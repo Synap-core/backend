@@ -1,0 +1,33 @@
+{
+  "name": "@synap/jobs",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "npx inngest-cli@latest dev"
+  },
+  "dependencies": {
+    "inngest": "^3.15.0",
+    "@synap/database": "workspace:*",
+    "ai": "^4.0.0",
+    "@ai-sdk/anthropic": "^1.0.0",
+    "zod": "^3.22.0",
+    "drizzle-orm": "^0.33.0",
+    "@initiativ/core": "workspace:*",
+    "@initiativ/rag": "workspace:*",
+    "@initiativ/agents": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}
+

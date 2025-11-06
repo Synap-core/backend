@@ -1,0 +1,40 @@
+{
+  "name": "@initiativ/storage",
+  "version": "0.1.0",
+  "description": "Storage layer for Initiativ Core - handles .md files + SQLite cache",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "storage",
+    "markdown",
+    "sqlite",
+    "cache",
+    "notes"
+  ],
+  "author": "Antoine Servant",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
+

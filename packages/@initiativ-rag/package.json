@@ -1,0 +1,40 @@
+{
+  "name": "@initiativ/rag",
+  "version": "0.1.0",
+  "description": "RAG (Retrieval-Augmented Generation) for Initiativ Core - semantic search with embeddings",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "rag",
+    "embeddings",
+    "semantic-search",
+    "vector-search"
+  ],
+  "author": "Antoine Servant",
+  "license": "MIT",
+  "dependencies": {
+    "@llamaindex/community": "^0.0.104",
+    "@llamaindex/google": "^0.3.22",
+    "@qdrant/js-client-rest": "^1.12.0",
+    "@xenova/transformers": "^2.17.2",
+    "llamaindex": "^0.7.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

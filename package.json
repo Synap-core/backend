@@ -1,0 +1,22 @@
+{
+  "name": "synap-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Synap - Event-Sourced Knowledge Backend",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "db:migrate": "cd packages/database && pnpm drizzle-kit push",
+    "db:studio": "cd packages/database && pnpm drizzle-kit studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.3.3"
+  },
+  "packageManager": "pnpm@8.15.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
+
