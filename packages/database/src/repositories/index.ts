@@ -5,4 +5,5 @@
  */
 
 export * from './event-repository.js';
+export * from './conversation-repository.js';
 
