@@ -10,6 +10,7 @@
     "@initiativ/storage": "workspace:*",
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
+    "@synap/storage": "workspace:*",
     "@trpc/server": "^11.0.0",
     "drizzle-orm": "^0.33.0",
     "inngest": "^3.15.0",

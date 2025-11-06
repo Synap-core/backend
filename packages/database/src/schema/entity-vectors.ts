@@ -10,8 +10,6 @@
  * - Supports multiple embedding models per entity
  */
 
-import { randomUUID } from 'crypto';
-
 const isPostgres = process.env.DB_DIALECT === 'postgres';
 
 let entityVectors: any;
@@ -31,7 +29,7 @@ if (isPostgres) {
     userId: text('user_id').notNull(),
     
     // Embedding vector
-    embedding: vector('embedding', { dimensions: 1536 }) as any,
+    embedding: (vector('embedding', { dimensions: 1536 }) as any),
     embeddingModel: text('embedding_model').default('text-embedding-3-small').notNull(),
     
     // Denormalized fields for search performance
@@ -59,7 +57,7 @@ if (isPostgres) {
       .references(() => entities.id, { onDelete: 'cascade' }),
     
     // Embedding as JSON array
-    embedding: text('embedding', { mode: 'json' }).$type<number[]>(),
+    embedding: text('embedding', { mode: 'json' }),
     embeddingModel: text('embedding_model').default('text-embedding-3-small').notNull(),
     
     // Denormalized fields

@@ -226,6 +226,9 @@ importers:
       '@synap/database':
         specifier: workspace:*
         version: link:../database
+      '@synap/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@trpc/server':
         specifier: ^11.0.0
         version: 11.7.1(typescript@5.9.3)
@@ -355,9 +358,15 @@ importers:
         specifier: ^3.926.0
         version: 3.926.0
     devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       vitest:
         specifier: ^1.0.4
-        version: 1.6.1(@vitest/ui@4.0.7)
+        version: 1.6.1(@types/node@22.19.0)(@vitest/ui@4.0.7)
 
 packages:
 
@@ -10285,7 +10294,7 @@ packages:
     hasBin: true
     dev: false
 
-  /vite-node@1.6.1:
+  /vite-node@1.6.1(@types/node@22.19.0):
     resolution: {integrity: sha512-YAXkfvGtuTzwWbDSACdJSg4A4DZiAqckWe90Zapc/sEX3XvHcw1NdurM/6od8J207tSDqNbSsgdCacBgvJKFuA==}
     engines: {node: ^18.0.0 || >=20.0.0}
     hasBin: true
@@ -10294,7 +10303,7 @@ packages:
       debug: 4.4.3
       pathe: 1.1.2
       picocolors: 1.1.1
-      vite: 5.4.21
+      vite: 5.4.21(@types/node@22.19.0)
     transitivePeerDependencies:
       - '@types/node'
       - less
@@ -10307,7 +10316,7 @@ packages:
       - terser
     dev: true
 
-  /vite@5.4.21:
+  /vite@5.4.21(@types/node@22.19.0):
     resolution: {integrity: sha512-o5a9xKjbtuhY6Bi5S3+HvbRERmouabWbyUcpXXUA1u+GNUKoROi9byOJ8M0nHbHYHkYICiMlqxkg1KkYmm25Sw==}
     engines: {node: ^18.0.0 || >=20.0.0}
     hasBin: true
@@ -10338,6 +10347,7 @@ packages:
       terser:
         optional: true
     dependencies:
+      '@types/node': 22.19.0
       esbuild: 0.21.5
       postcss: 8.5.6
       rollup: 4.52.5
@@ -10395,7 +10405,7 @@ packages:
       fsevents: 2.3.3
     dev: true
 
-  /vitest@1.6.1(@vitest/ui@4.0.7):
+  /vitest@1.6.1(@types/node@22.19.0)(@vitest/ui@4.0.7):
     resolution: {integrity: sha512-Ljb1cnSJSivGN0LqXd/zmDbWEM0RNNg2t1QW/XUhYl/qPqyu7CsqeWtqQXHVaJsecLPuDoak2oJcZN2QoRIOag==}
     engines: {node: ^18.0.0 || >=20.0.0}
     hasBin: true
@@ -10420,6 +10430,7 @@ packages:
       jsdom:
         optional: true
     dependencies:
+      '@types/node': 22.19.0
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
       '@vitest/snapshot': 1.6.1
@@ -10438,8 +10449,8 @@ packages:
       strip-literal: 2.1.1
       tinybench: 2.9.0
       tinypool: 0.8.4
-      vite: 5.4.21
-      vite-node: 1.6.1
+      vite: 5.4.21(@types/node@22.19.0)
+      vite-node: 1.6.1(@types/node@22.19.0)
       why-is-node-running: 2.3.0
     transitivePeerDependencies:
       - less
