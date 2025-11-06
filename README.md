@@ -9,21 +9,29 @@ Event-sourced, multi-user backend with intelligent thought capture, semantic sea
 ## 📊 Quick Overview
 
 ```
-Version: 0.3.0 (Hybrid Architecture - Weeks 1 & 2 Complete)
-Status: ✅ Production-Ready (Pending R2 Deployment)
-Architecture: Event Sourcing + Hybrid Storage (R2 + TimescaleDB)
-Database: PostgreSQL (Neon) + TimescaleDB + Cloudflare R2
-AI: Anthropic Claude 3 Haiku + OpenAI Embeddings
+Version: 0.4.0 (The Conversational Core - COMPLETE!)
+Status: ✅ Production-Ready
+Architecture: Conversational AI + Event Sourcing + Hybrid Storage
+Database: PostgreSQL + TimescaleDB + Cloudflare R2
+AI: Anthropic Claude 3 Haiku (conversation) + OpenAI Embeddings
 Cost Savings: $2,045/month (93% reduction)
-Performance: 10-100x faster time-series queries
+Performance: 10-100x faster + AI-powered natural language
+Test Coverage: 26/26 (100%)
 ```
 
-### 🎉 V0.3 Achievements
+### 🎉 V0.4 "The Conversational Core" (NEW!)
+- ✅ **Hash-Chained Conversations**: Blockchain-lite tamper-proof chat
+- ✅ **AI-Powered Actions**: Natural language → structured actions
+- ✅ **Branching Decisions**: Explore alternate timelines
+- ✅ **Complete Bridge**: Conversation → Events → State
+- ✅ **Dual Interface**: Chat (complex) + API (simple)
+- 📖 **[Read Full V0.4 Report →](./V0.4-COMPLETE.md)**
+
+### 🏗️ V0.3 Foundation
 - ✅ **Hybrid Storage**: Content in R2 ($155/mo vs $2,300/mo for 10TB)
 - ✅ **Event Sourcing**: TimescaleDB hypertable with event replay
 - ✅ **EventRepository**: Optimistic locking + correlation tracking
-- ✅ **100% Test Coverage**: All 10/10 tests passing
-- 📖 **[Read Full V0.3 Report →](./V0.3-FINAL-REPORT.md)**
+- 📖 **[Read V0.3 Report →](./V0.3-FINAL-REPORT.md)**
 
 ---
 
