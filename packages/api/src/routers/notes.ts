@@ -7,10 +7,11 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { events } from '@synap/database';
+import { events, entities, contentBlocks } from '@synap/database';
 import { createInitiativCore, createNoteViaInitiativ, noteToEntityEvent } from '../adapters/initiativ-adapter.js';
 import { Workflows } from '@initiativ/core';
 import { requireUserId } from '../utils/user-scoped.js';
+import { r2, R2Storage } from '@synap/storage';
 import path from 'path';
 import os from 'os';
 
@@ -89,18 +90,74 @@ export const notesRouter = router({
       // Step 2: Convert to Synap event format
       const eventData = noteToEntityEvent(note);
 
+      // ============================================================
+      // V0.3 DUAL-WRITE: Write to BOTH R2 AND PostgreSQL
+      // ============================================================
+      
+      // 2a. Upload to R2 (NEW!)
+      const r2Path = R2Storage.buildPath(userId, 'note', eventData.entityId, 'md');
+      const r2Upload = await r2.upload(
+        r2Path,
+        input.content,
+        { contentType: 'text/markdown' }
+      );
+
+      console.log('✅ [V0.3] Uploaded to R2:', {
+        entityId: eventData.entityId,
+        fileUrl: r2Upload.url,
+        fileSize: r2Upload.size,
+        checksum: r2Upload.checksum,
+      });
+
+      // 2b. Still write to content_blocks (OLD - for validation)
+      await ctx.db.insert(contentBlocks).values({
+        entityId: eventData.entityId,
+        content: input.content,
+        contentType: 'markdown',
+      });
+
+      console.log('✅ [V0.3] Wrote to content_blocks (legacy)');
+
+      // 2c. Create entity with file reference
+      await ctx.db.insert(entities).values({
+        id: eventData.entityId,
+        userId,
+        type: 'note',
+        title: note.title || 'Untitled',
+        preview: input.content.substring(0, 500),
+        fileUrl: r2Upload.url,
+        filePath: r2Upload.path,
+        fileSize: r2Upload.size,
+        fileType: 'markdown',
+        checksum: r2Upload.checksum,
+        version: 1,
+      });
+
+      console.log('✅ [V0.3] Created entity with file reference');
+
       // Step 3: Emit event to event log with userId
       await ctx.db.insert(events).values({
         type: 'entity.created',
-        data: { ...eventData, userId }, // ✅ Include userId in event data
+        data: { 
+          ...eventData, 
+          userId,
+          fileUrl: r2Upload.url,  // Include file reference in event
+        },
         source: 'api',
         userId, // ✅ User isolation
+      });
+
+      console.log('✅ [V0.3] Dual-write complete!', {
+        entityId: eventData.entityId,
+        r2: r2Upload.url,
+        postgres: 'content_blocks',
       });
 
       return {
         success: true,
         note,
         entityId: eventData.entityId,
+        fileUrl: r2Upload.url, // Return R2 URL
       };
     }),
 
