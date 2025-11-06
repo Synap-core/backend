@@ -17,9 +17,44 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { db } from '@synap/database';
-import { events, entities, contentBlocks } from '@synap/database';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import { Pool } from '@neondatabase/serverless';
+import { pgTable, uuid, text, timestamp, jsonb, integer } from 'drizzle-orm/pg-core';
+
+// Create PostgreSQL connection directly for tests
+const connectionString = process.env.DATABASE_URL!;
+const pool = new Pool({ connectionString });
+const db = drizzle(pool);
+
+// Define table schemas for PostgreSQL (simplified for tests)
+const events = pgTable('events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: text('user_id').notNull(),
+  timestamp: timestamp('timestamp', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  type: text('type').notNull(),
+  data: jsonb('data').notNull(),
+  source: text('source').default('api'),
+});
+
+const entities = pgTable('entities', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: text('user_id').notNull(),
+  type: text('type').notNull(),
+  title: text('title'),
+  preview: text('preview'),
+  version: integer('version').default(1).notNull(),
+  createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp('deleted_at', { mode: 'date', withTimezone: true }),
+});
+
+const contentBlocks = pgTable('content_blocks', {
+  entityId: uuid('entity_id').primaryKey().references(() => entities.id, { onDelete: 'cascade' }),
+  content: text('content'),
+  storageProvider: text('storage_provider').default('db').notNull(),
+  contentType: text('content_type').default('markdown').notNull(),
+});
 
 // Skip tests if not in PostgreSQL mode
 const isPostgres = process.env.DB_DIALECT === 'postgres';
@@ -46,13 +81,13 @@ describeIf('Multi-User Isolation (RLS)', () => {
     
     try {
       // User A cleanup
-      await db.execute(sql`SET LOCAL app.current_user_id = ${userA}`);
+      await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
       await db.delete(contentBlocks).where(sql`entity_id = ${entityIdA}`);
       await db.delete(entities).where(sql`id = ${entityIdA}`);
       await db.delete(events).where(sql`user_id = ${userA}`);
       
       // User B cleanup (should have no data, but just in case)
-      await db.execute(sql`SET LOCAL app.current_user_id = ${userB}`);
+      await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
       await db.delete(events).where(sql`user_id = ${userB}`);
       
       console.log('✅ Test data cleaned up');
@@ -63,7 +98,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should create data for User A', async () => {
     // Set RLS context to User A
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userA}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
 
     // Create an event (simulating note creation)
     const [event] = await db.insert(events).values({
@@ -105,7 +140,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should allow User A to read their own data', async () => {
     // Set RLS context to User A
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userA}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
 
     // User A should see their events
     const userEvents = await db.select().from(events).where(sql`type = 'entity.created'`);
@@ -128,7 +163,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should prevent User B from reading User A data (RLS)', async () => {
     // Set RLS context to User B
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userB}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
 
     // User B should NOT see User A's events
     const userBEvents = await db.select().from(events).where(sql`type = 'entity.created'`);
@@ -148,7 +183,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should allow User B to create their own data', async () => {
     // Set RLS context to User B
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userB}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
 
     // User B creates their own event
     const [event] = await db.insert(events).values({
@@ -181,12 +216,12 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should isolate search results between users', async () => {
     // User A searches
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userA}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
     const userAResults = await db.select().from(entities);
     const userATitles = userAResults.map((e) => e.title);
 
     // User B searches
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userB}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
     const userBResults = await db.select().from(entities);
     const userBTitles = userBResults.map((e) => e.title);
 
@@ -201,7 +236,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should prevent cross-user updates', async () => {
     // User B attempts to update User A's entity
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userB}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
 
     // This should fail silently (no rows affected) due to RLS
     const result = await db
@@ -210,7 +245,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
       .where(sql`id = ${entityIdA}`);
 
     // Verify no update occurred
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userA}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
     const [entity] = await db.select().from(entities).where(sql`id = ${entityIdA}`);
     
     expect(entity.title).not.toBe('HACKED BY USER B');
@@ -221,13 +256,13 @@ describeIf('Multi-User Isolation (RLS)', () => {
 
   it('should prevent cross-user deletes', async () => {
     // User B attempts to delete User A's entity
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userB}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
 
     // This should fail silently (no rows deleted) due to RLS
     await db.delete(entities).where(sql`id = ${entityIdA}`);
 
     // Verify entity still exists
-    await db.execute(sql`SET LOCAL app.current_user_id = ${userA}`);
+    await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
     const [entity] = await db.select().from(entities).where(sql`id = ${entityIdA}`);
     
     expect(entity).toBeDefined();

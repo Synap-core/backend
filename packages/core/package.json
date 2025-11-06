@@ -8,9 +8,10 @@
     "test:local": "tsx tests/local-mvp.test.ts"
   },
   "dependencies": {
-    "@synap/database": "workspace:*",
+    "@neondatabase/serverless": "^0.9.0",
     "@synap/api": "workspace:*",
     "@synap/auth": "workspace:*",
+    "@synap/database": "workspace:*",
     "drizzle-orm": "^0.33.0"
   },
   "devDependencies": {
@@ -18,4 +19,3 @@
     "typescript": "^5.3.3"
   }
 }
-

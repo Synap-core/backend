@@ -11,12 +11,13 @@
     "db:studio": "cd packages/database && pnpm drizzle-kit studio"
   },
   "devDependencies": {
+    "@vitest/ui": "^4.0.7",
     "turbo": "^2.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.7"
   },
   "packageManager": "pnpm@8.15.0",
   "engines": {
     "node": ">=20"
   }
 }
-
