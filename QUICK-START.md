@@ -1,389 +1,386 @@
-# ⚡ Synap Backend - Quick Start Guide
+# 🚀 Synap Backend - Quick Start Guide
 
-**Get running in 5 minutes** 🚀
-
----
-
-## Prerequisites
-
-- **Node.js**: v20+ ([download](https://nodejs.org))
-- **pnpm**: v8+ (`npm install -g pnpm`)
-- **Anthropic API Key**: Get one at [console.anthropic.com](https://console.anthropic.com)
+Complete setup guide for both local development and production deployment.
 
 ---
 
-## Step 1: Clone & Install (1 min)
+## 📋 Table of Contents
+
+1. [Local Development (SQLite)](#local-development-sqlite)
+2. [Production Setup (PostgreSQL)](#production-setup-postgresql)
+3. [Testing](#testing)
+4. [Troubleshooting](#troubleshooting)
+
+---
+
+## 🏠 Local Development (SQLite)
+
+### Single-user mode for local testing
+
+#### 1. Install Dependencies
 
 ```bash
-cd /Users/antoine/Documents/Code/synap-backend
+cd /path/to/synap-backend
 pnpm install
 ```
 
-**What this does**:
-- Installs all dependencies across the monorepo
-- Links workspace packages
-- Builds TypeScript packages
-
----
-
-## Step 2: Configure Environment (1 min)
+#### 2. Configure Environment
 
 ```bash
-cp env.example .env
+cp env.local.example .env
 ```
 
-Edit `.env` with your settings:
-
+Edit `.env`:
 ```bash
-# Database (SQLite for local MVP)
 DB_DIALECT=sqlite
 SQLITE_DB_PATH=./data/synap.db
-
-# Authentication (generate with: openssl rand -hex 32)
-SYNAP_SECRET_TOKEN=00a0896278b2ac5b19a8a3788ef1013a37a27d837c73ab2213aa6517414dbefd
-
-# AI Provider (Anthropic Claude)
-ANTHROPIC_API_KEY=sk-ant-your-api-key-here
-
-# Optional: RAG Embeddings (for semantic search)
-EMBEDDINGS_PROVIDER=openai  # or 'google', 'cohere', 'local'
-OPENAI_API_KEY=sk-proj-your-key-here  # if using OpenAI embeddings
+SYNAP_SECRET_TOKEN=your-secret-token-here  # openssl rand -hex 32
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+OPENAI_API_KEY=sk-proj-your-key-here  # For embeddings
 ```
 
-**Security Note**: The `SYNAP_SECRET_TOKEN` is your master password. Keep it secret!
-
----
-
-## Step 3: Initialize Database (30 sec)
+#### 3. Initialize Database
 
 ```bash
 pnpm --filter database db:init
 ```
 
-**What this does**:
-- Creates `data/synap.db` (SQLite database)
-- Initializes tables: `events`, `entities`, `content_blocks`, `relations`, `tags`, etc.
+#### 4. Start Servers
 
-**Verify**:
 ```bash
-ls -lh data/synap.db
-# Should show: synap.db file created
-```
-
----
-
-## Step 4: Start Development Servers (1 min)
-
-You need **two terminals**:
-
-### Terminal 1: API Server
-```bash
+# Terminal 1: API Server
 pnpm --filter api dev
-```
 
-**Expected output**:
-```
-> api@1.0.0 dev
-> tsx watch src/index.ts
-
-📦 SQLite database: /path/to/synap-backend/data/synap.db
-🚀 Hono server started on http://localhost:3000
-✅ tRPC endpoints available at /trpc/*
-```
-
-### Terminal 2: Inngest Job Server
-```bash
+# Terminal 2: Background Jobs
 pnpm --filter jobs dev
 ```
 
-**Expected output**:
-```
-> jobs@1.0.0 dev
-> npx inngest-cli@latest dev
-
-[Inngest] Dev server running at http://localhost:8288
-[Inngest] Functions loaded:
-  - analyzeCapturedThought
-  - processAnalyzedThought
-  - handleNewEvent
-```
-
-**Inngest Dashboard**: Open [http://localhost:8288](http://localhost:8288) to monitor jobs
-
----
-
-## Step 5: Test the System (2 min)
-
-### 5.1 Health Check
-```bash
-curl http://localhost:3000/health
-```
-
-**Expected**: `{"status":"ok"}`
-
----
-
-### 5.2 Create a Note (with AI enrichment)
+#### 5. Test
 
 ```bash
-curl -X POST "http://localhost:3000/trpc/notes.create" \
-  -H "Authorization: Bearer 00a0896278b2ac5b19a8a3788ef1013a37a27d837c73ab2213aa6517414dbefd" \
+# Get auth token
+export TOKEN=$(grep SYNAP_SECRET_TOKEN .env | cut -d= -f2)
+
+# Create a note
+curl -X POST http://localhost:3000/trpc/notes.create \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "content": "Build a real-time collaborative editor using WebSockets",
-    "autoEnrich": true
-  }'
+  -d '{"content":"Test note","autoEnrich":true}'
 ```
-
-**Expected response**:
-```json
-{
-  "result": {
-    "data": {
-      "success": true,
-      "note": {
-        "id": "uuid-here",
-        "title": "Real-time Collaborative Editor Project",
-        "content": "Build a real-time collaborative editor using WebSockets",
-        "tags": ["editor", "websockets", "real-time", "collaborative"],
-        "createdAt": "2025-11-06T...",
-        "metadata": {
-          "inputSource": "text",
-          "processedAt": "2025-11-06T..."
-        }
-      }
-    }
-  }
-}
-```
-
-**What happened**:
-1. ✅ API received your note
-2. ✅ Initiativ Core processed it (created .md file, indexed it)
-3. ✅ Claude AI enriched it (generated title + tags)
-4. ✅ Event logged in event store
-5. ✅ Entity created in database
 
 ---
 
-### 5.3 Search Notes
+## ☁️ Production Setup (PostgreSQL)
+
+### Multi-user SaaS with Better Auth
+
+#### 1. Create Neon Database
 
 ```bash
-curl -X POST "http://localhost:3000/trpc/notes.search" \
-  -H "Authorization: Bearer your-token-here" \
+# Sign up: https://neon.tech
+# Create project: "synap-backend-production"
+# Copy connection string
+```
+
+#### 2. Configure Environment
+
+```bash
+cp env.production.example .env.production
+```
+
+Edit `.env.production`:
+```bash
+# Database
+DB_DIALECT=postgres
+DATABASE_URL=postgresql://user:pass@ep-xxx.neon.tech/synap?sslmode=require
+
+# Better Auth
+BETTER_AUTH_SECRET=your-secret-here  # openssl rand -base64 32
+BETTER_AUTH_URL=https://yourdomain.com
+
+# OAuth (optional)
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-secret
+GITHUB_CLIENT_ID=your-github-client-id
+GITHUB_CLIENT_SECRET=your-github-secret
+
+# AI
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+OPENAI_API_KEY=sk-proj-your-key-here
+
+# Inngest
+INNGEST_EVENT_KEY=your-inngest-key
+INNGEST_SIGNING_KEY=your-signing-key
+```
+
+#### 3. Initialize Database
+
+```bash
+export $(cat .env.production | xargs)
+./scripts/init-postgres.sh
+```
+
+**Expected Output**:
+```
+🚀 Initializing Synap PostgreSQL Database...
+✅ pgvector enabled
+✅ Schemas pushed
+✅ RLS enabled (note: not active, using explicit filtering)
+🎉 Database initialization complete!
+```
+
+#### 4. Run Tests
+
+```bash
+export $(cat .env.production | xargs)
+npx vitest run packages/core/tests/user-isolation.test.ts
+```
+
+**Expected**: ✅ 10/10 tests passing
+
+#### 5. Deploy
+
+**Vercel** (Recommended):
+```bash
+npm i -g vercel
+vercel --prod
+```
+
+**Railway**:
+```bash
+npm i -g @railway/cli
+railway up
+```
+
+---
+
+## 🧪 Testing
+
+### User Isolation Tests
+
+Validates that users cannot access each other's data:
+
+```bash
+export DB_DIALECT=postgres
+export DATABASE_URL=postgresql://...
+npx vitest run packages/core/tests/user-isolation.test.ts
+```
+
+**Tests** (10 total):
+- ✅ Event creation with userId
+- ✅ Event filtering by userId
+- ✅ Entity creation with userId
+- ✅ Entity filtering by userId
+- ✅ User-scoped tags
+- ✅ Tag filtering
+- ✅ Cross-user access prevention
+- ✅ Update protection
+- ✅ Search isolation
+- ✅ Documentation
+
+---
+
+## 🔐 OAuth Setup (Optional)
+
+### Google OAuth
+
+1. Go to https://console.cloud.google.com
+2. Create project "Synap"
+3. Enable Google+ API
+4. Create OAuth 2.0 credentials:
+   - **Redirect URI**: `http://localhost:3000/api/auth/callback/google`
+5. Copy Client ID and Secret to `.env.production`
+
+### GitHub OAuth
+
+1. Go to https://github.com/settings/developers
+2. New OAuth App:
+   - **Name**: Synap Backend
+   - **Homepage**: `http://localhost:3000`
+   - **Callback**: `http://localhost:3000/api/auth/callback/github`
+3. Copy Client ID and Secret to `.env.production`
+
+---
+
+## 📖 API Usage Examples
+
+### Authentication
+
+```bash
+# Sign up
+curl -X POST http://localhost:3000/api/auth/sign-up \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "editor",
-    "useRAG": false,
-    "limit": 5
-  }'
-```
+  -d '{"email":"user@test.com","password":"pass123","name":"Test User"}'
 
-**Search modes**:
-- `useRAG: false` → Fast FTS (Full-Text Search) via SQLite
-- `useRAG: true` → Smart semantic search via LlamaIndex
-
----
-
-### 5.4 Verify Database
-
-```bash
-# View events
-sqlite3 data/synap.db "SELECT type, timestamp FROM events ORDER BY timestamp DESC LIMIT 5;"
-
-# View entities
-sqlite3 data/synap.db "SELECT id, type, title FROM entities LIMIT 5;"
-
-# View content
-sqlite3 data/synap.db "SELECT entityId, SUBSTR(content, 1, 50) FROM content_blocks LIMIT 5;"
-```
-
----
-
-## ✅ Success!
-
-You now have:
-- ✅ **Event-sourced backend** running locally
-- ✅ **SQLite database** (no cloud dependencies)
-- ✅ **AI enrichment** via Anthropic Claude
-- ✅ **Type-safe API** via tRPC
-- ✅ **Background jobs** via Inngest
-
----
-
-## 🎯 Next Steps
-
-### Try More Features
-
-#### 1. **Audio Input** (if Whisper configured)
-```bash
-curl -X POST "http://localhost:3000/trpc/notes.create" \
-  -H "Authorization: Bearer your-token-here" \
+# Sign in
+curl -X POST http://localhost:3000/api/auth/sign-in \
   -H "Content-Type: application/json" \
-  -d '{
-    "content": "https://example.com/audio.mp3",
-    "inputType": "audio"
-  }'
+  -d '{"email":"user@test.com","password":"pass123"}'
+
+# Returns session cookie: better-auth.session=...
 ```
 
-#### 2. **RAG Semantic Search**
+### Notes
+
 ```bash
-# Create 5+ notes first, then search with RAG
-curl -X POST "http://localhost:3000/trpc/notes.search" \
-  -H "Authorization: Bearer your-token-here" \
+# Create note (requires session)
+curl -X POST http://localhost:3000/trpc/notes.create \
   -H "Content-Type: application/json" \
+  -H "Cookie: better-auth.session=YOUR_SESSION" \
   -d '{
-    "query": "What are my ideas about real-time systems?",
-    "useRAG": true,
-    "limit": 10
+    "content": "Meeting notes from Q4 planning session",
+    "autoEnrich": true,
+    "useRAG": true
   }'
+
+# Search notes
+curl "http://localhost:3000/trpc/notes.search?input={\"query\":\"planning\",\"useRAG\":true}" \
+  -H "Cookie: better-auth.session=YOUR_SESSION"
 ```
 
-#### 3. **View Initiativ Data**
-```bash
-# Initiativ Core stores .md files locally
-ls ~/.synap/initiativ-data/notes/
-
-# View event log
-cat ~/.synap/data/events.jsonl | jq
-```
-
----
-
-## 🔧 Development Commands
+### Thought Capture
 
 ```bash
-# Install dependencies
-pnpm install
+# Quick capture (async processing)
+curl -X POST http://localhost:3000/trpc/capture.thought \
+  -H "Content-Type: application/json" \
+  -H "Cookie: better-auth.session=YOUR_SESSION" \
+  -d '{"content":"Buy milk tomorrow at 5pm"}'
 
-# Start API server (hot reload)
-pnpm --filter api dev
-
-# Start Inngest jobs
-pnpm --filter jobs dev
-
-# Initialize/reset database
-pnpm --filter database db:init
-
-# View database (Drizzle Studio)
-pnpm --filter database db:studio
-
-# Run tests
-pnpm --filter core test
-
-# Build for production
-pnpm build
-
-# Lint
-pnpm lint
-
-# Type check
-pnpm typecheck
+# AI will:
+# 1. Analyze: intent=task, dueDate=tomorrow-5pm
+# 2. Create task entity automatically
+# 3. Add tags: shopping, groceries
 ```
 
 ---
 
 ## 🐛 Troubleshooting
 
-### Error: "SYNAP_SECRET_TOKEN not set"
-**Fix**: Add to `.env`:
+### Error: "Module not found"
+
 ```bash
-SYNAP_SECRET_TOKEN=$(openssl rand -hex 32)
-```
-
-### Error: "ANTHROPIC_API_KEY not set"
-**Fix**: Get API key from [console.anthropic.com](https://console.anthropic.com) and add to `.env`
-
-### Error: "Cannot open database"
-**Fix**: Initialize database:
-```bash
-mkdir -p data
-pnpm --filter database db:init
-```
-
-### Error: "Module not found: better-sqlite3"
-**Fix**: Rebuild native module:
-```bash
-cd packages/database
-pnpm install
-npm rebuild better-sqlite3
-```
-
-### Error: "Port 3000 already in use"
-**Fix**: Kill existing process or change port:
-```bash
-lsof -ti:3000 | xargs kill -9
-# Or set PORT=3001 in .env
-```
-
-### Inngest jobs not triggering
-**Fix**: Make sure Inngest dev server is running in Terminal 2
-
----
-
-## 📊 Monitor & Debug
-
-### View Inngest Dashboard
-```bash
-open http://localhost:8288
-```
-
-**What you can see**:
-- Job execution history
-- Event payloads
-- Error traces
-- Execution times
-
-### View Database
-```bash
-pnpm --filter database db:studio
-```
-
-**What you can see**:
-- All tables (entities, events, content_blocks, etc.)
-- Run SQL queries
-- Edit data
-
-### View Logs
-```bash
-# API logs (Terminal 1)
-# Inngest logs (Terminal 2)
-
-# Or tail event log
-tail -f ~/.synap/data/events.jsonl | jq
-```
-
----
-
-## 🚀 Deploy to Production
-
-### Option 1: Single-User (Self-Hosted)
-```bash
-# Build
+# Rebuild packages
 pnpm build
 
-# Start production server
-NODE_ENV=production pnpm start
+# Or install missing deps
+pnpm install
 ```
 
-### Option 2: Multi-User (Cloud)
-1. Switch `DB_DIALECT=postgres` in `.env`
-2. Set `DATABASE_URL=postgresql://...`
-3. Deploy to Vercel/Railway/Render
-4. Add Better Auth for multi-user support
+### Error: "Cannot find database"
 
-**See [ARCHITECTURE.md](./ARCHITECTURE.md)** for cloud deployment details.
+```bash
+# SQLite: Initialize
+pnpm --filter database db:init
+
+# PostgreSQL: Run migrations
+./scripts/init-postgres.sh
+```
+
+### Error: "Unauthorized"
+
+```bash
+# Local (SQLite): Check token
+echo $SYNAP_SECRET_TOKEN
+
+# Production (PostgreSQL): Check session
+curl http://localhost:3000/api/auth/session \
+  -H "Cookie: better-auth.session=YOUR_SESSION"
+```
+
+### Error: "pgvector not found"
+
+```bash
+# Run extension migration
+psql $DATABASE_URL < packages/database/migrations-pg/0001_enable_pgvector.sql
+```
+
+### Tests Failing
+
+```bash
+# Check environment
+echo $DB_DIALECT
+echo $DATABASE_URL
+
+# PostgreSQL: Check tables exist
+psql $DATABASE_URL -c "\dt"
+
+# Should show: events, entities, content_blocks, relations, task_details, tags, entity_tags
+```
 
 ---
 
-## 📚 Learn More
+## 📊 Database Schema
 
-- **[README.md](./README.md)** - Project overview
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Technical deep-dive
-- **[CHANGELOG.md](./CHANGELOG.md)** - Version history
+```sql
+-- Events (immutable log)
+events
+├── id (uuid)
+├── user_id (text) ← Isolation key
+├── timestamp
+├── type (entity.created, ...)
+└── data (jsonb)
+
+-- Entities (knowledge graph)
+entities
+├── id (uuid)
+├── user_id (text) ← Isolation key
+├── type (note, task, project, ...)
+├── title
+└── preview
+
+-- Content (hybrid storage)
+content_blocks
+├── entity_id (FK → entities)
+├── content (text, nullable)
+├── storage_provider (db | s3 | r2)
+└── embedding (vector[1536])
+
+-- Tags (user-scoped)
+tags
+├── id (uuid)
+├── user_id (text) ← Isolation key
+└── name
+```
 
 ---
 
-**Need help?** Check the [GitHub Issues](https://github.com/yourusername/synap-backend/issues) or contact antoine@example.com
+## 🔧 Configuration
 
-**Ready to build!** 🎉
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DB_DIALECT` | Yes | `sqlite` or `postgres` |
+| `DATABASE_URL` | Yes* | PostgreSQL connection string |
+| `SQLITE_DB_PATH` | Yes* | SQLite file path |
+| `ANTHROPIC_API_KEY` | Yes | Claude API key |
+| `OPENAI_API_KEY` | Yes | Embeddings API key |
+| `BETTER_AUTH_SECRET` | Yes** | Session secret |
+| `SYNAP_SECRET_TOKEN` | Yes*** | Static auth token |
+
+\* One of DATABASE_URL or SQLITE_DB_PATH required  
+\** PostgreSQL only  
+\*** SQLite only
+
+---
+
+## 📚 Additional Resources
+
+- **Better Auth**: https://better-auth.com
+- **Drizzle ORM**: https://orm.drizzle.team
+- **Inngest**: https://inngest.com
+- **Neon**: https://neon.tech
+- **tRPC**: https://trpc.io
+
+---
+
+## 🆘 Support
+
+- **GitHub Issues**: https://github.com/Synap-core/backend/issues
+- **Discussions**: https://github.com/Synap-core/backend/discussions
+- **Email**: support@synap.dev (coming soon)
+
+---
+
+**Ready to build your second brain!** 🧠✨

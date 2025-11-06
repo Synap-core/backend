@@ -34,9 +34,13 @@ export const analyzeCapturedThought = inngest.createFunction(
     event: 'api/thought.captured',
   },
   async ({ event, step }) => {
-    const { content, context } = event.data;
+    const { content, context, userId } = event.data;
 
-    console.log(`🤖 Analyzing thought: "${content.substring(0, 50)}..."`);
+    if (!userId) {
+      throw new Error('userId is required in api/thought.captured event');
+    }
+
+    console.log(`🤖 Analyzing thought for user ${userId}: "${content.substring(0, 50)}..."`);
 
     // Step 1: AI Analysis
     const analysis = await step.run('analyze-with-ai', async () => {
@@ -71,15 +75,16 @@ Instructions:
       }
     });
 
-    console.log(`✅ Analysis complete:`, analysis);
+    console.log(`✅ Analysis complete for user ${userId}:`, analysis);
 
-    // Step 2: Emit analyzed event
+    // Step 2: Emit analyzed event with userId
     await step.sendEvent('emit-analyzed-event', {
       name: 'ai/thought.analyzed',
       data: {
         content,
         analysis,
         context,
+        userId, // ✅ Pass userId through the pipeline
       },
     });
 

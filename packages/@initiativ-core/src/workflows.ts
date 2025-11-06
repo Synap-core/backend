@@ -11,6 +11,7 @@ import type { Note, SearchResult } from '@initiativ/storage';
 export class Workflows {
   constructor(
     private core: InitiativCore,
+    // @ts-expect-error - userId will be used in future storage/rag integrations
     private userId?: string  // Optional: for multi-user mode (PostgreSQL)
   ) {}
 

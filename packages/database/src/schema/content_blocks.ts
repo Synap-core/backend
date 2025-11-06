@@ -86,7 +86,7 @@ if (isPostgres) {
     checksum: text('checksum'),
     
     // Embedding as JSON array (less efficient than pgvector, but works)
-    embedding: text('embedding', { mode: 'json' }).$type<number[]>(),
+    embedding: text('embedding', { mode: 'json' }),
     embeddingModel: text('embedding_model')
       .default('text-embedding-3-small'),
     

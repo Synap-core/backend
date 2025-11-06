@@ -6,6 +6,7 @@ export * from './trpc.js';
 export * from './context.js';
 export { eventsRouter } from './routers/events.js';
 export { captureRouter } from './routers/capture.js';
+export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
 
 import { router } from './trpc.js';
 import { eventsRouter } from './routers/events.js';

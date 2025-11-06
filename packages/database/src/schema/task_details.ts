@@ -5,24 +5,57 @@
  * Multi-dialect compatible (SQLite + PostgreSQL)
  */
 
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 import { entities } from './entities.js';
 
-export const taskDetails = sqliteTable('task_details', {
-  // Primary key (also foreign key to entity)
-  entityId: text('entity_id')
-    .primaryKey()
-    .references(() => entities.id, { onDelete: 'cascade' }),
+const isPostgres = process.env.DB_DIALECT === 'postgres';
+
+let taskDetails: any;
+
+if (isPostgres) {
+  // PostgreSQL schema
+  const { pgTable, uuid, text, integer, timestamp } = require('drizzle-orm/pg-core');
   
-  // Task status
-  status: text('status').default('todo').notNull(), // 'todo' | 'in_progress' | 'done'
+  taskDetails = pgTable('task_details', {
+    // Primary key + foreign key
+    entityId: uuid('entity_id')
+      .primaryKey()
+      .references(() => entities.id, { onDelete: 'cascade' }),
+    
+    // Task status
+    status: text('status').default('todo').notNull(),
+    
+    // Priority
+    priority: integer('priority').default(0).notNull(),
+    
+    // Dates
+    dueDate: timestamp('due_date', { mode: 'date', withTimezone: true }),
+    completedAt: timestamp('completed_at', { mode: 'date', withTimezone: true }),
+  });
+} else {
+  // SQLite schema
+  const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
   
-  // Due date (Unix timestamp in ms)
-  dueDate: integer('due_date', { mode: 'timestamp_ms' }),
-  
-  // Priority level
-  priority: integer('priority').default(0).notNull(), // 0: None, 1: Low, 2: Medium, 3: High
-});
+  taskDetails = sqliteTable('task_details', {
+    // Primary key + foreign key
+    entityId: text('entity_id')
+      .primaryKey()
+      .references(() => entities.id, { onDelete: 'cascade' }),
+    
+    // Task status
+    status: text('status').default('todo').notNull(),
+    
+    // Due date (Unix timestamp in ms)
+    dueDate: integer('due_date', { mode: 'timestamp_ms' }),
+    
+    // Priority level
+    priority: integer('priority').default(0).notNull(),
+    
+    // Completed timestamp
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+  });
+}
+
+export { taskDetails };
 
 export type TaskDetail = typeof taskDetails.$inferSelect;
 export type NewTaskDetail = typeof taskDetails.$inferInsert;

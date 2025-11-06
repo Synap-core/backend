@@ -18,6 +18,7 @@
   "dependencies": {
     "inngest": "^3.15.0",
     "@synap/database": "workspace:*",
+    "@synap/api": "workspace:*",
     "ai": "^4.0.0",
     "@ai-sdk/anthropic": "^1.0.0",
     "zod": "^3.22.0",

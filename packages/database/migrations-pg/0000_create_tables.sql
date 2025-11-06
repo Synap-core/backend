@@ -55,12 +55,9 @@ CREATE TABLE IF NOT EXISTS relations (
 CREATE TABLE IF NOT EXISTS task_details (
   entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'todo',
-  priority TEXT DEFAULT 'medium',
+  priority INTEGER NOT NULL DEFAULT 0,
   due_date TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  estimated_minutes INTEGER,
-  actual_minutes INTEGER,
-  parent_task_id UUID REFERENCES entities(id)
+  completed_at TIMESTAMPTZ
 );
 
 -- Tags table

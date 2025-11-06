@@ -6,8 +6,10 @@
  */
 
 import { z } from 'zod';
+import { eq } from 'drizzle-orm';
 import { router, protectedProcedure } from '../trpc.js';
 import { events } from '@synap/database';
+import { requireUserId } from '../utils/user-scoped.js';
 
 export const eventsRouter = router({
   /**
@@ -26,16 +28,22 @@ export const eventsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      
       // Insert event into the immutable log
-      const [event] = await ctx.db
+      // Type assertion needed for multi-dialect compatibility
+      const result = await ctx.db
         .insert(events)
         .values({
           type: input.type,
           data: input.data,
           source: input.source || 'api',
           correlationId: input.correlationId,
-        })
+          userId, // ✅ User isolation
+        } as any)
         .returning();
+      
+      const event = Array.isArray(result) ? result[0] : result;
 
       // TODO: Trigger Inngest function to process this event
       // For now, we just return the event
@@ -57,18 +65,22 @@ export const eventsRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      const query = ctx.db
+      const userId = requireUserId(ctx.userId);
+      
+      // Build query with user isolation
+      // Type assertions needed for multi-dialect compatibility
+      const baseQuery = ctx.db
         .select()
         .from(events)
-        .limit(input.limit)
-        .orderBy(events.timestamp);
+        .where(eq((events as any).userId, userId) as any) // ✅ User isolation
+        .limit(input.limit);
 
-      if (input.type) {
-        // Add type filter if provided
-        // query.where(eq(events.type, input.type));
-      }
+      // Add optional type filter
+      const finalQuery = input.type
+        ? (baseQuery as any).where(eq((events as any).type, input.type))
+        : baseQuery;
 
-      return await query;
+      return await finalQuery;
     }),
 });
 

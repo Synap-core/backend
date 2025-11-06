@@ -7,7 +7,11 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { inngest } from '@synap/jobs';
+import { requireUserId } from '../utils/user-scoped.js';
+import { Inngest } from 'inngest';
+
+// Create Inngest client (avoid circular dependency with @synap/jobs)
+const inngest = new Inngest({ id: 'synap-api' });
 
 export const captureRouter = router({
   /**
@@ -23,7 +27,9 @@ export const captureRouter = router({
         context: z.record(z.any()).optional().describe('Optional context metadata'),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      
       // Emit Inngest event for async processing
       await inngest.send({
         name: 'api/thought.captured',
@@ -31,6 +37,7 @@ export const captureRouter = router({
           content: input.content,
           context: input.context || {},
           capturedAt: new Date().toISOString(),
+          userId, // ✅ Pass userId for multi-user processing
         },
       });
 

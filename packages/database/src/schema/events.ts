@@ -31,7 +31,7 @@ if (isPostgres) {
     type: text('type').notNull(),
     
     // Event payload (JSONB for efficient queries)
-    data: jsonb('data').$type<Record<string, any>>().notNull(),
+    data: jsonb('data').notNull(),
     
     // Where did this event come from?
     source: text('source').default('api'),
@@ -59,7 +59,7 @@ if (isPostgres) {
     type: text('type').notNull(),
     
     // Event payload (JSON text)
-    data: text('data', { mode: 'json' }).$type<Record<string, any>>().notNull(),
+    data: text('data', { mode: 'json' }).notNull(),
     
     // Where did this event come from?
     source: text('source').default('api'),

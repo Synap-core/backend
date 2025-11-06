@@ -10,6 +10,7 @@ import { router, protectedProcedure } from '../trpc.js';
 import { events } from '@synap/database';
 import { createInitiativCore, createNoteViaInitiativ, noteToEntityEvent } from '../adapters/initiativ-adapter.js';
 import { Workflows } from '@initiativ/core';
+import { requireUserId } from '../utils/user-scoped.js';
 import path from 'path';
 import os from 'os';
 
@@ -64,8 +65,10 @@ export const notesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      
       // Get user-scoped Initiativ Core
-      const core = getInitiativCore(ctx.userId, input.useRAG);
+      const core = getInitiativCore(userId, input.useRAG);
       await core.init(); // Initialize if not already done
 
       // Step 1: Create note using Initiativ workflow
@@ -79,20 +82,19 @@ export const notesRouter = router({
         {
           autoEnrich: input.autoEnrich,
           tags: input.tags,
-          userId: ctx.userId, // Pass userId for multi-user mode
+          userId, // Pass userId for multi-user mode
         }
       );
 
       // Step 2: Convert to Synap event format
       const eventData = noteToEntityEvent(note);
 
-      // Step 3: Emit event to event log
-      // Note: RLS will automatically scope this insert to current user
+      // Step 3: Emit event to event log with userId
       await ctx.db.insert(events).values({
         type: 'entity.created',
-        data: eventData,
+        data: { ...eventData, userId }, // ✅ Include userId in event data
         source: 'api',
-        // userId is automatically added by RLS context
+        userId, // ✅ User isolation
       });
 
       return {
@@ -114,12 +116,14 @@ export const notesRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
+      const userId = ctx.userId || undefined; // Convert null to undefined
+      
       // Get user-scoped Initiativ Core
-      const core = getInitiativCore(ctx.userId, input.useRAG);
+      const core = getInitiativCore(userId, input.useRAG);
       await core.init();
 
-      // Use Initiativ's search workflow (RLS will filter results automatically)
-      const workflows = new Workflows(core, ctx.userId);
+      // Use Initiativ's search workflow
+      const workflows = new Workflows(core, userId);
       const results = await workflows.searchNotes(input.query, {
         useRAG: input.useRAG,
         limit: input.limit,

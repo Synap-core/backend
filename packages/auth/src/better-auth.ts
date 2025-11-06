@@ -11,7 +11,12 @@
 
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { db } from '@synap/database/client-pg';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import { Pool } from '@neondatabase/serverless';
+
+// Create PostgreSQL connection for Better Auth
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(pool);
 
 // Better Auth instance
 export const auth = betterAuth({
@@ -72,7 +77,7 @@ export const auth = betterAuth({
 
 // Type exports
 export type Session = typeof auth.$Infer.Session;
-export type User = typeof auth.$Infer.User;
+export type User = typeof auth.$Infer.Session.user;
 
 /**
  * Get session from request headers
@@ -98,7 +103,6 @@ export async function getSession(headers: Headers): Promise<Session | null> {
  * ```
  */
 import type { MiddlewareHandler } from 'hono';
-import { sql } from 'drizzle-orm';
 
 export const betterAuthMiddleware: MiddlewareHandler = async (c, next) => {
   const session = await getSession(c.req.raw.headers);
@@ -107,12 +111,8 @@ export const betterAuthMiddleware: MiddlewareHandler = async (c, next) => {
     return c.json({ error: 'Unauthorized' }, 401);
   }
   
-  // Set current user for RLS
-  try {
-    await db.execute(sql`SET LOCAL app.current_user_id = ${session.user.id}`);
-  } catch (error) {
-    console.error('[RLS] Failed to set current user:', error);
-  }
+  // Note: RLS not active with Neon serverless
+  // User isolation is handled via explicit filtering in queries
   
   // Add to context
   c.set('user', session.user);

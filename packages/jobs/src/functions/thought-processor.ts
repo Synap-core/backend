@@ -20,9 +20,13 @@ export const processAnalyzedThought = inngest.createFunction(
     event: 'ai/thought.analyzed',
   },
   async ({ event, step }) => {
-    const { content, analysis } = event.data;
+    const { content, analysis, userId } = event.data;
 
-    console.log(`📝 Creating entity from analyzed thought...`);
+    if (!userId) {
+      throw new Error('userId is required in ai/thought.analyzed event');
+    }
+
+    console.log(`📝 Creating entity from analyzed thought for user ${userId}...`);
 
     // Step 1: Create entity.created event
     const entityId = randomUUID();
@@ -38,8 +42,10 @@ export const processAnalyzedThought = inngest.createFunction(
           tagNames: analysis.tags,
           dueDate: analysis.dueDate,
           priority: analysis.priority,
+          userId, // ✅ Include userId in event data for projector
         },
         source: 'automation',
+        userId, // ✅ User isolation
       });
 
       return { entityId };
@@ -48,7 +54,7 @@ export const processAnalyzedThought = inngest.createFunction(
     // Step 2: The entity.created event will trigger the main projector
     // which will actually create the entity in the database
 
-    console.log(`✅ Entity creation event logged: ${entityId}`);
+    console.log(`✅ Entity creation event logged: ${entityId} for user ${userId}`);
 
     return {
       success: true,
