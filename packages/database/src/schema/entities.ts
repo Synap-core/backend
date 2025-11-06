@@ -30,6 +30,13 @@ if (isPostgres) {
     title: text('title'),
     preview: text('preview'),
     
+    // **V0.3 NEW**: File storage references (R2/S3/Local)
+    fileUrl: text('file_url'),        // Public URL: https://r2.../users/123/notes/456.md
+    filePath: text('file_path'),      // Storage key: users/123/notes/456.md
+    fileSize: integer('file_size'),   // Size in bytes
+    fileType: text('file_type'),      // 'markdown', 'pdf', 'audio', 'video', 'image'
+    checksum: text('checksum'),       // SHA256 hash for integrity verification
+    
     // Optimistic locking
     version: integer('version').default(1).notNull(),
     
@@ -56,6 +63,13 @@ if (isPostgres) {
     // Display metadata
     title: text('title'),
     preview: text('preview'),
+    
+    // **V0.3 NEW**: File storage references (R2/S3/Local)
+    fileUrl: text('file_url'),        // Public URL
+    filePath: text('file_path'),      // Storage key
+    fileSize: integer('file_size'),   // Size in bytes
+    fileType: text('file_type'),      // 'markdown', 'pdf', 'audio', 'video', 'image'
+    checksum: text('checksum'),       // SHA256 hash
     
     // Optimistic locking
     version: integer('version').default(1).notNull(),
