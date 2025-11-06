@@ -47,6 +47,9 @@ importers:
       hono:
         specifier: ^4.0.0
         version: 4.10.4
+      hono-rate-limiter:
+        specifier: ^0.4.2
+        version: 0.4.2(hono@4.10.4)
       inngest:
         specifier: ^3.15.0
         version: 3.44.5(@opentelemetry/core@2.2.0)(hono@4.10.4)(typescript@5.9.3)(zod@3.25.76)
@@ -323,9 +326,6 @@ importers:
       '@initiativ/rag':
         specifier: workspace:*
         version: link:../@initiativ-rag
-      '@synap/api':
-        specifier: workspace:*
-        version: link:../api
       '@synap/database':
         specifier: workspace:*
         version: link:../database
@@ -6924,6 +6924,14 @@ packages:
     engines: {node: '>= 0.4'}
     dependencies:
       function-bind: 1.1.2
+    dev: false
+
+  /hono-rate-limiter@0.4.2(hono@4.10.4):
+    resolution: {integrity: sha512-AAtFqgADyrmbDijcRTT/HJfwqfvhalya2Zo+MgfdrMPas3zSMD8SU03cv+ZsYwRU1swv7zgVt0shwN059yzhjw==}
+    peerDependencies:
+      hono: ^4.1.1
+    dependencies:
+      hono: 4.10.4
     dev: false
 
   /hono@4.10.4:

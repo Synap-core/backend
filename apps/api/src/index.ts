@@ -13,11 +13,18 @@ import 'dotenv/config';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { secureHeaders } from 'hono/secure-headers';
 import { trpcServer } from '@hono/trpc-server';
 import { appRouter, createContext } from '@synap/api';
 import { serve } from '@hono/node-server';
 import { serve as inngestServe } from 'inngest/hono';
 import { inngest, functions } from '@synap/jobs';
+import {
+  rateLimitMiddleware,
+  requestSizeLimit,
+  securityHeadersMiddleware,
+  getCorsOrigins,
+} from './middleware/security.js';
 
 // Dynamic auth import based on DB dialect
 const isPostgres = process.env.DB_DIALECT === 'postgres';
@@ -37,11 +44,21 @@ if (isPostgres) {
 
 const app = new Hono();
 
-// Middleware
+// Security Middleware (Applied First)
+app.use('*', requestSizeLimit); // Max 10MB requests
+app.use('*', rateLimitMiddleware); // 100 req/15min per IP
+app.use('*', securityHeadersMiddleware); // Security headers
+app.use('*', secureHeaders()); // Hono built-in security
+
+// Logging & CORS
 app.use('*', logger());
 app.use('*', cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  origin: getCorsOrigins(),
   credentials: true,
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+  exposeHeaders: ['Content-Length', 'X-Request-Id'],
+  maxAge: 86400, // 24 hours
 }));
 
 // Health check (public, no auth)
