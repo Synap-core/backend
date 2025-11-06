@@ -17,17 +17,19 @@ import type { CoreConfig } from '@initiativ/core';
 /**
  * Initialize Initiativ Core for Synap
  * 
- * Note: This is a simplified version that works with event sourcing.
- * The actual file operations (.md files) can be handled separately or in Phase 2.
+ * Multi-user support:
+ * - SQLite: userId defaults to 'local-user' (single-user)
+ * - PostgreSQL: userId comes from authenticated session (multi-user)
  */
 export function createInitiativCore(config: {
   dataPath: string;
   anthropicApiKey: string;
-  enableRAG?: boolean; // Only provide embeddings if RAG is enabled
+  enableRAG?: boolean;
+  userId?: string; // NEW: Optional userId for multi-user mode
 }): InitiativCore {
   const coreConfig: CoreConfig = {
     dataPath: config.dataPath,
-    userId: 'local-user', // Single-user MVP
+    userId: config.userId || 'local-user', // Fallback to 'local-user' for SQLite
     agentApiKey: config.anthropicApiKey,
     agentModel: 'claude-3-haiku-20240307',
     // Only provide embeddings config if RAG is enabled
@@ -73,17 +75,21 @@ export function noteToEntityEvent(note: Note): {
  * 1. Uses @initiativ/core to process input and create note
  * 2. Converts note to Synap event format
  * 3. Returns event data (caller should log it via events.log)
+ * 
+ * Multi-user support:
+ * - userId is passed to Workflows (optional for SQLite, required for PostgreSQL)
+ * - RLS automatically filters database queries by userId
  */
 export async function createNoteViaInitiativ(
   core: InitiativCore,
   input: { type: 'text' | 'audio'; content: string; audioUrl?: string },
-  options?: { autoEnrich?: boolean; tags?: string[] }
+  options?: { autoEnrich?: boolean; tags?: string[]; userId?: string }
 ): Promise<Note> {
   // Ensure core is initialized
   await core.init();
 
-  // Create workflows instance
-  const workflows = new Workflows(core);
+  // Create workflows instance with optional userId
+  const workflows = new Workflows(core, options?.userId);
 
   // Use Initiativ's input router to process
   // For now, only support text input (audio would need Buffer data)

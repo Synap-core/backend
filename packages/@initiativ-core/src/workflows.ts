@@ -9,7 +9,10 @@ import type { Input } from '@initiativ/input';
 import type { Note, SearchResult } from '@initiativ/storage';
 
 export class Workflows {
-  constructor(private core: InitiativCore) {}
+  constructor(
+    private core: InitiativCore,
+    private userId?: string  // Optional: for multi-user mode (PostgreSQL)
+  ) {}
 
   /**
    * Workflow: Capture Note

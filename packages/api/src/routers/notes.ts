@@ -13,30 +13,34 @@ import { Workflows } from '@initiativ/core';
 import path from 'path';
 import os from 'os';
 
-// Initialize Initiativ Core (singleton for now)
-let initiativCore: ReturnType<typeof createInitiativCore> | null = null;
+// Initialize Initiativ Core (singleton for now, but scoped per user)
+const initiativCores = new Map<string, ReturnType<typeof createInitiativCore>>();
 
-function getInitiativCore(enableRAG: boolean = false) {
-  // Reset core if RAG setting changes
-  if (initiativCore && enableRAG !== (initiativCore.rag !== undefined)) {
-    initiativCore = null;
+function getInitiativCore(userId?: string, enableRAG: boolean = false) {
+  const coreKey = `${userId || 'local-user'}-${enableRAG}`;
+  
+  // Return existing core if available
+  if (initiativCores.has(coreKey)) {
+    return initiativCores.get(coreKey)!;
   }
 
-  if (!initiativCore) {
-    const dataPath = process.env.DATA_PATH || path.join(os.homedir(), '.synap', 'data');
-    const anthropicKey = process.env.ANTHROPIC_API_KEY || '';
+  // Create new core
+  const dataPath = process.env.DATA_PATH || path.join(os.homedir(), '.synap', 'data');
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || '';
 
-    if (!anthropicKey) {
-      throw new Error('ANTHROPIC_API_KEY is required');
-    }
-
-    initiativCore = createInitiativCore({
-      dataPath,
-      anthropicApiKey: anthropicKey,
-      enableRAG,
-    });
+  if (!anthropicKey) {
+    throw new Error('ANTHROPIC_API_KEY is required');
   }
-  return initiativCore;
+
+  const core = createInitiativCore({
+    dataPath,
+    anthropicApiKey: anthropicKey,
+    enableRAG,
+    userId, // Pass userId for multi-user mode
+  });
+
+  initiativCores.set(coreKey, core);
+  return core;
 }
 
 export const notesRouter = router({
@@ -60,7 +64,8 @@ export const notesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const core = getInitiativCore(input.useRAG);
+      // Get user-scoped Initiativ Core
+      const core = getInitiativCore(ctx.userId, input.useRAG);
       await core.init(); // Initialize if not already done
 
       // Step 1: Create note using Initiativ workflow
@@ -74,6 +79,7 @@ export const notesRouter = router({
         {
           autoEnrich: input.autoEnrich,
           tags: input.tags,
+          userId: ctx.userId, // Pass userId for multi-user mode
         }
       );
 
@@ -81,10 +87,12 @@ export const notesRouter = router({
       const eventData = noteToEntityEvent(note);
 
       // Step 3: Emit event to event log
+      // Note: RLS will automatically scope this insert to current user
       await ctx.db.insert(events).values({
         type: 'entity.created',
         data: eventData,
         source: 'api',
+        // userId is automatically added by RLS context
       });
 
       return {
@@ -105,12 +113,13 @@ export const notesRouter = router({
         limit: z.number().min(1).max(100).default(10),
       })
     )
-    .query(async ({ input }) => {
-      const core = getInitiativCore();
+    .query(async ({ ctx, input }) => {
+      // Get user-scoped Initiativ Core
+      const core = getInitiativCore(ctx.userId, input.useRAG);
       await core.init();
 
-      // Use Initiativ's search workflow
-      const workflows = new Workflows(core);
+      // Use Initiativ's search workflow (RLS will filter results automatically)
+      const workflows = new Workflows(core, ctx.userId);
       const results = await workflows.searchNotes(input.query, {
         useRAG: input.useRAG,
         limit: input.limit,

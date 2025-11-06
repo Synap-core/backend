@@ -3,7 +3,7 @@
  * 
  * Hono server with:
  * - tRPC API endpoints
- * - Better Auth routes
+ * - Better Auth routes (PostgreSQL only)
  * - Inngest handler
  */
 
@@ -14,11 +14,26 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { trpcServer } from '@hono/trpc-server';
-import { authMiddleware } from '@synap/auth';
 import { appRouter, createContext } from '@synap/api';
 import { serve } from '@hono/node-server';
 import { serve as inngestServe } from 'inngest/hono';
 import { inngest, functions } from '@synap/jobs';
+
+// Dynamic auth import based on DB dialect
+const isPostgres = process.env.DB_DIALECT === 'postgres';
+let auth: any = null;
+let authMiddleware: any = null;
+
+if (isPostgres) {
+  // PostgreSQL: Better Auth with OAuth
+  const betterAuth = await import('@synap/auth');
+  auth = betterAuth.auth;
+  authMiddleware = betterAuth.authMiddleware;
+} else {
+  // SQLite: Simple token auth
+  const simpleAuth = await import('@synap/auth');
+  authMiddleware = simpleAuth.authMiddleware;
+}
 
 const app = new Hono();
 
@@ -34,12 +49,23 @@ app.get('/health', (c) => {
   return c.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    version: '1.0.0-local',
-    mode: 'single-user',
+    version: isPostgres ? '0.2.0-saas' : '0.1.0-local',
+    mode: isPostgres ? 'multi-user' : 'single-user',
+    auth: isPostgres ? 'better-auth' : 'static-token',
   });
 });
 
-// tRPC routes (protected by token auth)
+// Better Auth routes (PostgreSQL only)
+if (isPostgres && auth) {
+  // Handle all Better Auth routes: /api/auth/sign-in, /api/auth/sign-up, etc.
+  app.all('/api/auth/*', async (c) => {
+    return auth.handler(c.req.raw);
+  });
+  
+  console.log('✅ Better Auth routes enabled at /api/auth/*');
+}
+
+// tRPC routes (protected by auth)
 app.use('/trpc/*', authMiddleware);
 app.use(
   '/trpc/*',
@@ -90,4 +116,5 @@ serve({
 });
 
 export default app;
+
 
