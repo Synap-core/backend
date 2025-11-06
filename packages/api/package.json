@@ -8,6 +8,7 @@
     "@initiativ/core": "workspace:*",
     "@initiativ/input": "workspace:*",
     "@initiativ/storage": "workspace:*",
+    "@synap/ai": "workspace:*",
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/storage": "workspace:*",

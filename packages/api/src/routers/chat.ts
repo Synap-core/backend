@@ -16,7 +16,9 @@ import {
   conversationRepository, 
   MessageRole
 } from '@synap/database';
+import { conversationalAgent, actionExtractor } from '@synap/ai';
 import { requireUserId } from '../utils/user-scoped.js';
+import { eventRepository, AggregateType, EventSource } from '@synap/database';
 import { randomUUID } from 'crypto';
 
 // ============================================================================
@@ -79,16 +81,54 @@ export const chatRouter = router({
         userId,
       });
       
-      // TODO: Phase 2 - Call AI to generate response
-      // For now, return a placeholder assistant message
+      // ========================================================================
+      // PHASE 2: Real AI Integration ✅
+      // ========================================================================
+      
+      // Get conversation history for context
+      const history = await conversationRepository.getThreadHistory(threadId, 50);
+      
+      // Format history for AI (exclude system messages for cleaner context)
+      const conversationHistory = history
+        .filter(msg => msg.role !== 'system')
+        .map(msg => ({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        }));
+      
+      // Call AI to generate response
+      const aiResponse = await conversationalAgent.generateResponse(
+        conversationHistory.slice(0, -1), // Exclude the message we just added
+        input.content,
+        {
+          // TODO: Add user context (name, recent entities, etc.)
+        }
+      );
+      
+      // Extract actions from AI response
+      const extraction = actionExtractor.extractActions(aiResponse.content);
+      
+      console.log('🤖 AI Response:', {
+        latency: aiResponse.latency,
+        tokens: aiResponse.tokens,
+        actionsFound: extraction.actions.length,
+      });
+      
+      // Store assistant message with actions
       const assistantMessage = await conversationRepository.appendMessage({
         threadId,
         parentId: userMessage.id,
         role: MessageRole.ASSISTANT,
-        content: '🤖 AI response will be implemented in Phase 2. For now, this is a placeholder.',
+        content: extraction.cleanContent || aiResponse.content,
         metadata: {
-          model: 'placeholder',
-          suggestedActions: [],
+          suggestedActions: extraction.actions.map(action => ({
+            type: action.type,
+            description: `Execute ${action.type}`,
+            params: action.params,
+          })),
+          model: aiResponse.model,
+          tokens: aiResponse.tokens.total,
+          latency: aiResponse.latency,
         },
         userId,
       });
@@ -204,7 +244,7 @@ export const chatRouter = router({
   /**
    * Execute action suggested by AI
    * 
-   * This is where AI suggestions become real actions.
+   * This is THE BRIDGE from conversation → events → state
    */
   executeAction: protectedProcedure
     .input(
@@ -218,30 +258,240 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       
-      // TODO: Phase 3 - Bridge to Event Store
-      // For now, just log a system message
-      const systemMessage = await conversationRepository.appendMessage({
-        threadId: input.threadId,
-        parentId: input.messageId,
-        role: MessageRole.SYSTEM,
-        content: `✅ Action executed: ${input.actionType}`,
-        metadata: {
-          executedAction: {
-            type: input.actionType,
-            result: {
-              status: 'placeholder',
-              message: 'Action execution will be implemented in Phase 3',
+      // ========================================================================
+      // PHASE 3: Action Bridge - Connect Chat → Events → State ✅
+      // ========================================================================
+      
+      let result: any;
+      let eventType: string;
+      let aggregateId = randomUUID();
+      
+      try {
+        // Switch on action type and execute appropriate logic
+        switch (input.actionType) {
+          // =====================================================================
+          // TASK ACTIONS
+          // =====================================================================
+          case 'task.create': {
+            const { title, description, dueDate, priority } = input.actionParams;
+            
+            // Emit event to event store
+            await eventRepository.append({
+              aggregateId,
+              aggregateType: AggregateType.ENTITY,
+              eventType: 'task.creation.requested',
+              userId,
+              data: {
+                title,
+                description,
+                dueDate,
+                priority,
+                status: 'todo',
+              },
+              version: 1,
+              source: EventSource.API,
+              metadata: {
+                triggeredBy: 'conversation',
+                threadId: input.threadId,
+                messageId: input.messageId,
+              },
+            });
+            
+            result = {
+              taskId: aggregateId,
+              title,
+              status: 'todo',
+            };
+            eventType = 'task.created';
+            break;
+          }
+          
+          case 'task.complete': {
+            const { taskId } = input.actionParams;
+            aggregateId = taskId;
+            
+            // Get current version (for optimistic locking)
+            const currentVersion = await eventRepository.getAggregateVersion(taskId) || 0;
+            
+            await eventRepository.append({
+              aggregateId: taskId,
+              aggregateType: AggregateType.ENTITY,
+              eventType: 'task.completed',
+              userId,
+              data: {
+                completedAt: new Date().toISOString(),
+              },
+              version: currentVersion + 1,
+              source: EventSource.API,
+            });
+            
+            result = { taskId, status: 'done' };
+            eventType = 'task.completed';
+            break;
+          }
+          
+          // =====================================================================
+          // NOTE ACTIONS
+          // =====================================================================
+          case 'note.create': {
+            const { content, title, tags } = input.actionParams;
+            
+            await eventRepository.append({
+              aggregateId,
+              aggregateType: AggregateType.ENTITY,
+              eventType: 'note.creation.requested',
+              userId,
+              data: {
+                title,
+                content,
+                tags,
+                type: 'note',
+              },
+              version: 1,
+              source: EventSource.API,
+              metadata: {
+                triggeredBy: 'conversation',
+                threadId: input.threadId,
+              },
+            });
+            
+            result = {
+              noteId: aggregateId,
+              title: title || 'Untitled',
+            };
+            eventType = 'note.created';
+            break;
+          }
+          
+          // =====================================================================
+          // PROJECT ACTIONS
+          // =====================================================================
+          case 'project.create': {
+            const { title, description, startDate, endDate, tasks } = input.actionParams;
+            
+            await eventRepository.append({
+              aggregateId,
+              aggregateType: AggregateType.ENTITY,
+              eventType: 'project.creation.requested',
+              userId,
+              data: {
+                title,
+                description,
+                startDate,
+                endDate,
+                type: 'project',
+              },
+              version: 1,
+              source: EventSource.API,
+            });
+            
+            // If tasks provided, create them too
+            if (tasks && Array.isArray(tasks)) {
+              const correlationId = randomUUID();
+              
+              for (const taskTitle of tasks) {
+                const taskId = randomUUID();
+                await eventRepository.append({
+                  aggregateId: taskId,
+                  aggregateType: AggregateType.ENTITY,
+                  eventType: 'task.creation.requested',
+                  userId,
+                  data: {
+                    title: taskTitle,
+                    projectId: aggregateId,
+                    status: 'todo',
+                  },
+                  version: 1,
+                  source: EventSource.API,
+                  correlationId,
+                });
+              }
+            }
+            
+            result = {
+              projectId: aggregateId,
+              title,
+              tasksCreated: tasks?.length || 0,
+            };
+            eventType = 'project.created';
+            break;
+          }
+          
+          // =====================================================================
+          // SEARCH ACTIONS
+          // =====================================================================
+          case 'search.semantic': {
+            const { query } = input.actionParams;
+            
+            // TODO: Call existing search API
+            result = {
+              query,
+              results: [],
+              message: 'Search will be implemented with RAG integration',
+            };
+            eventType = 'search.executed';
+            break;
+          }
+          
+          // =====================================================================
+          // DEFAULT: Unknown action
+          // =====================================================================
+          default:
+            throw new Error(`Unknown action type: ${input.actionType}`);
+        }
+        
+        // Log system message confirming action
+        const systemMessage = await conversationRepository.appendMessage({
+          threadId: input.threadId,
+          parentId: input.messageId,
+          role: MessageRole.SYSTEM,
+          content: `✅ ${eventType.replace('.', ' ').replace('_', ' ')} - Action exécutée avec succès!`,
+          metadata: {
+            executedAction: {
+              type: input.actionType,
+              result,
             },
           },
-        },
-        userId,
-      });
-      
-      return {
-        success: true,
-        systemMessage,
-        message: 'Action executed (placeholder)',
-      };
+          userId,
+        });
+        
+        console.log('✅ Action executed:', {
+          type: input.actionType,
+          aggregateId,
+          eventType,
+        });
+        
+        return {
+          success: true,
+          systemMessage,
+          result,
+          eventType,
+        };
+        
+      } catch (error) {
+        // Log error as system message
+        const errorMessage = await conversationRepository.appendMessage({
+          threadId: input.threadId,
+          parentId: input.messageId,
+          role: MessageRole.SYSTEM,
+          content: `❌ Erreur lors de l'exécution: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          metadata: {
+            executedAction: {
+              type: input.actionType,
+              result: {
+                error: error instanceof Error ? error.message : 'Unknown error',
+              },
+            },
+          },
+          userId,
+        });
+        
+        return {
+          success: false,
+          systemMessage: errorMessage,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
     }),
 
   /**
