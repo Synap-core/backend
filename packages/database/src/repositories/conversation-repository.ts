@@ -13,6 +13,7 @@
 import { Pool } from '@neondatabase/serverless';
 import { createHash } from 'crypto';
 import { randomUUID } from 'crypto';
+import type { ConversationMessageMetadata } from '@synap/core';
 
 // ============================================================================
 // TYPES
@@ -24,41 +25,13 @@ export enum MessageRole {
   SYSTEM = 'system',
 }
 
-export interface SuggestedAction {
-  type: string;
-  description: string;
-  params: Record<string, unknown>;
-}
-
-export interface MessageMetadata {
-  // For assistant messages
-  suggestedActions?: SuggestedAction[];
-  
-  // For system messages
-  executedAction?: {
-    type: string;
-    result: unknown;
-  };
-  
-  // For user messages
-  attachments?: Array<{
-    type: string;
-    url: string;
-  }>;
-  
-  // AI metadata
-  model?: string;
-  tokens?: number;
-  latency?: number;
-}
-
 export interface ConversationMessage {
   id: string;
   threadId: string;
   parentId: string | null;
   role: MessageRole;
   content: string;
-  metadata?: MessageMetadata;
+  metadata?: ConversationMessageMetadata | null;
   userId: string;
   timestamp: Date;
   previousHash: string | null;
@@ -71,7 +44,7 @@ export interface AppendMessageData {
   parentId?: string;
   role: MessageRole;
   content: string;
-  metadata?: MessageMetadata;
+  metadata?: ConversationMessageMetadata | null;
   userId: string;
 }
 
@@ -405,15 +378,17 @@ export class ConversationRepository {
    * Map database row to ConversationMessage
    */
   private mapRow(row: Record<string, any>): ConversationMessage {
+    const metadataValue = row.metadata
+      ? (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata)
+      : null;
+
     return {
       id: row.id,
       threadId: row.thread_id,
       parentId: row.parent_id,
       role: row.role as MessageRole,
       content: row.content,
-      metadata: row.metadata
-        ? (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata)
-        : undefined,
+      metadata: metadataValue as ConversationMessageMetadata | null,
       userId: row.user_id,
       timestamp: new Date(row.timestamp),
       previousHash: row.previous_hash,

@@ -4,7 +4,7 @@
  * V0.4: Test conversational interface
  */
 
-import { conversationRepository, MessageRole } from '../packages/database/src/repositories/conversation-repository.js';
+import { conversationService } from '../packages/domain/src/index.js';
 import { randomUUID } from 'crypto';
 
 async function runTests() {
@@ -16,9 +16,9 @@ async function runTests() {
   try {
     // Test 1: Send user message
     console.log('Test 1: Send user message');
-    const msg1 = await conversationRepository.appendMessage({
+    const msg1 = await conversationService.appendMessage({
       threadId,
-      role: MessageRole.USER,
+      role: 'user',
       content: 'Create a task to call John tomorrow at 2pm',
       userId: testUserId,
     });
@@ -28,10 +28,10 @@ async function runTests() {
 
     // Test 2: Send assistant response
     console.log('\nTest 2: Send assistant response');
-    const msg2 = await conversationRepository.appendMessage({
+    const msg2 = await conversationService.appendMessage({
       threadId,
       parentId: msg1.id,
-      role: MessageRole.ASSISTANT,
+      role: 'assistant',
       content: 'I can create a task for you. Would you like me to proceed?',
       metadata: {
         suggestedActions: [
@@ -57,10 +57,10 @@ async function runTests() {
 
     // Test 3: User confirms
     console.log('\nTest 3: User confirms action');
-    const msg3 = await conversationRepository.appendMessage({
+    const msg3 = await conversationService.appendMessage({
       threadId,
       parentId: msg2.id,
-      role: MessageRole.USER,
+      role: 'user',
       content: 'Yes, please create it',
       userId: testUserId,
     });
@@ -68,10 +68,10 @@ async function runTests() {
 
     // Test 4: System confirms execution
     console.log('\nTest 4: System confirms execution');
-    const msg4 = await conversationRepository.appendMessage({
+    const msg4 = await conversationService.appendMessage({
       threadId,
       parentId: msg3.id,
-      role: MessageRole.SYSTEM,
+      role: 'system',
       content: '✅ Task created successfully!',
       metadata: {
         executedAction: {
@@ -88,7 +88,7 @@ async function runTests() {
 
     // Test 5: Get thread history
     console.log('\nTest 5: Get thread history');
-    const history = await conversationRepository.getThreadHistory(threadId);
+    const history = await conversationService.getThreadHistory(threadId);
     console.log(`✅ Thread has ${history.length} messages`);
     history.forEach((msg, index) => {
       console.log(`   ${index + 1}. [${msg.role}] ${msg.content.substring(0, 50)}...`);
@@ -96,7 +96,7 @@ async function runTests() {
 
     // Test 6: Verify hash chain
     console.log('\nTest 6: Verify hash chain integrity');
-    const verification = await conversationRepository.verifyHashChain(threadId);
+    const verification = await conversationService.verifyHashChain(threadId);
     console.log(`✅ Hash chain valid: ${verification.isValid}`);
     if (!verification.isValid) {
       console.log(`   ❌ Broken at: ${verification.brokenAt}`);
@@ -105,14 +105,14 @@ async function runTests() {
 
     // Test 7: Create branch (alternate timeline)
     console.log('\nTest 7: Create branch from message 2');
-    const branchThreadId = await conversationRepository.createBranch(msg2.id, testUserId);
+    const branchThreadId = await conversationService.createBranch(msg2.id, testUserId);
     console.log('✅ Branch created:', branchThreadId);
 
     // Add message to branch
-    const branchMsg = await conversationRepository.appendMessage({
+    const branchMsg = await conversationService.appendMessage({
       threadId: branchThreadId,
       parentId: msg2.id,
-      role: MessageRole.USER,
+      role: 'user',
       content: 'Actually, let me think about this first',
       userId: testUserId,
     });
@@ -120,7 +120,7 @@ async function runTests() {
 
     // Test 8: Get thread info
     console.log('\nTest 8: Get thread info');
-    const threadInfo = await conversationRepository.getThreadInfo(threadId);
+    const threadInfo = await conversationService.getThreadInfo(threadId);
     console.log('✅ Thread info:');
     console.log(`   Messages: ${threadInfo.messageCount}`);
     console.log(`   Branches: ${threadInfo.branches}`);
@@ -128,7 +128,7 @@ async function runTests() {
 
     // Test 9: Get user's threads
     console.log('\nTest 9: Get user threads');
-    const userThreads = await conversationRepository.getUserThreads(testUserId);
+    const userThreads = await conversationService.getUserThreads(testUserId);
     console.log(`✅ User has ${userThreads.length} threads`);
     userThreads.forEach((thread, index) => {
       console.log(`   ${index + 1}. Thread ${thread.threadId.substring(0, 8)}... (${thread.messageCount} messages)`);
@@ -137,7 +137,7 @@ async function runTests() {
 
     // Test 10: Get branches
     console.log('\nTest 10: Get branches from message 2');
-    const branches = await conversationRepository.getBranches(msg2.id);
+    const branches = await conversationService.getBranches(msg2.id);
     console.log(`✅ Found ${branches.length} branches`);
 
     console.log('\n' + '='.repeat(60));

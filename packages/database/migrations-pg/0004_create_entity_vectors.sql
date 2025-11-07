@@ -14,6 +14,7 @@ CREATE TABLE entity_vectors (
   entity_type TEXT NOT NULL,
   title TEXT,
   preview TEXT,  -- First 500 chars of content
+  file_url TEXT,
   
   -- Timestamps
   indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -52,5 +53,6 @@ CREATE TRIGGER trigger_entity_vectors_updated_at
 COMMENT ON TABLE entity_vectors IS 'Vector embeddings for semantic search (separated from entities for performance)';
 COMMENT ON COLUMN entity_vectors.embedding IS 'OpenAI embedding vector (1536 dimensions)';
 COMMENT ON COLUMN entity_vectors.preview IS 'Denormalized content preview for result snippets';
+COMMENT ON COLUMN entity_vectors.file_url IS 'Original file URL for quick retrieval';
 COMMENT ON INDEX idx_entity_vectors_embedding IS 'HNSW index for fast similarity search (m=16, ef_construction=64)';
 

@@ -18,8 +18,17 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
+    "@langchain/core": "1.0.1",
+    "@langchain/langgraph": "^1.0.1",
+    "@synap/core": "workspace:*",
+    "@synap/database": "workspace:*",
+    "@synap/domain": "workspace:*",
+    "@synap/storage": "workspace:*",
     "ai": "^3.4.33",
-    "zod": "^3.22.0"
+    "openai": "^4.104.0",
+    "langchain": "^0.3.10",
+    "zod": "^3.22.0",
+    "zod-to-json-schema": "^3.22.3"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
@@ -27,4 +36,3 @@
     "vitest": "^1.0.4"
   }
 }
-

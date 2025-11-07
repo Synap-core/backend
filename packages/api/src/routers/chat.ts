@@ -12,39 +12,80 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { 
-  conversationRepository, 
-  MessageRole
-} from '@synap/database';
-import { conversationalAgent, actionExtractor } from '@synap/ai';
+import { conversationService, eventService, MessageRoleSchema } from '@synap/domain';
+import { runSynapAgent } from '@synap/ai';
 import { requireUserId } from '../utils/user-scoped.js';
-import { eventRepository, AggregateType, EventSource } from '@synap/database';
 import { randomUUID } from 'crypto';
+import { AgentStateSchema } from '@synap/core';
+import type { SynapAgentResult } from '@synap/ai';
+import { createLogger } from '@synap/core';
 
-// ============================================================================
-// SCHEMAS
-// ============================================================================
+const chatLogger = createLogger({ module: 'chat-router' });
 
-const SuggestedActionSchema = z.object({
-  type: z.string(),
-  description: z.string(),
-  params: z.record(z.any()),
-});
+const NO_RESPONSE_FALLBACK =
+  "Je n'ai pas pu générer de réponse pour le moment. Réessaie dans quelques instants.";
 
-const MessageMetadataSchema = z.object({
-  suggestedActions: z.array(SuggestedActionSchema).optional(),
-  executedAction: z.object({
-    type: z.string(),
-    result: z.any(),
-  }).optional(),
-  attachments: z.array(z.object({
-    type: z.string(),
-    url: z.string(),
-  })).optional(),
-  model: z.string().optional(),
-  tokens: z.number().optional(),
-  latency: z.number().optional(),
-}).optional();
+const serializeAgentStateMetadata = (state: SynapAgentResult) => {
+  const planActions = state.plan?.actions.map((action) => ({
+    tool: action.tool,
+    params: action.params,
+    reasoning: action.justification ?? state.plan?.reasoning ?? 'Aucune justification fournie.',
+  })) ?? [];
+
+  const executionSummaries = (state.execution ?? []).map((log) => ({
+    tool: log.tool,
+    status: log.status,
+    result: log.result,
+    error: log.errorMessage,
+  }));
+
+  const suggestedActions = planActions.map((action) => ({
+    type: action.tool,
+    description: action.reasoning,
+    params: action.params,
+  }));
+
+  const metadataInput = {
+    intentAnalysis: state.intentAnalysis
+      ? {
+          label: state.intentAnalysis.label,
+          confidence: state.intentAnalysis.confidence,
+          reasoning: state.intentAnalysis.reasoning,
+          needsFollowUp: state.intentAnalysis.needsFollowUp,
+        }
+      : undefined,
+    context: state.context
+      ? {
+          retrievedNotesCount: state.context.semanticResults.length,
+          retrievedFactsCount: state.context.memoryFacts.length,
+        }
+      : undefined,
+    plan: planActions,
+    executionSummaries,
+    finalResponse: state.response ?? NO_RESPONSE_FALLBACK,
+    suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
+  };
+
+  const parsedState = AgentStateSchema.safeParse(metadataInput);
+
+  if (!parsedState.success) {
+    chatLogger.warn({ error: parsedState.error.flatten() }, 'Failed to normalize agent state metadata');
+    return {
+      agentState: metadataInput,
+      suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
+    };
+  }
+
+  const agentState = parsedState.data;
+
+  return {
+    agentState,
+    suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
+    model: agentState.model,
+    tokens: agentState.tokens,
+    latency: agentState.latency,
+  };
+};
 
 // ============================================================================
 // ROUTER
@@ -62,82 +103,64 @@ export const chatRouter = router({
         threadId: z.string().uuid().optional(),  // Create new if not provided
         parentId: z.string().uuid().optional(),  // For branching
         content: z.string().min(1).max(10000),
-        metadata: MessageMetadataSchema,
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      
-      // Create new thread if not provided
       const threadId = input.threadId || randomUUID();
-      
-      // Append user message
-      const userMessage = await conversationRepository.appendMessage({
+      const log = chatLogger.child({ userId, threadId });
+
+      log.info({ parentId: input.parentId }, 'Received chat message');
+
+      const userMessage = await conversationService.appendMessage({
         threadId,
         parentId: input.parentId,
-        role: MessageRole.USER,
+        role: MessageRoleSchema.Enum.user,
         content: input.content,
-        metadata: input.metadata as any,
+        metadata: null,
         userId,
       });
-      
-      // ========================================================================
-      // PHASE 2: Real AI Integration ✅
-      // ========================================================================
-      
-      // Get conversation history for context
-      const history = await conversationRepository.getThreadHistory(threadId, 50);
-      
-      // Format history for AI (exclude system messages for cleaner context)
-      const conversationHistory = history
-        .filter(msg => msg.role !== 'system')
-        .map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
-      
-      // Call AI to generate response
-      const aiResponse = await conversationalAgent.generateResponse(
-        conversationHistory.slice(0, -1), // Exclude the message we just added
-        input.content,
-        {
-          // TODO: Add user context (name, recent entities, etc.)
-        }
-      );
-      
-      // Extract actions from AI response
-      const extraction = actionExtractor.extractActions(aiResponse.content);
-      
-      console.log('🤖 AI Response:', {
-        latency: aiResponse.latency,
-        tokens: aiResponse.tokens,
-        actionsFound: extraction.actions.length,
-      });
-      
-      // Store assistant message with actions
-      const assistantMessage = await conversationRepository.appendMessage({
+
+      log.debug({ messageId: userMessage.id }, 'User message appended');
+
+      let agentState: SynapAgentResult | null = null;
+
+      try {
+        agentState = await runSynapAgent({
+          userId,
+          threadId,
+          message: input.content,
+        });
+      } catch (error) {
+        log.error({ err: error }, 'Synap agent invocation failed');
+      }
+
+      const assistantResponse = agentState?.response ?? NO_RESPONSE_FALLBACK;
+      const assistantMetadata = agentState ? serializeAgentStateMetadata(agentState) : null;
+
+      const assistantMessage = await conversationService.appendMessage({
         threadId,
         parentId: userMessage.id,
-        role: MessageRole.ASSISTANT,
-        content: extraction.cleanContent || aiResponse.content,
-        metadata: {
-          suggestedActions: extraction.actions.map(action => ({
-            type: action.type,
-            description: `Execute ${action.type}`,
-            params: action.params,
-          })),
-          model: aiResponse.model,
-          tokens: aiResponse.tokens.total,
-          latency: aiResponse.latency,
-        },
+        role: MessageRoleSchema.Enum.assistant,
+        content: assistantResponse,
+        metadata: assistantMetadata,
         userId,
       });
-      
+
+      log.info(
+        {
+          assistantMessageId: assistantMessage.id,
+          agentStateCaptured: Boolean(agentState),
+        },
+        'Assistant response persisted'
+      );
+
       return {
         success: true,
         threadId,
         userMessage,
         assistantMessage,
+        agentState,
       };
     }),
 
@@ -155,7 +178,7 @@ export const chatRouter = router({
       const userId = requireUserId(ctx.userId);
       
       // Get thread history
-      const messages = await conversationRepository.getThreadHistory(
+      const messages = await conversationService.getThreadHistory(
         input.threadId,
         input.limit
       );
@@ -166,7 +189,7 @@ export const chatRouter = router({
       }
       
       // Get thread info
-      const threadInfo = await conversationRepository.getThreadInfo(input.threadId);
+      const threadInfo = await conversationService.getThreadInfo(input.threadId);
       
       return {
         threadId: input.threadId,
@@ -187,7 +210,7 @@ export const chatRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       
-      const threads = await conversationRepository.getUserThreads(
+      const threads = await conversationService.getUserThreads(
         userId,
         input.limit
       );
@@ -210,7 +233,7 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       
-      const newThreadId = await conversationRepository.createBranch(
+      const newThreadId = await conversationService.createBranch(
         input.parentMessageId,
         userId
       );
@@ -232,7 +255,7 @@ export const chatRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const branches = await conversationRepository.getBranches(input.parentId);
+      const branches = await conversationService.getBranches(input.parentId);
       
       return {
         parentId: input.parentId,
@@ -257,15 +280,17 @@ export const chatRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      
-      // ========================================================================
-      // PHASE 3: Action Bridge - Connect Chat → Events → State ✅
-      // ========================================================================
-      
+      const log = chatLogger.child({
+        userId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        actionType: input.actionType,
+      });
+
       let result: any;
       let eventType: string;
       let aggregateId = randomUUID();
-      
+
       try {
         // Switch on action type and execute appropriate logic
         switch (input.actionType) {
@@ -276,9 +301,9 @@ export const chatRouter = router({
             const { title, description, dueDate, priority } = input.actionParams;
             
             // Emit event to event store
-            await eventRepository.append({
+            await eventService.append({
               aggregateId,
-              aggregateType: AggregateType.ENTITY,
+              aggregateType: 'entity',
               eventType: 'task.creation.requested',
               userId,
               data: {
@@ -289,7 +314,7 @@ export const chatRouter = router({
                 status: 'todo',
               },
               version: 1,
-              source: EventSource.API,
+              source: 'api',
               metadata: {
                 triggeredBy: 'conversation',
                 threadId: input.threadId,
@@ -311,18 +336,18 @@ export const chatRouter = router({
             aggregateId = taskId;
             
             // Get current version (for optimistic locking)
-            const currentVersion = await eventRepository.getAggregateVersion(taskId) || 0;
-            
-            await eventRepository.append({
+            const currentVersion = (await eventService.getAggregateVersion(taskId)) || 0;
+
+            await eventService.append({
               aggregateId: taskId,
-              aggregateType: AggregateType.ENTITY,
+              aggregateType: 'entity',
               eventType: 'task.completed',
               userId,
               data: {
                 completedAt: new Date().toISOString(),
               },
               version: currentVersion + 1,
-              source: EventSource.API,
+              source: 'api',
             });
             
             result = { taskId, status: 'done' };
@@ -336,9 +361,9 @@ export const chatRouter = router({
           case 'note.create': {
             const { content, title, tags } = input.actionParams;
             
-            await eventRepository.append({
+            await eventService.append({
               aggregateId,
-              aggregateType: AggregateType.ENTITY,
+              aggregateType: 'entity',
               eventType: 'note.creation.requested',
               userId,
               data: {
@@ -348,7 +373,7 @@ export const chatRouter = router({
                 type: 'note',
               },
               version: 1,
-              source: EventSource.API,
+              source: 'api',
               metadata: {
                 triggeredBy: 'conversation',
                 threadId: input.threadId,
@@ -369,9 +394,9 @@ export const chatRouter = router({
           case 'project.create': {
             const { title, description, startDate, endDate, tasks } = input.actionParams;
             
-            await eventRepository.append({
+            await eventService.append({
               aggregateId,
-              aggregateType: AggregateType.ENTITY,
+              aggregateType: 'entity',
               eventType: 'project.creation.requested',
               userId,
               data: {
@@ -382,7 +407,7 @@ export const chatRouter = router({
                 type: 'project',
               },
               version: 1,
-              source: EventSource.API,
+              source: 'api',
             });
             
             // If tasks provided, create them too
@@ -391,9 +416,9 @@ export const chatRouter = router({
               
               for (const taskTitle of tasks) {
                 const taskId = randomUUID();
-                await eventRepository.append({
+                await eventService.append({
                   aggregateId: taskId,
-                  aggregateType: AggregateType.ENTITY,
+                  aggregateType: 'entity',
                   eventType: 'task.creation.requested',
                   userId,
                   data: {
@@ -402,7 +427,7 @@ export const chatRouter = router({
                     status: 'todo',
                   },
                   version: 1,
-                  source: EventSource.API,
+                  source: 'api',
                   correlationId,
                 });
               }
@@ -439,12 +464,10 @@ export const chatRouter = router({
           default:
             throw new Error(`Unknown action type: ${input.actionType}`);
         }
-        
-        // Log system message confirming action
-        const systemMessage = await conversationRepository.appendMessage({
+        const systemMessage = await conversationService.appendMessage({
           threadId: input.threadId,
           parentId: input.messageId,
-          role: MessageRole.SYSTEM,
+          role: MessageRoleSchema.Enum.system,
           content: `✅ ${eventType.replace('.', ' ').replace('_', ' ')} - Action exécutée avec succès!`,
           metadata: {
             executedAction: {
@@ -454,12 +477,8 @@ export const chatRouter = router({
           },
           userId,
         });
-        
-        console.log('✅ Action executed:', {
-          type: input.actionType,
-          aggregateId,
-          eventType,
-        });
+
+        log.info({ aggregateId, eventType }, 'Conversation action executed');
         
         return {
           success: true,
@@ -470,10 +489,10 @@ export const chatRouter = router({
         
       } catch (error) {
         // Log error as system message
-        const errorMessage = await conversationRepository.appendMessage({
+        const errorMessage = await conversationService.appendMessage({
           threadId: input.threadId,
           parentId: input.messageId,
-          role: MessageRole.SYSTEM,
+          role: MessageRoleSchema.Enum.system,
           content: `❌ Erreur lors de l'exécution: ${error instanceof Error ? error.message : 'Unknown error'}`,
           metadata: {
             executedAction: {
@@ -485,6 +504,8 @@ export const chatRouter = router({
           },
           userId,
         });
+
+        log.error({ err: error }, 'Conversation action failed');
         
         return {
           success: false,
@@ -507,7 +528,7 @@ export const chatRouter = router({
       // Note: User ownership check removed for simplicity
       // Hash chain verification is public information
       
-      const verification = await conversationRepository.verifyHashChain(input.threadId);
+      const verification = await conversationService.verifyHashChain(input.threadId);
       
       return {
         threadId: input.threadId,
@@ -527,7 +548,7 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       
-      await conversationRepository.deleteMessage(input.messageId, userId);
+      await conversationService.deleteMessage(input.messageId, userId);
       
       return {
         success: true,

@@ -1,9 +1,18 @@
 {
   "name": "@synap/core",
   "version": "1.0.0",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
+    "build": "tsc",
     "test": "tsx tests/phase1.test.ts",
     "test:local": "tsx tests/local-mvp.test.ts"
   },
@@ -12,7 +21,9 @@
     "@synap/api": "workspace:*",
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
-    "drizzle-orm": "^0.33.0"
+    "pino": "^9.2.0",
+    "drizzle-orm": "^0.33.0",
+    "zod": "^3.22.0"
   },
   "devDependencies": {
     "tsx": "^4.7.0",

@@ -1,19 +1,4 @@
-/**
- * Conversation Messages Schema - The Source of INTENTION
- * 
- * V0.4: Hash-chained conversation history
- * 
- * This is the PRIMARY source of truth. It captures:
- * - User intent (WHY actions were taken)
- * - AI reasoning (HOW decisions were made)
- * - Branching discussions (WHAT-IF scenarios)
- * 
- * The hash chain ensures:
- * - Immutability (tamper detection)
- * - Verifiable ordering
- * - Branch integrity
- */
-
+import type { ConversationMessageMetadata } from '@synap/core';
 import { randomUUID } from 'crypto';
 
 const isPostgres = process.env.DB_DIALECT === 'postgres';
@@ -22,7 +7,8 @@ let conversationMessages: any;
 
 if (isPostgres) {
   // PostgreSQL schema
-  const { pgTable, uuid, text, timestamp, jsonb } = require('drizzle-orm/pg-core');
+  const pg = require('drizzle-orm/pg-core') as typeof import('drizzle-orm/pg-core');
+  const { pgTable, uuid, text, timestamp, jsonb } = pg;
   
   conversationMessages = pgTable('conversation_messages', {
     // Identity
@@ -39,7 +25,7 @@ if (isPostgres) {
     content: text('content').notNull(),
     
     // Metadata (AI suggestions, sources, etc.)
-    metadata: jsonb('metadata') as any,
+    metadata: jsonb('metadata').$type<ConversationMessageMetadata | null>(),
     
     // Ownership
     userId: text('user_id').notNull(),
@@ -58,7 +44,8 @@ if (isPostgres) {
   });
 } else {
   // SQLite schema (single-user, no hash chain needed)
-  const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
+  const sqlite = require('drizzle-orm/sqlite-core') as typeof import('drizzle-orm/sqlite-core');
+  const { sqliteTable, text, integer } = sqlite;
   
   conversationMessages = sqliteTable('conversation_messages', {
     id: text('id').primaryKey().$defaultFn(() => randomUUID()),
@@ -67,7 +54,7 @@ if (isPostgres) {
     
     role: text('role', { enum: ['user', 'assistant', 'system'] }).notNull(),
     content: text('content').notNull(),
-    metadata: text('metadata', { mode: 'json' }),
+    metadata: text('metadata', { mode: 'json' }).$type<ConversationMessageMetadata | null>(),
     
     userId: text('user_id').notNull(),
     

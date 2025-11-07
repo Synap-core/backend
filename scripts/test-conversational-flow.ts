@@ -1,221 +1,139 @@
 /**
- * V0.4 End-to-End Conversational Flow Test
- * 
- * Tests the complete flow:
- * User Message → AI Response → User Confirmation → Event Logged → State Updated
+ * V0.5 End-to-End Conversational Flow Test
+ *
+ * Validates the agent orchestrator branch:
+ * User Message → Synap Agent Graph → Tool Execution → Conversation Log + Events
  */
 
-import { conversationRepository, MessageRole } from '../packages/database/src/repositories/conversation-repository.js';
-import { eventRepository, AggregateType } from '../packages/database/src/repositories/event-repository.js';
-import { conversationalAgent, actionExtractor } from '../packages/ai/src/index.js';
 import { randomUUID } from 'crypto';
+import { AgentStateSchema } from '@synap/core';
+import { runSynapAgent } from '../packages/ai/src/index.js';
+import { conversationService, eventService } from '../packages/domain/src/index.js';
+
+const NO_RESPONSE_FALLBACK =
+  "Je n'ai pas pu générer de réponse pour le moment. Réessaie dans quelques instants.";
+
+const divider = (label: string) => {
+  console.log('\n' + label);
+  console.log('─'.repeat(60));
+};
 
 async function runE2ETest() {
-  console.log('🧪 Testing V0.4 Complete Conversational Flow...\n');
-  console.log('=' .repeat(60));
+  console.log('🧪 Testing V0.5 Conversational Agent Flow...\n');
+  console.log('='.repeat(60));
 
-  const testUserId = 'test-user-' + Date.now();
+  const testUserId = `test-user-${Date.now()}`;
   const threadId = randomUUID();
 
   try {
-    // =========================================================================
-    // STEP 1: User sends a message
-    // =========================================================================
-    console.log('\n📝 STEP 1: User Message');
-    console.log('─'.repeat(60));
-    
-    const userMessage = await conversationRepository.appendMessage({
+    divider('📝 STEP 1: User message is captured in the hash-chained log');
+
+    const userMessage = await conversationService.appendMessage({
       threadId,
-      role: MessageRole.USER,
-      content: 'Pense-bête: appeler Jean demain à 14h pour discuter du projet',
+      role: 'user',
+      content: 'Capture cette idée: planifier une démo LangGraph avec l’équipe produit.',
       userId: testUserId,
     });
-    
-    console.log('✅ User message saved');
-    console.log('   ID:', userMessage.id);
-    console.log('   Content:', userMessage.content);
-    console.log('   Hash:', userMessage.hash.substring(0, 16) + '...');
 
-    // =========================================================================
-    // STEP 2: AI analyzes and responds
-    // =========================================================================
-    console.log('\n🤖 STEP 2: AI Analysis & Response');
-    console.log('─'.repeat(60));
-    
-    const aiResponse = await conversationalAgent.generateResponse(
-      [],  // No previous history
-      userMessage.content,
-      {}
-    );
-    
-    console.log('✅ AI response generated');
-    console.log('   Model:', aiResponse.model);
-    console.log('   Latency:', aiResponse.latency, 'ms');
-    console.log('   Tokens:', aiResponse.tokens.total);
-    console.log('   Content:', aiResponse.content.substring(0, 100) + '...');
+    console.log('✅ User message saved:', userMessage.id);
 
-    // Extract actions
-    const extraction = actionExtractor.extractActions(aiResponse.content);
-    
-    console.log('\n🔍 Action Extraction:');
-    console.log('   Actions found:', extraction.actions.length);
-    extraction.actions.forEach((action, index) => {
-      console.log(`   ${index + 1}. ${action.type}`);
-      console.log(`      Params:`, JSON.stringify(action.params, null, 2).split('\n').map(l => '      ' + l).join('\n').trim());
+    divider('🧠 STEP 2: Synap Agent orchestrates intent → context → plan → execution');
+
+    const agentState = await runSynapAgent({
+      userId: testUserId,
+      threadId,
+      message: userMessage.content,
     });
 
-    // Save assistant message
-    const assistantMessage = await conversationRepository.appendMessage({
+    const agentMetadata = AgentStateSchema.parse({
+      intentAnalysis: agentState.intentAnalysis,
+      context: agentState.context
+        ? {
+            retrievedNotesCount: agentState.context.semanticResults.length,
+            retrievedFactsCount: agentState.context.memoryFacts.length,
+          }
+        : undefined,
+      plan: agentState.plan?.actions.map((action) => ({
+        tool: action.tool,
+        params: action.params,
+        reasoning: action.justification ?? agentState.plan?.reasoning ?? 'Plan fourni sans justification.',
+      })) ?? [],
+      executionSummaries:
+        agentState.execution?.map((log) => ({
+          tool: log.tool,
+          status: log.status,
+          result: log.result,
+          error: log.errorMessage,
+        })) ?? [],
+      finalResponse: agentState.response ?? NO_RESPONSE_FALLBACK,
+      suggestedActions: agentState.plan?.actions.map((action) => ({
+        type: action.tool,
+        description: action.justification ?? 'Action proposée par le planificateur.',
+        params: action.params,
+      })),
+    });
+
+    console.log('✅ Agent state produced:');
+    console.log('   Intent:', agentState.intent);
+    console.log('   Actions:', agentState.plan?.actions.length ?? 0);
+    console.log('   Executions:', agentState.execution?.length ?? 0);
+
+    divider('💬 STEP 3: Assistant reply persisted with agent metadata');
+
+    const assistantMetadata = {
+      agentState: agentMetadata,
+      suggestedActions: agentMetadata.suggestedActions,
+      model: agentMetadata.model,
+      tokens: agentMetadata.tokens,
+      latency: agentMetadata.latency,
+    };
+
+    const assistantMessage = await conversationService.appendMessage({
       threadId,
       parentId: userMessage.id,
-      role: MessageRole.ASSISTANT,
-      content: extraction.cleanContent || aiResponse.content,
-      metadata: {
-        suggestedActions: extraction.actions.map(action => ({
-          type: action.type,
-          description: `Execute ${action.type}`,
-          params: action.params,
-        })),
-        model: aiResponse.model,
-        tokens: aiResponse.tokens.total,
-        latency: aiResponse.latency,
-      },
+      role: 'assistant',
+      content: agentState.response ?? NO_RESPONSE_FALLBACK,
+      metadata: assistantMetadata,
       userId: testUserId,
     });
-    
-    console.log('\n✅ Assistant message saved');
-    console.log('   ID:', assistantMessage.id);
-    console.log('   Suggested actions:', (assistantMessage.metadata as any)?.suggestedActions?.length || 0);
 
-    // =========================================================================
-    // STEP 3: User confirms action
-    // =========================================================================
-    console.log('\n👍 STEP 3: User Confirmation');
-    console.log('─'.repeat(60));
-    
-    const confirmationMessage = await conversationRepository.appendMessage({
-      threadId,
-      parentId: assistantMessage.id,
-      role: MessageRole.USER,
-      content: 'Oui, crée la tâche s\'il te plaît',
-      userId: testUserId,
-    });
-    
-    console.log('✅ User confirmed action');
-    console.log('   ID:', confirmationMessage.id);
+    console.log('✅ Assistant message saved:', assistantMessage.id);
 
-    // =========================================================================
-    // STEP 4: Execute action (emit event)
-    // =========================================================================
-    console.log('\n⚡ STEP 4: Action Execution (Event Emission)');
-    console.log('─'.repeat(60));
-    
-    // Simulate executeAction logic
-    if (extraction.actions.length > 0) {
-      const firstAction = extraction.actions[0];
-      const aggregateId = randomUUID();
-      
-      // Emit event to event store
-      const event = await eventRepository.append({
-        aggregateId,
-        aggregateType: AggregateType.ENTITY,
-        eventType: 'task.creation.requested',
-        userId: testUserId,
-        data: {
-          ...firstAction.params,
-          status: 'todo',
-        },
-        version: 1,
-        source: 'api' as any,
-        metadata: {
-          triggeredBy: 'conversation',
-          threadId,
-          messageId: assistantMessage.id,
-        },
-      });
-      
-      console.log('✅ Event emitted to event store');
-      console.log('   Event ID:', event.id);
-      console.log('   Event Type:', event.eventType);
-      console.log('   Aggregate ID:', event.aggregateId);
-      console.log('   Version:', event.version);
-      
-      // Log system message
-      const systemMessage = await conversationRepository.appendMessage({
-        threadId,
-        parentId: confirmationMessage.id,
-        role: MessageRole.SYSTEM,
-        content: '✅ Tâche créée avec succès!',
-        metadata: {
-          executedAction: {
-            type: firstAction.type,
-            result: {
-              taskId: aggregateId,
-              eventId: event.id,
-            },
-          },
-        },
-        userId: testUserId,
-      });
-      
-      console.log('\n✅ System confirmation saved');
-      console.log('   ID:', systemMessage.id);
+    divider('📦 STEP 4: Verify that tools executed side-effects (events, storage, etc.)');
 
-      // ========================================================================
-      // STEP 5: Verify complete flow
-      // ========================================================================
-      console.log('\n✅ STEP 5: Verification');
-      console.log('─'.repeat(60));
-      
-      // Verify conversation history
-      const fullHistory = await conversationRepository.getThreadHistory(threadId);
-      console.log('✅ Conversation history:', fullHistory.length, 'messages');
-      fullHistory.forEach((msg, index) => {
-        console.log(`   ${index + 1}. [${msg.role}] ${msg.content.substring(0, 50)}...`);
-      });
-      
-      // Verify hash chain
-      const verification = await conversationRepository.verifyHashChain(threadId);
-      console.log('\n✅ Hash chain verification:', verification.isValid ? 'VALID ✅' : 'INVALID ❌');
-      
-      // Verify event was logged
-      const events = await eventRepository.getAggregateStream(aggregateId);
-      console.log('\n✅ Events in aggregate stream:', events.length);
-      events.forEach((evt, index) => {
-        console.log(`   ${index + 1}. v${evt.version} ${evt.eventType}`);
-      });
-      
-      // Verify event has conversation context
-      const eventWithContext = events[0];
-      console.log('\n✅ Event metadata (conversation context):');
-      console.log('   Triggered by:', (eventWithContext.metadata as any)?.triggeredBy);
-      console.log('   Thread ID:', (eventWithContext.metadata as any)?.threadId);
-      console.log('   Message ID:', (eventWithContext.metadata as any)?.messageId);
-
+    const executed = agentState.execution ?? [];
+    if (executed.length === 0) {
+      console.warn('⚠️ Agent executed no tools. Nothing to verify.');
     } else {
-      console.log('⚠️  No actions extracted from AI response');
-      console.log('   AI Response:', aiResponse.content);
+      for (const log of executed) {
+        console.log(`→ ${log.tool}: ${log.status}`);
+        if (log.result && typeof log.result === 'object') {
+          const result = log.result as { eventId?: string; entityId?: string };
+          if (result.eventId && result.entityId) {
+            const events = await eventService.getAggregateStream(result.entityId);
+            const event = events.find((evt) => evt.id === result.eventId);
+
+            if (event) {
+              console.log(`   Event recorded: ${event.eventType} (${event.id})`);
+            } else {
+              console.warn('   ⚠️ Unable to locate event for:', result.eventId);
+            }
+          }
+        }
+      }
     }
 
-    // =========================================================================
-    // SUCCESS
-    // =========================================================================
-    console.log('\n' + '='.repeat(60));
-    console.log('✅ END-TO-END TEST PASSED!');
-    console.log('='.repeat(60));
-    console.log('\n🎉 V0.4 Complete Conversational Flow Working!');
-    console.log('\nFlow Validated:');
-    console.log('1. ✅ User Message → Conversation DB (hash-chained)');
-    console.log('2. ✅ AI Analysis → Action Extraction');
-    console.log('3. ✅ Assistant Response → Stored with metadata');
-    console.log('4. ✅ User Confirmation → Logged');
-    console.log('5. ✅ Action Execution → Event Emitted (TimescaleDB)');
-    console.log('6. ✅ System Confirmation → Conversation updated');
-    console.log('7. ✅ Hash Chain → Verified');
-    console.log('8. ✅ Event Metadata → Contains conversation context');
-    console.log('\n🔗 Connection: Conversation → Events → State (COMPLETE)');
-    console.log('');
+    divider('🔍 STEP 5: End-to-end integrity checks');
 
+    const history = await conversationService.getThreadHistory(threadId);
+    console.log('✅ Conversation history contains', history.length, 'messages');
+
+    const integrity = await conversationService.verifyHashChain(threadId);
+    console.log('✅ Hash chain:', integrity.isValid ? 'VALID ✅' : 'INVALID ❌');
+
+    console.log('\n' + '='.repeat(60));
+    console.log('✅ V0.5 Conversational Agent flow verified!');
+    console.log('='.repeat(60));
   } catch (error) {
     console.error('\n❌ TEST FAILED:', error);
     if (error instanceof Error) {

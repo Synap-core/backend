@@ -6,10 +6,13 @@
  */
 
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
 import { router, protectedProcedure } from '../trpc.js';
-import { events } from '@synap/database';
 import { requireUserId } from '../utils/user-scoped.js';
+import {
+  eventService,
+  AggregateTypeSchema,
+  EventSourceSchema,
+} from '@synap/domain';
 
 export const eventsRouter = router({
   /**
@@ -21,35 +24,34 @@ export const eventsRouter = router({
   log: protectedProcedure
     .input(
       z.object({
-        type: z.string().min(1).describe('Event type (e.g., "entity.created")'),
-        data: z.record(z.any()).describe('Event payload'),
-        source: z.enum(['api', 'automation', 'sync', 'migration']).optional(),
+        aggregateId: z.string().uuid(),
+        aggregateType: AggregateTypeSchema,
+        eventType: z.string().min(1),
+        data: z.record(z.unknown()),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+        version: z.number().int().positive(),
+        source: EventSourceSchema.optional(),
+        causationId: z.string().uuid().optional(),
         correlationId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      
-      // Insert event into the immutable log
-      // Type assertion needed for multi-dialect compatibility
-      const result = await ctx.db
-        .insert(events)
-        .values({
-          type: input.type,
-          data: input.data,
-          source: input.source || 'api',
-          correlationId: input.correlationId,
-          userId, // ✅ User isolation
-        } as any)
-        .returning();
-      
-      const event = Array.isArray(result) ? result[0] : result;
 
-      // TODO: Trigger Inngest function to process this event
-      // For now, we just return the event
-      // In Phase 1.3, we'll add: await inngest.send({ name: 'api/event.logged', data: event });
+      const record = await eventService.append({
+        aggregateId: input.aggregateId,
+        aggregateType: input.aggregateType,
+        eventType: input.eventType,
+        userId,
+        data: input.data,
+        metadata: input.metadata,
+        version: input.version,
+        causationId: input.causationId,
+        correlationId: input.correlationId,
+        source: input.source,
+      });
 
-      return event;
+      return record;
     }),
 
   /**
@@ -66,21 +68,13 @@ export const eventsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      
-      // Build query with user isolation
-      // Type assertions needed for multi-dialect compatibility
-      const baseQuery = ctx.db
-        .select()
-        .from(events)
-        .where(eq((events as any).userId, userId) as any) // ✅ User isolation
-        .limit(input.limit);
 
-      // Add optional type filter
-      const finalQuery = input.type
-        ? (baseQuery as any).where(eq((events as any).type, input.type))
-        : baseQuery;
+      const events = await eventService.getUserStream(userId, {
+        limit: input.limit,
+        eventTypes: input.type ? [input.type] : undefined,
+      });
 
-      return await finalQuery;
+      return events;
     }),
 });
 

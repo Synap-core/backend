@@ -36,6 +36,7 @@ if (isPostgres) {
     entityType: text('entity_type').notNull(),
     title: text('title'),
     preview: text('preview'),  // First 500 chars
+    fileUrl: text('file_url'),
     
     // Timestamps
     indexedAt: timestamp('indexed_at', { mode: 'date', withTimezone: true })
@@ -64,6 +65,7 @@ if (isPostgres) {
     entityType: text('entity_type').notNull(),
     title: text('title'),
     preview: text('preview'),
+    fileUrl: text('file_url'),
     
     // Timestamps (Unix timestamps in ms)
     indexedAt: integer('indexed_at', { mode: 'timestamp_ms' })
