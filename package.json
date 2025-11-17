@@ -7,11 +7,13 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
+    "test:system": "pnpm build && tsx scripts/test-system.ts",
     "db:migrate": "cd packages/database && pnpm drizzle-kit push",
     "db:studio": "cd packages/database && pnpm drizzle-kit studio"
   },
   "devDependencies": {
     "@vitest/ui": "^4.0.7",
+    "tsx": "^4.7.0",
     "turbo": "^2.0.0",
     "typescript": "^5.3.3",
     "vitest": "^4.0.7"

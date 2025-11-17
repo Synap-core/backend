@@ -33,8 +33,30 @@ CREATE TABLE events_v2 (
   source TEXT NOT NULL DEFAULT 'api' CHECK (source IN ('api', 'automation', 'sync', 'migration', 'system'))
 );
 
+-- ============================================================================
+-- TIMESCALEDB HYPERTABLE
+-- ============================================================================
+-- 
+-- Why TimescaleDB?
+-- 
+-- TimescaleDB is a PostgreSQL extension optimized for time-series data.
+-- It provides:
+-- 1. **Automatic Partitioning**: Events are partitioned by time (1-day chunks)
+--    This dramatically improves query performance for time-range queries.
+-- 2. **Query Optimization**: Time-based queries (e.g., "events in last 7 days")
+--    are optimized through chunk exclusion and parallel processing.
+-- 3. **Scalability**: Can handle millions of events efficiently.
+-- 4. **Retention Policies**: (Commercial license) Can automatically delete old events.
+-- 
+-- Performance Benefits:
+-- - Time-range queries: 10-100x faster than regular PostgreSQL
+-- - Aggregations: Optimized for COUNT, SUM, AVG over time windows
+-- - Indexing: Automatic indexing on time dimension
+-- 
+-- Note: Neon's Apache-licensed TimescaleDB doesn't support compression/retention
+-- features (requires Timescale Cloud commercial license).
+-- 
 -- Convert to TimescaleDB hypertable (time-series optimized)
--- Note: Neon's Apache license doesn't support compression/retention
 SELECT create_hypertable(
   'events_v2',
   'timestamp',

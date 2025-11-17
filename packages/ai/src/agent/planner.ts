@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { getAnthropicClient } from './anthropic-client.js';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { createChatModel } from '../providers/chat.js';
+import { messageContentToString } from '../providers/utils.js';
 import type { AgentActionPlan, AgentContext, AgentIntent, PlannedAction } from './types.js';
 import { getToolSchemasForPlanner } from '../tools/index.js';
 
@@ -83,26 +85,18 @@ export interface PlannerOutput extends AgentActionPlan {
 }
 
 export const planActions = async (input: PlannerInput): Promise<PlannerOutput> => {
-  const client = getAnthropicClient();
-
-  const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
-    max_tokens: 512,
+  const model = createChatModel({
+    purpose: 'planner',
+    maxTokens: 512,
     temperature: 0.3,
-    system: plannerSystemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content: buildPlannerInput(input),
-      },
-    ],
   });
 
-  const textSegments = response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => ('text' in block ? block.text : ''));
+  const response = await model.invoke([
+    new SystemMessage(plannerSystemPrompt),
+    new HumanMessage(buildPlannerInput(input)),
+  ]);
 
-  const rawText = textSegments.join('\n').trim();
+  const rawText = messageContentToString(response);
 
   try {
     const parsed = JSON.parse(rawText);

@@ -6,7 +6,7 @@
  */
 
 import { inngest } from '../client.js';
-import { db, entities, contentBlocks, taskDetails, tags, entityTags } from '@synap/database';
+import { db, entities, taskDetails, tags, entityTags } from '@synap/database';
 import { eq, and } from 'drizzle-orm';
 
 /**
@@ -78,16 +78,6 @@ async function handleEntityCreated(data: EventDataWithUser) {
   });
 
   // 2. If there's content, store it (inherits userId from entity via FK)
-  if (content) {
-    await db.insert(contentBlocks).values({
-      entityId,
-      content,
-      storageProvider: 'db',
-      contentType: 'markdown',
-      sizeBytes: Buffer.byteLength(content, 'utf-8'),
-    });
-  }
-
   // 3. If it's a task, create task details (inherits userId from entity via FK)
   if (type === 'task' && data.dueDate) {
     await db.insert(taskDetails).values({

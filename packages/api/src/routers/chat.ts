@@ -16,7 +16,7 @@ import { conversationService, eventService, MessageRoleSchema } from '@synap/dom
 import { runSynapAgent } from '@synap/ai';
 import { requireUserId } from '../utils/user-scoped.js';
 import { randomUUID } from 'crypto';
-import { AgentStateSchema } from '@synap/core';
+import { AgentStateSchema, ForbiddenError, ValidationError } from '@synap/core';
 import type { SynapAgentResult } from '@synap/ai';
 import { createLogger } from '@synap/core';
 
@@ -185,7 +185,7 @@ export const chatRouter = router({
       
       // Verify user owns this thread
       if (messages.length > 0 && messages[0].userId !== userId) {
-        throw new Error('Unauthorized: Thread belongs to another user');
+        throw new ForbiddenError('Thread belongs to another user', { threadId: input.threadId });
       }
       
       // Get thread info
@@ -462,7 +462,7 @@ export const chatRouter = router({
           // DEFAULT: Unknown action
           // =====================================================================
           default:
-            throw new Error(`Unknown action type: ${input.actionType}`);
+            throw new ValidationError(`Unknown action type: ${input.actionType}`, { actionType: input.actionType });
         }
         const systemMessage = await conversationService.appendMessage({
           threadId: input.threadId,

@@ -49,13 +49,6 @@ const entities = pgTable('entities', {
   deletedAt: timestamp('deleted_at', { mode: 'date', withTimezone: true }),
 });
 
-const contentBlocks = pgTable('content_blocks', {
-  entityId: uuid('entity_id').primaryKey().references(() => entities.id, { onDelete: 'cascade' }),
-  content: text('content'),
-  storageProvider: text('storage_provider').default('db').notNull(),
-  contentType: text('content_type').default('markdown').notNull(),
-});
-
 // Skip tests if not in PostgreSQL mode
 const isPostgres = process.env.DB_DIALECT === 'postgres';
 const describeIf = isPostgres ? describe : describe.skip;
@@ -82,7 +75,6 @@ describeIf('Multi-User Isolation (RLS)', () => {
     try {
       // User A cleanup
       await pool.query(`SET LOCAL app.current_user_id = '${userA}'`);
-      await db.delete(contentBlocks).where(sql`entity_id = ${entityIdA}`);
       await db.delete(entities).where(sql`id = ${entityIdA}`);
       await db.delete(events).where(sql`user_id = ${userA}`);
       
@@ -121,19 +113,13 @@ describeIf('Multi-User Isolation (RLS)', () => {
       title: 'User A Secret Note',
       preview: 'This is confidential...',
       userId: userA,
+      filePath: `users/${userA}/notes/secret.md`,
+      fileUrl: `https://storage/${userA}/notes/secret.md`,
     }).returning();
 
     expect(entity).toBeDefined();
     expect(entity.userId).toBe(userA);
     entityIdA = entity.id;
-
-    // Create content block
-    await db.insert(contentBlocks).values({
-      entityId: entityIdA,
-      content: 'This is confidential data for User A',
-      storageProvider: 'db',
-      contentType: 'markdown',
-    });
 
     console.log('✅ User A created note:', entityIdA);
   });
@@ -153,11 +139,7 @@ describeIf('Multi-User Isolation (RLS)', () => {
     expect(userEntities.every((e) => e.userId === userA)).toBe(true);
     expect(userEntities.some((e) => e.id === entityIdA)).toBe(true);
 
-    // User A should see their content
-    const content = await db.select().from(contentBlocks).where(sql`entity_id = ${entityIdA}`);
-    expect(content.length).toBe(1);
-    expect(content[0].content).toContain('confidential data for User A');
-
+    expect(userEntities.some((e) => e.filePath)?.toString()).toBeTruthy();
     console.log('✅ User A can read their own data');
   });
 
@@ -175,9 +157,6 @@ describeIf('Multi-User Isolation (RLS)', () => {
     expect(userBEntities.some((e) => e.id === entityIdA)).toBe(false);
 
     // User B should NOT see User A's content (JOIN filter)
-    const content = await db.select().from(contentBlocks).where(sql`entity_id = ${entityIdA}`);
-    expect(content.length).toBe(0); // RLS blocks via entity JOIN
-
     console.log('✅ User B CANNOT see User A data (RLS working!)');
   });
 

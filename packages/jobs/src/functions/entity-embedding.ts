@@ -1,8 +1,36 @@
 import { inngest } from '../client.js';
-import { r2 } from '@synap/storage';
+import { storage } from '@synap/storage';
 import { vectorService } from '@synap/domain';
 import { generateEmbedding } from '@synap/ai';
 import { createLogger } from '@synap/core';
+
+// Lazy load config to avoid circular dependencies
+let _config: typeof import('@synap/core')['config']['ai'] | null = null;
+let _configPromise: Promise<typeof import('@synap/core')['config']> | null = null;
+
+async function loadConfig() {
+  if (!_configPromise) {
+    _configPromise = import('@synap/core').then((module) => {
+      _config = module.config.ai;
+      return module.config;
+    });
+  }
+  return _configPromise;
+}
+
+function getConfig() {
+  if (!_config) {
+    throw new Error(
+      'Config not loaded. Please ensure @synap/core is imported before using this function.'
+    );
+  }
+  return _config!;
+}
+
+// Pre-load config in the background
+loadConfig().catch(() => {
+  // Will be loaded on first access
+});
 
 const logger = createLogger({ module: 'entity-embedding-indexer' });
 
@@ -28,7 +56,7 @@ const downloadContent = async (payload: EntityCreatedEvent): Promise<string | nu
   }
 
   try {
-    return await r2.download(payload.filePath);
+    return await storage.download(payload.filePath);
   } catch (error) {
     logger.error({ err: error, entityId: payload.entityId }, 'Failed to download entity content from storage');
     return null;
@@ -75,7 +103,7 @@ export const processEntityCreatedEvent = async (
       preview: payload.preview,
       fileUrl: payload.fileUrl,
       embedding,
-      embeddingModel: process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small',
+      embeddingModel: getConfig().embeddings.model,
     });
   });
 

@@ -1,11 +1,11 @@
 /**
- * Conversational Agent - The Brain of Synap
- * 
- * V0.4: AI-powered conversation with action suggestion
+ * Conversational Agent - Provider agnostic orchestration layer
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getSystemPrompt } from './prompts.js';
+import { createChatModel } from './providers/chat.js';
+import { extractTokenUsage, messageContentToString } from './providers/utils.js';
 
 // ============================================================================
 // TYPES
@@ -25,11 +25,11 @@ export interface AgentResponse {
     total: number;
   };
   latency: number;
-  rawResponse?: any;
+  rawResponse?: unknown;
 }
 
 export interface AgentConfig {
-  apiKey: string;
+  provider: 'anthropic' | 'openai';
   model?: string;
   maxTokens?: number;
   temperature?: number;
@@ -40,24 +40,41 @@ export interface AgentConfig {
 // ============================================================================
 
 export class ConversationalAgent {
-  private client: Anthropic;
-  private model: string;
-  private maxTokens: number;
-  private temperature: number;
+  private readonly provider: AgentConfig['provider'];
+  private readonly model?: string;
+  private readonly maxTokens: number;
+  private readonly temperature: number;
 
   constructor(config: AgentConfig) {
-    this.client = new Anthropic({
-      apiKey: config.apiKey,
-    });
-    
-    this.model = config.model || 'claude-3-haiku-20240307'; // Claude 3 Haiku (fast & cheap)
-    this.maxTokens = config.maxTokens || 2048;
-    this.temperature = config.temperature || 0.7;
+    this.provider = config.provider;
+    this.model = config.model;
+    this.maxTokens = config.maxTokens ?? 2048;
+    this.temperature = config.temperature ?? 0.7;
   }
 
-  /**
-   * Generate AI response based on conversation history
-   */
+  private buildMessageSequence(
+    systemPrompt: string,
+    history: ConversationMessage[],
+    userMessage: string
+  ): Array<SystemMessage | AIMessage | HumanMessage> {
+    const sequence: Array<SystemMessage | AIMessage | HumanMessage> = [
+      new SystemMessage(systemPrompt),
+    ];
+
+    for (const snippet of history) {
+      if (snippet.role === 'assistant') {
+        sequence.push(new AIMessage(snippet.content));
+      } else if (snippet.role === 'system') {
+        sequence.push(new SystemMessage(snippet.content));
+      } else {
+        sequence.push(new HumanMessage(snippet.content));
+      }
+    }
+
+    sequence.push(new HumanMessage(userMessage));
+    return sequence;
+  }
+
   async generateResponse(
     history: ConversationMessage[],
     userMessage: string,
@@ -67,69 +84,42 @@ export class ConversationalAgent {
     }
   ): Promise<AgentResponse> {
     const startTime = Date.now();
-    
-    // Build system prompt with context
+
     const systemPrompt = getSystemPrompt({
       userName: context?.userName,
       recentEntities: context?.recentEntities,
       currentDate: new Date(),
     });
-    
-    // Format messages for Anthropic API
-    const messages: Anthropic.MessageParam[] = [
-      // Add conversation history
-      ...history.map(msg => ({
-        role: msg.role === 'assistant' ? 'assistant' as const : 'user' as const,
-        content: msg.content,
-      })),
-      // Add new user message
-      {
-        role: 'user' as const,
-        content: userMessage,
-      },
-    ];
-    
-    try {
-      // Call Anthropic API
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: this.maxTokens,
-        temperature: this.temperature,
-        system: systemPrompt,
-        messages,
-      });
-      
-      const latency = Date.now() - startTime;
-      
-      // Extract text content
-      const content = response.content
-        .filter(block => block.type === 'text')
-        .map(block => (block as Anthropic.TextBlock).text)
-        .join('\n');
-      
-      return {
-        content,
-        model: response.model,
-        tokens: {
-          input: response.usage.input_tokens,
-          output: response.usage.output_tokens,
-          total: response.usage.input_tokens + response.usage.output_tokens,
-        },
-        latency,
-        rawResponse: response,
-      };
-      
-    } catch (error) {
-      console.error('❌ Anthropic API error:', error);
-      throw new Error(
-        `Failed to generate AI response: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
+
+    const messages = this.buildMessageSequence(systemPrompt, history, userMessage);
+    const chatModel = createChatModel({
+      purpose: 'chat',
+      model: this.model,
+      maxTokens: this.maxTokens,
+      temperature: this.temperature,
+      streaming: false,
+    });
+
+    const response = await chatModel.invoke(messages);
+    const latency = Date.now() - startTime;
+
+    const content = messageContentToString(response);
+    const metadata = (response as any).response_metadata ?? (response as any).usage_metadata ?? {};
+    const usage = extractTokenUsage(metadata);
+    const resolvedModel =
+      (metadata && typeof metadata === 'object' && 'model' in metadata
+        ? (metadata as Record<string, string>).model
+        : undefined) ?? this.model ?? this.provider;
+
+    return {
+      content,
+      model: resolvedModel,
+      tokens: usage,
+      latency,
+      rawResponse: response,
+    };
   }
 
-  /**
-   * Generate response with streaming (for future real-time UI)
-   */
   async *generateResponseStream(
     history: ConversationMessage[],
     userMessage: string,
@@ -143,29 +133,21 @@ export class ConversationalAgent {
       recentEntities: context?.recentEntities,
       currentDate: new Date(),
     });
-    
-    const messages: Anthropic.MessageParam[] = [
-      ...history.map(msg => ({
-        role: msg.role === 'assistant' ? 'assistant' as const : 'user' as const,
-        content: msg.content,
-      })),
-      {
-        role: 'user' as const,
-        content: userMessage,
-      },
-    ];
-    
-    const stream = await this.client.messages.stream({
+
+    const messages = this.buildMessageSequence(systemPrompt, history, userMessage);
+    const chatModel = createChatModel({
+      purpose: 'chat',
       model: this.model,
-      max_tokens: this.maxTokens,
+      maxTokens: this.maxTokens,
       temperature: this.temperature,
-      system: systemPrompt,
-      messages,
+      streaming: true,
     });
-    
+
+    const stream = await chatModel.stream(messages);
     for await (const chunk of stream) {
-      if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-        yield chunk.delta.text;
+      const delta = messageContentToString(chunk);
+      if (delta.length > 0) {
+        yield delta;
       }
     }
   }
@@ -175,26 +157,68 @@ export class ConversationalAgent {
 // SINGLETON EXPORT
 // ============================================================================
 
-let _agent: ConversationalAgent | null = null;
+let coreModule: typeof import('@synap/core') | null = null;
+let _aiConfig: typeof import('@synap/core')['config']['ai'] | null = null;
+
+async function loadCore() {
+  if (!coreModule) {
+    coreModule = await import('@synap/core');
+    _aiConfig = coreModule.config.ai;
+  }
+  return coreModule!;
+}
+
+function getAISettings() {
+  if (!_aiConfig) {
+    // Config not loaded yet - this should not happen in practice
+    // but we'll throw a helpful error
+    throw new Error(
+      'AI config not loaded. Please ensure @synap/core is imported before using AI features.'
+    );
+  }
+  return _aiConfig;
+}
+
+// Pre-load config in the background
+loadCore().catch(() => {
+  // Will be loaded on first access
+});
+
+let agentSingleton: ConversationalAgent | null = null;
 
 export function getConversationalAgent(): ConversationalAgent {
-  if (!_agent) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    
-    if (!apiKey) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+  if (!agentSingleton) {
+    const ai = getAISettings();
+    if (ai.provider === 'anthropic') {
+      if (!ai.anthropic.apiKey) {
+        throw new Error('ANTHROPIC_API_KEY environment variable is required');
+      }
+
+      const config = ai.anthropic;
+      agentSingleton = new ConversationalAgent({
+        provider: 'anthropic',
+        model: config.models.chat ?? config.model,
+        maxTokens: config.maxOutputTokens,
+        temperature: config.temperature,
+      });
+    } else {
+      if (!ai.openai.apiKey) {
+        throw new Error('OPENAI_API_KEY environment variable is required');
+      }
+
+      const config = ai.openai;
+      agentSingleton = new ConversationalAgent({
+        provider: 'openai',
+        model: config.models.chat ?? config.model,
+        maxTokens: config.maxTokens,
+        temperature: config.temperature,
+      });
     }
-    
-    _agent = new ConversationalAgent({
-      apiKey,
-      model: 'claude-3-haiku-20240307',  // Fast & cheap for conversation
-      maxTokens: 2048,
-      temperature: 0.7,
-    });
   }
-  
-  return _agent;
+
+  return agentSingleton;
 }
 
 export const conversationalAgent = getConversationalAgent();
+
 

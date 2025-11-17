@@ -17,6 +17,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@synap/types": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/storage": "workspace:*",
     "@synap/core": "workspace:*",

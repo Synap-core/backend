@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'crypto';
+import * as pgCore from 'drizzle-orm/pg-core';
+import * as sqliteCore from 'drizzle-orm/sqlite-core';
 import { entities } from './entities.js';
 
 const isPostgres = process.env.DB_DIALECT === 'postgres';
@@ -15,7 +17,7 @@ let relations: any;
 
 if (isPostgres) {
   // PostgreSQL schema
-  const { pgTable, uuid, text, timestamp } = require('drizzle-orm/pg-core');
+  const { pgTable, uuid, text, timestamp } = pgCore;
   
   relations = pgTable('relations', {
     // Primary key
@@ -42,7 +44,7 @@ if (isPostgres) {
   });
 } else {
   // SQLite schema (single-user, no userId)
-  const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
+  const { sqliteTable, text, integer } = sqliteCore;
   
   relations = sqliteTable('relations', {
     // Primary key

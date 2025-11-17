@@ -7,15 +7,16 @@
 
 import { eq, and } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
+import { UnauthorizedError, ValidationError } from '@synap/core';
 
 /**
  * Validates and returns userId, throwing if not present
  * 
- * @throws {Error} If userId is null or undefined
+ * @throws {UnauthorizedError} If userId is null or undefined
  */
 export function requireUserId(userId?: string | null): string {
   if (!userId) {
-    throw new Error('Unauthorized: userId is required for this operation');
+    throw new UnauthorizedError('User ID is required for this operation');
   }
   return userId;
 }
@@ -67,10 +68,12 @@ export interface EventDataWithUser {
 
 /**
  * Validates event data has required userId
+ * 
+ * @throws {ValidationError} If userId is missing from event data
  */
 export function requireEventUserId(data: any): EventDataWithUser {
   if (!data.userId) {
-    throw new Error('Event data must include userId for multi-user isolation');
+    throw new ValidationError('Event data must include userId for multi-user isolation', { data });
   }
   return data as EventDataWithUser;
 }

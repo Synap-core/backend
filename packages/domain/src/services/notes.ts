@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { db, entities, contentBlocks } from '@synap/database';
-import { r2, R2Storage } from '@synap/storage';
+import { db, entities } from '@synap/database';
+import { storage, type IFileStorage } from '@synap/storage';
 import { z } from 'zod';
 import { createLogger } from '@synap/core';
 import {
@@ -43,7 +43,7 @@ const notesLogger = createLogger({ module: 'note-service' });
 export class NoteService {
   constructor(
     private readonly database: typeof db = db,
-    private readonly storage: typeof r2 = r2
+    private readonly fileStorage: IFileStorage = storage
   ) {}
 
   async createNote(input: CreateNoteInput): Promise<CreateNoteResult> {
@@ -57,18 +57,12 @@ export class NoteService {
 
     log.info({ tags: tags.length }, 'Creating note');
 
-    const storagePath = R2Storage.buildPath(parsed.userId, 'note', entityId, 'md');
-    const fileMetadata = await this.storage.upload(storagePath, parsed.content, {
+    const storagePath = this.fileStorage.buildPath(parsed.userId, 'note', entityId, 'md');
+    const fileMetadata = await this.fileStorage.upload(storagePath, parsed.content, {
       contentType: 'text/markdown',
     });
 
     log.debug({ storagePath: fileMetadata.path, size: fileMetadata.size }, 'Uploaded note content to storage');
-
-    await this.database.insert(contentBlocks).values({
-      entityId,
-      content: parsed.content,
-      contentType: 'markdown',
-    });
 
     await this.database.insert(entities).values({
       id: entityId,

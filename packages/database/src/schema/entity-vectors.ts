@@ -10,14 +10,17 @@
  * - Supports multiple embedding models per entity
  */
 
+import * as pgCore from 'drizzle-orm/pg-core';
+import * as sqliteCore from 'drizzle-orm/sqlite-core';
+import { entities } from './entities.js';
+
 const isPostgres = process.env.DB_DIALECT === 'postgres';
 
 let entityVectors: any;
 
 if (isPostgres) {
   // PostgreSQL schema with pgvector
-  const { pgTable, uuid, text, timestamp, vector } = require('drizzle-orm/pg-core');
-  const { entities } = require('./entities');
+  const { pgTable, uuid, text, timestamp, vector } = pgCore;
   
   entityVectors = pgTable('entity_vectors', {
     // Foreign key to entities (one-to-one)
@@ -48,8 +51,7 @@ if (isPostgres) {
   });
 } else {
   // SQLite schema (single-user, no pgvector)
-  const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
-  const { entities } = require('./entities');
+  const { sqliteTable, text, integer } = sqliteCore;
   
   entityVectors = sqliteTable('entity_vectors', {
     // Foreign key to entities

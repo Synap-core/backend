@@ -4,7 +4,7 @@
  * Tests the complete workflow without needing complex tRPC client setup
  */
 
-import { db, events, entities, contentBlocks } from '@synap/database';
+import { db, events, entities } from '@synap/database';
 
 console.log('🧪 Testing Thought Capture Workflow\n');
 

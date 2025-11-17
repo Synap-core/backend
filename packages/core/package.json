@@ -17,12 +17,7 @@
     "test:local": "tsx tests/local-mvp.test.ts"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.9.0",
-    "@synap/api": "workspace:*",
-    "@synap/auth": "workspace:*",
-    "@synap/database": "workspace:*",
     "pino": "^9.2.0",
-    "drizzle-orm": "^0.33.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {

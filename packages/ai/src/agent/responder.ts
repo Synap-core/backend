@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import { getAnthropicClient } from './anthropic-client.js';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { createChatModel } from '../providers/chat.js';
+import { messageContentToString } from '../providers/utils.js';
 import type { ActionExecutionLog, AgentPlanSummary } from './types.js';
 
 const responseSystemPrompt = [
@@ -54,28 +56,30 @@ const parseResponse = (rawText: string): string => {
 };
 
 export const generateFinalResponse = async (input: ResponseInput): Promise<string> => {
-  const client = getAnthropicClient();
-
-  const response = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
-    max_tokens: 512,
+  const model = createChatModel({
+    purpose: 'responder',
+    maxTokens: 512,
     temperature: 0.4,
-    system: responseSystemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content: buildResponderPayload(input),
-      },
-    ],
   });
 
-  const textSegments = response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => ('text' in block ? block.text : ''));
+  const response = await model.invoke([
+    new SystemMessage(responseSystemPrompt),
+    new HumanMessage(buildResponderPayload(input)),
+  ]);
 
-  const rawText = textSegments.join('\n').trim();
+  const rawText = messageContentToString(response);
   return parseResponse(rawText);
 };
+
+
+
+
+
+
+
+
+
+
 
 
 

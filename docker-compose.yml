@@ -1,0 +1,82 @@
+version: '3.8'
+
+# Synap Backend - Local Development Setup
+#
+# This docker-compose file sets up a complete local development environment:
+# - PostgreSQL database (with TimescaleDB extension)
+# - MinIO object storage (S3-compatible, uses local folder)
+# - Synap API server (optional, if you want to run in Docker)
+#
+# Usage:
+#   1. Place your existing notes folder in ./data/notes
+#   2. Run: docker-compose up -d
+#   3. Access MinIO console at http://localhost:9001
+#   4. Connect your Synap backend to:
+#      - Database: postgresql://postgres:your_secret_password@localhost:5432/synap
+#      - Storage: http://localhost:9000 (MinIO endpoint)
+
+services:
+  # PostgreSQL Database with TimescaleDB
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: synap-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synap_dev_password}
+      POSTGRES_DB: synap
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MinIO Object Storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: synap-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"  # S3 API endpoint
+      - "9001:9001"  # Web console
+    volumes:
+      # Mount your existing notes folder here!
+      # Files in ./data/notes will be accessible via MinIO S3 API
+      - ./data/notes:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  # Optional: MinIO client for bucket management
+  minio-client:
+    image: minio/mc:latest
+    container_name: synap-minio-client
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb local/synap-storage --ignore-existing;
+      /usr/bin/mc anonymous set download local/synap-storage;
+      exit 0;
+      "
+    restart: "no"
+
+# Volumes (optional, for persistent data)
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+

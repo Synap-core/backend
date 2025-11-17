@@ -23,7 +23,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",
-    "@aws-sdk/s3-request-presigner": "^3.926.0"
+    "@aws-sdk/s3-request-presigner": "^3.926.0",
+    "@synap/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

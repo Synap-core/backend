@@ -1,12 +1,15 @@
 import { Inngest } from 'inngest';
 import { registerDomainEventPublisher } from '@synap/domain';
+import { createLogger, config, ValidationError } from '@synap/core';
 
-const isProduction = process.env.NODE_ENV === 'production';
-const resolvedEventKey = process.env.INNGEST_EVENT_KEY ?? (isProduction ? undefined : 'dev-local-key');
-const baseUrl = process.env.INNGEST_BASE_URL ?? (isProduction ? undefined : 'http://127.0.0.1:8288');
+const eventLogger = createLogger({ module: 'event-publisher' });
 
-if (!process.env.INNGEST_EVENT_KEY && !isProduction) {
-  console.warn('INNGEST_EVENT_KEY not provided. Using default "dev-local-key" for local development.');
+const isProduction = config.server.nodeEnv === 'production';
+const resolvedEventKey = config.inngest.eventKey ?? (isProduction ? undefined : 'dev-local-key');
+const baseUrl = config.inngest.baseUrl ?? (isProduction ? undefined : 'http://127.0.0.1:8288');
+
+if (!config.inngest.eventKey && !isProduction) {
+  eventLogger.warn('INNGEST_EVENT_KEY not provided. Using default "dev-local-key" for local development.');
 }
 
 const inngest = new Inngest({
@@ -19,13 +22,15 @@ const canPublish = Boolean(resolvedEventKey);
 let hasLoggedMissingKey = false;
 
 if (isProduction && !canPublish) {
-  throw new Error('INNGEST_EVENT_KEY must be configured in production environments.');
+  throw new ValidationError('INNGEST_EVENT_KEY must be configured in production environments', {
+    environment: config.server.nodeEnv,
+  });
 }
 
 registerDomainEventPublisher(async (event) => {
   if (!canPublish) {
     if (!hasLoggedMissingKey) {
-      console.warn('INNGEST_EVENT_KEY is not set. Domain events will not be published.');
+      eventLogger.warn('INNGEST_EVENT_KEY is not set. Domain events will not be published.');
       hasLoggedMissingKey = true;
     }
     return;
@@ -46,8 +51,9 @@ registerDomainEventPublisher(async (event) => {
         metadata: event.metadata ?? null,
       },
     });
+    eventLogger.debug({ eventId: event.id, eventType: event.eventType }, 'Domain event published to Inngest');
   } catch (error) {
-    console.error('Failed to publish domain event to Inngest', error);
+    eventLogger.error({ err: error, eventId: event.id }, 'Failed to publish domain event to Inngest');
   }
 });
 

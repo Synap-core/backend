@@ -7,8 +7,11 @@
  */
 
 import { db } from '@synap/database';
+import { createLogger } from '@synap/core';
+import { config } from '@synap/core';
 
-const isPostgres = process.env.DB_DIALECT === 'postgres';
+const contextLogger = createLogger({ module: 'api-context' });
+const isPostgres = config.database.dialect === 'postgres';
 
 export interface Context extends Record<string, unknown> {
   db: typeof db;
@@ -22,8 +25,11 @@ export async function createContext(req: Request): Promise<Context> {
   if (isPostgres) {
     // PostgreSQL: Use Better Auth session
     try {
-      const { getSession } = await import('@synap/auth');
-      const session = await getSession(req.headers);
+      const authModule = await import('@synap/auth');
+      if (!authModule.getSession) {
+        throw new Error('getSession not available');
+      }
+      const session = await authModule.getSession(req.headers);
       
       if (session && session.user) {
         return {
@@ -44,11 +50,13 @@ export async function createContext(req: Request): Promise<Context> {
         session: null,
       };
     } catch (error) {
-      console.error('[Context] Error getting session:', error);
+      contextLogger.error({ err: error }, 'Error getting session');
       return {
         db,
         authenticated: false,
         userId: null,
+        user: null,
+        session: null,
       };
     }
   } else {

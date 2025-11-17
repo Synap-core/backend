@@ -6,6 +6,8 @@
  */
 
 import { entities } from './entities.js';
+import * as pgCore from 'drizzle-orm/pg-core';
+import * as sqliteCore from 'drizzle-orm/sqlite-core';
 
 const isPostgres = process.env.DB_DIALECT === 'postgres';
 
@@ -13,7 +15,7 @@ let taskDetails: any;
 
 if (isPostgres) {
   // PostgreSQL schema
-  const { pgTable, uuid, text, integer, timestamp } = require('drizzle-orm/pg-core');
+  const { pgTable, uuid, text, integer, timestamp } = pgCore;
   
   taskDetails = pgTable('task_details', {
     // Primary key + foreign key
@@ -33,7 +35,7 @@ if (isPostgres) {
   });
 } else {
   // SQLite schema
-  const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
+  const { sqliteTable, text, integer } = sqliteCore;
   
   taskDetails = sqliteTable('task_details', {
     // Primary key + foreign key

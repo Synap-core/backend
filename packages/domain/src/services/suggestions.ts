@@ -1,5 +1,6 @@
 import { suggestionRepository } from '@synap/database';
 import { z } from 'zod';
+import { NotFoundError } from '@synap/core';
 import {
   CreateProposeProjectSuggestionSchema,
   ProposeProjectPayloadSchema,
@@ -42,7 +43,7 @@ export class SuggestionService {
     const parsed = ChangeStatusInputSchema.parse(input);
     const record = await this.repo.updateStatus(parsed.userId, parsed.suggestionId, 'accepted');
     if (!record) {
-      throw new Error('Suggestion not found');
+      throw new NotFoundError('Suggestion', parsed.suggestionId, { userId: parsed.userId });
     }
     return SuggestionSchema.parse(record);
   }
@@ -51,7 +52,7 @@ export class SuggestionService {
     const parsed = ChangeStatusInputSchema.parse(input);
     const record = await this.repo.updateStatus(parsed.userId, parsed.suggestionId, 'dismissed');
     if (!record) {
-      throw new Error('Suggestion not found');
+      throw new NotFoundError('Suggestion', parsed.suggestionId, { userId: parsed.userId });
     }
     return SuggestionSchema.parse(record);
   }

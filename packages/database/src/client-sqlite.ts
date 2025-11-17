@@ -7,12 +7,16 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import Database from 'better-sqlite3';
 import * as schema from './schema/index.js';
 import path from 'path';
+import { createLogger } from '@synap/core';
+import { mkdirSync } from 'fs';
 
-// Database path
+const dbLogger = createLogger({ module: 'database-sqlite' });
+
+// Database path - use process.env to avoid circular dependency with config
+// Config can be used in higher-level packages, but database client should be low-level
 const dbPath = process.env.SQLITE_DB_PATH || path.join(process.cwd(), 'data', 'synap.db');
 
 // Ensure directory exists
-import { mkdirSync } from 'fs';
 mkdirSync(path.dirname(dbPath), { recursive: true });
 
 // Create SQLite connection
@@ -31,5 +35,5 @@ export const db = Object.assign(drizzleDb, {
   }
 });
 
-console.log(`📦 SQLite database: ${dbPath}`);
+dbLogger.info({ dbPath }, 'SQLite database connected');
 

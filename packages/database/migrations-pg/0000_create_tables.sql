@@ -24,23 +24,6 @@ CREATE TABLE IF NOT EXISTS entities (
   deleted_at TIMESTAMPTZ
 );
 
--- Content blocks table (hybrid storage)
-CREATE TABLE IF NOT EXISTS content_blocks (
-  entity_id UUID PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-  storage_provider TEXT NOT NULL DEFAULT 'db',
-  storage_path TEXT,
-  storage_url TEXT,
-  content TEXT,
-  content_type TEXT NOT NULL DEFAULT 'markdown',
-  mime_type TEXT,
-  size_bytes INTEGER,
-  checksum TEXT,
-  embedding vector(1536),
-  embedding_model TEXT DEFAULT 'text-embedding-3-small',
-  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_modified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- Relations table (knowledge graph edges)
 CREATE TABLE IF NOT EXISTS relations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -94,6 +77,4 @@ CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_entity_id);
 
 CREATE INDEX IF NOT EXISTS idx_tags_user_id ON tags(user_id);
 CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
-
-CREATE INDEX IF NOT EXISTS idx_content_blocks_storage ON content_blocks(storage_provider);
 

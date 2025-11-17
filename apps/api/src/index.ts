@@ -19,6 +19,8 @@ import { appRouter, createContext } from '@synap/api';
 import { serve } from '@hono/node-server';
 import { serve as inngestServe } from 'inngest/hono';
 import { inngest, functions } from '@synap/jobs';
+import { createLogger, config, isSynapError, toSynapError, validateConfig } from '@synap/core';
+import crypto from 'crypto';
 import {
   rateLimitMiddleware,
   requestSizeLimit,
@@ -26,8 +28,41 @@ import {
   getCorsOrigins,
 } from './middleware/security.js';
 
+// Validate configuration at startup
+const apiLogger = createLogger({ module: 'api-server' });
+try {
+  // Validate database config
+  if (config.database.dialect === 'postgres') {
+    validateConfig('postgres');
+    apiLogger.info('PostgreSQL configuration validated');
+  }
+  
+  // Validate storage config
+  if (config.storage.provider === 'r2') {
+    validateConfig('r2');
+    apiLogger.info('R2 storage configuration validated');
+  }
+  
+  // Validate AI config in production
+  if (config.server.nodeEnv === 'production') {
+    validateConfig('ai');
+    apiLogger.info('AI configuration validated');
+  }
+  
+  // Validate auth config for PostgreSQL
+  if (config.database.dialect === 'postgres') {
+    validateConfig('better-auth');
+    apiLogger.info('Better Auth configuration validated');
+  }
+} catch (error) {
+  apiLogger.error({ err: error }, 'Configuration validation failed');
+  console.error('❌ Configuration Error:', error instanceof Error ? error.message : String(error));
+  console.error('Please check your environment variables and configuration.');
+  process.exit(1);
+}
+
 // Dynamic auth import based on DB dialect
-const isPostgres = process.env.DB_DIALECT === 'postgres';
+const isPostgres = config.database.dialect === 'postgres';
 let auth: any = null;
 let authMiddleware: any = null;
 
@@ -79,7 +114,7 @@ if (isPostgres && auth) {
     return auth.handler(c.req.raw);
   });
   
-  console.log('✅ Better Auth routes enabled at /api/auth/*');
+  apiLogger.info('Better Auth routes enabled at /api/auth/*');
 }
 
 // tRPC routes (protected by auth)
@@ -111,25 +146,64 @@ app.notFound((c) => {
 
 // Error handler
 app.onError((err, c) => {
-  console.error('Server error:', err);
-  return c.json({
-    error: 'Internal server error',
-    message: err.message,
-  }, 500);
+  const errorId = crypto.randomUUID();
+  const apiLogger = createLogger({ module: 'api-server' });
+  
+  // Convert to SynapError if needed (standardized error handling)
+  const synapError = isSynapError(err) ? err : toSynapError(err, 'An unexpected error occurred');
+  
+  // Only log stack trace for 5xx errors or in development
+  const shouldLogStack = synapError.statusCode >= 500 || config.server.nodeEnv === 'development';
+  
+  apiLogger[synapError.statusCode >= 500 ? 'error' : 'warn'](
+    { 
+      err: synapError, 
+      errorId, 
+      path: c.req.path,
+      method: c.req.method,
+      statusCode: synapError.statusCode,
+      ...(shouldLogStack && { stack: synapError.stack }),
+    },
+    synapError.statusCode >= 500 ? 'Server error' : 'Client error'
+  );
+  
+  const isDev = config.server.nodeEnv === 'development';
+  
+  // Return standardized error response
+  // Cast statusCode to satisfy Hono's type requirements
+  const statusCode = synapError.statusCode as 400 | 401 | 403 | 404 | 409 | 429 | 500 | 503;
+  return c.json(
+    {
+      error: synapError.name,
+      code: synapError.code,
+      message: synapError.message,
+      ...(synapError.context && { context: synapError.context }),
+      ...(isDev && { 
+        errorId,
+        ...(shouldLogStack && { stack: synapError.stack }),
+      }),
+    },
+    statusCode
+  );
 });
 
 // Start server
-const port = parseInt(process.env.PORT || '3000');
-
-console.log(`🚀 Synap API starting on port ${port}`);
+const port = config.server.port;
+apiLogger.info({ port }, 'Synap API starting');
 
 serve({
   fetch: app.fetch,
   port,
 }, (info) => {
-  console.log(`✅ Server running at http://localhost:${info.port}`);
-  console.log(`📡 tRPC API: http://localhost:${info.port}/api/trpc`);
-  console.log(`🔐 Auth API: http://localhost:${info.port}/api/auth`);
+  apiLogger.info(
+    {
+      port: info.port,
+      tRPC: `http://localhost:${info.port}/trpc`,
+      auth: `http://localhost:${info.port}/api/auth`,
+      health: `http://localhost:${info.port}/health`,
+    },
+    'Server running'
+  );
 });
 
 export default app;

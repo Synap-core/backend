@@ -23,6 +23,7 @@
     "@synap/database": "workspace:*",
     "@synap/domain": "workspace:*",
     "@synap/storage": "workspace:*",
+    "@synap/types": "workspace:*",
     "ai": "^4.0.0",
     "@ai-sdk/anthropic": "^1.0.0",
     "zod": "^3.22.0",

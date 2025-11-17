@@ -1,0 +1,304 @@
+/**
+ * Centralized Configuration Management
+ * 
+ * Provides type-safe, validated configuration from environment variables.
+ * All packages should use this instead of directly accessing process.env.
+ * 
+ * @example
+ * ```typescript
+ * import { config } from '@synap/core';
+ * 
+ * const dbUrl = config.database.url;
+ * const storageProvider = config.storage.provider;
+ * ```
+ */
+
+import { z } from 'zod';
+import { createLogger } from './logger.js';
+
+const configLogger = createLogger({ module: 'config' });
+
+// ============================================================================
+// CONFIGURATION SCHEMAS
+// ============================================================================
+
+const DatabaseConfigSchema = z.object({
+  dialect: z.enum(['sqlite', 'postgres']).default('sqlite'),
+  url: z.string().optional(),
+  sqlitePath: z.string().optional(),
+});
+
+const StorageConfigSchema = z.object({
+  provider: z.enum(['r2', 'minio']).default('r2'),
+  // R2 config
+  r2AccountId: z.string().optional(),
+  r2AccessKeyId: z.string().optional(),
+  r2SecretAccessKey: z.string().optional(),
+  r2BucketName: z.string().default('synap-storage'),
+  r2PublicUrl: z.string().optional(),
+  // MinIO config
+  minioEndpoint: z.string().default('http://localhost:9000'),
+  minioAccessKeyId: z.string().default('minioadmin'),
+  minioSecretAccessKey: z.string().default('minioadmin'),
+  minioBucketName: z.string().default('synap-storage'),
+  minioPublicUrl: z.string().optional(),
+});
+
+const AIModelOverrideSchema = z.object({
+  chat: z.string().optional(),
+  intent: z.string().optional(),
+  planner: z.string().optional(),
+  responder: z.string().optional(),
+}).default({});
+
+const AIAnthropicConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  model: z.string().default('claude-3-haiku-20240307'),
+  maxOutputTokens: z.coerce.number().default(2048),
+  temperature: z.coerce.number().min(0).max(2).default(0.7),
+  models: AIModelOverrideSchema,
+});
+
+const AIOpenAIConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.string().default('gpt-4o-mini'),
+  maxTokens: z.coerce.number().default(2048),
+  temperature: z.coerce.number().min(0).max(2).default(0.7),
+  models: AIModelOverrideSchema,
+});
+
+const AIConfigSchema = z.object({
+  provider: z.enum(['anthropic', 'openai']).default('anthropic'),
+  streaming: z.coerce.boolean().default(false),
+  anthropic: AIAnthropicConfigSchema.default({}),
+  openai: AIOpenAIConfigSchema.default({}),
+  embeddings: z.object({
+    provider: z.enum(['openai', 'deterministic']).default('openai'),
+    model: z.string().default('text-embedding-3-small'),
+  }).default({}),
+});
+
+const AuthConfigSchema = z.object({
+  betterAuthSecret: z.string().optional(),
+  betterAuthUrl: z.string().optional(),
+  simpleToken: z.string().optional(),
+  // OAuth (optional)
+  googleClientId: z.string().optional(),
+  googleClientSecret: z.string().optional(),
+  githubClientId: z.string().optional(),
+  githubClientSecret: z.string().optional(),
+});
+
+const ServerConfigSchema = z.object({
+  port: z.coerce.number().default(3000),
+  nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
+  corsOrigins: z.string().optional(),
+  logLevel: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+});
+
+const InngestConfigSchema = z.object({
+  eventKey: z.string().optional(),
+  signingKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+});
+
+const ConfigSchema = z.object({
+  database: DatabaseConfigSchema,
+  storage: StorageConfigSchema,
+  ai: AIConfigSchema,
+  auth: AuthConfigSchema,
+  server: ServerConfigSchema,
+  inngest: InngestConfigSchema,
+});
+
+export type Config = z.infer<typeof ConfigSchema>;
+export type DatabaseConfig = z.infer<typeof DatabaseConfigSchema>;
+export type StorageConfig = z.infer<typeof StorageConfigSchema>;
+export type AIConfig = z.infer<typeof AIConfigSchema>;
+export type AuthConfig = z.infer<typeof AuthConfigSchema>;
+export type ServerConfig = z.infer<typeof ServerConfigSchema>;
+export type InngestConfig = z.infer<typeof InngestConfigSchema>;
+
+// ============================================================================
+// CONFIGURATION LOADER
+// ============================================================================
+
+/**
+ * Load and validate configuration from environment variables
+ * 
+ * @returns Validated configuration object
+ * @throws Error if required configuration is invalid
+ */
+function loadConfig(): Config {
+  try {
+    const rawConfig = {
+      database: {
+        dialect: process.env.DB_DIALECT,
+        url: process.env.DATABASE_URL,
+        sqlitePath: process.env.SQLITE_DB_PATH,
+      },
+      storage: {
+        provider: process.env.STORAGE_PROVIDER,
+        r2AccountId: process.env.R2_ACCOUNT_ID,
+        r2AccessKeyId: process.env.R2_ACCESS_KEY_ID,
+        r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+        r2BucketName: process.env.R2_BUCKET_NAME,
+        r2PublicUrl: process.env.R2_PUBLIC_URL,
+        minioEndpoint: process.env.MINIO_ENDPOINT,
+        minioAccessKeyId: process.env.MINIO_ACCESS_KEY_ID,
+        minioSecretAccessKey: process.env.MINIO_SECRET_ACCESS_KEY,
+        minioBucketName: process.env.MINIO_BUCKET_NAME,
+        minioPublicUrl: process.env.MINIO_PUBLIC_URL,
+      },
+      ai: {
+        provider: process.env.AI_PROVIDER,
+        streaming: process.env.AI_STREAMING,
+        anthropic: {
+          apiKey: process.env.ANTHROPIC_API_KEY,
+          model: process.env.ANTHROPIC_MODEL,
+          maxOutputTokens: process.env.ANTHROPIC_MAX_TOKENS,
+          temperature: process.env.ANTHROPIC_TEMPERATURE,
+          models: {
+            chat: process.env.ANTHROPIC_CHAT_MODEL,
+            intent: process.env.ANTHROPIC_INTENT_MODEL,
+            planner: process.env.ANTHROPIC_PLANNER_MODEL,
+            responder: process.env.ANTHROPIC_RESPONDER_MODEL,
+          },
+        },
+        openai: {
+          apiKey: process.env.OPENAI_API_KEY,
+          baseUrl: process.env.OPENAI_BASE_URL,
+          model: process.env.OPENAI_MODEL,
+          maxTokens: process.env.OPENAI_MAX_TOKENS,
+          temperature: process.env.OPENAI_TEMPERATURE,
+          models: {
+            chat: process.env.OPENAI_CHAT_MODEL,
+            intent: process.env.OPENAI_INTENT_MODEL,
+            planner: process.env.OPENAI_PLANNER_MODEL,
+            responder: process.env.OPENAI_RESPONDER_MODEL,
+          },
+        },
+        embeddings: {
+          provider: process.env.EMBEDDING_PROVIDER,
+          model: process.env.EMBEDDING_MODEL ?? process.env.OPENAI_EMBEDDING_MODEL,
+        },
+      },
+      auth: {
+        betterAuthSecret: process.env.BETTER_AUTH_SECRET,
+        betterAuthUrl: process.env.BETTER_AUTH_URL,
+        simpleToken: process.env.SYNAP_SECRET_TOKEN,
+        googleClientId: process.env.GOOGLE_CLIENT_ID,
+        googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        githubClientId: process.env.GITHUB_CLIENT_ID,
+        githubClientSecret: process.env.GITHUB_CLIENT_SECRET,
+      },
+      server: {
+        port: process.env.PORT,
+        nodeEnv: process.env.NODE_ENV,
+        corsOrigins: process.env.CORS_ORIGINS,
+        logLevel: process.env.LOG_LEVEL,
+      },
+      inngest: {
+        eventKey: process.env.INNGEST_EVENT_KEY,
+        signingKey: process.env.INNGEST_SIGNING_KEY,
+        baseUrl: process.env.INNGEST_BASE_URL,
+      },
+    };
+
+    const config = ConfigSchema.parse(rawConfig);
+
+    // Log configuration status (without secrets)
+    configLogger.info({
+      database: { dialect: config.database.dialect },
+      storage: { provider: config.storage.provider },
+      server: { port: config.server.port, env: config.server.nodeEnv },
+    }, 'Configuration loaded');
+
+    return config;
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const issues = error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      }));
+      configLogger.error({ issues }, 'Configuration validation failed');
+      throw new Error(
+        `Invalid configuration: ${issues.map((i) => `${i.path}: ${i.message}`).join(', ')}`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Global configuration instance
+ * 
+ * Loaded once at module initialization.
+ * All packages should import this instead of accessing process.env directly.
+ * 
+ * @example
+ * ```typescript
+ * import { config } from '@synap/core';
+ * 
+ * if (config.database.dialect === 'postgres') {
+ *   // Use PostgreSQL
+ * }
+ * ```
+ */
+export const config = loadConfig();
+
+/**
+ * Validate required configuration for specific features
+ * 
+ * @param feature - Feature name (e.g., 'r2', 'better-auth', 'ai')
+ * @throws Error if required configuration is missing
+ * 
+ * @example
+ * ```typescript
+ * validateConfig('r2');
+ * // Throws if R2 credentials are missing
+ * ```
+ */
+export function validateConfig(feature: 'r2' | 'better-auth' | 'ai' | 'postgres'): void {
+  switch (feature) {
+    case 'r2':
+      if (!config.storage.r2AccountId || !config.storage.r2AccessKeyId || !config.storage.r2SecretAccessKey) {
+        throw new Error(
+          'R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables'
+        );
+      }
+      break;
+
+    case 'better-auth':
+      if (!config.auth.betterAuthSecret) {
+        throw new Error('Better Auth requires BETTER_AUTH_SECRET environment variable');
+      }
+      break;
+
+    case 'ai': {
+      const { provider, anthropic, openai, embeddings } = config.ai;
+
+      if (provider === 'anthropic' && !anthropic.apiKey) {
+        throw new Error('Anthropic provider requires ANTHROPIC_API_KEY environment variable');
+      }
+
+      if (provider === 'openai' && !openai.apiKey) {
+        throw new Error('OpenAI provider requires OPENAI_API_KEY environment variable');
+      }
+
+      if (embeddings.provider === 'openai' && !openai.apiKey) {
+        throw new Error('OpenAI embeddings require OPENAI_API_KEY environment variable');
+      }
+
+      break;
+    }
+
+    case 'postgres':
+      if (!config.database.url) {
+        throw new Error('PostgreSQL requires DATABASE_URL environment variable');
+      }
+      break;
+  }
+}
+

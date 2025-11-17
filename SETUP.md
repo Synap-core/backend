@@ -1,30 +1,38 @@
-# 🚀 Synap Backend - Quick Start Guide
+# 🚀 Synap Backend - Setup Guide
 
-Complete setup guide for both local development and production deployment.
+Complete setup guide for local development and production deployment.
 
 ---
 
 ## 📋 Table of Contents
 
-1. [Local Development (SQLite)](#local-development-sqlite)
-2. [Production Setup (PostgreSQL)](#production-setup-postgresql)
+1. [Local Development (SQLite + MinIO)](#local-development-sqlite--minio)
+2. [Production Setup (PostgreSQL + R2)](#production-setup-postgresql--r2)
 3. [Testing](#testing)
 4. [Troubleshooting](#troubleshooting)
 
 ---
 
-## 🏠 Local Development (SQLite)
+## 🏠 Local Development (SQLite + MinIO)
 
-### Single-user mode for local testing
+### Single-user mode for local testing with local file storage
 
-#### 1. Install Dependencies
+#### 1. Prerequisites
+
+- Node.js 20+
+- pnpm 8+
+- Docker and Docker Compose (for MinIO)
+- Anthropic API key
+- OpenAI API key (for embeddings)
+
+#### 2. Install Dependencies
 
 ```bash
 cd /path/to/synap-backend
 pnpm install
 ```
 
-#### 2. Configure Environment
+#### 3. Configure Environment
 
 ```bash
 cp env.local.example .env
@@ -32,34 +40,66 @@ cp env.local.example .env
 
 Edit `.env`:
 ```bash
+# Database
 DB_DIALECT=sqlite
 SQLITE_DB_PATH=./data/synap.db
+
+# Storage (MinIO for local)
+STORAGE_PROVIDER=minio
+MINIO_ENDPOINT=http://localhost:9000
+MINIO_ACCESS_KEY_ID=minioadmin
+MINIO_SECRET_ACCESS_KEY=minioadmin
+MINIO_BUCKET_NAME=synap-storage
+
+# Auth (simple token)
 SYNAP_SECRET_TOKEN=your-secret-token-here  # openssl rand -hex 32
+
+# AI
 ANTHROPIC_API_KEY=sk-ant-your-key-here
-OPENAI_API_KEY=sk-proj-your-key-here  # For embeddings
+OPENAI_API_KEY=sk-proj-your-key-here
+
+# Inngest (optional, for local dev)
+INNGEST_EVENT_KEY=dev-local-key
 ```
 
-#### 3. Initialize Database
+#### 4. Start Local Services
+
+```bash
+# Start MinIO (S3-compatible local storage)
+docker-compose up -d minio
+
+# Verify MinIO is running
+docker-compose ps
+
+# Access MinIO console (optional)
+# http://localhost:9001
+# Login: minioadmin / minioadmin
+```
+
+#### 5. Initialize Database
 
 ```bash
 pnpm --filter database db:init
 ```
 
-#### 4. Start Servers
+#### 6. Start Servers
 
 ```bash
 # Terminal 1: API Server
 pnpm --filter api dev
 
-# Terminal 2: Background Jobs
+# Terminal 2: Background Jobs (optional)
 pnpm --filter jobs dev
 ```
 
-#### 5. Test
+#### 7. Test It Works
 
 ```bash
 # Get auth token
 export TOKEN=$(grep SYNAP_SECRET_TOKEN .env | cut -d= -f2)
+
+# Health check
+curl http://localhost:3000/health
 
 # Create a note
 curl -X POST http://localhost:3000/trpc/notes.create \
@@ -68,9 +108,27 @@ curl -X POST http://localhost:3000/trpc/notes.create \
   -d '{"content":"Test note","autoEnrich":true}'
 ```
 
+### Using Your Existing Notes Folder
+
+You can use an existing notes folder with MinIO:
+
+```bash
+# Option 1: Place notes in data/notes
+mkdir -p data/notes
+cp -r ~/Documents/MyNotes/* data/notes/
+
+# Option 2: Symlink existing folder
+ln -s ~/Documents/MyNotes ./data/notes
+
+# MinIO will expose your folder via S3 API
+# Files are accessible at: http://localhost:9000/synap-storage/path/to/file.md
+```
+
+See [LOCAL-SETUP.md](./LOCAL-SETUP.md) for more details.
+
 ---
 
-## ☁️ Production Setup (PostgreSQL)
+## ☁️ Production Setup (PostgreSQL + R2)
 
 ### Multi-user SaaS with Better Auth
 
@@ -93,6 +151,14 @@ Edit `.env.production`:
 # Database
 DB_DIALECT=postgres
 DATABASE_URL=postgresql://user:pass@ep-xxx.neon.tech/synap?sslmode=require
+
+# Storage (R2 for production)
+STORAGE_PROVIDER=r2
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ACCESS_KEY_ID=your-r2-access-key
+R2_SECRET_ACCESS_KEY=your-r2-secret-key
+R2_BUCKET_NAME=synap-storage
+R2_PUBLIC_URL=https://synap-storage.r2.dev
 
 # Better Auth
 BETTER_AUTH_SECRET=your-secret-here  # openssl rand -base64 32
@@ -125,7 +191,7 @@ export $(cat .env.production | xargs)
 🚀 Initializing Synap PostgreSQL Database...
 ✅ pgvector enabled
 ✅ Schemas pushed
-✅ RLS enabled (note: not active, using explicit filtering)
+✅ RLS enabled
 🎉 Database initialization complete!
 ```
 
@@ -136,7 +202,7 @@ export $(cat .env.production | xargs)
 npx vitest run packages/core/tests/user-isolation.test.ts
 ```
 
-**Expected**: ✅ 10/10 tests passing
+**Expected**: ✅ All tests passing
 
 #### 5. Deploy
 
@@ -150,6 +216,7 @@ vercel --prod
 ```bash
 npm i -g @railway/cli
 railway up
+railway add -d postgres
 ```
 
 ---
@@ -166,7 +233,7 @@ export DATABASE_URL=postgresql://...
 npx vitest run packages/core/tests/user-isolation.test.ts
 ```
 
-**Tests** (10 total):
+**Tests**:
 - ✅ Event creation with userId
 - ✅ Event filtering by userId
 - ✅ Entity creation with userId
@@ -176,7 +243,6 @@ npx vitest run packages/core/tests/user-isolation.test.ts
 - ✅ Cross-user access prevention
 - ✅ Update protection
 - ✅ Search isolation
-- ✅ Documentation
 
 ---
 
@@ -238,19 +304,29 @@ curl "http://localhost:3000/trpc/notes.search?input={\"query\":\"planning\",\"us
   -H "Cookie: better-auth.session=YOUR_SESSION"
 ```
 
-### Thought Capture
+### Chat (Conversational Interface)
 
 ```bash
-# Quick capture (async processing)
-curl -X POST http://localhost:3000/trpc/capture.thought \
+# Send message
+curl -X POST http://localhost:3000/trpc/chat.sendMessage \
   -H "Content-Type: application/json" \
   -H "Cookie: better-auth.session=YOUR_SESSION" \
-  -d '{"content":"Buy milk tomorrow at 5pm"}'
+  -d '{
+    "threadId": "uuid",
+    "content": "Create a task to call John tomorrow at 3pm"
+  }'
 
-# AI will:
-# 1. Analyze: intent=task, dueDate=tomorrow-5pm
-# 2. Create task entity automatically
-# 3. Add tags: shopping, groceries
+# AI responds with action proposal
+# Confirm action
+curl -X POST http://localhost:3000/trpc/chat.executeAction \
+  -H "Content-Type: application/json" \
+  -H "Cookie: better-auth.session=YOUR_SESSION" \
+  -d '{
+    "threadId": "uuid",
+    "messageId": "uuid",
+    "actionType": "task.create",
+    "actionParams": {...}
+  }'
 ```
 
 ---
@@ -293,6 +369,31 @@ curl http://localhost:3000/api/auth/session \
 ```bash
 # Run extension migration
 psql $DATABASE_URL < packages/database/migrations-pg/0001_enable_pgvector.sql
+```
+
+### MinIO Not Starting
+
+```bash
+# Check logs
+docker-compose logs minio
+
+# Restart
+docker-compose restart minio
+
+# Verify port is available
+lsof -i :9000
+```
+
+### Storage Provider Not Found
+
+```bash
+# Verify environment variable
+echo $STORAGE_PROVIDER
+
+# Should be "minio" or "r2"
+
+# Check .env file
+cat .env | grep STORAGE_PROVIDER
 ```
 
 ### Tests Failing
@@ -354,14 +455,21 @@ tags
 | `DB_DIALECT` | Yes | `sqlite` or `postgres` |
 | `DATABASE_URL` | Yes* | PostgreSQL connection string |
 | `SQLITE_DB_PATH` | Yes* | SQLite file path |
+| `STORAGE_PROVIDER` | Yes | `r2` or `minio` |
+| `R2_ACCOUNT_ID` | Yes** | Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | Yes** | R2 access key |
+| `R2_SECRET_ACCESS_KEY` | Yes** | R2 secret key |
+| `MINIO_ENDPOINT` | Yes*** | MinIO endpoint URL |
 | `ANTHROPIC_API_KEY` | Yes | Claude API key |
 | `OPENAI_API_KEY` | Yes | Embeddings API key |
-| `BETTER_AUTH_SECRET` | Yes** | Session secret |
-| `SYNAP_SECRET_TOKEN` | Yes*** | Static auth token |
+| `BETTER_AUTH_SECRET` | Yes**** | Session secret |
+| `SYNAP_SECRET_TOKEN` | Yes***** | Static auth token |
 
 \* One of DATABASE_URL or SQLITE_DB_PATH required  
-\** PostgreSQL only  
-\*** SQLite only
+\** Required if STORAGE_PROVIDER=r2  
+\*** Required if STORAGE_PROVIDER=minio  
+\**** PostgreSQL only  
+\***** SQLite only
 
 ---
 
@@ -372,6 +480,7 @@ tags
 - **Inngest**: https://inngest.com
 - **Neon**: https://neon.tech
 - **tRPC**: https://trpc.io
+- **MinIO**: https://min.io/docs/
 
 ---
 
@@ -379,8 +488,8 @@ tags
 
 - **GitHub Issues**: https://github.com/Synap-core/backend/issues
 - **Discussions**: https://github.com/Synap-core/backend/discussions
-- **Email**: support@synap.dev (coming soon)
 
 ---
 
 **Ready to build your second brain!** 🧠✨
+

@@ -1,4 +1,6 @@
 import type { ConversationMessageMetadata } from '@synap/core';
+import * as pgCore from 'drizzle-orm/pg-core';
+import * as sqliteCore from 'drizzle-orm/sqlite-core';
 import { randomUUID } from 'crypto';
 
 const isPostgres = process.env.DB_DIALECT === 'postgres';
@@ -7,8 +9,7 @@ let conversationMessages: any;
 
 if (isPostgres) {
   // PostgreSQL schema
-  const pg = require('drizzle-orm/pg-core') as typeof import('drizzle-orm/pg-core');
-  const { pgTable, uuid, text, timestamp, jsonb } = pg;
+  const { pgTable, uuid, text, timestamp, jsonb } = pgCore;
   
   conversationMessages = pgTable('conversation_messages', {
     // Identity
@@ -44,8 +45,7 @@ if (isPostgres) {
   });
 } else {
   // SQLite schema (single-user, no hash chain needed)
-  const sqlite = require('drizzle-orm/sqlite-core') as typeof import('drizzle-orm/sqlite-core');
-  const { sqliteTable, text, integer } = sqlite;
+  const { sqliteTable, text, integer } = sqliteCore;
   
   conversationMessages = sqliteTable('conversation_messages', {
     id: text('id').primaryKey().$defaultFn(() => randomUUID()),

@@ -12,6 +12,7 @@
     "@hono/trpc-server": "^0.3.2",
     "@synap/api": "workspace:*",
     "@synap/auth": "workspace:*",
+    "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@trpc/server": "^11.0.0",

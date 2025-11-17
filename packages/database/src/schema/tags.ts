@@ -5,6 +5,8 @@
  */
 
 import { randomUUID } from 'crypto';
+import * as pgCore from 'drizzle-orm/pg-core';
+import * as sqliteCore from 'drizzle-orm/sqlite-core';
 
 const isPostgres = process.env.DB_DIALECT === 'postgres';
 
@@ -12,7 +14,7 @@ let tags: any;
 
 if (isPostgres) {
   // PostgreSQL schema
-  const { pgTable, uuid, text, timestamp } = require('drizzle-orm/pg-core');
+  const { pgTable, uuid, text, timestamp } = pgCore;
   
   tags = pgTable('tags', {
     // Primary key
@@ -34,19 +36,19 @@ if (isPostgres) {
   });
 } else {
   // SQLite schema (single-user, no userId)
-  const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
+  const { sqliteTable, text, integer } = sqliteCore;
   
   tags = sqliteTable('tags', {
     // Primary key
     id: text('id').primaryKey().$defaultFn(() => randomUUID()),
     
     // Tag name
-    name: text('name').notNull().unique(),
+    name: text('name').notNull(),
     
     // Display color
     color: text('color'),
     
-    // Created timestamp
+    // Timestamps (Unix timestamps in ms)
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .$defaultFn(() => new Date())
       .notNull(),
@@ -57,4 +59,3 @@ export { tags };
 
 export type Tag = typeof tags.$inferSelect;
 export type NewTag = typeof tags.$inferInsert;
-

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { AgentIntent, IntentAnalysis } from './types.js';
-import { getAnthropicClient } from './anthropic-client.js';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { createChatModel } from '../providers/chat.js';
+import { messageContentToString } from '../providers/utils.js';
 
 const classificationSchema = z.object({
   intent: z.enum(['capture', 'command', 'query', 'unknown']),
@@ -57,26 +59,18 @@ const toIntentAnalysis = (payload: ClassificationPayload): IntentAnalysis => ({
 });
 
 export const classifyIntent = async (message: string): Promise<IntentAnalysis> => {
-  const client = getAnthropicClient();
-
-  const response = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+  const model = createChatModel({
+    purpose: 'intent',
     temperature: 0,
-    max_tokens: 256,
-    system: classificationSystemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content: userPrompt(message),
-      },
-    ],
+    maxTokens: 256,
   });
 
-  const textSegments = response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => ('text' in block ? block.text : ''));
+  const response = await model.invoke([
+    new SystemMessage(classificationSystemPrompt),
+    new HumanMessage(userPrompt(message)),
+  ]);
 
-  const rawText = textSegments.join('\n').trim();
+  const rawText = messageContentToString(response);
   const jsonCandidate = safeJsonExtract(rawText);
 
   if (!jsonCandidate) {
@@ -102,6 +96,16 @@ export const classifyIntent = async (message: string): Promise<IntentAnalysis> =
     };
   }
 };
+
+
+
+
+
+
+
+
+
+
 
 
 

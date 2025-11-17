@@ -1,6 +1,5 @@
-import { db, entityVectors } from '@synap/database';
-import type { EntityVector, NewEntityVector } from '@synap/database';
-import { sql } from 'drizzle-orm';
+import { db, entityVectors, searchEntityVectorsRaw } from '@synap/database';
+import type { EntityVector, NewEntityVector, VectorRepositoryDatabase, VectorSearchRow } from '@synap/database';
 import { createLogger } from '@synap/core';
 import {
   UpsertEntityEmbeddingInputSchema,
@@ -83,35 +82,17 @@ export class VectorService {
     const parsed = VectorSearchInputSchema.parse(input);
 
     if (isPostgres) {
-      type ExecuteResult = { rows: Array<Record<string, unknown>> };
-      type ExecutableDatabase = typeof this.database & {
-        execute?: (query: ReturnType<typeof sql>) => Promise<ExecuteResult>;
-      };
+      const rawRows = await searchEntityVectorsRaw(this.database as unknown as VectorRepositoryDatabase, {
+        userId: parsed.userId,
+        embedding: parsed.embedding,
+        limit: parsed.limit,
+      });
 
-      const databaseWithExecute = this.database as ExecutableDatabase;
-
-      if (databaseWithExecute.execute) {
-        const result = await databaseWithExecute.execute(
-          sql`
-            SELECT
-              entity_id as "entityId",
-              user_id as "userId",
-              entity_type as "entityType",
-              title,
-              preview,
-              file_url as "fileUrl",
-              (1 / (1 + (embedding <-> ${parsed.embedding}))) AS "relevanceScore"
-            FROM entity_vectors
-            WHERE user_id = ${parsed.userId}
-            ORDER BY embedding <-> ${parsed.embedding}
-            LIMIT ${parsed.limit}
-          `
-        );
-
-        return result.rows.map((row) => VectorSearchResultSchema.parse(row));
+      if (rawRows && rawRows.length > 0) {
+        return rawRows.map((row: VectorSearchRow) => VectorSearchResultSchema.parse(row));
       }
 
-      logger.warn('Database execute method unavailable; falling back to in-memory similarity search.');
+      logger.warn('Vector repository search unavailable; falling back to in-memory similarity search.');
     }
 
     const allRows = (await this.database.select().from(entityVectors).limit(500)) as EntityVector[];

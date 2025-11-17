@@ -1,12 +1,13 @@
 import { randomUUID } from 'crypto';
+import * as pgCore from 'drizzle-orm/pg-core';
+import * as sqliteCore from 'drizzle-orm/sqlite-core';
 
 const isPostgres = process.env.DB_DIALECT === 'postgres';
 
 let knowledgeFacts: any;
 
 if (isPostgres) {
-  const pg = require('drizzle-orm/pg-core') as typeof import('drizzle-orm/pg-core');
-  const { pgTable, uuid, text, real, timestamp, vector } = pg;
+  const { pgTable, uuid, text, real, timestamp, vector } = pgCore;
 
   knowledgeFacts = pgTable('knowledge_facts', {
     id: uuid('id').defaultRandom().primaryKey(),
@@ -21,8 +22,7 @@ if (isPostgres) {
       .notNull(),
   });
 } else {
-  const sqlite = require('drizzle-orm/sqlite-core') as typeof import('drizzle-orm/sqlite-core');
-  const { sqliteTable, text, real, integer } = sqlite;
+  const { sqliteTable, text, real, integer } = sqliteCore;
 
   knowledgeFacts = sqliteTable('knowledge_facts', {
     id: text('id').primaryKey().$defaultFn(() => randomUUID()),

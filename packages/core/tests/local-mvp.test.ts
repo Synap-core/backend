@@ -4,7 +4,7 @@
  * Tests the simplified single-user architecture
  */
 
-import { db, events, entities, contentBlocks } from '@synap/database';
+import { db, events, entities } from '@synap/database';
 
 console.log('🧪 Starting Local MVP Validation Tests\n');
 
@@ -130,15 +130,11 @@ async function runTests() {
       if (countAfter > countBefore) {
         const newEntity = entitiesAfter[entitiesAfter.length - 1];
         console.log(`   Created: ${newEntity.title} (type: ${newEntity.type})`);
-        
-        // Check if content was stored
-        const allContent = await db.select().from(contentBlocks).all();
-        const content = allContent.filter((c: any) => c.entityId === newEntity.id);
-        
+
         logTest(
           'Test 5: End-to-End Thought Capture',
-          content.length > 0 && content[0].content.includes('milk'),
-          content.length === 0 ? 'Content not stored' : undefined
+          Boolean(newEntity.filePath),
+          !newEntity.filePath ? 'File path not stored' : undefined
         );
       } else {
         logTest('Test 5: End-to-End Thought Capture', false, 'Entity not created');

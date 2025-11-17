@@ -1,13 +1,11 @@
 /**
  * @synap/ai - AI Integration Package
- * 
- * V0.4: Conversational intelligence for Synap
+ *
+ * Core exports are split across generated bundles so capabilities can
+ * selectively add functionality without modifying this file.
  */
 
-export * from './conversational-agent.js';
-export * from './action-extractor.js';
-export * from './prompts.js';
-export * from './agent/graph.js';
-export * from './tools/index.js';
-export * from './clients/embeddings.js';
+export { messageContentToString, extractTokenUsage } from './providers/utils.js';
 
+export * from './generated/chat.js';
+export * from './generated/embeddings.js';
