@@ -1,21 +1,30 @@
 /**
  * Event Repository - Event Sourcing Abstraction
- * 
+ *
  * Phase 1: Event Store Foundation
- * 
+ *
  * This repository is the single point of entry for all events.
  * It validates events against the SynapEvent v1 schema before insertion.
- * 
+ *
  * Features:
  * - Schema validation at insertion (Zod)
  * - Append events with optimistic locking
  * - Event replay (get aggregate stream)
  * - User event streams
  * - Correlation tracking
+ * - Event hooks for real-time broadcasting
  */
 
 import { Pool } from '@neondatabase/serverless';
 import { SynapEventSchema, type SynapEvent } from '@synap/types';
+
+/**
+ * Event Hook Callback Type
+ *
+ * Functions that want to be notified when events are appended
+ * can register a hook using EventRepository.addEventHook()
+ */
+export type EventHook = (event: EventRecord) => void | Promise<void>;
 
 // ============================================================================
 // LEGACY TYPES (for backward compatibility during migration)
@@ -75,16 +84,51 @@ export interface UserStreamOptions {
 // ============================================================================
 
 export class EventRepository {
+  private eventHooks: EventHook[] = [];
+
   constructor(private pool: Pool) {}
 
   /**
+   * Add an event hook
+   *
+   * Hooks are called after an event is successfully appended to the store.
+   * Useful for real-time broadcasting, analytics, etc.
+   *
+   * @param hook - Callback function to be called on each event
+   */
+  addEventHook(hook: EventHook): void {
+    this.eventHooks.push(hook);
+  }
+
+  /**
+   * Remove an event hook
+   *
+   * @param hook - The hook function to remove
+   */
+  removeEventHook(hook: EventHook): void {
+    this.eventHooks = this.eventHooks.filter(h => h !== hook);
+  }
+
+  /**
+   * Notify all event hooks
+   *
+   * @param event - The event record to broadcast
+   */
+  private async notifyHooks(event: EventRecord): Promise<void> {
+    // Fire all hooks in parallel
+    await Promise.allSettled(
+      this.eventHooks.map(hook => Promise.resolve(hook(event)))
+    );
+  }
+
+  /**
    * Append event to stream
-   * 
+   *
    * Phase 1: This is the single validation point for all events.
    * Events are validated against SynapEvent v1 schema before insertion.
-   * 
+   *
    * Includes optimistic concurrency check for aggregates.
-   * 
+   *
    * @param event - SynapEvent to append (validated against schema)
    * @returns EventRecord (database representation)
    * @throws Error if event is invalid or version conflict detected
@@ -144,7 +188,16 @@ export class EventRepository {
       validated.timestamp,
     ]);
 
-    return this.mapRow(result.rows[0]);
+    const eventRecord = this.mapRow(result.rows[0]);
+
+    // Notify hooks (real-time broadcasting, etc.)
+    // Fire and forget - don't block the response
+    this.notifyHooks(eventRecord).catch(err => {
+      // Log but don't throw - hooks failing shouldn't break event storage
+      console.error('Event hook error:', err);
+    });
+
+    return eventRecord;
   }
   
   /**
@@ -344,6 +397,84 @@ export class EventRepository {
       LIMIT $2
     `, [eventType, limit]);
 
+    return result.rows.map(row => this.mapRow(row));
+  }
+
+  /**
+   * Search events with filters and pagination
+   */
+  async searchEvents(filters: {
+    userId?: string;
+    eventType?: string;
+    aggregateType?: AggregateType;
+    aggregateId?: string;
+    correlationId?: string;
+    fromDate?: Date;
+    toDate?: Date;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<EventRecord[]> {
+    let query = 'SELECT * FROM events_v2 WHERE 1=1';
+    const params: unknown[] = [];
+    let paramIndex = 1;
+
+    if (filters.userId) {
+      query += ` AND user_id = $${paramIndex}`;
+      params.push(filters.userId);
+      paramIndex++;
+    }
+
+    if (filters.eventType) {
+      query += ` AND event_type = $${paramIndex}`;
+      params.push(filters.eventType);
+      paramIndex++;
+    }
+
+    if (filters.aggregateType) {
+      query += ` AND aggregate_type = $${paramIndex}`;
+      params.push(filters.aggregateType);
+      paramIndex++;
+    }
+
+    if (filters.aggregateId) {
+      query += ` AND aggregate_id = $${paramIndex}`;
+      params.push(filters.aggregateId);
+      paramIndex++;
+    }
+
+    if (filters.correlationId) {
+      query += ` AND correlation_id = $${paramIndex}`;
+      params.push(filters.correlationId);
+      paramIndex++;
+    }
+
+    if (filters.fromDate) {
+      query += ` AND timestamp >= $${paramIndex}`;
+      params.push(filters.fromDate);
+      paramIndex++;
+    }
+
+    if (filters.toDate) {
+      query += ` AND timestamp <= $${paramIndex}`;
+      params.push(filters.toDate);
+      paramIndex++;
+    }
+
+    query += ' ORDER BY timestamp DESC';
+
+    if (filters.limit) {
+      query += ` LIMIT $${paramIndex}`;
+      params.push(filters.limit);
+      paramIndex++;
+    }
+
+    if (filters.offset) {
+      query += ` OFFSET $${paramIndex}`;
+      params.push(filters.offset);
+      paramIndex++;
+    }
+
+    const result = await this.pool.query(query, params);
     return result.rows.map(row => this.mapRow(row));
   }
 

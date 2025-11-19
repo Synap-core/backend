@@ -9,29 +9,43 @@ export { eventsRouter } from './routers/events.js';
 export { captureRouter } from './routers/capture.js';
 export { chatRouter } from './routers/chat.js';
 export { suggestionsRouter } from './routers/suggestions.js';
+export { systemRouter } from './routers/system.js';
 export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
+export { eventStreamManager } from './event-stream-manager.js';
+export { setupEventBroadcasting } from './setup-event-broadcasting.js';
 
-import { router } from './trpc.js';
 import { eventsRouter } from './routers/events.js';
 import { captureRouter } from './routers/capture.js';
 import { notesRouter } from './routers/notes.js';
 import { chatRouter } from './routers/chat.js';
 import { suggestionsRouter } from './routers/suggestions.js';
+import { systemRouter } from './routers/system.js';
 import { createContext } from './context.js';
+import { registerRouter, buildAppRouter } from './router-registry.js';
 
-// Main app router
-export const appRouter = router({
-  events: eventsRouter,
-  capture: captureRouter,
-  notes: notesRouter,
-  chat: chatRouter,  // V0.4: Conversational interface
-  suggestions: suggestionsRouter,
-  // Future routers:
-  // entities: entitiesRouter,
-  // search: searchRouter,
-});
+// V1.0: Register core routers dynamically
+// These are the built-in routers that come with the kernel
+registerRouter('events', eventsRouter, { version: '1.0.0', source: 'core', description: 'Event logging API' });
+registerRouter('capture', captureRouter, { version: '1.0.0', source: 'core', description: 'Thought capture API' });
+registerRouter('notes', notesRouter, { version: '1.0.0', source: 'core', description: 'Notes management API' });
+registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Conversational interface API' });
+registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
+registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
+
+// Build the main app router from all registered routers
+// This enables plugins to add routers without modifying core code
+export const appRouter = buildAppRouter();
 
 export type AppRouter = typeof appRouter;
+
+// Re-export router registry functions for plugin developers
+export {
+  registerRouter,
+  unregisterRouter,
+  dynamicRouterRegistry,
+  getRouter,
+  buildAppRouter,
+} from './router-registry.js';
 
 // Explicit re-export for server
 export { createContext };

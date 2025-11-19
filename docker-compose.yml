@@ -1,19 +1,27 @@
 version: '3.8'
 
-# Synap Backend - Local Development Setup
+# Synap Backend - Complete Self-Hosted Setup
 #
-# This docker-compose file sets up a complete local development environment:
+# This docker-compose file sets up a complete self-hosted Synap Core OS:
 # - PostgreSQL database (with TimescaleDB extension)
-# - MinIO object storage (S3-compatible, uses local folder)
-# - Synap API server (optional, if you want to run in Docker)
+# - MinIO object storage (S3-compatible)
+# - Synap API server (backend API)
 #
 # Usage:
-#   1. Place your existing notes folder in ./data/notes
-#   2. Run: docker-compose up -d
-#   3. Access MinIO console at http://localhost:9001
-#   4. Connect your Synap backend to:
-#      - Database: postgresql://postgres:your_secret_password@localhost:5432/synap
-#      - Storage: http://localhost:9000 (MinIO endpoint)
+#   1. Create .env file with your API keys (see env.example)
+#   2. Run: docker compose up -d
+#   3. Wait for all services to be healthy
+#   4. Access:
+#      - API: http://localhost:3000
+#      - MinIO Console: http://localhost:9001
+#      - PostgreSQL: localhost:5432
+#
+# Environment Variables Required:
+#   - ANTHROPIC_API_KEY (required)
+#   - OPENAI_API_KEY (required)
+#   - POSTGRES_PASSWORD (optional, defaults to synap_dev_password)
+#   - MINIO_ROOT_USER (optional, defaults to minioadmin)
+#   - MINIO_ROOT_PASSWORD (optional, defaults to minioadmin)
 
 services:
   # PostgreSQL Database with TimescaleDB
@@ -72,6 +80,65 @@ services:
       exit 0;
       "
     restart: "no"
+
+  # Synap API Backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: synap-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      # Database
+      DB_DIALECT: postgres
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-synap_dev_password}@postgres:5432/synap
+      
+      # Storage (MinIO)
+      STORAGE_PROVIDER: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: synap-storage
+      MINIO_USE_SSL: "false"
+      
+      # Server
+      NODE_ENV: production
+      PORT: 3000
+      API_URL: http://localhost:3000
+      
+      # Auth (for PostgreSQL mode)
+      # AUTH_SECRET: ${AUTH_SECRET:-your-secret-key}
+      # AUTH_URL: http://localhost:3000
+      
+      # Inngest (optional - can use cloud or local)
+      # INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      # INNGEST_BASE_URL: ${INNGEST_BASE_URL}
+      
+      # AI (required)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      
+      # Security
+      SYNAP_SECRET_TOKEN: ${SYNAP_SECRET_TOKEN:-dev-secret-token}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount .env if you want to override (optional)
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
 
 # Volumes (optional, for persistent data)
 volumes:

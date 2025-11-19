@@ -19,7 +19,7 @@ import { type SynapEvent } from '@synap/types';
 import { storage } from '@synap/storage';
 import { vectorService } from '@synap/domain';
 import { generateEmbedding } from '@synap/ai';
-import { createLogger, config } from '@synap/core';
+import { createLogger, config, ValidationError, InternalServerError } from '@synap/core';
 
 const logger = createLogger({ module: 'embedding-generator-handler' });
 
@@ -57,13 +57,13 @@ export class EmbeddingGeneratorHandler implements IEventHandler {
       const content = await step.run('retrieve-content', async () => {
         if (!filePath) {
           logger.warn({ entityId }, 'No file path provided, cannot generate embedding');
-          throw new Error('File path is required for embedding generation');
+          throw new ValidationError('File path is required for embedding generation', { entityId });
         }
 
         try {
           const content = await storage.download(filePath);
           if (!content || content.trim().length === 0) {
-            throw new Error('Note content is empty');
+            throw new ValidationError('Note content is empty', { entityId, filePath });
           }
           logger.debug({ entityId, contentLength: content.length }, 'Retrieved note content from storage');
           return content;
@@ -78,7 +78,7 @@ export class EmbeddingGeneratorHandler implements IEventHandler {
         try {
           const vector = await generateEmbedding(content);
           if (!Array.isArray(vector) || vector.length === 0) {
-            throw new Error('Embedding generation returned empty vector');
+            throw new InternalServerError('Embedding generation returned empty vector', { entityId, contentLength: content.length });
           }
           logger.debug({ entityId, embeddingDimensions: vector.length }, 'Generated embedding');
           return vector;

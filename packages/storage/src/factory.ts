@@ -13,6 +13,7 @@
 import type { IFileStorage } from './interface.js';
 import { R2StorageProvider, type R2Config } from './r2-provider.js';
 import { MinIOStorageProvider, type MinIOConfig } from './minio-provider.js';
+import { ValidationError, InternalServerError } from '@synap/core';
 
 // Import config using dynamic import to avoid circular dependencies
 // This will be resolved when the module loads
@@ -35,7 +36,7 @@ function getConfig(): typeof import('@synap/core')['config'] {
   }
   // If config isn't loaded yet, we need to load it synchronously
   // This is a fallback - in practice config should be loaded before this is called
-  throw new Error(
+  throw new InternalServerError(
     'Config not loaded. Please ensure @synap/core is imported before using storage.'
   );
 }
@@ -60,8 +61,9 @@ export function createFileStorageProvider(): IFileStorage {
     case 'r2': {
       // Validate R2 configuration
       if (!config.storage.r2AccountId || !config.storage.r2AccessKeyId || !config.storage.r2SecretAccessKey) {
-        throw new Error(
-          'R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables'
+        throw new ValidationError(
+          'R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables',
+          { provider: 'r2' }
         );
       }
 
@@ -91,8 +93,9 @@ export function createFileStorageProvider(): IFileStorage {
     }
 
     default:
-      throw new Error(
-        `Unknown storage provider: ${provider}. Supported providers: "r2", "minio"`
+      throw new ValidationError(
+        `Unknown storage provider: ${provider}. Supported providers: "r2", "minio"`,
+        { provider }
       );
   }
 }

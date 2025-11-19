@@ -7,7 +7,7 @@
  */
 
 import { db } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger, InternalServerError } from '@synap/core';
 import { config } from '@synap/core';
 
 const contextLogger = createLogger({ module: 'api-context' });
@@ -27,7 +27,7 @@ export async function createContext(req: Request): Promise<Context> {
     try {
       const authModule = await import('@synap/auth');
       if (!authModule.getSession) {
-        throw new Error('getSession not available');
+        throw new InternalServerError('getSession not available', { module: '@synap/auth' });
       }
       const session = await authModule.getSession(req.headers);
       

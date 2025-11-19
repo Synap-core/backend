@@ -45,15 +45,23 @@ const mapEventSource = (source?: EventSource): 'api' | 'automation' | 'sync' | '
 };
 
 /**
- * EventService - DEPRECATED
+ * EventService - DEPRECATED (V0.6)
  * 
- * ⚠️ PHASE 1 MIGRATION: This service is deprecated and will be removed in Phase 2.
+ * ⚠️ **THIS SERVICE IS DEPRECATED AND SHOULD NOT BE USED**
  * 
- * For Phase 1, this service acts as a compatibility layer, converting AppendEventInput
- * to SynapEvent format. In Phase 2, all callers will be updated to publish directly
- * to Inngest, and this service will be removed.
+ * V0.6: All references to eventService have been removed from the codebase.
+ * This class is kept for backward compatibility only and will be removed in a future version.
  * 
- * DO NOT USE IN NEW CODE. Use createSynapEvent() and publish to Inngest directly.
+ * **Migration Guide**:
+ * - Instead of `eventService.append()`, use:
+ *   1. `createSynapEvent()` to create the event
+ *   2. `getEventRepository().append()` to store it
+ *   3. `publishEvent()` to publish to Inngest
+ * 
+ * - Instead of `eventService.getUserStream()`, use:
+ *   `getEventRepository().getUserStream()`
+ * 
+ * @deprecated V0.6 - Use direct event publishing instead
  */
 export class EventService {
   constructor(private readonly repo = eventRepository) {}

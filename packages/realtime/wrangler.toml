@@ -1,0 +1,16 @@
+name = "synap-realtime"
+main = "src/index.ts"
+compatibility_date = "2024-01-20"
+
+[durable_objects]
+bindings = [
+  { name = "NOTIFICATION_ROOM", class_name = "NotificationRoom", script_name = "synap-realtime" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["NotificationRoom"]
+
+[vars]
+# Environment variables can be set here or via wrangler secret put
+

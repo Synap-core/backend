@@ -12,80 +12,17 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { conversationService, eventService, MessageRoleSchema } from '@synap/domain';
-import { runSynapAgent } from '@synap/ai';
+import { conversationService, MessageRoleSchema } from '@synap/domain';
 import { requireUserId } from '../utils/user-scoped.js';
 import { randomUUID } from 'crypto';
-import { AgentStateSchema, ForbiddenError, ValidationError } from '@synap/core';
-import type { SynapAgentResult } from '@synap/ai';
+import { ForbiddenError, ValidationError } from '@synap/core';
 import { createLogger } from '@synap/core';
+import { aiRateLimitMiddleware } from '../middleware/ai-rate-limit.js';
+import { publishEvent } from '../utils/inngest-client.js';
+import { createSynapEvent, EventTypes } from '@synap/types';
+import { getEventRepository } from '@synap/database';
 
 const chatLogger = createLogger({ module: 'chat-router' });
-
-const NO_RESPONSE_FALLBACK =
-  "Je n'ai pas pu générer de réponse pour le moment. Réessaie dans quelques instants.";
-
-const serializeAgentStateMetadata = (state: SynapAgentResult) => {
-  const planActions = state.plan?.actions.map((action) => ({
-    tool: action.tool,
-    params: action.params,
-    reasoning: action.justification ?? state.plan?.reasoning ?? 'Aucune justification fournie.',
-  })) ?? [];
-
-  const executionSummaries = (state.execution ?? []).map((log) => ({
-    tool: log.tool,
-    status: log.status,
-    result: log.result,
-    error: log.errorMessage,
-  }));
-
-  const suggestedActions = planActions.map((action) => ({
-    type: action.tool,
-    description: action.reasoning,
-    params: action.params,
-  }));
-
-  const metadataInput = {
-    intentAnalysis: state.intentAnalysis
-      ? {
-          label: state.intentAnalysis.label,
-          confidence: state.intentAnalysis.confidence,
-          reasoning: state.intentAnalysis.reasoning,
-          needsFollowUp: state.intentAnalysis.needsFollowUp,
-        }
-      : undefined,
-    context: state.context
-      ? {
-          retrievedNotesCount: state.context.semanticResults.length,
-          retrievedFactsCount: state.context.memoryFacts.length,
-        }
-      : undefined,
-    plan: planActions,
-    executionSummaries,
-    finalResponse: state.response ?? NO_RESPONSE_FALLBACK,
-    suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
-  };
-
-  const parsedState = AgentStateSchema.safeParse(metadataInput);
-
-  if (!parsedState.success) {
-    chatLogger.warn({ error: parsedState.error.flatten() }, 'Failed to normalize agent state metadata');
-    return {
-      agentState: metadataInput,
-      suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
-    };
-  }
-
-  const agentState = parsedState.data;
-
-  return {
-    agentState,
-    suggestedActions: suggestedActions.length > 0 ? suggestedActions : undefined,
-    model: agentState.model,
-    tokens: agentState.tokens,
-    latency: agentState.latency,
-  };
-};
 
 // ============================================================================
 // ROUTER
@@ -98,6 +35,7 @@ export const chatRouter = router({
    * This is the main entry point for conversational interaction.
    */
   sendMessage: protectedProcedure
+    .use(aiRateLimitMiddleware) // V1.0: Stricter rate limiting for AI endpoints
     .input(
       z.object({
         threadId: z.string().uuid().optional(),  // Create new if not provided
@@ -108,59 +46,65 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const threadId = input.threadId || randomUUID();
-      const log = chatLogger.child({ userId, threadId });
+      const requestId = randomUUID();
+      const correlationId = randomUUID();
+      const log = chatLogger.child({ userId, threadId, requestId });
 
-      log.info({ parentId: input.parentId }, 'Received chat message');
+      log.info({ parentId: input.parentId }, 'Received chat message - publishing event');
 
-      const userMessage = await conversationService.appendMessage({
-        threadId,
-        parentId: input.parentId,
-        role: MessageRoleSchema.Enum.user,
-        content: input.content,
-        metadata: null,
+      // V1.0 Event-Driven: Publish event instead of calling services directly
+      // The handler will process the message and generate the response
+      const event = createSynapEvent({
+        type: EventTypes.CONVERSATION_MESSAGE_SENT,
         userId,
-      });
-
-      log.debug({ messageId: userMessage.id }, 'User message appended');
-
-      let agentState: SynapAgentResult | null = null;
-
-      try {
-        agentState = await runSynapAgent({
-          userId,
+        aggregateId: threadId,
+        data: {
           threadId,
-          message: input.content,
-        });
-      } catch (error) {
-        log.error({ err: error }, 'Synap agent invocation failed');
-      }
-
-      const assistantResponse = agentState?.response ?? NO_RESPONSE_FALLBACK;
-      const assistantMetadata = agentState ? serializeAgentStateMetadata(agentState) : null;
-
-      const assistantMessage = await conversationService.appendMessage({
-        threadId,
-        parentId: userMessage.id,
-        role: MessageRoleSchema.Enum.assistant,
-        content: assistantResponse,
-        metadata: assistantMetadata,
-        userId,
+          parentId: input.parentId,
+          content: input.content,
+        },
+        source: 'api',
+        requestId,
+        correlationId,
       });
 
-      log.info(
-        {
-          assistantMessageId: assistantMessage.id,
-          agentStateCaptured: Boolean(agentState),
-        },
-        'Assistant response persisted'
-      );
+      // Append to Event Store
+      const eventRepo = getEventRepository();
+      await eventRepo.append(event);
 
+      // Publish to Inngest (for async processing)
+      await publishEvent('api/event.logged', {
+        id: event.id,
+        type: event.type,
+        aggregateId: event.aggregateId,
+        aggregateType: 'conversation',
+        userId: event.userId,
+        version: 1,
+        timestamp: event.timestamp.toISOString(),
+        data: event.data,
+        metadata: { version: event.version, requestId: event.requestId },
+        source: event.source,
+        causationId: event.causationId,
+        correlationId: event.correlationId,
+        requestId: event.requestId,
+      }, userId);
+
+      log.info({ requestId, eventId: event.id }, 'Published conversation.message.sent event');
+
+      // V0.7: Real-time feedback via WebSocket
+      // Return immediately with requestId - client should subscribe to WebSocket
+      // for real-time updates via useSynapRealtime hook
+      
       return {
         success: true,
+        status: 'pending' as const,
+        requestId,
         threadId,
-        userMessage,
-        assistantMessage,
-        agentState,
+        message: 'Message sent. Response is being generated. Subscribe to WebSocket for real-time updates.',
+        // WebSocket URL for client to connect
+        websocketUrl: process.env.REALTIME_URL 
+          ? `${process.env.REALTIME_URL.replace(/^https?/, 'wss')}/rooms/user_${userId}/subscribe`
+          : `wss://realtime.synap.app/rooms/user_${userId}/subscribe`,
       };
     }),
 
@@ -267,7 +211,10 @@ export const chatRouter = router({
   /**
    * Execute action suggested by AI
    * 
+   * V0.6: Pure Event-Driven - Publishes intent events only, no business logic
+   * 
    * This is THE BRIDGE from conversation → events → state
+   * All business logic is handled by workers (Epic 2)
    */
   executeAction: protectedProcedure
     .input(
@@ -287,12 +234,14 @@ export const chatRouter = router({
         actionType: input.actionType,
       });
 
-      let result: any;
-      let eventType: string;
+      const requestId = randomUUID();
+      const correlationId = randomUUID();
       let aggregateId = randomUUID();
+      let eventType: string;
+      let result: any;
 
       try {
-        // Switch on action type and execute appropriate logic
+        // Switch on action type and publish intent events
         switch (input.actionType) {
           // =====================================================================
           // TASK ACTIONS
@@ -300,12 +249,11 @@ export const chatRouter = router({
           case 'task.create': {
             const { title, description, dueDate, priority } = input.actionParams;
             
-            // Emit event to event store
-            await eventService.append({
-              aggregateId,
-              aggregateType: 'entity',
-              eventType: 'task.creation.requested',
+            // Create and publish intent event
+            const event = createSynapEvent({
+              type: EventTypes.TASK_CREATION_REQUESTED,
               userId,
+              aggregateId,
               data: {
                 title,
                 description,
@@ -313,21 +261,43 @@ export const chatRouter = router({
                 priority,
                 status: 'todo',
               },
-              version: 1,
               source: 'api',
+              requestId,
+              correlationId,
               metadata: {
                 triggeredBy: 'conversation',
                 threadId: input.threadId,
                 messageId: input.messageId,
               },
             });
+
+            // Append to Event Store
+            const eventRepo = getEventRepository();
+            await eventRepo.append(event);
+
+            // Publish to Inngest
+            await publishEvent('api/event.logged', {
+              id: event.id,
+              type: event.type,
+              aggregateId: event.aggregateId,
+              aggregateType: 'entity',
+              userId: event.userId,
+              version: 1,
+              timestamp: event.timestamp.toISOString(),
+              data: event.data,
+              metadata: { version: event.version, requestId: event.requestId },
+              source: event.source,
+              causationId: event.causationId,
+              correlationId: event.correlationId,
+              requestId: event.requestId,
+            }, userId);
             
             result = {
               taskId: aggregateId,
               title,
               status: 'todo',
             };
-            eventType = 'task.created';
+            eventType = EventTypes.TASK_CREATION_REQUESTED;
             break;
           }
           
@@ -335,23 +305,47 @@ export const chatRouter = router({
             const { taskId } = input.actionParams;
             aggregateId = taskId;
             
-            // Get current version (for optimistic locking)
-            const currentVersion = (await eventService.getAggregateVersion(taskId)) || 0;
-
-            await eventService.append({
-              aggregateId: taskId,
-              aggregateType: 'entity',
-              eventType: 'task.completed',
+            // Create and publish intent event
+            const event = createSynapEvent({
+              type: EventTypes.TASK_COMPLETION_REQUESTED,
               userId,
+              aggregateId: taskId,
               data: {
                 completedAt: new Date().toISOString(),
               },
-              version: currentVersion + 1,
               source: 'api',
+              requestId,
+              correlationId,
+              metadata: {
+                triggeredBy: 'conversation',
+                threadId: input.threadId,
+                messageId: input.messageId,
+              },
             });
+
+            // Append to Event Store
+            const eventRepo = getEventRepository();
+            await eventRepo.append(event);
+
+            // Publish to Inngest
+            await publishEvent('api/event.logged', {
+              id: event.id,
+              type: event.type,
+              aggregateId: event.aggregateId,
+              aggregateType: 'entity',
+              userId: event.userId,
+              version: 1,
+              timestamp: event.timestamp.toISOString(),
+              data: event.data,
+              metadata: { version: event.version, requestId: event.requestId },
+              source: event.source,
+              causationId: event.causationId,
+              correlationId: event.correlationId,
+              requestId: event.requestId,
+            }, userId);
             
-            result = { taskId, status: 'done' };
-            eventType = 'task.completed';
+            result = { taskId, status: 'pending' };
+            eventType = EventTypes.TASK_COMPLETION_REQUESTED;
             break;
           }
           
@@ -361,30 +355,53 @@ export const chatRouter = router({
           case 'note.create': {
             const { content, title, tags } = input.actionParams;
             
-            await eventService.append({
-              aggregateId,
-              aggregateType: 'entity',
-              eventType: 'note.creation.requested',
+            // Create and publish intent event
+            const event = createSynapEvent({
+              type: EventTypes.NOTE_CREATION_REQUESTED,
               userId,
+              aggregateId,
               data: {
                 title,
                 content,
                 tags,
                 type: 'note',
               },
-              version: 1,
               source: 'api',
+              requestId,
+              correlationId,
               metadata: {
                 triggeredBy: 'conversation',
                 threadId: input.threadId,
+                messageId: input.messageId,
               },
             });
+
+            // Append to Event Store
+            const eventRepo = getEventRepository();
+            await eventRepo.append(event);
+
+            // Publish to Inngest
+            await publishEvent('api/event.logged', {
+              id: event.id,
+              type: event.type,
+              aggregateId: event.aggregateId,
+              aggregateType: 'entity',
+              userId: event.userId,
+              version: 1,
+              timestamp: event.timestamp.toISOString(),
+              data: event.data,
+              metadata: { version: event.version, requestId: event.requestId },
+              source: event.source,
+              causationId: event.causationId,
+              correlationId: event.correlationId,
+              requestId: event.requestId,
+            }, userId);
             
             result = {
               noteId: aggregateId,
               title: title || 'Untitled',
             };
-            eventType = 'note.created';
+            eventType = EventTypes.NOTE_CREATION_REQUESTED;
             break;
           }
           
@@ -394,11 +411,11 @@ export const chatRouter = router({
           case 'project.create': {
             const { title, description, startDate, endDate, tasks } = input.actionParams;
             
-            await eventService.append({
-              aggregateId,
-              aggregateType: 'entity',
-              eventType: 'project.creation.requested',
+            // Create and publish project creation intent event
+            const projectEvent = createSynapEvent({
+              type: EventTypes.PROJECT_CREATION_REQUESTED,
               userId,
+              aggregateId,
               data: {
                 title,
                 description,
@@ -406,30 +423,77 @@ export const chatRouter = router({
                 endDate,
                 type: 'project',
               },
-              version: 1,
               source: 'api',
+              requestId,
+              correlationId,
+              metadata: {
+                triggeredBy: 'conversation',
+                threadId: input.threadId,
+                messageId: input.messageId,
+              },
             });
+
+            // Append to Event Store
+            const eventRepo = getEventRepository();
+            await eventRepo.append(projectEvent);
+
+            // Publish to Inngest
+            await publishEvent('api/event.logged', {
+              id: projectEvent.id,
+              type: projectEvent.type,
+              aggregateId: projectEvent.aggregateId,
+              aggregateType: 'entity',
+              userId: projectEvent.userId,
+              version: 1,
+              timestamp: projectEvent.timestamp.toISOString(),
+              data: projectEvent.data,
+              metadata: { version: projectEvent.version, requestId: projectEvent.requestId },
+              source: projectEvent.source,
+              causationId: projectEvent.causationId,
+              correlationId: projectEvent.correlationId,
+              requestId: projectEvent.requestId,
+            }, userId);
             
-            // If tasks provided, create them too
+            // If tasks provided, create them too (publish separate events)
             if (tasks && Array.isArray(tasks)) {
-              const correlationId = randomUUID();
-              
               for (const taskTitle of tasks) {
                 const taskId = randomUUID();
-                await eventService.append({
-                  aggregateId: taskId,
-                  aggregateType: 'entity',
-                  eventType: 'task.creation.requested',
+                const taskEvent = createSynapEvent({
+                  type: EventTypes.TASK_CREATION_REQUESTED,
                   userId,
+                  aggregateId: taskId,
                   data: {
                     title: taskTitle,
                     projectId: aggregateId,
                     status: 'todo',
                   },
-                  version: 1,
                   source: 'api',
-                  correlationId,
+                  requestId: randomUUID(),
+                  correlationId, // Same correlation ID to group related events
+                  metadata: {
+                    triggeredBy: 'conversation',
+                    threadId: input.threadId,
+                    messageId: input.messageId,
+                    parentProjectId: aggregateId,
+                  },
                 });
+
+                await eventRepo.append(taskEvent);
+                await publishEvent('api/event.logged', {
+                  id: taskEvent.id,
+                  type: taskEvent.type,
+                  aggregateId: taskEvent.aggregateId,
+                  aggregateType: 'entity',
+                  userId: taskEvent.userId,
+                  version: 1,
+                  timestamp: taskEvent.timestamp.toISOString(),
+                  data: taskEvent.data,
+                  metadata: { version: taskEvent.version, requestId: taskEvent.requestId },
+                  source: taskEvent.source,
+                  causationId: taskEvent.causationId,
+                  correlationId: taskEvent.correlationId,
+                  requestId: taskEvent.requestId,
+                }, userId);
               }
             }
             
@@ -438,7 +502,7 @@ export const chatRouter = router({
               title,
               tasksCreated: tasks?.length || 0,
             };
-            eventType = 'project.created';
+            eventType = EventTypes.PROJECT_CREATION_REQUESTED;
             break;
           }
           
@@ -448,7 +512,7 @@ export const chatRouter = router({
           case 'search.semantic': {
             const { query } = input.actionParams;
             
-            // TODO: Call existing search API
+            // Search is read-only, no event needed
             result = {
               query,
               results: [],
@@ -464,6 +528,8 @@ export const chatRouter = router({
           default:
             throw new ValidationError(`Unknown action type: ${input.actionType}`, { actionType: input.actionType });
         }
+
+        // Add system message to conversation (this is still synchronous as it's just logging)
         const systemMessage = await conversationService.appendMessage({
           threadId: input.threadId,
           parentId: input.messageId,
@@ -478,10 +544,12 @@ export const chatRouter = router({
           userId,
         });
 
-        log.info({ aggregateId, eventType }, 'Conversation action executed');
+        log.info({ aggregateId, eventType, requestId }, 'Intent event published');
         
         return {
           success: true,
+          status: 'pending' as const,
+          requestId,
           systemMessage,
           result,
           eventType,

@@ -16,6 +16,7 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@synap/core": "workspace:*",
     "zod": "^3.22.0"
   },
   "devDependencies": {

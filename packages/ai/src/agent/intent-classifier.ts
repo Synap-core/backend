@@ -1,8 +1,8 @@
 import { z } from 'zod';
+import { generateObject } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
 import type { AgentIntent, IntentAnalysis } from './types.js';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { createChatModel } from '../providers/chat.js';
-import { messageContentToString } from '../providers/utils.js';
+import { getAnthropicModel } from './config-helper.js';
 
 const classificationSchema = z.object({
   intent: z.enum(['capture', 'command', 'query', 'unknown']),
@@ -40,17 +40,6 @@ const userPrompt = (message: string): string =>
     '---',
   ].join('\n');
 
-const safeJsonExtract = (raw: string): string | null => {
-  const startIndex = raw.indexOf('{');
-  const endIndex = raw.lastIndexOf('}');
-
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-    return null;
-  }
-
-  return raw.slice(startIndex, endIndex + 1);
-};
-
 const toIntentAnalysis = (payload: ClassificationPayload): IntentAnalysis => ({
   label: payload.intent satisfies AgentIntent,
   confidence: payload.confidence,
@@ -59,39 +48,24 @@ const toIntentAnalysis = (payload: ClassificationPayload): IntentAnalysis => ({
 });
 
 export const classifyIntent = async (message: string): Promise<IntentAnalysis> => {
-  const model = createChatModel({
-    purpose: 'intent',
-    temperature: 0,
-    maxTokens: 256,
-  });
-
-  const response = await model.invoke([
-    new SystemMessage(classificationSystemPrompt),
-    new HumanMessage(userPrompt(message)),
-  ]);
-
-  const rawText = messageContentToString(response);
-  const jsonCandidate = safeJsonExtract(rawText);
-
-  if (!jsonCandidate) {
-    return {
-      label: 'unknown',
-      confidence: 0,
-      reasoning: 'Intent classifier returned no JSON payload.',
-      needsFollowUp: true,
-    };
-  }
-
   try {
-    const parsed = JSON.parse(jsonCandidate);
-    const result = classificationSchema.parse(parsed);
-    return toIntentAnalysis(result);
+    const modelName = getAnthropicModel('intent');
+    
+    const result = await generateObject({
+      model: anthropic(modelName),
+      schema: classificationSchema,
+      prompt: `${classificationSystemPrompt}\n\n${userPrompt(message)}`,
+      temperature: 0,
+      maxTokens: 256,
+    });
+
+    return toIntentAnalysis(result.object);
   } catch (error) {
-    console.error('❌ Failed to parse intent classification response:', error);
+    console.error('❌ Failed to classify intent:', error);
     return {
       label: 'unknown',
       confidence: 0,
-      reasoning: 'Intent classifier response could not be parsed.',
+      reasoning: error instanceof Error ? error.message : 'Intent classification failed.',
       needsFollowUp: true,
     };
   }

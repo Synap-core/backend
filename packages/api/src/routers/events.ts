@@ -1,6 +1,8 @@
 /**
  * Events Router - Event Logging API
  * 
+ * V0.6: Refactored to use direct event publishing instead of deprecated eventService
+ * 
  * This is the PRIMARY entry point for modifying system state.
  * All state changes MUST go through the event log.
  */
@@ -9,14 +11,19 @@ import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { requireUserId } from '../utils/user-scoped.js';
 import {
-  eventService,
   AggregateTypeSchema,
   EventSourceSchema,
 } from '@synap/domain';
+import { createSynapEvent, type EventType } from '@synap/types';
+import { getEventRepository } from '@synap/database';
+import { publishEvent } from '../utils/inngest-client.js';
+import { randomUUID } from 'crypto';
 
 export const eventsRouter = router({
   /**
    * Log a new event
+   * 
+   * V0.6: Refactored to use direct event publishing
    * 
    * This is the ONLY way to modify system state.
    * The event will be stored immutably and trigger projectors.
@@ -37,25 +44,50 @@ export const eventsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const requestId = randomUUID();
+      const correlationId = input.correlationId || randomUUID();
 
-      const record = await eventService.append({
-        aggregateId: input.aggregateId,
-        aggregateType: input.aggregateType,
-        eventType: input.eventType,
+      // Create SynapEvent
+      const event = createSynapEvent({
+        type: input.eventType as EventType,
         userId,
+        aggregateId: input.aggregateId,
         data: input.data,
-        metadata: input.metadata,
-        version: input.version,
+        source: input.source || 'api',
+        requestId,
+        correlationId,
         causationId: input.causationId,
-        correlationId: input.correlationId,
-        source: input.source,
+        metadata: input.metadata,
       });
 
-      return record;
+      // Append to Event Store
+      const eventRepo = getEventRepository();
+      const eventRecord = await eventRepo.append(event);
+
+      // Publish to Inngest
+      await publishEvent('api/event.logged', {
+        id: eventRecord.id,
+        type: eventRecord.eventType,
+        aggregateId: eventRecord.aggregateId,
+        aggregateType: input.aggregateType,
+        userId: eventRecord.userId,
+        version: input.version,
+        timestamp: eventRecord.timestamp.toISOString(),
+        data: eventRecord.data,
+        metadata: { version: eventRecord.version, requestId: eventRecord.metadata?.requestId, ...input.metadata },
+        source: eventRecord.source,
+        causationId: eventRecord.causationId,
+        correlationId: eventRecord.correlationId,
+        requestId: eventRecord.metadata?.requestId,
+      }, userId);
+
+      return eventRecord;
     }),
 
   /**
    * Get events for current user
+   * 
+   * V0.6: Refactored to use EventRepository directly
    * 
    * Useful for debugging and audit trails
    */
@@ -69,7 +101,9 @@ export const eventsRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      const events = await eventService.getUserStream(userId, {
+      // Use EventRepository directly instead of deprecated eventService
+      const eventRepo = getEventRepository();
+      const events = await eventRepo.getUserStream(userId, {
         limit: input.limit,
         eventTypes: input.type ? [input.type] : undefined,
       });

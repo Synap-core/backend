@@ -29,7 +29,7 @@ const DatabaseConfigSchema = z.object({
 });
 
 const StorageConfigSchema = z.object({
-  provider: z.enum(['r2', 'minio']).default('r2'),
+  provider: z.enum(['r2', 'minio']).default('minio'), // Default to MinIO, auto-detect R2 if credentials present
   // R2 config
   r2AccountId: z.string().optional(),
   r2AccessKeyId: z.string().optional(),
@@ -114,7 +114,10 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type DatabaseConfig = z.infer<typeof DatabaseConfigSchema>;
-export type StorageConfig = z.infer<typeof StorageConfigSchema>;
+// StorageConfig with provider always set (after auto-detection)
+export type StorageConfig = Omit<z.infer<typeof StorageConfigSchema>, 'provider'> & {
+  provider: 'r2' | 'minio';
+};
 export type AIConfig = z.infer<typeof AIConfigSchema>;
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -132,6 +135,16 @@ export type InngestConfig = z.infer<typeof InngestConfigSchema>;
  */
 function loadConfig(): Config {
   try {
+    // Auto-detect storage provider if not explicitly set
+    const explicitProvider = process.env.STORAGE_PROVIDER as 'r2' | 'minio' | undefined;
+    const hasR2Credentials = 
+      process.env.R2_ACCOUNT_ID && 
+      process.env.R2_ACCESS_KEY_ID && 
+      process.env.R2_SECRET_ACCESS_KEY;
+    
+    // If provider not set, auto-detect: use R2 if credentials exist, otherwise MinIO
+    const detectedProvider: 'r2' | 'minio' = explicitProvider || (hasR2Credentials ? 'r2' : 'minio');
+    
     const rawConfig = {
       database: {
         dialect: process.env.DB_DIALECT,
@@ -139,7 +152,7 @@ function loadConfig(): Config {
         sqlitePath: process.env.SQLITE_DB_PATH,
       },
       storage: {
-        provider: process.env.STORAGE_PROVIDER,
+        provider: detectedProvider,
         r2AccountId: process.env.R2_ACCOUNT_ID,
         r2AccessKeyId: process.env.R2_ACCESS_KEY_ID,
         r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
@@ -206,12 +219,25 @@ function loadConfig(): Config {
       },
     };
 
-    const config = ConfigSchema.parse(rawConfig);
+    const parsedConfig = ConfigSchema.parse(rawConfig);
+    
+    // Override provider with auto-detected value if not explicitly set
+    // This ensures we use MinIO by default if R2 credentials are missing
+    const config: Config = {
+      ...parsedConfig,
+      storage: {
+        ...parsedConfig.storage,
+        provider: explicitProvider || detectedProvider, // Use explicit or auto-detected
+      },
+    };
 
     // Log configuration status (without secrets)
     configLogger.info({
       database: { dialect: config.database.dialect },
-      storage: { provider: config.storage.provider },
+      storage: { 
+        provider: config.storage.provider,
+        autoDetected: !explicitProvider,
+      },
       server: { port: config.server.port, env: config.server.nodeEnv },
     }, 'Configuration loaded');
 
@@ -247,6 +273,11 @@ function loadConfig(): Config {
  * ```
  */
 export const config = loadConfig();
+
+// Make config available globally for lazy access (avoids circular dependencies)
+if (typeof globalThis !== 'undefined') {
+  (globalThis as any).__synap_core_module = { config };
+}
 
 /**
  * Validate required configuration for specific features

@@ -1,69 +1,48 @@
-import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import type { AgentToolContext, ToolExecutionResult } from './types.js';
+/**
+ * Tool Registry - V1.0 Ecosystem Extensibility
+ * 
+ * This module provides backward-compatible access to the dynamic tool registry.
+ * Core tools are automatically registered at module load time.
+ * 
+ * For dynamic tool registration, use the dynamic registry directly:
+ * ```typescript
+ * import { registerTool } from './dynamic-registry.js';
+ * registerTool(myTool, { version: '1.0.0', source: 'my-plugin' });
+ * ```
+ */
+
 import { createEntityTool } from './create-entity-tool.js';
 import { semanticSearchTool } from './semantic-search-tool.js';
 import { saveFactTool } from './save-fact-tool.js';
+import {
+  registerTool,
+  getTool,
+  getAllTools,
+  getToolSchemasForPlanner,
+  executeTool as executeToolDynamic,
+} from './dynamic-registry.js';
 
-const registry = [createEntityTool, semanticSearchTool, saveFactTool] as const;
+// Register core tools at module load time
+// These are the built-in tools that come with the kernel
+registerTool(createEntityTool, { version: '1.0.0', source: 'core' });
+registerTool(semanticSearchTool, { version: '1.0.0', source: 'core' });
+registerTool(saveFactTool, { version: '1.0.0', source: 'core' });
 
-export type RegistryTool = (typeof registry)[number];
+// Backward compatibility exports
+export const toolRegistry = getAllTools();
 
-const registryMap = new Map(registry.map((tool) => [tool.name, tool]));
+export const getToolByName = getTool;
 
-export const toolRegistry: ReadonlyArray<RegistryTool> = registry;
+export { executeToolDynamic as executeTool };
 
-export interface PlannerToolSchema {
-  name: string;
-  description: string;
-  parameters: unknown;
-}
+export { getToolSchemasForPlanner };
 
-export const getToolSchemasForPlanner = (): PlannerToolSchema[] =>
-  toolRegistry.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: zodToJsonSchema(tool.schema, tool.name),
-  }));
-
-export const getToolByName = (name: string): RegistryTool | undefined =>
-  registryMap.get(name);
-
-export async function executeTool(
-  name: string,
-  params: unknown,
-  context: AgentToolContext
-): Promise<ToolExecutionResult> {
-  const tool = getToolByName(name);
-
-  if (!tool) {
-    return {
-      success: false,
-      error: `Tool "${name}" is not registered.`,
-    };
-  }
-
-  const validation = (tool.schema as z.ZodTypeAny).safeParse(params);
-
-  if (!validation.success) {
-    return {
-      success: false,
-      error: `Invalid parameters for tool "${name}": ${validation.error.message}`,
-    };
-  }
-
-  try {
-    const result = await tool.execute(validation.data, context);
-    return {
-      success: true,
-      result,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown tool execution error.',
-    };
-  }
-}
+// Re-export dynamic registry functions for plugin developers
+export {
+  registerTool,
+  unregisterTool,
+  dynamicToolRegistry,
+  getAllTools,
+} from './dynamic-registry.js';
 
 

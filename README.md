@@ -11,9 +11,9 @@ Event-sourced, multi-user backend with intelligent thought capture, semantic sea
 ```
 Version: 0.4.0+ (Production-Ready)
 Status: ✅ Production-Ready
-Architecture: Conversational AI + Event Sourcing + Hybrid Storage
+Architecture: Event-Driven + LangGraph AI Agent + Hybrid Storage
 Database: PostgreSQL (TimescaleDB) + SQLite (local) + Cloudflare R2 / MinIO
-AI: Anthropic Claude 3 Haiku (conversation) + OpenAI Embeddings
+AI: LangGraph (orchestration) + Vercel AI SDK (LLM calls) + OpenAI Embeddings
 Cost Savings: $2,045/month (93% reduction)
 Performance: 10-100x faster + AI-powered natural language
 ```
@@ -40,7 +40,7 @@ Performance: 10-100x faster + AI-powered natural language
 
 - Node.js 20+
 - pnpm 8+
-- PostgreSQL (Neon) or SQLite (local)
+- Docker & Docker Compose (for MinIO)
 - Anthropic API key
 - OpenAI API key (for embeddings)
 
@@ -56,17 +56,28 @@ pnpm install
 
 # Setup environment
 cp env.local.example .env
-# Edit .env with your credentials
+# Edit .env and add your API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, SYNAP_SECRET_TOKEN)
+
+# Start MinIO (S3-compatible storage)
+# ⚠️ IMPORTANT: Start Docker Desktop app first!
+# Then run:
+docker compose up -d minio
+# (If that doesn't work, try: docker-compose up -d minio)
 
 # Initialize database
 pnpm --filter database db:init
 
-# Start servers
-pnpm --filter api dev      # Terminal 1 (API server)
-pnpm --filter jobs dev     # Terminal 2 (Background jobs)
+# Start all services (API + Jobs)
+pnpm dev
 ```
 
-See [SETUP.md](./SETUP.md) for detailed setup instructions.
+**That's it!** The backend will:
+- ✅ Start API server on `http://localhost:3000`
+- ✅ Start Inngest dev server for background jobs
+- ✅ Auto-detect MinIO as storage (if R2 not configured)
+- ✅ Use SQLite database (if PostgreSQL not configured)
+
+See [QUICKSTART.md](./QUICKSTART.md) for quick reference or [SETUP.md](./SETUP.md) for detailed setup.
 
 ---
 
@@ -143,7 +154,8 @@ See [SETUP.md](./SETUP.md) for detailed setup instructions.
 | **Projections** | PostgreSQL / SQLite | Materialized views (read-optimized) |
 | **ORM** | Drizzle | Type-safe queries |
 | **Workers** | Inngest Functions | Event handlers (business logic) |
-| **AI** | Anthropic Claude | Text analysis & conversation |
+| **AI** | LangGraph + Vercel AI SDK | Multi-step reasoning (LangGraph) + LLM calls (Vercel SDK) |
+| **LLM** | Anthropic Claude | Text generation via Vercel AI SDK |
 | **Search** | pgvector + OpenAI | Semantic RAG |
 | **Storage** | R2 / MinIO | File storage (S3-compatible) |
 | **Types** | Zod | Runtime validation (SynapEvent) |
@@ -374,14 +386,35 @@ pnpm --filter database db:studio   # Open Drizzle Studio
 
 ## 📖 Documentation
 
-### Core Documentation
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Event-driven architecture & system design
-- **[ROADMAP.md](./ROADMAP.md)** - Implementation roadmap & completed phases
-- **[PRD.md](./PRD.md)** - Product requirements document
-- **[SETUP.md](./SETUP.md)** - Detailed setup guide (local + production)
-- **[DEPLOYMENT.md](./DEPLOYMENT.md)** - Production deployment guide
-- **[STORAGE-ABSTRACTION.md](./STORAGE-ABSTRACTION.md)** - Storage system details
-- **[CHANGELOG.md](./CHANGELOG.md)** - Version history
+**📚 [Documentation Complète](./docs/README.md)** - Index principal de toute la documentation
+
+### Guides Rapides
+- **[Quick Start](./docs/getting-started/QUICKSTART.md)** - Démarrage rapide en 3 étapes
+- **[Setup Guide](./docs/getting-started/SETUP.md)** - Configuration détaillée
+
+### Architecture
+- **[Architecture Overview](./docs/architecture/README.md)** - Vue d'ensemble
+- **[Event-Driven Architecture](./docs/architecture/EVENT_DRIVEN.md)** - Architecture événementielle
+- **[AI Architecture](./docs/architecture/AI_ARCHITECTURE.md)** - Système d'IA
+- **[Storage System](./docs/architecture/STORAGE.md)** - Système de stockage
+
+### Développement
+- **[Developer Guide](./docs/development/README.md)** - Guides pour développeurs
+- **[Extensibility Guide](./docs/development/EXTENSIBILITY.md)** - Étendre le système
+- **[SDK Reference](./docs/development/SDK_REFERENCE.md)** - Référence du SDK
+
+### Déploiement
+- **[Deployment Guide](./docs/deployment/README.md)** - Guides de déploiement
+- **[Docker Deployment](./docs/deployment/DOCKER.md)** - Déploiement Docker
+
+### Stratégie
+- **[V2 Mission](./docs/strategy/V2_MISSION.md)** - Vision et roadmap
+- **[Roadmap](./docs/strategy/ROADMAP.md)** - Feuille de route
+- **[PRD](./docs/strategy/PRD.md)** - Product Requirements
+
+### Référence
+- **[API Reference](./docs/api/README.md)** - Référence API tRPC
+- **[CHANGELOG.md](./CHANGELOG.md)** - Historique des versions
 
 ### Reference Documentation
 - **[EVENT_DRIVEN_ROADMAP.md](./EVENT_DRIVEN_ROADMAP.md)** - Event-driven architecture roadmap (Phase 1-4)

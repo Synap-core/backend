@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [Unreleased] - 2025-11-18
+
+### 🎉 Major: AI Architecture Migration
+
+#### Changed
+- **AI Architecture**: Migrated from LangChain-only to **LangGraph + Vercel AI SDK** hybrid approach
+  - LangGraph handles orchestration (state machine workflows)
+  - Vercel AI SDK handles LLM calls (simpler, type-safe)
+  - All LangGraph nodes now use `generateObject()` with Zod schemas
+  - Removed `@langchain/anthropic` dependency
+  - Updated `ai` package from `^3.4.33` to `^4.0.0`
+
+#### Removed
+- **Dead Code**: Removed `ConversationalAgent` class (225 lines, unused)
+- **Deprecated**: Removed `providers/chat.ts` (replaced by Vercel AI SDK)
+
+#### Added
+- **New Helper**: `packages/ai/src/agent/config-helper.ts` for lazy config loading
+- **Documentation**: `AI_ARCHITECTURE.md` - Consolidated AI architecture documentation
+
+#### Fixed
+- **ESM Compatibility**: Fixed CommonJS `exports` issue in `@synap/jobs/src/client.ts`
+- **Config Loading**: Implemented proper lazy initialization pattern
+
+#### Documentation
+- Updated `ARCHITECTURE.md` to reflect new AI architecture
+- Updated `README.md` with LangGraph + Vercel AI SDK stack
+- Consolidated AI documentation into single `AI_ARCHITECTURE.md`
+- Archived obsolete analysis documents
+
+---
+
+## [Unreleased] - Previous
 
 ### Added
 - Database factory pattern for runtime SQLite/PostgreSQL selection

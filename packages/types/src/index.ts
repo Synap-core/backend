@@ -11,9 +11,16 @@ export {
   SynapEventSchema,
   type SynapEvent,
   EventTypeSchemas,
-  type EventType,
+  type EventTypeWithSchema,
   validateEventData,
   createSynapEvent,
   parseSynapEvent,
 } from './synap-event.js';
+
+export {
+  EventTypes,
+  type EventType,
+  isValidEventType,
+  getAllEventTypes,
+} from './event-types.js';
 

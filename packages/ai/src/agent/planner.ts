@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { createChatModel } from '../providers/chat.js';
-import { messageContentToString } from '../providers/utils.js';
+import { generateObject } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
 import type { AgentActionPlan, AgentContext, AgentIntent, PlannedAction } from './types.js';
 import { getToolSchemasForPlanner } from '../tools/index.js';
+import { getAnthropicModel } from './config-helper.js';
 
 const plannerSystemPrompt = [
   'You are Synap\'s orchestration planner. Your job is to design a concise sequence of tool calls',
@@ -23,8 +23,6 @@ const plannerSystemPrompt = [
   '- If the user intent is unclear or follow-up questions are needed, return an empty plan.',
   '- Plans should be short (1-3 steps). Optimise for minimal actions.',
   '- If the best response is conversational (no tool), return `actions: []` with reasoning explaining why.',
-  '',
-  'Return strictly formatted JSON.',
 ].join('\n');
 
 const planSchema = z.object({
@@ -85,31 +83,25 @@ export interface PlannerOutput extends AgentActionPlan {
 }
 
 export const planActions = async (input: PlannerInput): Promise<PlannerOutput> => {
-  const model = createChatModel({
-    purpose: 'planner',
-    maxTokens: 512,
-    temperature: 0.3,
-  });
-
-  const response = await model.invoke([
-    new SystemMessage(plannerSystemPrompt),
-    new HumanMessage(buildPlannerInput(input)),
-  ]);
-
-  const rawText = messageContentToString(response);
-
   try {
-    const parsed = JSON.parse(rawText);
-    const result = planSchema.parse(parsed);
+    const modelName = getAnthropicModel('planner');
+    
+    const result = await generateObject({
+      model: anthropic(modelName),
+      schema: planSchema,
+      prompt: `${plannerSystemPrompt}\n\n${buildPlannerInput(input)}`,
+      temperature: 0.3,
+      maxTokens: 512,
+    });
 
     return {
-      reasoning: result.reasoning,
-      actions: result.actions.map(toPlannedAction),
+      reasoning: result.object.reasoning,
+      actions: result.object.actions.map(toPlannedAction),
     };
   } catch (error) {
-    console.error('❌ Planner response could not be parsed:', error, rawText);
+    console.error('❌ Planner failed to produce a valid plan:', error);
     return {
-      reasoning: 'Planner failed to produce a valid plan.',
+      reasoning: error instanceof Error ? error.message : 'Planner failed to produce a valid plan.',
       actions: [],
     };
   }

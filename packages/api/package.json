@@ -10,6 +10,7 @@
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/domain": "workspace:*",
+    "@synap/jobs": "workspace:*",
     "@synap/storage": "workspace:*",
     "@synap/types": "workspace:*",
     "@trpc/server": "^11.0.0",

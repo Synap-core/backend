@@ -15,7 +15,7 @@
  */
 
 import { IEventHandler, type InngestStep, type HandlerResult } from './interface.js';
-import { createSynapEvent, type SynapEvent } from '@synap/types';
+import { createSynapEvent, EventTypes, type SynapEvent } from '@synap/types';
 import { storage } from '@synap/storage';
 import { db, entities } from '@synap/database';
 import { inngest } from '../client.js';
@@ -25,13 +25,13 @@ import { randomUUID } from 'crypto';
 const logger = createLogger({ module: 'note-creation-handler' });
 
 export class NoteCreationHandler implements IEventHandler {
-  eventType = 'note.creation.requested';
+  eventType = EventTypes.NOTE_CREATION_REQUESTED;
 
   async handle(event: SynapEvent, step: InngestStep): Promise<HandlerResult> {
-    if (event.type !== 'note.creation.requested') {
+    if (event.type !== EventTypes.NOTE_CREATION_REQUESTED) {
       return {
         success: false,
-        message: `Invalid event type: expected 'note.creation.requested', got '${event.type}'`,
+        message: `Invalid event type: expected '${EventTypes.NOTE_CREATION_REQUESTED}', got '${event.type}'`,
       };
     }
 
@@ -92,7 +92,7 @@ export class NoteCreationHandler implements IEventHandler {
       // Step 3: Publish completion event
       await step.run('publish-completion-event', async () => {
         const completionEvent = createSynapEvent({
-          type: 'note.creation.completed',
+          type: EventTypes.NOTE_CREATION_COMPLETED,
           userId,
           aggregateId: entityId,
           data: {
@@ -132,12 +132,53 @@ export class NoteCreationHandler implements IEventHandler {
         logger.info({ entityId, completionEventId: completionEvent.id }, 'Published note.creation.completed event');
       });
 
+      // Step 4: Broadcast notification to connected clients
+      await step.run('broadcast-notification', async () => {
+        const { broadcastNotification } = await import('../utils/realtime-broadcast.js');
+        const broadcastResult = await broadcastNotification({
+          userId,
+          requestId: event.requestId,
+          message: {
+            type: 'note.creation.completed',
+            data: {
+              entityId,
+              fileUrl: fileMetadata.url,
+              filePath: fileMetadata.path,
+              title,
+            },
+            requestId: event.requestId,
+            status: 'success',
+            timestamp: new Date().toISOString(),
+          },
+        });
+
+        if (broadcastResult.success) {
+          logger.debug({ entityId, broadcastCount: broadcastResult.broadcastCount }, 'Notification broadcasted');
+        } else {
+          logger.warn({ entityId, error: broadcastResult.error }, 'Failed to broadcast notification');
+        }
+      });
+
       return {
         success: true,
         message: `Note ${entityId} created successfully`,
       };
     } catch (error) {
       logger.error({ err: error, entityId, userId }, 'Note creation failed');
+      
+      // Broadcast error notification
+      try {
+        const { broadcastError } = await import('../utils/realtime-broadcast.js');
+        await broadcastError(
+          userId,
+          'note.creation.failed',
+          error instanceof Error ? error.message : String(error),
+          { requestId: event.requestId }
+        );
+      } catch (broadcastErr) {
+        logger.warn({ err: broadcastErr }, 'Failed to broadcast error notification');
+      }
+      
       return {
         success: false,
         message: `Note creation failed: ${error instanceof Error ? error.message : String(error)}`,

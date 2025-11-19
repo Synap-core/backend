@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { requireUserId } from '../utils/user-scoped.js';
 import { Inngest } from 'inngest';
+import { aiRateLimitMiddleware } from '../middleware/ai-rate-limit.js';
 
 // Create Inngest client (avoid circular dependency with @synap/jobs)
 const inngest = new Inngest({ id: 'synap-api' });
@@ -21,6 +22,7 @@ export const captureRouter = router({
    * the appropriate entity (note, task, etc.)
    */
   thought: protectedProcedure
+    .use(aiRateLimitMiddleware) // V1.0: Stricter rate limiting for AI endpoints
     .input(
       z.object({
         content: z.string().min(1).describe('Raw thought content'),

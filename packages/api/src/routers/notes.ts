@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { randomUUID } from 'crypto';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent, EventTypes } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
 import { db, entities } from '@synap/database';
@@ -63,7 +63,7 @@ export const notesRouter = router({
 
       // Create SynapEvent
       const event = createSynapEvent({
-        type: 'note.creation.requested',
+        type: EventTypes.NOTE_CREATION_REQUESTED,
         userId,
         aggregateId: entityId,
         data: {
@@ -141,7 +141,7 @@ export const notesRouter = router({
         .select()
         .from(entities)
         .where(whereCondition)
-        .orderBy(desc(entities.createdAt))
+        .orderBy(desc(entities.createdAt) as any)
         .limit(input.limit)
         .offset(input.offset);
 

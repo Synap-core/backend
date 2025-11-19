@@ -11,9 +11,10 @@ import type { MiddlewareHandler } from 'hono';
 import { rateLimiter } from 'hono-rate-limiter';
 
 /**
- * Rate Limiting Middleware
+ * Rate Limiting Middleware (General)
  * 
  * Limits: 100 requests per 15 minutes per IP
+ * Applied to all routes by default
  */
 export const rateLimitMiddleware = rateLimiter({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -28,6 +29,43 @@ export const rateLimitMiddleware = rateLimiter({
       error: 'Too many requests',
       message: 'Rate limit exceeded. Please try again later.',
       retryAfter: '15 minutes',
+    }, 429);
+  },
+});
+
+/**
+ * AI Endpoint Rate Limiting Middleware
+ * 
+ * V1.0 Security Hardening: Stricter limits for AI endpoints
+ * 
+ * Limits: 20 requests per 5 minutes per user (more restrictive)
+ * Applied to endpoints that call AI services (chat, capture, etc.)
+ * 
+ * Why stricter?
+ * - AI API calls are expensive (cost per request)
+ * - AI API calls are slow (can cause DoS if too many concurrent)
+ * - Prevents abuse and cost explosion
+ */
+export const aiRateLimitMiddleware = rateLimiter({
+  windowMs: 5 * 60 * 1000, // 5 minutes (shorter window)
+  limit: 20, // Max 20 requests per window (stricter limit)
+  standardHeaders: 'draft-7',
+  keyGenerator: (c) => {
+    // Try to use user ID from context if available (better than IP)
+    // Fall back to IP if no user context
+    const userId = (c as any).userId;
+    if (userId) {
+      return `user:${userId}`;
+    }
+    return c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+  },
+  handler: (c) => {
+    return c.json({
+      error: 'Too many AI requests',
+      message: 'AI endpoint rate limit exceeded. Please wait before making more requests.',
+      retryAfter: '5 minutes',
+      limit: 20,
+      window: '5 minutes',
     }, 429);
   },
 });
@@ -96,16 +134,17 @@ export const securityHeadersMiddleware: MiddlewareHandler = async (c, next) => {
  */
 export const getCorsOrigins = () => {
   const origins = process.env.ALLOWED_ORIGINS?.split(',') || [
-    'http://localhost:5173',  // Vite dev
+    'http://localhost:5173',  // Vite dev (default)
+    'http://localhost:5174',  // Vite dev (alternative port)
     'http://localhost:3000',  // Next.js dev
     'http://localhost:3001',  // Alternative port
   ];
-  
+
   // Add production origin
   if (process.env.BETTER_AUTH_URL) {
     origins.push(process.env.BETTER_AUTH_URL);
   }
-  
+
   return origins;
 };
 

@@ -12,6 +12,8 @@
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
+import type { EventType } from './event-types.js';
+import { ValidationError } from '@synap/core';
 
 // ============================================================================
 // CORE EVENT SCHEMA
@@ -85,7 +87,13 @@ export const EventTypeSchemas = {
   }),
 } as const;
 
-export type EventType = keyof typeof EventTypeSchemas;
+/**
+ * Event Type for Schema Validation
+ * 
+ * This is a subset of EventType from event-types.ts
+ * Only event types with validation schemas are included here.
+ */
+export type EventTypeWithSchema = keyof typeof EventTypeSchemas;
 
 /**
  * Validate event data against its type-specific schema
@@ -95,13 +103,13 @@ export type EventType = keyof typeof EventTypeSchemas;
  * @returns Validated event data
  * @throws Error if event type is unknown or data is invalid
  */
-export function validateEventData<T extends EventType>(
+export function validateEventData<T extends EventTypeWithSchema>(
   eventType: T,
   data: unknown
 ): z.infer<typeof EventTypeSchemas[T]> {
   const schema = EventTypeSchemas[eventType];
   if (!schema) {
-    throw new Error(`Unknown event type: ${eventType}. Add it to EventTypeSchemas.`);
+    throw new ValidationError(`Unknown event type: ${eventType}. Add it to EventTypeSchemas.`, { eventType });
   }
   return schema.parse(data);
 }
@@ -113,26 +121,37 @@ export function validateEventData<T extends EventType>(
 /**
  * Create a SynapEvent with automatic ID and timestamp
  * 
+ * V0.6: Updated to accept EventType from EventTypes constant
+ * 
  * This factory function ensures all events are created with:
  * - Unique UUID
  * - Current timestamp
- * - Validated data (if event type is in registry)
+ * - Validated data (if event type has a schema in EventTypeSchemas)
  * 
  * @param input - Event creation parameters
  * @returns Validated SynapEvent
  */
-export function createSynapEvent<T extends EventType>(input: {
-  type: T;
-  data: unknown; // Will be validated against EventTypeSchemas[T]
+export function createSynapEvent(input: {
+  type: EventType;
+  data: Record<string, unknown>; // Event payload
   userId: string;
   aggregateId?: string;
   source?: SynapEvent['source'];
   correlationId?: string;
   causationId?: string;
   requestId?: string;
+  metadata?: Record<string, unknown>; // Optional metadata
 }): SynapEvent {
-  // Validate event data against type-specific schema
-  const validatedData = validateEventData(input.type, input.data);
+  // Validate event data against type-specific schema if schema exists
+  let validatedData: Record<string, unknown> = input.data;
+  if (input.type in EventTypeSchemas) {
+    try {
+      validatedData = validateEventData(input.type as EventTypeWithSchema, input.data);
+    } catch (error) {
+      // If validation fails, log warning but continue (for backward compatibility)
+      console.warn(`Event data validation failed for ${input.type}:`, error);
+    }
+  }
   
   return SynapEventSchema.parse({
     id: randomUUID(),

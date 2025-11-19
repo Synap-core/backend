@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { createChatModel } from '../providers/chat.js';
-import { messageContentToString } from '../providers/utils.js';
+import { generateObject } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
 import type { ActionExecutionLog, AgentPlanSummary } from './types.js';
+import { getAnthropicModel } from './config-helper.js';
 
 const responseSystemPrompt = [
   'You are Synap, an intelligent thought partner.',
@@ -14,8 +14,6 @@ const responseSystemPrompt = [
   '- If no action was taken, explain why.',
   '- Offer a clear next step or follow-up question when helpful.',
   '- Keep tone supportive, professional, and focused on productivity.',
-  '',
-  'Return plain text. No markdown fences.',
 ].join('\n');
 
 const responseSchema = z.object({
@@ -45,30 +43,24 @@ const buildResponderPayload = (input: ResponseInput) =>
     2
   );
 
-const parseResponse = (rawText: string): string => {
-  try {
-    const parsed = JSON.parse(rawText);
-    const result = responseSchema.parse(parsed);
-    return result.message;
-  } catch {
-    return rawText.trim();
-  }
-};
-
 export const generateFinalResponse = async (input: ResponseInput): Promise<string> => {
-  const model = createChatModel({
-    purpose: 'responder',
-    maxTokens: 512,
-    temperature: 0.4,
-  });
+  try {
+    const modelName = getAnthropicModel('responder');
+    
+    const result = await generateObject({
+      model: anthropic(modelName),
+      schema: responseSchema,
+      prompt: `${responseSystemPrompt}\n\n${buildResponderPayload(input)}`,
+      temperature: 0.4,
+      maxTokens: 512,
+    });
 
-  const response = await model.invoke([
-    new SystemMessage(responseSystemPrompt),
-    new HumanMessage(buildResponderPayload(input)),
-  ]);
-
-  const rawText = messageContentToString(response);
-  return parseResponse(rawText);
+    return result.object.message;
+  } catch (error) {
+    console.error('❌ Failed to generate final response:', error);
+    // Fallback response
+    return 'Je n\'ai pas pu générer de réponse pour le moment. Réessaie dans quelques instants.';
+  }
 };
 
 

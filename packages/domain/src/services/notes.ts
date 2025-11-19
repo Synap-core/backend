@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db, entities } from '@synap/database';
 import { storage, type IFileStorage } from '@synap/storage';
-import { z } from 'zod';
 import { createLogger } from '@synap/core';
 import {
   CreateNoteInputSchema,
@@ -12,17 +11,17 @@ import {
   type NoteSearchResult,
   type SearchNotesInput,
 } from '../types.js';
-import { eventService } from './events.js';
 
-const noteMetadataSchema = z.object({
-  entityId: z.string().uuid(),
-  type: z.literal('note'),
-  title: z.string(),
-  content: z.string(),
-  tags: z.array(z.string()).default([]),
-  fileUrl: z.string().nullable(),
-  filePath: z.string().nullable(),
-});
+// Schema for note metadata validation (currently unused but kept for future use)
+// const noteMetadataSchema = z.object({
+//   entityId: z.string().uuid(),
+//   type: z.literal('note'),
+//   title: z.string(),
+//   content: z.string(),
+//   tags: z.array(z.string()).default([]),
+//   fileUrl: z.string().nullable(),
+//   filePath: z.string().nullable(),
+// });
 
 const buildTitle = (explicitTitle: string | undefined, content: string): string => {
   if (explicitTitle && explicitTitle.trim().length > 0) {
@@ -46,6 +45,12 @@ export class NoteService {
     private readonly fileStorage: IFileStorage = storage
   ) {}
 
+  /**
+   * @deprecated V0.6: This method is deprecated. Notes should be created via event-driven flow.
+   * Use `note.creation.requested` event instead. This method is kept for backward compatibility only.
+   * 
+   * Note: This method no longer emits events. Events are handled by NoteCreationHandler worker.
+   */
   async createNote(input: CreateNoteInput): Promise<CreateNoteResult> {
     const parsed = CreateNoteInputSchema.parse(input);
     const entityId = parsed.entityId ?? randomUUID();
@@ -82,33 +87,20 @@ export class NoteService {
 
     log.debug('Entity projection inserted');
 
-    const metadataPayload = noteMetadataSchema.parse({
-      entityId,
-      type: 'note',
-      title,
-      content: parsed.content,
-      tags,
-      fileUrl: fileMetadata.url,
-      filePath: fileMetadata.path,
-    });
+    // V0.6: NoteService.createNote() is deprecated
+    // Notes should be created via event-driven flow (note.creation.requested event)
+    // This method is kept for backward compatibility but should not emit events
+    // Events are now handled by NoteCreationHandler worker
+    
+    // Generate a synthetic event ID for backward compatibility
+    const syntheticEventId = randomUUID();
 
-    const eventRecord = await eventService.append({
-      aggregateId: entityId,
-      aggregateType: 'entity',
-      eventType: 'entity.created',
-      userId: parsed.userId,
-      data: metadataPayload,
-      metadata: parsed.metadata,
-      version: 1,
-      source: parsed.source,
-    });
-
-    log.info({ eventId: eventRecord.id }, 'Note creation event appended');
+    log.warn({ entityId }, 'NoteService.createNote() is deprecated. Use event-driven flow instead.');
 
     return CreateNoteResultSchema.parse({
       entityId,
-      eventId: eventRecord.id,
-      aggregateVersion: eventRecord.version,
+      eventId: syntheticEventId, // Synthetic ID for backward compatibility
+      aggregateVersion: 1,
       title,
       preview,
       fileUrl: fileMetadata.url,

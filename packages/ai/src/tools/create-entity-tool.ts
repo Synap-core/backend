@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { eventService, noteService } from '@synap/domain';
 import { z } from 'zod';
+import { createSynapEvent, EventTypes } from '@synap/types';
+import { getEventRepository } from '@synap/database';
+import { ValidationError } from '@synap/core';
 import type {
   AgentToolDefinition,
   AgentToolExecutionResult,
@@ -27,22 +29,9 @@ const createEntityInputSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
-interface EventDataPayload extends Record<string, unknown> {
-  entityId: string;
-  type: 'note' | 'task';
-  title: string;
-  preview?: string;
-  fileUrl?: string;
-  filePath?: string;
-  fileSize?: number;
-  fileType?: string;
-  checksum?: string;
-  dueDate?: string;
-}
-
 const ensureNoteContent = (type: 'note' | 'task', content?: string) => {
   if (type === 'note' && (!content || content.trim().length === 0)) {
-    throw new Error('Note creation requires non-empty content.');
+    throw new ValidationError('Note creation requires non-empty content.', { type, hasContent: Boolean(content) });
   }
 };
 
@@ -75,64 +64,125 @@ export const createEntityTool: AgentToolDefinition<
 
     ensureNoteContent(input.type, input.content);
     const entityId = randomUUID();
+    const requestId = randomUUID();
+    const correlationId = randomUUID();
 
     logs.push(`Generated entityId ${entityId}`);
 
+    // V0.6: Pure Event-Driven - Publish intent events only
+    // All business logic is handled by workers (Epic 2)
     if (input.type === 'note') {
-      const noteResult = await noteService.createNote({
+      // Create and publish note.creation.requested event
+      const event = createSynapEvent({
+        type: EventTypes.NOTE_CREATION_REQUESTED,
         userId: context.userId,
-        content: input.content ?? '',
-        title: input.title,
-        tags: input.tags,
+        aggregateId: entityId,
+        data: {
+          content: input.content ?? '',
+          title: input.title,
+          tags: input.tags,
+        },
         source: 'automation',
-        metadata: {
-          orchestrator: 'synap-agent',
-          tool: 'createEntity',
-          threadId: context.threadId,
+        requestId,
+        correlationId,
+      });
+      
+      // Store metadata for Inngest payload
+      const eventMetadata = {
+        orchestrator: 'synap-agent',
+        tool: 'createEntity',
+        threadId: context.threadId,
+      };
+
+      // Append to Event Store
+      const eventRepo = getEventRepository();
+      const eventRecord = await eventRepo.append(event);
+
+      // Publish to Inngest (dynamic import to avoid cyclic dependency)
+      // @ts-expect-error - Dynamic import of workspace package, resolved at runtime
+      const { inngest } = await import('@synap/jobs');
+      await inngest.send({
+        name: 'api/event.logged',
+        data: {
+          id: event.id,
+          type: event.type,
+          aggregateId: event.aggregateId,
+          aggregateType: 'entity',
+          userId: event.userId,
+          version: 1,
+          timestamp: event.timestamp.toISOString(),
+          data: event.data,
+          metadata: { version: event.version, requestId: event.requestId, ...eventMetadata },
+          source: event.source,
+          causationId: event.causationId,
+          correlationId: event.correlationId,
+          requestId: event.requestId,
         },
       });
 
-      logs.push(`Created note ${noteResult.entityId} via NoteService.`);
+      logs.push(`Published note.creation.requested event ${eventRecord.id}.`);
 
       const resultPayload: CreateEntityPayload = {
-        entityId: noteResult.entityId,
-        eventId: noteResult.eventId,
-        aggregateVersion: noteResult.aggregateVersion,
-        fileUrl: noteResult.fileUrl ?? undefined,
-        filePath: noteResult.filePath ?? undefined,
-        fileSize: noteResult.fileSize ?? undefined,
-        fileChecksum: noteResult.checksum ?? undefined,
+        entityId,
+        eventId: eventRecord.id,
+        aggregateVersion: eventRecord.version,
       };
 
       return toExecutionResult(resultPayload, startedAt, logs);
     }
 
+    // Task creation - publish task.creation.requested event
     const preview = input.preview ?? input.content?.slice(0, 500);
 
-    const eventData: EventDataPayload = {
-      entityId,
-      type: 'task',
-      title: input.title,
-      preview,
-      dueDate: input.dueDate,
+    const event = createSynapEvent({
+      type: EventTypes.TASK_CREATION_REQUESTED,
+      userId: context.userId,
+      aggregateId: entityId,
+      data: {
+        title: input.title,
+        preview,
+        dueDate: input.dueDate,
+        status: 'todo',
+      },
+      source: 'automation',
+      requestId,
+      correlationId,
+    });
+    
+    // Store metadata for Inngest payload
+    const taskEventMetadata = {
+      orchestrator: 'synap-agent',
+      tool: 'createEntity',
+      threadId: context.threadId,
     };
 
-    const eventRecord = await eventService.append({
-      aggregateId: eventData.entityId,
-      aggregateType: 'entity',
-      eventType: 'entity.created',
-      userId: context.userId,
-      data: eventData,
-      metadata: {
-        orchestrator: 'synap-agent',
-        tool: 'createEntity',
-        threadId: context.threadId,
+    // Append to Event Store
+    const eventRepo = getEventRepository();
+    const eventRecord = await eventRepo.append(event);
+
+    // Publish to Inngest (dynamic import to avoid cyclic dependency)
+    // @ts-expect-error - Dynamic import of workspace package, resolved at runtime
+    const { inngest } = await import('@synap/jobs');
+    await inngest.send({
+      name: 'api/event.logged',
+      data: {
+        id: event.id,
+        type: event.type,
+        aggregateId: event.aggregateId,
+        aggregateType: 'entity',
+        userId: event.userId,
+        version: 1,
+        timestamp: event.timestamp.toISOString(),
+        data: event.data,
+        metadata: { version: event.version, requestId: event.requestId, ...taskEventMetadata },
+        source: event.source,
+        causationId: event.causationId,
+        correlationId: event.correlationId,
+        requestId: event.requestId,
       },
-      version: 1,
-      source: 'automation',
     });
 
-    logs.push(`Appended task creation event ${eventRecord.id}.`);
+    logs.push(`Published task.creation.requested event ${eventRecord.id}.`);
 
     const resultPayload: CreateEntityPayload = {
       entityId,

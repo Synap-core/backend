@@ -7,7 +7,7 @@ import { drizzle } from 'drizzle-orm/neon-serverless';
 import { sql } from 'drizzle-orm';
 import { Pool } from '@neondatabase/serverless';
 import * as schema from './schema/index.js';
-import { createLogger } from '@synap/core';
+import { createLogger, ValidationError, InternalServerError } from '@synap/core';
 
 const dbLogger = createLogger({ module: 'database-pg' });
 
@@ -34,16 +34,17 @@ export const db = drizzle(pool, { schema });
  */
 export async function setCurrentUser(userId: string): Promise<void> {
   if (!userId || typeof userId !== 'string') {
-    throw new Error('Invalid userId: must be a non-empty string');
+    throw new ValidationError('Invalid userId: must be a non-empty string', { userId });
   }
 
   try {
-    // Use parameterized query to prevent SQL injection
-    await db.execute(sql`SET app.current_user_id = ${userId}`);
+    // Use the set_current_user() function for better validation and security
+    // This function validates the user_id and sets it in the session
+    await db.execute(sql`SELECT set_current_user(${userId})`);
     dbLogger.debug({ userId }, 'RLS current user set');
   } catch (error) {
     dbLogger.error({ err: error, userId }, 'Failed to set RLS current user');
-    throw new Error(`Failed to set current user: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new InternalServerError(`Failed to set current user: ${error instanceof Error ? error.message : 'Unknown error'}`, { userId, originalError: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -64,7 +65,7 @@ export async function clearCurrentUser(): Promise<void> {
     dbLogger.debug('RLS current user cleared');
   } catch (error) {
     dbLogger.error({ err: error }, 'Failed to clear RLS current user');
-    throw new Error(`Failed to clear current user: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new InternalServerError(`Failed to clear current user: ${error instanceof Error ? error.message : 'Unknown error'}`, { originalError: error instanceof Error ? error.message : String(error) });
   }
 }
 

@@ -1,48 +1,129 @@
-# Documentation Archive
+# 📚 Synap Backend Documentation
 
-This folder contains historical documentation that has been archived.
+**Documentation complète du Synap Core OS - Backend Event-Driven avec IA**
 
 ---
 
-## Structure
+## 🗺️ Navigation Rapide
+
+### Pour Démarrer
+- **[Getting Started](./getting-started/README.md)** - Installation et premier démarrage
+- **[Quick Start Guide](./getting-started/QUICKSTART.md)** - Guide rapide en 3 étapes
+- **[Setup Guide](./getting-started/SETUP.md)** - Configuration détaillée
+
+### Architecture & Concepts
+- **[Architecture Overview](./architecture/README.md)** - Vue d'ensemble de l'architecture
+- **[Event-Driven Architecture](./architecture/EVENT_DRIVEN.md)** - Architecture événementielle
+- **[AI Architecture](./architecture/AI_ARCHITECTURE.md)** - Système d'IA (LangGraph + Vercel AI SDK)
+- **[Storage System](./architecture/STORAGE.md)** - Système de stockage (R2/MinIO)
+
+### Développement
+- **[Developer Guide](./development/README.md)** - Guide pour développeurs
+- **[Backend SDK Reference](./development/SDK_REFERENCE.md)** - Référence du SDK backend
+- **[Extensibility Guide](./development/EXTENSIBILITY.md)** - Comment étendre le système
+- **[SDK npm Package](./development/SDK_NPM.md)** - Créer le package @synap/client
+
+### Déploiement
+- **[Deployment Guide](./deployment/README.md)** - Guide de déploiement
+- **[Docker Deployment](./deployment/DOCKER.md)** - Déploiement avec Docker
+- **[Production Setup](./deployment/PRODUCTION.md)** - Configuration production
+
+### Vision & Stratégie
+- **[V2 Mission](./strategy/V2_MISSION.md)** - Vision et roadmap V2.0
+- **[Roadmap](./strategy/ROADMAP.md)** - Feuille de route
+- **[PRD](./strategy/PRD.md)** - Product Requirements Document
+
+### Référence
+- **[API Reference](./api/README.md)** - Référence de l'API tRPC
+- **[Changelog](../CHANGELOG.md)** - Historique des versions
+
+---
+
+## 📖 Structure de la Documentation
 
 ```
 docs/
-├── README.md (this file)
-└── archive/
-    ├── consolidation/    # Code consolidation reports
-    ├── V0.2-*.md         # Version 0.2 documentation
-    ├── V0.3-*.md         # Version 0.3 documentation
-    └── V0.4-*.md         # Version 0.4 documentation
+├── README.md (ce fichier)
+│
+├── getting-started/          # Guides de démarrage
+│   ├── README.md
+│   ├── QUICKSTART.md
+│   └── SETUP.md
+│
+├── architecture/             # Documentation technique
+│   ├── README.md
+│   ├── EVENT_DRIVEN.md
+│   ├── AI_ARCHITECTURE.md
+│   └── STORAGE.md
+│
+├── development/              # Guides pour développeurs
+│   ├── README.md
+│   ├── SDK_REFERENCE.md
+│   ├── EXTENSIBILITY.md
+│   └── SDK_NPM.md
+│
+├── deployment/               # Guides de déploiement
+│   ├── README.md
+│   ├── DOCKER.md
+│   └── PRODUCTION.md
+│
+├── strategy/                 # Vision et stratégie
+│   ├── V2_MISSION.md
+│   ├── ROADMAP.md
+│   └── PRD.md
+│
+├── api/                      # Référence API
+│   └── README.md
+│
+└── archive/                  # Documentation historique
+    └── ...
 ```
 
 ---
 
-## Current Documentation
+## 🎯 Par Où Commencer ?
 
-Active documentation is in the root directory:
+### Nouveau sur Synap ?
+1. Lisez **[Getting Started](./getting-started/README.md)**
+2. Suivez le **[Quick Start Guide](./getting-started/QUICKSTART.md)**
+3. Explorez **[Architecture Overview](./architecture/README.md)**
 
-- **README.md** - Main entry point
-- **ARCHITECTURE.md** - Technical deep dive
-- **SETUP.md** - Setup guide (local + production)
-- **STORAGE-ABSTRACTION.md** - Storage system details
-- **CHANGELOG.md** - Version history
+### Développeur Backend ?
+1. **[Developer Guide](./development/README.md)**
+2. **[Backend SDK Reference](./development/SDK_REFERENCE.md)**
+3. **[Extensibility Guide](./development/EXTENSIBILITY.md)**
+
+### Déploiement Production ?
+1. **[Deployment Guide](./deployment/README.md)**
+2. **[Docker Deployment](./deployment/DOCKER.md)**
+3. **[Production Setup](./deployment/PRODUCTION.md)**
+
+### Créer une Capacité ?
+1. **[Extensibility Guide](./development/EXTENSIBILITY.md)**
+2. **[Backend SDK Reference](./development/SDK_REFERENCE.md)**
+
+### Intégrer le SDK Frontend ?
+1. **[SDK npm Package](./development/SDK_NPM.md)**
+2. **[API Reference](./api/README.md)**
 
 ---
 
-## Archive Contents
+## 📝 Contribution
 
-### Consolidation Reports
-- Code consolidation reports from Phase 1-3
-- Dead code analysis
-- Technical assessment
-
-### Version History
-- V0.2 - Initial multi-user backend
-- V0.3 - Hybrid storage implementation
-- V0.4 - Conversational interface
+Pour améliorer la documentation :
+1. Les fichiers sont organisés par thème
+2. Utilisez des exemples de code clairs
+3. Gardez la documentation à jour avec le code
+4. Archivez les anciennes versions dans `archive/`
 
 ---
 
-**Note**: Archived docs are kept for historical reference but may not reflect current codebase.
+## 🔗 Liens Utiles
 
+- **Repository GitHub** : [synap-core-os](https://github.com/synap/core-os)
+- **Issues** : [GitHub Issues](https://github.com/synap/core-os/issues)
+- **Discussions** : [GitHub Discussions](https://github.com/synap/core-os/discussions)
+
+---
+
+**Dernière mise à jour** : 2025-01-20

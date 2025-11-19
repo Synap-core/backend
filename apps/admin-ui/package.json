@@ -1,0 +1,50 @@
+{
+  "name": "admin-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mantine/core": "^7.15.4",
+    "@mantine/dates": "^8.3.8",
+    "@mantine/hooks": "^7.15.4",
+    "@mantine/notifications": "^7.15.4",
+    "@monaco-editor/react": "^4.6.0",
+    "@synap/api": "workspace:*",
+    "@tabler/icons-react": "^3.35.0",
+    "@tanstack/react-query": "^5.62.13",
+    "@tanstack/react-virtual": "^3.13.12",
+    "@trpc/client": "^11.0.0",
+    "@trpc/react-query": "^11.0.0",
+    "@types/cytoscape": "^3.31.0",
+    "cmdk": "^1.1.1",
+    "cytoscape": "^3.33.1",
+    "date-fns": "^4.1.0",
+    "dayjs": "^1.11.19",
+    "partysocket": "^1.0.2",
+    "react": "^19.2.0",
+    "react-cytoscapejs": "^2.0.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.2.0",
+    "recharts": "^3.4.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.3",
+    "vite": "^7.2.2"
+  }
+}
