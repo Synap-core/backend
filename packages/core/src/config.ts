@@ -23,9 +23,9 @@ const configLogger = createLogger({ module: 'config' });
 // ============================================================================
 
 const DatabaseConfigSchema = z.object({
-  dialect: z.enum(['sqlite', 'postgres']).default('sqlite'),
-  url: z.string().optional(),
-  sqlitePath: z.string().optional(),
+  url: z.string({
+    required_error: 'DATABASE_URL is required (PostgreSQL connection string)',
+  }),
 });
 
 const StorageConfigSchema = z.object({
@@ -147,9 +147,7 @@ function loadConfig(): Config {
     
     const rawConfig = {
       database: {
-        dialect: process.env.DB_DIALECT,
         url: process.env.DATABASE_URL,
-        sqlitePath: process.env.SQLITE_DB_PATH,
       },
       storage: {
         provider: detectedProvider,
@@ -233,7 +231,7 @@ function loadConfig(): Config {
 
     // Log configuration status (without secrets)
     configLogger.info({
-      database: { dialect: config.database.dialect },
+      database: { connected: !!config.database.url },
       storage: { 
         provider: config.storage.provider,
         autoDetected: !explicitProvider,
@@ -267,9 +265,8 @@ function loadConfig(): Config {
  * ```typescript
  * import { config } from '@synap/core';
  * 
- * if (config.database.dialect === 'postgres') {
- *   // Use PostgreSQL
- * }
+ * const dbUrl = config.database.url;
+ * const storageProvider = config.storage.provider;
  * ```
  */
 export const config = loadConfig();

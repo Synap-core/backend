@@ -10,6 +10,8 @@ export { captureRouter } from './routers/capture.js';
 export { chatRouter } from './routers/chat.js';
 export { suggestionsRouter } from './routers/suggestions.js';
 export { systemRouter } from './routers/system.js';
+export { hubRouter } from './routers/hub.js';
+export { apiKeysRouter } from './routers/api-keys.js';
 export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
 export { eventStreamManager } from './event-stream-manager.js';
 export { setupEventBroadcasting } from './setup-event-broadcasting.js';
@@ -20,6 +22,8 @@ import { notesRouter } from './routers/notes.js';
 import { chatRouter } from './routers/chat.js';
 import { suggestionsRouter } from './routers/suggestions.js';
 import { systemRouter } from './routers/system.js';
+import { hubRouter } from './routers/hub.js';
+import { apiKeysRouter } from './routers/api-keys.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -31,6 +35,8 @@ registerRouter('notes', notesRouter, { version: '1.0.0', source: 'core', descrip
 registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Conversational interface API' });
 registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
 registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
+registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
+registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', description: 'API key management for Hub authentication' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code

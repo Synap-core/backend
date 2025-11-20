@@ -1,32 +1,24 @@
+/**
+ * Drizzle Kit Configuration - PostgreSQL Only
+ * 
+ * Used for:
+ * - drizzle-kit generate: Generate migration files from schema
+ * - drizzle-kit push: Push schema directly to database (dev only)
+ * - drizzle-kit studio: Launch Drizzle Studio UI
+ */
+
 import type { Config } from 'drizzle-kit';
-import path from 'path';
 
-const dialect = process.env.DB_DIALECT || 'sqlite';
-
-const config: Config = dialect === 'sqlite' 
-  ? {
-      // SQLite configuration (local MVP)
-      schema: './src/schema/index.ts',
-      out: './migrations',
-      dialect: 'sqlite',
-      dbCredentials: {
-        url: process.env.SQLITE_DB_PATH || 
-          path.join(process.cwd(), '../../data/synap.db'),
-      },
-      verbose: true,
-      strict: true,
-    }
-  : {
-      // PostgreSQL configuration (cloud)
-      schema: './src/schema/index.ts',
-      out: './migrations',
-      dialect: 'postgresql',
-      dbCredentials: {
-        url: process.env.DATABASE_URL!,
-      },
-      verbose: true,
-      strict: true,
-    };
+const config: Config = {
+  // PostgreSQL with TimescaleDB + pgvector
+  schema: './src/schema/index.ts',
+  out: './migrations-drizzle', // Auto-generated migrations
+  dialect: 'postgresql',
+  dbCredentials: {
+    url: process.env.DATABASE_URL || "",
+  },
+  verbose: true,
+  strict: true,
+};
 
 export default config;
-

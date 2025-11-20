@@ -73,6 +73,14 @@ export const EventTypes = {
   // ============================================================================
   API_EVENT_LOGGED: 'api/event.logged',
   API_THOUGHT_CAPTURED: 'api/thought.captured',
+
+  // ============================================================================
+  // Hub Protocol Events (V1.0)
+  // ============================================================================
+  HUB_ACCESS_LOGGED: 'hub.access.logged',
+  HUB_TOKEN_GENERATED: 'hub.token.generated',
+  HUB_DATA_REQUESTED: 'hub.data.requested',
+  HUB_INSIGHT_SUBMITTED: 'hub.insight.submitted',
 } as const;
 
 /**

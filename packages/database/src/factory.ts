@@ -1,145 +1,57 @@
 /**
- * Database Factory - Provider Selection
+ * Database Factory - PostgreSQL Client
  * 
- * Creates the appropriate database client based on environment configuration.
+ * Simplified for PostgreSQL-only architecture.
  * 
- * Supported dialects:
- * - "sqlite" (default): SQLite for local single-user development
- * - "postgres": PostgreSQL for cloud multi-tenant deployment
- * 
- * Uses process.env directly to avoid circular dependencies with config.
- * Higher-level packages can use config, but database client remains low-level.
+ * @deprecated This file is kept for backward compatibility.
+ * Prefer importing directly from './client.js' instead.
  */
 
-// Type union for database client (using any for compatibility)
-// In practice, these are Drizzle database instances with different dialects
-export type DatabaseClient = any;
+import { db, setCurrentUser, clearCurrentUser } from './client-pg.js';
 
-// Lazy import to avoid loading both clients at once
-let _sqliteDb: DatabaseClient | null = null;
-let _pgDb: DatabaseClient | null = null;
-
-// Pre-import SQLite client for synchronous access
-// This is safe because SQLite client doesn't have circular dependencies
-let _sqliteModule: typeof import('./client-sqlite.js') | null = null;
+export type DatabaseClient = typeof db;
 
 /**
- * Get SQLite database client
- */
-async function getSQLiteClient(): Promise<DatabaseClient> {
-  if (!_sqliteDb) {
-    const sqliteModule = await import('./client-sqlite.js');
-    _sqliteModule = sqliteModule;
-    _sqliteDb = sqliteModule.db;
-  }
-  return _sqliteDb;
-}
-
-/**
- * Get PostgreSQL database client
- */
-async function getPostgresClient(): Promise<DatabaseClient> {
-  if (!_pgDb) {
-    const pgModule = await import('./client-pg.js');
-    _pgDb = pgModule.db;
-  }
-  return _pgDb;
-}
-
-/**
- * Create database client based on environment configuration
+ * Create database client
  * 
- * @returns Configured database client instance
- * @throws Error if required environment variables are missing
+ * @returns PostgreSQL database client
+ * @throws Error if DATABASE_URL is not set
  * 
- * @example
- * ```typescript
- * const db = await createDatabaseClient();
- * const users = await db.select().from(users);
- * ```
+ * @deprecated Import { db } from '@synap/database' instead
  */
 export async function createDatabaseClient(): Promise<DatabaseClient> {
-  const dialect = (process.env.DB_DIALECT || 'sqlite').toLowerCase();
-
-  switch (dialect) {
-    case 'postgres':
-      if (!process.env.DATABASE_URL) {
-        throw new Error('PostgreSQL requires DATABASE_URL environment variable');
-      }
-      return getPostgresClient();
-
-    case 'sqlite':
-      return getSQLiteClient();
-
-    default:
-      throw new Error(`Unknown database dialect: ${dialect}. Supported dialects: "sqlite", "postgres"`);
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL environment variable is required');
   }
+  return db;
 }
 
 /**
- * Get database client synchronously (for compatibility)
+ * Get database client synchronously
  * 
- * Note: This returns the default client based on current environment.
- * For SQLite, this is safe. For PostgreSQL, ensure DATABASE_URL is set.
- * 
- * @deprecated Use createDatabaseClient() for async initialization
+ * @deprecated Import { db } from '@synap/database' instead
  */
 export function getDatabaseClient(): DatabaseClient {
-  const dialect = (process.env.DB_DIALECT || 'sqlite').toLowerCase();
-
-  if (dialect === 'postgres') {
-    // PostgreSQL requires async initialization, but we'll try to use cached instance
-    if (!_pgDb) {
-      throw new Error('PostgreSQL client not initialized. Use createDatabaseClient() instead.');
-    }
-    return _pgDb;
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL environment variable is required');
   }
-
-  // SQLite can be used synchronously
-  if (!_sqliteDb) {
-    // Import synchronously (SQLite only)
-    // Use dynamic import but handle it synchronously for this deprecated function
-    if (!_sqliteModule) {
-      // This will fail in ES modules, but the function is deprecated anyway
-      throw new Error(
-        'SQLite client not pre-initialized. Use createDatabaseClient() for async initialization.'
-      );
-    }
-    _sqliteDb = _sqliteModule.db;
-  }
-
-  return _sqliteDb;
+  return db;
 }
 
 /**
- * Get setCurrentUser function for the current database dialect
+ * Get setCurrentUser function (PostgreSQL RLS)
  * 
- * Only available for PostgreSQL (RLS support)
+ * @deprecated Import { setCurrentUser } from '@synap/database' instead
  */
-export async function getSetCurrentUserFunction(): Promise<((userId: string) => Promise<void>) | null> {
-  const dialect = (process.env.DB_DIALECT || 'sqlite').toLowerCase();
-
-  if (dialect === 'postgres') {
-    const pgModule = await import('./client-pg.js');
-    return pgModule.setCurrentUser;
-  }
-
-  return null; // SQLite doesn't support RLS
+export async function getSetCurrentUserFunction(): Promise<(userId: string) => Promise<void>> {
+  return setCurrentUser;
 }
 
 /**
- * Get clearCurrentUser function for the current database dialect
+ * Get clearCurrentUser function (PostgreSQL RLS)
  * 
- * Only available for PostgreSQL (RLS support)
+ * @deprecated Import { clearCurrentUser } from '@synap/database' instead
  */
-export async function getClearCurrentUserFunction(): Promise<((() => Promise<void>) | null)> {
-  const dialect = (process.env.DB_DIALECT || 'sqlite').toLowerCase();
-
-  if (dialect === 'postgres') {
-    const pgModule = await import('./client-pg.js');
-    return pgModule.clearCurrentUser;
-  }
-
-  return null; // SQLite doesn't support RLS
+export async function getClearCurrentUserFunction(): Promise<() => Promise<void>> {
+  return clearCurrentUser;
 }
-

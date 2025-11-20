@@ -1,0 +1,40 @@
+{
+  "name": "@synap/hub-protocol",
+  "version": "1.0.0",
+  "description": "Hub Protocol V1.0 - Standardized schemas for Hub ↔ Data Pod communication",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.7"
+  },
+  "keywords": [
+    "synap",
+    "hub-protocol",
+    "data-pod",
+    "intelligence-hub"
+  ],
+  "license": "MIT"
+}
+
+
+
+
+

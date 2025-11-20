@@ -1,33 +1,13 @@
+# Synap Backend - Development Environment
+# PostgreSQL with pgvector + TimescaleDB
 version: '3.8'
 
-# Synap Backend - Complete Self-Hosted Setup
-#
-# This docker-compose file sets up a complete self-hosted Synap Core OS:
-# - PostgreSQL database (with TimescaleDB extension)
-# - MinIO object storage (S3-compatible)
-# - Synap API server (backend API)
-#
-# Usage:
-#   1. Create .env file with your API keys (see env.example)
-#   2. Run: docker compose up -d
-#   3. Wait for all services to be healthy
-#   4. Access:
-#      - API: http://localhost:3000
-#      - MinIO Console: http://localhost:9001
-#      - PostgreSQL: localhost:5432
-#
-# Environment Variables Required:
-#   - ANTHROPIC_API_KEY (required)
-#   - OPENAI_API_KEY (required)
-#   - POSTGRES_PASSWORD (optional, defaults to synap_dev_password)
-#   - MINIO_ROOT_USER (optional, defaults to minioadmin)
-#   - MINIO_ROOT_PASSWORD (optional, defaults to minioadmin)
-
 services:
-  # PostgreSQL Database with TimescaleDB
+  # PostgreSQL with TimescaleDB + pgvector
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb-ha:pg16-latest
     container_name: synap-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synap_dev_password}
@@ -35,115 +15,81 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+    networks:
+      - synap-network
 
-  # MinIO Object Storage (S3-compatible)
+  # MinIO (S3-compatible storage)
   minio:
     image: minio/minio:latest
     container_name: synap-minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
     ports:
-      - "9000:9000"  # S3 API endpoint
-      - "9001:9001"  # Web console
+      - "9000:9000"
+      - "9001:9001"
     volumes:
-      # Mount your existing notes folder here!
-      # Files in ./data/notes will be accessible via MinIO S3 API
-      - ./data/notes:/data
+      - minio_data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-
-  # Optional: MinIO client for bucket management
-  minio-client:
-    image: minio/mc:latest
-    container_name: synap-minio-client
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 5;
-      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin;
-      /usr/bin/mc mb local/synap-storage --ignore-existing;
-      /usr/bin/mc anonymous set download local/synap-storage;
-      exit 0;
-      "
-    restart: "no"
-
-  # Synap API Backend
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: synap-api
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    environment:
-      # Database
-      DB_DIALECT: postgres
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-synap_dev_password}@postgres:5432/synap
-      
-      # Storage (MinIO)
-      STORAGE_PROVIDER: minio
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_BUCKET: synap-storage
-      MINIO_USE_SSL: "false"
-      
-      # Server
-      NODE_ENV: production
-      PORT: 3000
-      API_URL: http://localhost:3000
-      
-      # Auth (for PostgreSQL mode)
-      # AUTH_SECRET: ${AUTH_SECRET:-your-secret-key}
-      # AUTH_URL: http://localhost:3000
-      
-      # Inngest (optional - can use cloud or local)
-      # INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
-      # INNGEST_BASE_URL: ${INNGEST_BASE_URL}
-      
-      # AI (required)
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      
-      # Security
-      SYNAP_SECRET_TOKEN: ${SYNAP_SECRET_TOKEN:-dev-secret-token}
-      
-      # CORS
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
-    ports:
-      - "3000:3000"
-    volumes:
-      # Mount .env if you want to override (optional)
-      - ./.env:/app/.env:ro
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
-      interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    restart: unless-stopped
+    networks:
+      - synap-network
 
-# Volumes (optional, for persistent data)
+  # Redis (for rate limiting, caching, job queues)
+  redis:
+    image: redis:7-alpine
+    container_name: synap-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - synap-network
+
 volumes:
   postgres_data:
     driver: local
   minio_data:
     driver: local
+  redis_data:
+    driver: local
 
+networks:
+  synap-network:
+    driver: bridge
+
+# Quick start:
+# 1. Start services: docker compose up -d
+# 2. Check health: docker compose ps
+# 3. View logs: docker compose logs -f postgres
+#
+# Environment variables (optional):
+# - POSTGRES_PASSWORD: PostgreSQL password (default: synap_dev_password)
+# - MINIO_ROOT_USER: MinIO admin user (default: minioadmin)
+# - MINIO_ROOT_PASSWORD: MinIO admin password (default: minioadmin123)
+#
+# Connection strings:
+# - PostgreSQL: postgresql://postgres:synap_dev_password@localhost:5432/synap
+# - MinIO: http://localhost:9000 (console: http://localhost:9001)
+# - Redis: redis://localhost:6379
+#
+# Stop services: docker compose down
+# Stop and remove volumes: docker compose down -v

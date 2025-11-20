@@ -12,4 +12,5 @@ export * from './entity_tags.js';
 export * from './conversation-messages.js';
 export * from './knowledge-facts.js';
 export * from './ai-suggestions.js';
+export * from './api-keys.js';
 

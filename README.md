@@ -1,299 +1,189 @@
-# 🧠 Synap Backend
+# Synap Backend - PostgreSQL Edition
 
-**Personal AI-Powered Knowledge Management Platform**
+**Personal Knowledge Management System with AI-Powered Intelligence Hub**
 
-Event-sourced, multi-user backend with intelligent thought capture, semantic search, and AI enrichment.
-
----
-
-## 📊 Quick Overview
-
-```
-Version: 0.4.0+ (Production-Ready)
-Status: ✅ Production-Ready
-Architecture: Event-Driven + LangGraph AI Agent + Hybrid Storage
-Database: PostgreSQL (TimescaleDB) + SQLite (local) + Cloudflare R2 / MinIO
-AI: LangGraph (orchestration) + Vercel AI SDK (LLM calls) + OpenAI Embeddings
-Cost Savings: $2,045/month (93% reduction)
-Performance: 10-100x faster + AI-powered natural language
-```
-
----
-
-## ✨ Features
-
-- ✅ **Conversational Interface** - Hash-chained conversations with AI-powered actions
-- ✅ **Intelligent Capture** - AI analyzes thoughts and creates structured entities
-- ✅ **Semantic Search** - RAG with pgvector for similarity search
-- ✅ **Multi-User** - Full user isolation with Better Auth + OAuth
-- ✅ **Event Sourcing** - Immutable audit trail, time-travel capable
-- ✅ **Type-Safe API** - tRPC for end-to-end type safety
-- ✅ **Async Workflows** - Inngest for background AI processing
-- ✅ **Hybrid Storage** - Cloudflare R2 (production) or MinIO (local)
-- ✅ **Local-First** - SQLite for single-user, PostgreSQL for multi-user
+Synap is an event-driven backend for managing personal knowledge with AI assistance. This is the PostgreSQL-only version with TimescaleDB and pgvector extensions.
 
 ---
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### 1. Prerequisites
 
-- Node.js 20+
-- pnpm 8+
-- Docker & Docker Compose (for MinIO)
-- Anthropic API key
-- OpenAI API key (for embeddings)
+- Node.js 20+ & pnpm
+- Docker (for PostgreSQL)
 
-### Installation
+### 2. Start Database
 
 ```bash
-# Clone repository
-git clone <your-repo-url> synap-backend
-cd synap-backend
+# Start PostgreSQL + MinIO + Redis
+docker compose up -d
 
-# Install dependencies
+# Verify services are healthy
+docker compose ps
+```
+
+**Connection URLs:**
+- PostgreSQL: `postgresql://postgres:synap_dev_password@localhost:5432/synap`
+- MinIO: `http://localhost:9000` (console: `http://localhost:9001`)
+- Redis: `redis://localhost:6379`
+
+### 3. Install Dependencies
+
+```bash
 pnpm install
+```
 
-# Setup environment
-cp env.local.example .env
-# Edit .env and add your API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, SYNAP_SECRET_TOKEN)
+### 4. Setup Environment
 
-# Start MinIO (S3-compatible storage)
-# ⚠️ IMPORTANT: Start Docker Desktop app first!
-# Then run:
-docker compose up -d minio
-# (If that doesn't work, try: docker-compose up -d minio)
+```bash
+# Copy example env file
+cp .env.example .env
 
-# Initialize database
-pnpm --filter database db:init
+# Edit .env with your settings
+# DATABASE_URL is already configured for docker-compose
+```
 
-# Start all services (API + Jobs)
+### 5. Run Migrations
+
+```bash
+cd packages/database
+pnpm db:migrate
+```
+
+This applies both:
+- **Drizzle migrations** (auto-generated from TypeScript schema)
+- **Custom migrations** (extensions, functions, hypertables)
+
+### 6. Start Development
+
+```bash
+# Terminal 1: API server
+pnpm dev
+
+# Terminal 2: Inngest dev server (background jobs)
+cd packages/jobs
 pnpm dev
 ```
 
-**That's it!** The backend will:
-- ✅ Start API server on `http://localhost:3000`
-- ✅ Start Inngest dev server for background jobs
-- ✅ Auto-detect MinIO as storage (if R2 not configured)
-- ✅ Use SQLite database (if PostgreSQL not configured)
-
-See [QUICKSTART.md](./QUICKSTART.md) for quick reference or [SETUP.md](./SETUP.md) for detailed setup.
+**API available at:** `http://localhost:3000`
 
 ---
 
-## 🏗️ Architecture
+## 📦 Architecture
 
-### Core Principles
+### Core Technologies
 
-1. **Event-Driven First**: Inngest as the central event bus - all communication goes through events
-2. **CQRS Pattern**: Commands (writes) via events, Queries (reads) directly from projections
-3. **Event Sourcing**: TimescaleDB event store as the single source of truth
-4. **Hybrid Storage**: PostgreSQL for metadata, R2/MinIO for content (large files)
-5. **Type-Safe**: TypeScript strict mode everywhere with Zod validation
-6. **Local-First**: SQLite for single-user, PostgreSQL for multi-user
+- **Database:** PostgreSQL 16 with TimescaleDB + pgvector
+- **ORM:** Drizzle ORM (type-safe, performant)
+- **API:** tRPC (type-safe APIs) + Hono (web server)
+- **Jobs:** Inngest (event-driven background jobs)
+- **Storage:** MinIO / R2 (S3-compatible)
+- **AI:** LangGraph + Vercel AI SDK
+- **Auth:** Better Auth (multi-user)
 
-### Event-Driven Architecture
+### Key Features
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  API Layer (tRPC) - Event Producers                        │
-│  • Commands: Publish events → Inngest                     │
-│  • Queries: Read directly from projections                 │
-│  • Returns: { status: 'pending', requestId } (async)      │
-├─────────────────────────────────────────────────────────────┤
-│  Event Bus (Inngest) - Central Orchestrator                │
-│  • Receives events from API/Agents                         │
-│  • Dispatches to registered handlers                      │
-│  • Retries on failure                                      │
-├─────────────────────────────────────────────────────────────┤
-│  Worker Layer (@synap/jobs) - Event Consumers              │
-│  • Handlers subscribe to event types                       │
-│  • Execute business logic (storage, DB, AI)                │
-│  • Update projections (materialized views)                 │
-├─────────────────────────────────────────────────────────────┤
-│  Projection Layer (@synap/database)                        │
-│  • PostgreSQL: Metadata + embeddings (pgvector)            │
-│  • TimescaleDB: Event store (immutable history)           │
-│  • R2/MinIO: Content storage (large files)                  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Command Flow (Write)
-
-```
-1. Frontend → API: POST /trpc/notes.create
-2. API validates input (Zod)
-3. API creates SynapEvent (note.creation.requested)
-4. API appends to Event Store (TimescaleDB)
-5. API publishes to Inngest bus
-6. API returns: { status: 'pending', requestId }
-7. Handler processes event (async):
-   - Uploads content to R2/MinIO
-   - Creates entity in PostgreSQL
-   - Generates embedding
-   - Publishes note.creation.completed
-```
-
-### Query Flow (Read)
-
-```
-1. Frontend → API: GET /trpc/notes.list
-2. API reads directly from entities table (projection)
-3. RLS filters by userId (PostgreSQL)
-4. API returns results immediately (fast, no events)
-```
-
-### Tech Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **API** | Hono + tRPC | Type-safe HTTP server (CQRS) |
-| **Event Bus** | Inngest | Central event orchestration |
-| **Auth** | Better Auth / Simple Token | Multi-user / Single-user auth |
-| **Event Store** | TimescaleDB (PostgreSQL) | Immutable event history |
-| **Projections** | PostgreSQL / SQLite | Materialized views (read-optimized) |
-| **ORM** | Drizzle | Type-safe queries |
-| **Workers** | Inngest Functions | Event handlers (business logic) |
-| **AI** | LangGraph + Vercel AI SDK | Multi-step reasoning (LangGraph) + LLM calls (Vercel SDK) |
-| **LLM** | Anthropic Claude | Text generation via Vercel AI SDK |
-| **Search** | pgvector + OpenAI | Semantic RAG |
-| **Storage** | R2 / MinIO | File storage (S3-compatible) |
-| **Types** | Zod | Runtime validation (SynapEvent) |
+1. **Event Sourcing** - TimescaleDB for immutable event history
+2. **Vector Search** - pgvector for semantic search
+3. **Hybrid Storage** - PostgreSQL for metadata, R2/MinIO for content
+4. **Row-Level Security** - PostgreSQL RLS for multi-user isolation
+5. **Type-Safe APIs** - tRPC with Zod validation
+6. **AI Integration** - Hub Protocol for AI agents
 
 ---
 
-## 📁 Project Structure
+## 🗂️ Project Structure
 
 ```
 synap-backend/
-├── apps/
-│   └── api/              # Hono API server
 ├── packages/
-│   ├── api/              # tRPC routers
-│   ├── auth/             # Better Auth + Simple token
-│   ├── database/         # Drizzle schemas + migrations
-│   ├── domain/           # Business logic services
-│   ├── jobs/             # Inngest functions
-│   ├── core/             # Config, errors, logging
-│   ├── storage/          # Storage abstraction (R2/MinIO)
-│   └── ai/               # AI agents & embeddings
-├── scripts/              # Utility scripts
-├── SETUP.md              # Setup guide
-├── ARCHITECTURE.md       # Technical deep dive
-└── CHANGELOG.md          # Version history
+│   ├── api/          # tRPC routers + API logic
+│   ├── database/     # Drizzle schema + migrations
+│   ├── jobs/         # Inngest background jobs
+│   ├── ai/           # LangGraph agents
+│   ├── types/        # Shared TypeScript types
+│   ├── core/         # Utilities (logger, errors, etc.)
+│   ├── auth/         # Better Auth configuration
+│   └── storage/      # R2/MinIO client
+├── apps/
+│   ├── api-server/   # Hono API server
+│   └── admin-ui/     # Admin dashboard (optional)
+├── docker-compose.yml # PostgreSQL + MinIO + Redis
+└── scripts/          # Utility scripts
 ```
 
 ---
 
-## 🔐 Authentication
+## 🔧 Development
 
-### Single-User (SQLite)
-
-```bash
-# Set static token
-export SYNAP_SECRET_TOKEN=your-secret-token
-
-# Use in requests
-curl -H "Authorization: Bearer $SYNAP_SECRET_TOKEN" ...
-```
-
-### Multi-User (PostgreSQL)
+### Database Commands
 
 ```bash
-# Sign up
-POST /api/auth/sign-up
-{
-  "email": "user@example.com",
-  "password": "secure-password",
-  "name": "John Doe"
-}
+cd packages/database
 
-# Sign in
-POST /api/auth/sign-in
-{
-  "email": "user@example.com",
-  "password": "secure-password"
-}
+# Generate migration from schema changes
+pnpm db:generate
 
-# Returns session cookie
+# Apply all migrations
+pnpm db:migrate
+
+# Push schema directly (dev only, no migration files)
+pnpm db:push
+
+# Open Drizzle Studio (visual DB editor)
+pnpm db:studio
 ```
 
----
+### Adding a New Table
 
-## 📚 API Endpoints
+1. **Edit schema** (`packages/database/src/schema/my-table.ts`):
+   ```typescript
+   import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
+   
+   export const myTable = pgTable('my_table', {
+     id: uuid('id').primaryKey().defaultRandom(),
+     name: text('name').notNull(),
+     createdAt: timestamp('created_at').notNull().defaultNow(),
+   });
+   ```
 
-### Chat (Conversational Interface)
+2. **Export in index** (`packages/database/src/schema/index.ts`):
+   ```typescript
+   export * from './my-table.js';
+   ```
 
-```typescript
-// Send message
-POST /trpc/chat.sendMessage
-{
-  "threadId": "uuid",
-  "content": "Create a task to call John tomorrow at 3pm"
-}
+3. **Generate migration**:
+   ```bash
+   pnpm db:generate
+   ```
 
-// AI responds with action proposal:
-// "I'll create that task for you. [ACTION:task.create:{...}]"
+4. **Apply migration**:
+   ```bash
+   pnpm db:migrate
+   ```
 
-// Confirm action
-POST /trpc/chat.executeAction
-{
-  "threadId": "uuid",
-  "messageId": "uuid",
-  "actionType": "task.create",
-  "actionParams": {...}
-}
-```
+### Adding Custom SQL (Extensions, Functions)
 
-### Notes
+For PostgreSQL-specific features (extensions, PL/pgSQL functions, hypertables):
 
-```typescript
-// Create note (Command - async)
-POST /trpc/notes.create
-{
-  "content": "Meeting notes from Q4 planning",
-  "title": "Q4 Planning",
-  "tags": ["work", "planning"]
-}
+1. **Create file** in `packages/database/migrations-custom/`:
+   ```sql
+   -- migrations-custom/0011_my_custom_feature.sql
+   CREATE EXTENSION IF NOT EXISTS postgis;
+   
+   CREATE OR REPLACE FUNCTION my_function()
+   RETURNS TABLE(...) AS $$
+   BEGIN
+     -- Logic here
+   END;
+   $$ LANGUAGE plpgsql;
+   ```
 
-// Response (immediate):
-{
-  "success": true,
-  "status": "pending",
-  "requestId": "uuid",
-  "entityId": "uuid",
-  "message": "Note creation request received. Processing asynchronously."
-}
-
-// List notes (Query - direct read)
-GET /trpc/notes.list?input={"json":{"limit":20,"offset":0}}
-
-// Response (fast):
-{
-  "notes": [...],
-  "total": 10,
-  "limit": 20,
-  "offset": 0
-}
-```
-
-### Events
-
-```typescript
-// Log event
-POST /trpc/events.log
-{
-  "type": "custom.event",
-  "data": { "key": "value" }
-}
-
-// List events
-GET /trpc/events.list
-{
-  "limit": 50,
-  "type": "entity.created"
-}
-```
+2. **Apply migration**:
+   ```bash
+   pnpm db:migrate
+   ```
 
 ---
 
@@ -303,186 +193,181 @@ GET /trpc/events.list
 # Run all tests
 pnpm test
 
-# Run specific test suite
-npx vitest run packages/core/tests/user-isolation.test.ts
+# Run tests for specific package
+pnpm --filter @synap/api test
 
-# Expected: ✅ All tests passing
+# Run tests in watch mode
+pnpm test:watch
 ```
 
 ---
 
-## 🚢 Deployment
+## 📚 Key Concepts
 
-### Option 1: Vercel (Recommended)
+### Event Sourcing
 
-```bash
-npm i -g vercel
-vercel --prod
+All state changes are captured as immutable events in TimescaleDB:
+
+```typescript
+import { getEventRepository } from '@synap/database';
+
+const eventRepo = getEventRepository();
+
+// Append event
+await eventRepo.append({
+  type: 'task.created',
+  data: { title: 'My Task' },
+  userId: 'user-123',
+});
+
+// Query events
+const events = await eventRepo.getByUserId('user-123');
 ```
 
-### Option 2: Railway
+### Vector Search
 
-```bash
-npm i -g @railway/cli
-railway up
-railway add -d postgres
+Store and search embeddings with pgvector:
+
+```typescript
+import { db, entityVectors } from '@synap/database';
+import { cosineDistance } from 'drizzle-orm';
+
+// Search similar vectors
+const results = await db
+  .select()
+  .from(entityVectors)
+  .where(cosineDistance(entityVectors.embedding, queryVector).lt(0.5))
+  .limit(10);
 ```
 
-### Option 3: Self-Hosted
+### Row-Level Security (RLS)
 
-```bash
-pnpm build
-NODE_ENV=production pnpm --filter api start
+Automatic user isolation for multi-tenant:
+
+```typescript
+import { setCurrentUser, clearCurrentUser } from '@synap/database';
+
+// Set user context (applies RLS policies)
+await setCurrentUser('user-123');
+
+// All queries now filtered by user
+const tasks = await db.select().from(tasks); // Only user-123's tasks
+
+// Clear context
+await clearCurrentUser();
+```
+
+### Hub Protocol
+
+AI agents communicate with the data pod:
+
+```typescript
+// 1. Hub generates access token
+const { token } = await client.hub.generateAccessToken.mutate({
+  apiKey: hubApiKey,
+  requestId: uuid(),
+  scope: ['preferences', 'notes', 'tasks'],
+});
+
+// 2. Hub requests data
+const { data } = await client.hub.requestData.query({
+  token,
+  scope: ['notes'],
+});
+
+// 3. Hub submits insights
+await client.hub.submitInsight.mutate({
+  token,
+  requestId,
+  insight: {
+    type: 'action_plan',
+    actions: [{ eventType: 'task.create', data: {...} }],
+  },
+});
 ```
 
 ---
 
-## 📈 Performance
+## 🔐 Security
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| API Response | 50-200ms | Cached queries |
-| AI Enrichment | 2-3s | Async (Inngest) |
-| Vector Search | 300-500ms | pgvector HNSW |
-| Concurrent Users | 1000+ | Neon autoscale |
-| Cost per User | $0.055/mo | At 1000 users |
-
----
-
-## 🛠️ Development
-
-### Setup
-
-```bash
-# Install dependencies
-pnpm install
-
-# Setup environment
-cp env.local.example .env
-
-# Initialize SQLite (local dev)
-pnpm --filter database db:init
-
-# Start dev servers
-pnpm --filter api dev      # API (port 3000)
-pnpm --filter jobs dev     # Jobs (Inngest dev)
-```
-
-### Useful Commands
-
-```bash
-# Build all packages
-pnpm build
-
-# Run tests
-pnpm test
-
-# Database operations
-pnpm --filter database db:push     # Push schema changes
-pnpm --filter database db:studio   # Open Drizzle Studio
-```
+- **RLS**: PostgreSQL Row-Level Security for user isolation
+- **API Keys**: Bcrypt-hashed, scoped permissions, rate-limited
+- **JWT**: Short-lived tokens (5 min max) for Hub communication
+- **Audit Logs**: All Hub accesses logged in Event Store
+- **HTTPS**: Enforced in production
 
 ---
 
 ## 📖 Documentation
 
-**📚 [Documentation Complète](./docs/README.md)** - Index principal de toute la documentation
-
-### Guides Rapides
-- **[Quick Start](./docs/getting-started/QUICKSTART.md)** - Démarrage rapide en 3 étapes
-- **[Setup Guide](./docs/getting-started/SETUP.md)** - Configuration détaillée
-
-### Architecture
-- **[Architecture Overview](./docs/architecture/README.md)** - Vue d'ensemble
-- **[Event-Driven Architecture](./docs/architecture/EVENT_DRIVEN.md)** - Architecture événementielle
-- **[AI Architecture](./docs/architecture/AI_ARCHITECTURE.md)** - Système d'IA
-- **[Storage System](./docs/architecture/STORAGE.md)** - Système de stockage
-
-### Développement
-- **[Developer Guide](./docs/development/README.md)** - Guides pour développeurs
-- **[Extensibility Guide](./docs/development/EXTENSIBILITY.md)** - Étendre le système
-- **[SDK Reference](./docs/development/SDK_REFERENCE.md)** - Référence du SDK
-
-### Déploiement
-- **[Deployment Guide](./docs/deployment/README.md)** - Guides de déploiement
-- **[Docker Deployment](./docs/deployment/DOCKER.md)** - Déploiement Docker
-
-### Stratégie
-- **[V2 Mission](./docs/strategy/V2_MISSION.md)** - Vision et roadmap
-- **[Roadmap](./docs/strategy/ROADMAP.md)** - Feuille de route
-- **[PRD](./docs/strategy/PRD.md)** - Product Requirements
-
-### Référence
-- **[API Reference](./docs/api/README.md)** - Référence API tRPC
-- **[CHANGELOG.md](./CHANGELOG.md)** - Historique des versions
-
-### Reference Documentation
-- **[EVENT_DRIVEN_ROADMAP.md](./EVENT_DRIVEN_ROADMAP.md)** - Event-driven architecture roadmap (Phase 1-4)
-- **[EVENT_DRIVEN_AUDIT.md](./EVENT_DRIVEN_AUDIT.md)** - Architecture audit report
-- **[PHASE1_IMPLEMENTATION_REPORT.md](./PHASE1_IMPLEMENTATION_REPORT.md)** - Phase 1 completion report
-- **[PHASE2_IMPLEMENTATION_REPORT.md](./PHASE2_IMPLEMENTATION_REPORT.md)** - Phase 2 completion report
-- **[PHASE3_IMPLEMENTATION_REPORT.md](./PHASE3_IMPLEMENTATION_REPORT.md)** - Phase 3 completion report
-- **[PHASE4_IMPLEMENTATION_REPORT.md](./PHASE4_IMPLEMENTATION_REPORT.md)** - Phase 4 completion report
+- **Architecture:** `docs/architecture/`
+- **API Keys:** `docs/api/API_KEYS.md`
+- **Hub Protocol:** `docs/architecture/PRDs/HUB_PROTOCOL_V1.md`
+- **Event Sourcing:** `docs/architecture/EVENT_DRIVEN.md`
+- **Deployment:** `docs/deployment/`
 
 ---
 
-## 🔒 Security
+## 🐳 Production Deployment
 
-### Multi-User Isolation
+### Option 1: Docker Compose
 
-**Method**: Application-level filtering with explicit `userId` checks
+```bash
+# Set production passwords
+export POSTGRES_PASSWORD=your_secure_password
+export MINIO_ROOT_PASSWORD=your_minio_password
 
-**Implementation**:
-- ✅ Every query filters by `ctx.userId`
-- ✅ Helper functions enforce filtering
-- ✅ Comprehensive isolation tests
-- ✅ Code review required for all DB operations
+# Start services
+docker compose up -d
 
----
+# Apply migrations
+cd packages/database
+export DATABASE_URL=postgresql://postgres:your_secure_password@localhost:5432/synap
+pnpm db:migrate
+```
 
-## 🗺️ Roadmap
+### Option 2: Managed Services
 
-### Completed (V0.5+)
-- ✅ Event-driven architecture (Inngest as event bus)
-- ✅ CQRS pattern (Commands vs Queries)
-- ✅ Event Store foundation (TimescaleDB + SynapEvent schema)
-- ✅ Worker layer (Event handlers with IEventHandler interface)
-- ✅ Projection layer (Hybrid storage: PostgreSQL + R2/MinIO)
-- ✅ API layer (tRPC with async commands, fast queries)
-- ✅ RLS security (PostgreSQL Row-Level Security)
+- **Database:** Neon, Supabase, or Railway (PostgreSQL with TimescaleDB)
+- **Storage:** Cloudflare R2 or AWS S3
+- **Cache:** Upstash Redis
 
-### Future (V0.6+)
-- ⏳ WebSocket channels for async responses
-- ⏳ Real-time subscriptions
-- ⏳ Team workspaces
-- ⏳ Mobile API optimizations
-- ⏳ Advanced search filters
+```bash
+# Set environment variables
+export DATABASE_URL=postgresql://...
+export R2_ACCOUNT_ID=...
+export R2_ACCESS_KEY_ID=...
+export R2_SECRET_ACCESS_KEY=...
+
+# Deploy
+pnpm build
+pnpm start
+```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions welcome! Please:
-1. Read [ARCHITECTURE.md](./ARCHITECTURE.md) first
-2. Follow TypeScript strict mode
-3. Add tests for new features
-4. Update documentation
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ---
 
 ## 📄 License
 
-MIT License - See LICENSE file
+MIT License - See LICENSE file for details
 
 ---
 
-## 💡 Questions?
+## 🆘 Support
 
-1. **Setup issues?** → Check [SETUP.md](./SETUP.md)
-2. **Architecture questions?** → Read [ARCHITECTURE.md](./ARCHITECTURE.md)
-3. **API usage?** → See examples above
-4. **Contributing?** → Open an issue first
+- **Issues:** [GitHub Issues](https://github.com/your-repo/issues)
+- **Discord:** [Synap Community](https://discord.gg/synap)
+- **Docs:** `docs/` directory
 
 ---
 
-**Built with ❤️ for the future of personal knowledge management**
+**Built with ❤️ using PostgreSQL, TypeScript, and AI**

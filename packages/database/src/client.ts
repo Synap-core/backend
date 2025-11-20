@@ -1,21 +1,22 @@
 /**
  * Database client configuration
  * 
- * Default export uses SQLite for backward compatibility.
- * For runtime database selection, use the factory pattern:
+ * PostgreSQL only (with TimescaleDB + pgvector)
  * 
- * @example
+ * For direct access:
  * ```typescript
- * import { createDatabaseClient } from '@synap/database/factory';
- * const db = await createDatabaseClient();
+ * import { db } from '@synap/database';
+ * const users = await db.select().from(users);
  * ```
  * 
- * Or use the default export which selects based on DB_DIALECT:
+ * For RLS (Row-Level Security):
+ * ```typescript
+ * import { setCurrentUser, clearCurrentUser } from '@synap/database';
+ * await setCurrentUser('user-123');
+ * // All queries filtered by RLS
+ * await clearCurrentUser();
+ * ```
  */
 
-// Default: SQLite for backward compatibility
-export * from './client-sqlite.js';
-
-// Export factory for runtime database selection
-export * from './factory.js';
-
+// Export PostgreSQL client as default
+export * from './client-pg.js';
