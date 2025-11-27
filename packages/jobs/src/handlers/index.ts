@@ -17,16 +17,18 @@ import { ProjectCreationHandler } from './project-creation-handler.js';
 
 // Create handler instances
 const noteCreationHandler = new NoteCreationHandler();
-const embeddingGeneratorHandler = new EmbeddingGeneratorHandler();
-const conversationMessageHandler = new ConversationMessageHandler();
+// NOTE: These handlers are disabled as they use @synap/ai which has been moved to synap-intelligence-hub
+// const embeddingGeneratorHandler = new EmbeddingGeneratorHandler();
+// const conversationMessageHandler = new ConversationMessageHandler();
 const taskCreationHandler = new TaskCreationHandler();
 const taskCompletionHandler = new TaskCompletionHandler();
 const projectCreationHandler = new ProjectCreationHandler();
 
 // Register handlers
 handlerRegistry.register(noteCreationHandler);
-handlerRegistry.register(embeddingGeneratorHandler);
-handlerRegistry.register(conversationMessageHandler);
+// NOTE: Embedding and conversation handlers disabled - use Intelligence Hub via Hub Protocol
+// handlerRegistry.register(embeddingGeneratorHandler);
+// handlerRegistry.register(conversationMessageHandler);
 handlerRegistry.register(taskCreationHandler);
 handlerRegistry.register(taskCompletionHandler);
 handlerRegistry.register(projectCreationHandler);

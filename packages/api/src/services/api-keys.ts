@@ -10,7 +10,7 @@
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcrypt';
 import { db } from '@synap/database';
-import { apiKeys, KEY_PREFIXES, ApiKeyRecord, ApiKeyScope } from '@synap/database/schema';
+import { apiKeys, KEY_PREFIXES, ApiKeyRecord, ApiKeyScope } from '@synap/database';
 import { eq, and, or, isNull, gt, sql } from 'drizzle-orm';
 
 /**
@@ -303,7 +303,8 @@ export class ApiKeyService {
    * @returns Prefix or null if invalid
    */
   private extractPrefix(apiKey: string): string | null {
-    for (const prefix of Object.values(KEY_PREFIXES)) {
+    const prefixes = Object.values(KEY_PREFIXES) as string[];
+    for (const prefix of prefixes) {
       if (apiKey.startsWith(prefix)) {
         return prefix;
       }
@@ -319,8 +320,10 @@ export class ApiKeyService {
    * @returns Number of keys cleaned up
    */
   async cleanupExpiredKeys(): Promise<number> {
-    const result = await db.execute(sql`SELECT cleanup_expired_api_keys()`);
-    return result.rows[0]?.cleanup_expired_api_keys || 0;
+    const result = await db.execute<{ cleanup_expired_api_keys: number }>(
+      sql`SELECT cleanup_expired_api_keys() as cleanup_expired_api_keys`
+    );
+    return result.rows[0]?.cleanup_expired_api_keys ?? 0;
   }
   
   /**
@@ -337,7 +340,7 @@ export class ApiKeyService {
       .where(
         and(
           eq(apiKeys.isActive, true),
-          gt(apiKeys.rotationScheduledAt, new Date())
+          sql`${apiKeys.rotationScheduledAt} < NOW()`
         )
       );
   }

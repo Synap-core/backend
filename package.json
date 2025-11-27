@@ -7,11 +7,17 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
+    "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
+    "test:e2e:watch": "vitest watch --config tests/e2e/vitest.config.ts",
     "test:system": "pnpm build && tsx scripts/test-system.ts",
-    "db:migrate": "cd packages/database && pnpm drizzle-kit push",
-    "db:studio": "cd packages/database && pnpm drizzle-kit studio"
+    "db:migrate": "tsx packages/database/src/migrate.ts",
+    "db:studio": "cd packages/database && pnpm drizzle-kit studio",
+    "create:hub-client": "tsx scripts/create-hub-client.ts",
+    "publish:packages": "./scripts/publish-packages.sh",
+    "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run"
   },
   "devDependencies": {
+    "@ory/hydra-client": "^2.2.1",
     "@vitest/ui": "^4.0.7",
     "tsx": "^4.7.0",
     "turbo": "^2.0.0",

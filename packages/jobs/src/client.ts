@@ -80,6 +80,8 @@ export type Events = {
       content: string;
       context: Record<string, any>;
       capturedAt: string;
+      userId: string;
+      inputType?: 'text' | 'voice' | 'image';
     };
   };
   'ai/thought.analyzed': {

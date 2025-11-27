@@ -1,7 +1,6 @@
 {
   "name": "@synap/storage",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,6 +16,10 @@
       "default": "./dist/r2.js"
     }
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest"

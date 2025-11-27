@@ -1,17 +1,13 @@
 /**
  * tRPC Context
  * 
- * Multi-dialect support:
- * - SQLite: Static token authentication (single-user)
- * - PostgreSQL: Better Auth session (multi-user)
+ * PostgreSQL-only with Ory Kratos session authentication for multi-user support.
  */
 
 import { db } from '@synap/database';
 import { createLogger, InternalServerError } from '@synap/core';
-import { config } from '@synap/core';
 
 const contextLogger = createLogger({ module: 'api-context' });
-const isPostgres = config.database.dialect === 'postgres';
 
 export interface Context extends Record<string, unknown> {
   db: typeof db;
@@ -22,55 +18,45 @@ export interface Context extends Record<string, unknown> {
 }
 
 export async function createContext(req: Request): Promise<Context> {
-  if (isPostgres) {
-    // PostgreSQL: Use Better Auth session
-    try {
-      const authModule = await import('@synap/auth');
-      if (!authModule.getSession) {
-        throw new InternalServerError('getSession not available', { module: '@synap/auth' });
-      }
-      const session = await authModule.getSession(req.headers);
-      
-      if (session && session.user) {
-        return {
-          db,
-          authenticated: true,
-          userId: session.user.id,
-          user: session.user,
-          session,
-        };
-      }
-      
-      // No valid session
+  // Use Ory Kratos session for authentication
+  try {
+    const authModule = await import('@synap/auth');
+    if (!authModule.getSession) {
+      throw new InternalServerError('getSession not available', { module: '@synap/auth' });
+    }
+    const session = await authModule.getSession(req.headers);
+    
+    // Kratos session structure: { identity: { id, traits: { email, name } } }
+    if (session && session.identity) {
       return {
         db,
-        authenticated: false,
-        userId: null,
-        user: null,
-        session: null,
-      };
-    } catch (error) {
-      contextLogger.error({ err: error }, 'Error getting session');
-      return {
-        db,
-        authenticated: false,
-        userId: null,
-        user: null,
-        session: null,
+        authenticated: true,
+        userId: session.identity.id,
+        user: {
+          id: session.identity.id,
+          email: session.identity.traits.email,
+          name: session.identity.traits.name,
+        },
+        session,
       };
     }
-  } else {
-    // SQLite: Static token authentication
-    const authHeader = req.headers.get('Authorization');
-    const expectedToken = process.env.SYNAP_SECRET_TOKEN;
     
-    const authenticated = !expectedToken ? true : // No token = dev mode
-      (authHeader?.startsWith('Bearer ') && authHeader.substring(7) === expectedToken);
-    
+    // No valid session
     return {
       db,
-      authenticated: authenticated || false,
-      // No userId in single-user mode
+      authenticated: false,
+      userId: null,
+      user: null,
+      session: null,
+    };
+  } catch (error) {
+    contextLogger.error({ err: error }, 'Error getting session');
+    return {
+      db,
+      authenticated: false,
+      userId: null,
+      user: null,
+      session: null,
     };
   }
 }

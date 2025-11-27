@@ -1,0 +1,35 @@
+{
+  "name": "@synap/hub-protocol-client",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:watch": "vitest watch"
+  },
+  "dependencies": {
+    "@synap/hub-protocol": "workspace:*",
+    "@synap/api": "workspace:*",
+    "@synap/core": "workspace:*",
+    "@trpc/client": "^11.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.7"
+  }
+}
+

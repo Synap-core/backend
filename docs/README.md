@@ -13,14 +13,18 @@
 
 ### Architecture & Concepts
 - **[Architecture Overview](./architecture/README.md)** - Vue d'ensemble de l'architecture
+- **[Ecosystem Analysis](./architecture/ECOSYSTEM_ANALYSIS.md)** - Analyse complète de l'écosystème
 - **[Event-Driven Architecture](./architecture/EVENT_DRIVEN.md)** - Architecture événementielle
 - **[AI Architecture](./architecture/AI_ARCHITECTURE.md)** - Système d'IA (LangGraph + Vercel AI SDK)
+- **[Authentication Architecture](./architecture/AUTHENTICATION_ARCHITECTURE.md)** - Architecture d'authentification
 - **[Storage System](./architecture/STORAGE.md)** - Système de stockage (R2/MinIO)
+- **[Hub Protocol V1.0](./architecture/PRDs/HUB_PROTOCOL_V1.md)** - Spécification du Hub Protocol
 
 ### Développement
 - **[Developer Guide](./development/README.md)** - Guide pour développeurs
 - **[Backend SDK Reference](./development/SDK_REFERENCE.md)** - Référence du SDK backend
-- **[Extensibility Guide](./development/EXTENSIBILITY.md)** - Comment étendre le système
+- **[Extensibility Guide V1](./development/EXTENSIBILITY_GUIDE_V1.md)** - Comment étendre le système
+- **[Creating Custom Hubs](./development/CREATING_CUSTOM_HUB.md)** - Guide pour créer des Hubs personnalisés
 - **[SDK npm Package](./development/SDK_NPM.md)** - Créer le package @synap/client
 
 ### Déploiement
@@ -31,7 +35,6 @@
 ### Vision & Stratégie
 - **[V2 Mission](./strategy/V2_MISSION.md)** - Vision et roadmap V2.0
 - **[Roadmap](./strategy/ROADMAP.md)** - Feuille de route
-- **[PRD](./strategy/PRD.md)** - Product Requirements Document
 
 ### Référence
 - **[API Reference](./api/README.md)** - Référence de l'API tRPC
@@ -99,8 +102,9 @@ docs/
 3. **[Production Setup](./deployment/PRODUCTION.md)**
 
 ### Créer une Capacité ?
-1. **[Extensibility Guide](./development/EXTENSIBILITY.md)**
+1. **[Extensibility Guide V1](./development/EXTENSIBILITY_GUIDE_V1.md)**
 2. **[Backend SDK Reference](./development/SDK_REFERENCE.md)**
+3. **[Creating Custom Hubs](./development/CREATING_CUSTOM_HUB.md)**
 
 ### Intégrer le SDK Frontend ?
 1. **[SDK npm Package](./development/SDK_NPM.md)**

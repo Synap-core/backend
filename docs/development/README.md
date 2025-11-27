@@ -15,14 +15,24 @@ Référence complète du SDK backend avec tous les packages et leurs APIs.
 - Exemples d'utilisation
 - Patterns recommandés
 
-### [Extensibility Guide](./EXTENSIBILITY.md)
+### [Extensibility Guide V1](./EXTENSIBILITY_GUIDE_V1.md)
 Guide complet pour étendre le Synap Core OS avec des capacités.
 
 **Contenu :**
 - Architecture d'extensibilité
+- Internal Plugins vs External Services
 - Ajouter une capacité (migration, worker, router, tool)
 - Intégrer un service externe
 - Exemples complets
+
+### [Creating Custom Hubs](./CREATING_CUSTOM_HUB.md)
+Guide pour créer des Hubs personnalisés (alternatives au Synap Intelligence Hub).
+
+**Contenu :**
+- Architecture des Hubs
+- Utilisation de @synap/hub-protocol-client
+- Utilisation de @synap/hub-orchestrator-base
+- Exemples de code
 
 ### [SDK npm Package](./SDK_NPM.md)
 Guide pour créer et publier le package npm `@synap/client`.

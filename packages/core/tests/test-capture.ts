@@ -41,7 +41,7 @@ async function testCapture() {
     console.log('\n⏳ Now you need to:');
     console.log('   1. Start Inngest dev server: pnpm --filter jobs dev');
     console.log('   2. Inngest will pick up the event and process it');
-    console.log('   3. After ~5 seconds, check: sqlite3 data/synap.db "SELECT * FROM entities;"');
+    console.log('   3. After ~5 seconds, check PostgreSQL: psql $DATABASE_URL -c "SELECT * FROM entities;"');
     console.log('\n💡 The AI will analyze and create a task entity automatically!');
     
   } catch (error) {

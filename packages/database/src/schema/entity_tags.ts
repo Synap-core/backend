@@ -1,30 +1,33 @@
 /**
  * Entity Tags Schema - Many-to-Many relationship
  * 
- * Links entities to tags
- * Multi-dialect compatible (SQLite + PostgreSQL)
+ * Links entities to tags.
+ * 
+ * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import { randomUUID } from 'crypto';
+import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
 import { entities } from './entities.js';
 import { tags } from './tags.js';
 
-export const entityTags = sqliteTable('entity_tags', {
+export const entityTags = pgTable('entity_tags', {
   // Primary key
-  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  id: uuid('id').defaultRandom().primaryKey(),
+  
+  // User ID (for filtering and RLS)
+  userId: text('user_id').notNull(),
   
   // References
-  entityId: text('entity_id')
+  entityId: uuid('entity_id')
     .references(() => entities.id, { onDelete: 'cascade' })
     .notNull(),
-  tagId: text('tag_id')
+  tagId: uuid('tag_id')
     .references(() => tags.id, { onDelete: 'cascade' })
     .notNull(),
   
   // When was this tag added?
-  createdAt: integer('created_at', { mode: 'timestamp_ms' })
-    .$defaultFn(() => new Date())
+  createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+    .defaultNow()
     .notNull(),
 });
 

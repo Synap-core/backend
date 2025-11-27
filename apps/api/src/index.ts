@@ -3,7 +3,8 @@
  *
  * Hono server with:
  * - tRPC API endpoints
- * - Better Auth routes (PostgreSQL only)
+ * - Ory Kratos routes (PostgreSQL only)
+ * - Token Exchange endpoint
  * - Inngest handler
  */
 
@@ -70,8 +71,8 @@ try {
   
   // Validate auth config for PostgreSQL
   if (config.database.dialect === 'postgres') {
-    validateConfig('better-auth');
-    apiLogger.info('Better Auth configuration validated');
+    validateConfig('ory');
+    apiLogger.info('Ory Stack configuration validated');
   }
 } catch (error) {
   apiLogger.error({ err: error }, 'Configuration validation failed');
@@ -82,18 +83,17 @@ try {
 
 // Dynamic auth import based on DB dialect
 const isPostgres = config.database.dialect === 'postgres';
-let auth: any = null;
 let authMiddleware: any = null;
 
 if (isPostgres) {
-  // PostgreSQL: Better Auth with OAuth
-  const betterAuth = await import('@synap/auth');
-  auth = betterAuth.auth;
-  authMiddleware = betterAuth.authMiddleware;
+  // PostgreSQL: Ory Stack (Kratos + Hydra)
+  const oryAuth = await import('@synap/auth');
+  authMiddleware = oryAuth.authMiddleware; // Uses orySessionMiddleware for session-based auth
 } else {
-  // SQLite: Simple token auth
-  const simpleAuth = await import('@synap/auth');
-  authMiddleware = simpleAuth.authMiddleware;
+  // SQLite: Simple token auth (not implemented in PostgreSQL-only version)
+  // For SQLite mode, we would need to implement simple token auth
+  // For now, PostgreSQL-only version uses Ory
+  throw new Error('SQLite mode not supported in PostgreSQL-only version');
 }
 
 const app = new Hono();
@@ -122,7 +122,7 @@ app.get('/health', (c) => {
     timestamp: new Date().toISOString(),
     version: isPostgres ? '0.2.0-saas' : '0.1.0-local',
     mode: isPostgres ? 'multi-user' : 'single-user',
-    auth: isPostgres ? 'better-auth' : 'static-token',
+    auth: isPostgres ? 'ory-stack' : 'static-token',
   });
 });
 
@@ -135,14 +135,60 @@ app.get('/metrics', async (c) => {
   });
 });
 
-// Better Auth routes (PostgreSQL only)
-if (isPostgres && auth) {
-  // Handle all Better Auth routes: /api/auth/sign-in, /api/auth/sign-up, etc.
-  app.all('/api/auth/*', async (c) => {
-    return auth.handler(c.req.raw);
+// Ory Kratos routes (PostgreSQL only)
+// Kratos handles its own routes via public API
+// We proxy the necessary endpoints for browser-based flows
+if (isPostgres) {
+  // Proxy Kratos self-service flows
+  app.get('/self-service/*', async (c) => {
+    const path = c.req.path.replace('/self-service', '');
+    try {
+      // Forward request to Kratos public API
+      const response = await fetch(`${process.env.KRATOS_PUBLIC_URL || 'http://localhost:4433'}${path}`, {
+        method: c.req.method,
+        headers: {
+          'Cookie': c.req.header('cookie') || '',
+        },
+      });
+      
+      return new Response(response.body, {
+        status: response.status,
+        headers: response.headers,
+      });
+    } catch (error) {
+      apiLogger.error({ err: error, path }, 'Error proxying Kratos request');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
   });
 
-  apiLogger.info('Better Auth routes enabled at /api/auth/*');
+  // Token Exchange endpoint (for websites with external providers)
+  app.post('/api/auth/token-exchange', async (c) => {
+    try {
+      const body = await c.req.json();
+      const { exchangeToken } = await import('@synap/auth');
+      
+      const result = await exchangeToken({
+        subject_token: body.subject_token,
+        subject_token_type: body.subject_token_type || 'urn:ietf:params:oauth:token-type:access_token',
+        client_id: body.client_id,
+        client_secret: body.client_secret,
+        requested_token_type: body.requested_token_type || 'urn:ietf:params:oauth:token-type:access_token',
+        scope: body.scope,
+      });
+      
+      if (!result) {
+        return c.json({ error: 'Token exchange failed' }, 400);
+      }
+      
+      return c.json(result);
+    } catch (error) {
+      apiLogger.error({ err: error }, 'Error in token exchange');
+      return c.json({ error: 'Token exchange failed' }, 500);
+    }
+  });
+
+  apiLogger.info('Ory Kratos routes enabled at /self-service/*');
+  apiLogger.info('Token Exchange endpoint enabled at /api/auth/token-exchange');
 }
 
 // SSE endpoint for real-time event streaming (admin dashboard)

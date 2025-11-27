@@ -140,9 +140,9 @@ export const getCorsOrigins = () => {
     'http://localhost:3001',  // Alternative port
   ];
 
-  // Add production origin
-  if (process.env.BETTER_AUTH_URL) {
-    origins.push(process.env.BETTER_AUTH_URL);
+  // Add production origin from Kratos UI URL
+  if (process.env.KRATOS_UI_URL) {
+    origins.push(process.env.KRATOS_UI_URL);
   }
 
   return origins;

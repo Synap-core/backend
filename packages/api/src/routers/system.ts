@@ -13,7 +13,9 @@ import { z } from 'zod';
 import { publicProcedure, router } from '../trpc.js';
 import { getAllEventTypes, EventTypeSchemas } from '@synap/types';
 import { handlerRegistry, inngest } from '@synap/jobs';
-import { dynamicToolRegistry } from '@synap/ai';
+// NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)
+// Tools are now managed by Intelligence Hub
+// import { dynamicToolRegistry } from '@synap/ai';
 import { dynamicRouterRegistry } from '../router-registry.js';
 import { createSynapEvent } from '@synap/types';
 import { eventRepository } from '@synap/database';
@@ -50,6 +52,10 @@ export const systemRouter = router({
     });
 
     // Get all tools
+    // NOTE: Tools are now managed by Intelligence Hub (proprietary)
+    // Tools are no longer available in the open-source Data Pod
+    const tools: Array<{ name: string; description?: string; version: string; source: string }> = [];
+    /*
     const toolsStats = dynamicToolRegistry.getStats();
     const tools = dynamicToolRegistry.getAllTools().map((tool: { name: string; description?: string }) => {
       const metadata = dynamicToolRegistry.getToolMetadata(tool.name);
@@ -60,6 +66,7 @@ export const systemRouter = router({
         source: metadata?.source || 'unknown',
       };
     });
+    */
 
     // Get all routers
     const routersStats = dynamicRouterRegistry.getStats();
@@ -84,10 +91,10 @@ export const systemRouter = router({
       stats: {
         totalEventTypes: eventTypes.length,
         totalHandlers: handlers.reduce((acc: number, h: { handlers: unknown[] }) => acc + h.handlers.length, 0),
-        totalTools: toolsStats.totalTools,
+        totalTools: 0, // Tools are now in Intelligence Hub
         totalRouters: routersStats.totalRouters,
         connectedSSEClients: sseStats.totalClients,
-        toolsBySource: toolsStats.toolsBySource,
+        toolsBySource: {}, // Tools are now in Intelligence Hub
         routersBySource: routersStats.routersBySource,
       },
     };

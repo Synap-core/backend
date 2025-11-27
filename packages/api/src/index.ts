@@ -3,6 +3,13 @@
  */
 
 import './event-publisher.js';
+import { initializePlugins } from './plugins/init.js';
+
+// Initialize plugins at module load
+// This ensures plugins are registered before the app router is built
+initializePlugins().catch((error) => {
+  console.error('Failed to initialize plugins:', error);
+});
 export * from './trpc.js';
 export * from './context.js';
 export { eventsRouter } from './routers/events.js';
@@ -52,6 +59,15 @@ export {
   getRouter,
   buildAppRouter,
 } from './router-registry.js';
+
+// Re-export plugin system
+export {
+  pluginManager,
+  intelligenceHubPlugin,
+  type DataPodPlugin,
+  type ThoughtInput,
+  type ThoughtResponse,
+} from './plugins/index.js';
 
 // Explicit re-export for server
 export { createContext };

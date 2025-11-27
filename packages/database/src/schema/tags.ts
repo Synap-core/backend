@@ -1,61 +1,29 @@
 /**
  * Tags Schema - For organizing entities
  * 
- * Multi-dialect compatible (SQLite + PostgreSQL)
+ * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
-import { randomUUID } from 'crypto';
-import * as pgCore from 'drizzle-orm/pg-core';
-import * as sqliteCore from 'drizzle-orm/sqlite-core';
+import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
 
-const isPostgres = process.env.DB_DIALECT === 'postgres';
-
-let tags: any;
-
-if (isPostgres) {
-  // PostgreSQL schema
-  const { pgTable, uuid, text, timestamp } = pgCore;
+export const tags = pgTable('tags', {
+  // Primary key
+  id: uuid('id').defaultRandom().primaryKey(),
   
-  tags = pgTable('tags', {
-    // Primary key
-    id: uuid('id').defaultRandom().primaryKey(),
-    
-    // **NEW for Multi-User**: Which user owns this tag?
-    userId: text('user_id').notNull(),
-    
-    // Tag name (unique per user)
-    name: text('name').notNull(),
-    
-    // Display color
-    color: text('color'),
-    
-    // Timestamps
-    createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  });
-} else {
-  // SQLite schema (single-user, no userId)
-  const { sqliteTable, text, integer } = sqliteCore;
+  // Which user owns this tag?
+  userId: text('user_id').notNull(),
   
-  tags = sqliteTable('tags', {
-    // Primary key
-    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-    
-    // Tag name
-    name: text('name').notNull(),
-    
-    // Display color
-    color: text('color'),
-    
-    // Timestamps (Unix timestamps in ms)
-    createdAt: integer('created_at', { mode: 'timestamp_ms' })
-      .$defaultFn(() => new Date())
-      .notNull(),
-  });
-}
-
-export { tags };
+  // Tag name (unique per user)
+  name: text('name').notNull(),
+  
+  // Display color
+  color: text('color'),
+  
+  // Timestamps
+  createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
 
 export type Tag = typeof tags.$inferSelect;
 export type NewTag = typeof tags.$inferInsert;

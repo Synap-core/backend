@@ -19,7 +19,9 @@
 import { IEventHandler, type InngestStep, type HandlerResult } from './interface.js';
 import { createSynapEvent, EventTypes, type SynapEvent } from '@synap/types';
 import { conversationService, MessageRoleSchema } from '@synap/domain';
-import { runSynapAgent } from '@synap/ai';
+// NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)
+// Agent execution is now handled by Intelligence Hub via Hub Protocol
+// import { runSynapAgent } from '@synap/ai';
 import { inngest } from '../client.js';
 import { createLogger } from '@synap/core';
 import { randomUUID } from 'crypto';
@@ -75,7 +77,11 @@ export class ConversationMessageHandler implements IEventHandler {
       });
 
       // Step 2: Run Synap agent to generate response
+      // NOTE: Agent execution is now handled by Intelligence Hub via Hub Protocol
+      // This handler is disabled as @synap/ai has been moved to synap-intelligence-hub
+      logger.warn({ threadId }, 'Conversation handler disabled - use Intelligence Hub via Hub Protocol');
       let agentState = null;
+      /*
       try {
         agentState = await step.run('run-synap-agent', async () => {
           const result = await runSynapAgent({
@@ -90,6 +96,7 @@ export class ConversationMessageHandler implements IEventHandler {
         logger.error({ err: error, threadId }, 'Synap agent invocation failed');
         // Continue with fallback response
       }
+      */
 
       // Step 3: Append assistant response to conversation
       const assistantResponse = agentState?.response ?? NO_RESPONSE_FALLBACK;

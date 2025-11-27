@@ -9,7 +9,7 @@
 import { router, protectedProcedure } from '../trpc.js';
 import { z } from 'zod';
 import { apiKeyService } from '../services/api-keys.js';
-import { API_KEY_SCOPES } from '@synap/database/schema';
+import { API_KEY_SCOPES, ApiKeyScope } from '@synap/database';
 import { TRPCError } from '@trpc/server';
 
 /**
@@ -17,7 +17,7 @@ import { TRPCError } from '@trpc/server';
  */
 const CreateApiKeyInputSchema = z.object({
   keyName: z.string().min(1, 'Key name is required').max(100, 'Key name too long'),
-  scope: z.array(z.enum(API_KEY_SCOPES as [string, ...string[]])).min(1, 'At least one scope required'),
+  scope: z.array(z.enum([...API_KEY_SCOPES] as [string, ...string[]])).min(1, 'At least one scope required'),
   hubId: z.string().optional(),
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
@@ -54,7 +54,7 @@ export const apiKeysRouter = router({
         const { key, keyId } = await apiKeyService.generateApiKey(
           ctx.userId,
           input.keyName,
-          input.scope,
+          input.scope as ApiKeyScope[],
           input.hubId,
           input.expiresInDays
         );

@@ -1,15 +1,38 @@
 {
   "name": "@synap/auth",
-  "version": "1.0.0",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
   "dependencies": {
-    "better-auth": "^1.3.34",
-    "hono": "^4.0.0",
-    "drizzle-orm": "^0.33.0",
-    "@neondatabase/serverless": "^0.9.0"
+    "@ory/hydra-client": "^2.2.1",
+    "@ory/kratos-client": "^1.3.8",
+    "hono": "^4.0.0"
   },
   "devDependencies": {
     "typescript": "^5.3.3"
-  }
+  },
+  "keywords": [
+    "synap",
+    "auth",
+    "ory",
+    "kratos",
+    "hydra"
+  ],
+  "license": "MIT"
 }

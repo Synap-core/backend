@@ -92,7 +92,7 @@ async function handleEntityCreated(data: EventDataWithUser) {
   if (tagNames && tagNames.length > 0) {
     for (const tagName of tagNames) {
       // Find existing tag FOR THIS USER
-      // Type assertions needed due to dynamic schema (SQLite vs PostgreSQL)
+      // Type assertions for Drizzle ORM compatibility
       const existingTagsQuery = db.select().from(tags) as any;
       const existingTags: any[] = await existingTagsQuery.where(eq((tags as any).userId, userId)).all();
         

@@ -1,7 +1,9 @@
 import { inngest } from '../client.js';
 import { storage } from '@synap/storage';
 import { vectorService } from '@synap/domain';
-import { generateEmbedding } from '@synap/ai';
+// NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)
+// Embedding generation is now handled by Intelligence Hub via Hub Protocol
+// import { generateEmbedding } from '@synap/ai';
 import { createLogger } from '@synap/core';
 
 // Lazy load config to avoid circular dependencies
@@ -84,6 +86,11 @@ export const processEntityCreatedEvent = async (
     return { status: 'skipped', reason: 'empty-content' };
   }
 
+  // NOTE: Embedding generation is now handled by Intelligence Hub via Hub Protocol
+  // This function is disabled as @synap/ai has been moved to synap-intelligence-hub
+  logger.warn({ entityId: payload.entityId }, 'Entity embedding disabled - use Intelligence Hub via Hub Protocol');
+  throw new Error('Embedding generation is now handled by Intelligence Hub. Please use Hub Protocol.');
+  /*
   const embeddingResult = await step.run('generate-embedding', async () => {
     const vector = await generateEmbedding(content);
     if (!Array.isArray(vector) || vector.length === 0) {
@@ -93,6 +100,7 @@ export const processEntityCreatedEvent = async (
     return vector;
   });
   const embedding = embeddingResult as number[];
+  */
 
   await step.run('store-embedding', async () => {
     await vectorService.upsertEntityEmbedding({

@@ -161,11 +161,11 @@ More content here.`;
       expect(vector.entityId).toBe(testEntityId);
       expect(vector.embedding).toBeTruthy();
       
-      // Verify embedding is an array (for SQLite) or vector type (for PostgreSQL)
-      if (typeof vector.embedding === 'string') {
-        const embeddingArray = JSON.parse(vector.embedding);
-        expect(Array.isArray(embeddingArray)).toBe(true);
-        expect(embeddingArray.length).toBeGreaterThan(0);
+      // Verify embedding is a vector type (PostgreSQL pgvector)
+      // Note: pgvector returns embeddings as arrays in Drizzle ORM
+      expect(vector.embedding).toBeTruthy();
+      if (Array.isArray(vector.embedding)) {
+        expect(vector.embedding.length).toBeGreaterThan(0);
       }
     } else {
       // Embedding may not be generated yet (async workflow)

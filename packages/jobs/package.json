@@ -11,6 +11,10 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -18,7 +22,6 @@
   },
   "dependencies": {
     "inngest": "^3.15.0",
-    "@synap/ai": "workspace:*",
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/domain": "workspace:*",

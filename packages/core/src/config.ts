@@ -23,6 +23,7 @@ const configLogger = createLogger({ module: 'config' });
 // ============================================================================
 
 const DatabaseConfigSchema = z.object({
+  dialect: z.enum(['postgres']).default('postgres'),
   url: z.string({
     required_error: 'DATABASE_URL is required (PostgreSQL connection string)',
   }),
@@ -80,10 +81,13 @@ const AIConfigSchema = z.object({
 });
 
 const AuthConfigSchema = z.object({
-  betterAuthSecret: z.string().optional(),
-  betterAuthUrl: z.string().optional(),
-  simpleToken: z.string().optional(),
-  // OAuth (optional)
+  // Ory Stack
+  kratosPublicUrl: z.string().optional(),
+  kratosAdminUrl: z.string().optional(),
+  hydraPublicUrl: z.string().optional(),
+  hydraAdminUrl: z.string().optional(),
+  hydraSecretsSystem: z.string().optional(),
+  // OAuth Providers (optional)
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
   githubClientId: z.string().optional(),
@@ -103,6 +107,13 @@ const InngestConfigSchema = z.object({
   baseUrl: z.string().optional(),
 });
 
+const Mem0ConfigSchema = z.object({
+  apiUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+  dbPassword: z.string().optional(),
+  logLevel: z.string().optional(),
+});
+
 const ConfigSchema = z.object({
   database: DatabaseConfigSchema,
   storage: StorageConfigSchema,
@@ -110,6 +121,7 @@ const ConfigSchema = z.object({
   auth: AuthConfigSchema,
   server: ServerConfigSchema,
   inngest: InngestConfigSchema,
+  mem0: Mem0ConfigSchema,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -122,6 +134,7 @@ export type AIConfig = z.infer<typeof AIConfigSchema>;
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type InngestConfig = z.infer<typeof InngestConfigSchema>;
+export type Mem0Config = z.infer<typeof Mem0ConfigSchema>;
 
 // ============================================================================
 // CONFIGURATION LOADER
@@ -147,6 +160,7 @@ function loadConfig(): Config {
     
     const rawConfig = {
       database: {
+        dialect: 'postgres' as const,
         url: process.env.DATABASE_URL,
       },
       storage: {
@@ -196,9 +210,13 @@ function loadConfig(): Config {
         },
       },
       auth: {
-        betterAuthSecret: process.env.BETTER_AUTH_SECRET,
-        betterAuthUrl: process.env.BETTER_AUTH_URL,
-        simpleToken: process.env.SYNAP_SECRET_TOKEN,
+        // Ory Stack
+        kratosPublicUrl: process.env.KRATOS_PUBLIC_URL,
+        kratosAdminUrl: process.env.KRATOS_ADMIN_URL,
+        hydraPublicUrl: process.env.HYDRA_PUBLIC_URL,
+        hydraAdminUrl: process.env.HYDRA_ADMIN_URL,
+        hydraSecretsSystem: process.env.ORY_HYDRA_SECRETS_SYSTEM,
+        // OAuth Providers
         googleClientId: process.env.GOOGLE_CLIENT_ID,
         googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
         githubClientId: process.env.GITHUB_CLIENT_ID,
@@ -214,6 +232,12 @@ function loadConfig(): Config {
         eventKey: process.env.INNGEST_EVENT_KEY,
         signingKey: process.env.INNGEST_SIGNING_KEY,
         baseUrl: process.env.INNGEST_BASE_URL,
+      },
+      mem0: {
+        apiUrl: process.env.MEM0_API_URL,
+        apiKey: process.env.MEM0_API_KEY,
+        dbPassword: process.env.MEM0_DB_PASSWORD,
+        logLevel: process.env.MEM0_LOG_LEVEL,
       },
     };
 
@@ -279,7 +303,7 @@ if (typeof globalThis !== 'undefined') {
 /**
  * Validate required configuration for specific features
  * 
- * @param feature - Feature name (e.g., 'r2', 'better-auth', 'ai')
+ * @param feature - Feature name (e.g., 'r2', 'ory', 'ai', 'postgres')
  * @throws Error if required configuration is missing
  * 
  * @example
@@ -288,7 +312,7 @@ if (typeof globalThis !== 'undefined') {
  * // Throws if R2 credentials are missing
  * ```
  */
-export function validateConfig(feature: 'r2' | 'better-auth' | 'ai' | 'postgres'): void {
+export function validateConfig(feature: 'r2' | 'ory' | 'ai' | 'postgres' | 'mem0'): void {
   switch (feature) {
     case 'r2':
       if (!config.storage.r2AccountId || !config.storage.r2AccessKeyId || !config.storage.r2SecretAccessKey) {
@@ -298,9 +322,16 @@ export function validateConfig(feature: 'r2' | 'better-auth' | 'ai' | 'postgres'
       }
       break;
 
-    case 'better-auth':
-      if (!config.auth.betterAuthSecret) {
-        throw new Error('Better Auth requires BETTER_AUTH_SECRET environment variable');
+    case 'ory':
+      if (!config.auth.kratosPublicUrl || !config.auth.hydraPublicUrl) {
+        throw new Error(
+          'Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables'
+        );
+      }
+      if (!config.auth.hydraSecretsSystem) {
+        throw new Error(
+          'Ory Hydra requires ORY_HYDRA_SECRETS_SYSTEM environment variable'
+        );
       }
       break;
 
@@ -325,6 +356,15 @@ export function validateConfig(feature: 'r2' | 'better-auth' | 'ai' | 'postgres'
     case 'postgres':
       if (!config.database.url) {
         throw new Error('PostgreSQL requires DATABASE_URL environment variable');
+      }
+      break;
+
+    case 'mem0':
+      if (!config.mem0.apiKey) {
+        throw new Error('Mem0 requires MEM0_API_KEY environment variable');
+      }
+      if (!config.mem0.apiUrl) {
+        throw new Error('Mem0 requires MEM0_API_URL environment variable');
       }
       break;
   }

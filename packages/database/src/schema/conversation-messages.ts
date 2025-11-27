@@ -1,75 +1,47 @@
+/**
+ * Conversation Messages Schema
+ * 
+ * Stores conversation messages with hash chain for integrity.
+ * 
+ * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
+ */
+
 import type { ConversationMessageMetadata } from '@synap/core';
-import * as pgCore from 'drizzle-orm/pg-core';
-import * as sqliteCore from 'drizzle-orm/sqlite-core';
-import { randomUUID } from 'crypto';
+import { pgTable, uuid, text, timestamp, jsonb } from 'drizzle-orm/pg-core';
 
-const isPostgres = process.env.DB_DIALECT === 'postgres';
-
-let conversationMessages: any;
-
-if (isPostgres) {
-  // PostgreSQL schema
-  const { pgTable, uuid, text, timestamp, jsonb } = pgCore;
+export const conversationMessages = pgTable('conversation_messages', {
+  // Identity
+  id: uuid('id').defaultRandom().primaryKey(),
   
-  conversationMessages = pgTable('conversation_messages', {
-    // Identity
-    id: uuid('id').defaultRandom().primaryKey(),
-    
-    // Thread management
-    threadId: uuid('thread_id').notNull(), // Conversation thread
-    parentId: uuid('parent_id'),           // Parent message (for branching)
-    
-    // Message content
-    role: text('role', { 
-      enum: ['user', 'assistant', 'system'] 
-    }).notNull(),
-    content: text('content').notNull(),
-    
-    // Metadata (AI suggestions, sources, etc.)
-    metadata: jsonb('metadata').$type<ConversationMessageMetadata | null>(),
-    
-    // Ownership
-    userId: text('user_id').notNull(),
-    
-    // Timestamps
-    timestamp: timestamp('timestamp', { mode: 'date', withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    
-    // Hash chain (blockchain-like integrity)
-    previousHash: text('previous_hash'), // Hash of parent message
-    hash: text('hash').notNull(),        // SHA256 of this message
-    
-    // Soft delete
-    deletedAt: timestamp('deleted_at', { mode: 'date', withTimezone: true }),
-  });
-} else {
-  // SQLite schema (single-user, no hash chain needed)
-  const { sqliteTable, text, integer } = sqliteCore;
+  // Thread management
+  threadId: uuid('thread_id').notNull(), // Conversation thread
+  parentId: uuid('parent_id'),           // Parent message (for branching)
   
-  conversationMessages = sqliteTable('conversation_messages', {
-    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-    threadId: text('thread_id').notNull(),
-    parentId: text('parent_id'),
-    
-    role: text('role', { enum: ['user', 'assistant', 'system'] }).notNull(),
-    content: text('content').notNull(),
-    metadata: text('metadata', { mode: 'json' }).$type<ConversationMessageMetadata | null>(),
-    
-    userId: text('user_id').notNull(),
-    
-    timestamp: integer('timestamp', { mode: 'timestamp_ms' })
-      .$defaultFn(() => new Date())
-      .notNull(),
-    
-    previousHash: text('previous_hash'),
-    hash: text('hash').notNull(),
-    
-    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
-  });
-}
+  // Message content
+  role: text('role', { 
+    enum: ['user', 'assistant', 'system'] 
+  }).notNull(),
+  content: text('content').notNull(),
+  
+  // Metadata (AI suggestions, sources, etc.)
+  metadata: jsonb('metadata').$type<ConversationMessageMetadata | null>(),
+  
+  // Ownership
+  userId: text('user_id').notNull(),
+  
+  // Timestamps
+  timestamp: timestamp('timestamp', { mode: 'date', withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  
+  // Hash chain (blockchain-like integrity)
+  previousHash: text('previous_hash'), // Hash of parent message
+  hash: text('hash').notNull(),        // SHA256 of this message
+  
+  // Soft delete
+  deletedAt: timestamp('deleted_at', { mode: 'date', withTimezone: true }),
+});
 
-export { conversationMessages };
 
 // Note: Main types exported from conversation-repository.ts to avoid conflicts
 export type ConversationMessageRow = typeof conversationMessages.$inferSelect;

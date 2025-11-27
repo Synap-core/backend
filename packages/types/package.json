@@ -11,6 +11,10 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "tsx --test src/**/*.test.ts"
@@ -23,6 +27,12 @@
     "@types/node": "^20.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
-  }
+  },
+  "keywords": [
+    "synap",
+    "types",
+    "typescript"
+  ],
+  "license": "MIT"
 }
 

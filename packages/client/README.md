@@ -216,12 +216,12 @@ const synap = new SynapClient({
 });
 ```
 
-### Static Token (SQLite mode)
+### Ory Kratos Session (PostgreSQL mode)
 
 ```typescript
 const synap = new SynapClient({
   url: 'http://localhost:3000',
-  token: process.env.SYNAP_SECRET_TOKEN,
+  // Authentication handled via Ory Kratos session cookies
 });
 ```
 

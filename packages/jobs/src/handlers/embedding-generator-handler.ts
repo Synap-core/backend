@@ -18,7 +18,9 @@ import { IEventHandler, type InngestStep, type HandlerResult } from './interface
 import { type SynapEvent } from '@synap/types';
 import { storage } from '@synap/storage';
 import { vectorService } from '@synap/domain';
-import { generateEmbedding } from '@synap/ai';
+// NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)
+// Embedding generation is now handled by Intelligence Hub via Hub Protocol
+// import { generateEmbedding } from '@synap/ai';
 import { createLogger, config, ValidationError, InternalServerError } from '@synap/core';
 
 const logger = createLogger({ module: 'embedding-generator-handler' });
@@ -74,6 +76,14 @@ export class EmbeddingGeneratorHandler implements IEventHandler {
       });
 
       // Step 2: Generate embedding
+      // NOTE: Embedding generation is now handled by Intelligence Hub via Hub Protocol
+      // This handler is disabled as @synap/ai has been moved to synap-intelligence-hub
+      logger.warn({ entityId }, 'Embedding generation disabled - use Intelligence Hub via Hub Protocol');
+      throw new InternalServerError(
+        'Embedding generation is now handled by Intelligence Hub. Please use Hub Protocol.',
+        { entityId }
+      );
+      /*
       const embedding = await step.run('generate-embedding', async () => {
         try {
           const vector = await generateEmbedding(content);
@@ -87,6 +97,7 @@ export class EmbeddingGeneratorHandler implements IEventHandler {
           throw error;
         }
       });
+      */
 
       // Step 3: Store embedding in entity_vectors table
       await step.run('store-embedding', async () => {

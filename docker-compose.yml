@@ -1,6 +1,6 @@
 # Synap Backend - Development Environment
 # PostgreSQL with pgvector + TimescaleDB
-version: '3.8'
+# Note: version is obsolete in Docker Compose v2+, but kept for compatibility
 
 services:
   # PostgreSQL with TimescaleDB + pgvector
@@ -64,12 +64,189 @@ services:
     networks:
       - synap-network
 
+  # PostgreSQL for Ory (separate from main postgres)
+  postgres-ory:
+    image: postgres:15-alpine
+    container_name: synap-postgres-ory
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ory
+      POSTGRES_USER: ory
+      POSTGRES_PASSWORD: ${ORY_DB_PASSWORD:-ory_dev_password}
+    ports:
+      - "5433:5432"
+    volumes:
+      - ory_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synap-network
+
+  # Ory Kratos - Identity Provider
+  kratos:
+    image: oryd/kratos:v1.0.0
+    container_name: synap-kratos
+    restart: unless-stopped
+    ports:
+      - "4433:4433" # Public API
+      - "4434:4434" # Admin API
+    environment:
+      DSN: postgres://ory:${ORY_DB_PASSWORD:-ory_dev_password}@postgres-ory:5432/ory?sslmode=disable
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      KRATOS_PUBLIC_URL: ${KRATOS_PUBLIC_URL:-http://localhost:4433}
+      KRATOS_ADMIN_URL: ${KRATOS_ADMIN_URL:-http://localhost:4434}
+      KRATOS_UI_URL: ${KRATOS_UI_URL:-http://localhost:3000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+    volumes:
+      - ./kratos:/etc/config/kratos
+    command: serve -c /etc/config/kratos/kratos.yml
+    depends_on:
+      postgres-ory:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4433/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synap-network
+
+  # Ory Hydra - OAuth2 Server
+  hydra:
+    image: oryd/hydra:v2.0.0
+    container_name: synap-hydra
+    restart: unless-stopped
+    ports:
+      - "4444:4444" # Public API
+      - "4445:4445" # Admin API
+    environment:
+      DSN: postgres://ory:${ORY_DB_PASSWORD:-ory_dev_password}@postgres-ory:5432/ory?sslmode=disable
+      URLS_SELF_ISSUER: ${ORY_HYDRA_ISSUER_URL:-http://localhost:4444}
+      URLS_CONSENT: ${ORY_CONSENT_URL:-http://localhost:3000/consent}
+      URLS_LOGIN: ${ORY_LOGIN_URL:-http://localhost:3000/login}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM:-please-change-this-secret-key-in-production}
+    volumes:
+      - ./hydra:/etc/config/hydra
+    command: serve all -c /etc/config/hydra/hydra.yml
+    depends_on:
+      postgres-ory:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4444/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synap-network
+
+  # PostgreSQL for Mem0 (separate from main postgres)
+  postgres-mem0:
+    image: postgres:15-alpine
+    container_name: synap-postgres-mem0
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mem0
+      POSTGRES_USER: mem0
+      POSTGRES_PASSWORD: ${MEM0_DB_PASSWORD:-mem0_dev_password}
+    ports:
+      - "5434:5432"
+    volumes:
+      - mem0_db_data:/var/lib/postgresql/data
+      - ./scripts/init-mem0-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mem0"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - synap-network
+
+  # Mem0 - Super Memory System
+  mem0:
+    image: mem0ai/mem0:latest
+    container_name: synap-mem0
+    restart: unless-stopped
+    ports:
+      - "8765:8765" # API Server
+    environment:
+      - MEM0_DATABASE_URL=postgresql://mem0:${MEM0_DB_PASSWORD:-mem0_dev_password}@postgres-mem0:5432/mem0?sslmode=disable
+      - MEM0_API_KEY=${MEM0_API_KEY:-change-me-in-production}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MEM0_LOG_LEVEL=${MEM0_LOG_LEVEL:-info}
+    depends_on:
+      postgres-mem0:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - synap-network
+
+  # API Server (Synap Backend)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: synap-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-synap_dev_password}@postgres:5432/synap
+      - KRATOS_PUBLIC_URL=http://kratos:4433
+      - KRATOS_ADMIN_URL=http://kratos:4434
+      - HYDRA_PUBLIC_URL=http://hydra:4444
+      - HYDRA_ADMIN_URL=http://hydra:4445
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - MINIO_BUCKET_NAME=synap-storage
+      - REDIS_URL=redis://redis:6379
+      - MEM0_API_URL=http://mem0:8765
+      - MEM0_API_KEY=${MEM0_API_KEY:-change-me-in-production}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - INNGEST_EVENT_KEY=${INNGEST_EVENT_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kratos:
+        condition: service_healthy
+      hydra:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      mem0:
+        condition: service_healthy
+    networks:
+      - synap-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
 volumes:
   postgres_data:
     driver: local
   minio_data:
     driver: local
   redis_data:
+    driver: local
+  ory_db_data:
+    driver: local
+  mem0_db_data:
     driver: local
 
 networks:
@@ -88,8 +265,13 @@ networks:
 #
 # Connection strings:
 # - PostgreSQL: postgresql://postgres:synap_dev_password@localhost:5432/synap
+# - PostgreSQL Ory: postgresql://ory:ory_dev_password@localhost:5433/ory
+# - PostgreSQL Mem0: postgresql://mem0:mem0_dev_password@localhost:5434/mem0
 # - MinIO: http://localhost:9000 (console: http://localhost:9001)
 # - Redis: redis://localhost:6379
+# - Kratos Public: http://localhost:4433 (Admin: http://localhost:4434)
+# - Hydra Public: http://localhost:4444 (Admin: http://localhost:4445)
+# - Mem0 API: http://localhost:8765
 #
 # Stop services: docker compose down
 # Stop and remove volumes: docker compose down -v

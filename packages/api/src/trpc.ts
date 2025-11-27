@@ -2,7 +2,7 @@
  * tRPC Initialization - Phase 4: CQRS API Layer
  * 
  * Implements:
- * - Protected procedures with Better Auth + RLS
+ * - Protected procedures with Ory Kratos + RLS
  * - Command procedures (publish events)
  * - Query procedures (read from projections)
  */
@@ -43,12 +43,9 @@ export const protectedProcedure = t.procedure.use(async (opts) => {
   // Phase 4: Set RLS for PostgreSQL
   if (isPostgres) {
     try {
-      const { getSetCurrentUserFunction } = await import('@synap/database');
-      const setCurrentUser = await getSetCurrentUserFunction();
-      if (setCurrentUser) {
-        await setCurrentUser(userId);
-        logger.debug({ userId }, 'RLS current user set for tRPC request');
-      }
+      const { setCurrentUser } = await import('@synap/database');
+      await setCurrentUser(userId);
+      logger.debug({ userId }, 'RLS current user set for tRPC request');
     } catch (error) {
       logger.error({ err: error, userId }, 'Failed to set RLS current user');
       // Don't fail the request, but log the error

@@ -11,6 +11,12 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "migrations-custom",
+    "migrations-drizzle"
+  ],
   "scripts": {
     "build": "tsc",
     "db:migrate": "tsx scripts/migrate.ts",
