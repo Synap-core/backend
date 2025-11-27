@@ -12,11 +12,12 @@
 // This function has been moved to synap-intelligence-hub
 // import { inngest } from '../client.js';
 // import { runIngestionEngine } from '@synap/intelligence-hub';
-import { getEventRepository } from '@synap/database';
-import { createLogger } from '@synap/core';
-import type { SynapEvent } from '@synap/types';
+// NOTE: These imports are kept for reference but not used
+// import { getEventRepository } from '@synap/database';
+// import { createLogger } from '@synap/core';
+// import type { SynapEvent } from '@synap/types';
 
-const logger = createLogger({ module: 'ingestion-engine-worker' });
+// const logger = createLogger({ module: 'ingestion-engine-worker' });
 
 /**
  * Ingestion Engine Worker

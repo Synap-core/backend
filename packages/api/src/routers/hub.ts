@@ -58,6 +58,12 @@ const SubmitInsightInputSchema = z.object({
   insight: z.any(),
 });
 
+const SemanticSearchInputSchema = z.object({
+  token: z.string().min(1, 'Token is required'),
+  query: z.string().min(1, 'Query is required'),
+  limit: z.number().int().min(1).max(100).default(10),
+});
+
 const hubTokenMiddleware = middleware(async (opts) => {
   const { input, ctx } = opts;
   const token = (input as { token?: string })?.token;
@@ -373,5 +379,70 @@ export const hubRouter = router({
         eventsCreated: eventIds.length,
         errors: errors.length > 0 ? errors : undefined,
       };
+    }),
+
+  /**
+   * Semantic Search
+   * 
+   * Performs semantic search using vector embeddings.
+   * This endpoint is used by Intelligence Hub to search user data semantically.
+   * 
+   * Flow:
+   * 1. Generate embedding from query text (using @synap/ai-embeddings)
+   * 2. Search entities by embedding similarity (using vectorService)
+   * 3. Return results with relevance scores
+   */
+  semanticSearch: hubTokenProcedure
+    .input(SemanticSearchInputSchema)
+    .query(async ({ ctx, input }) => {
+      const tokenPayload = ctx.hubToken as HubTokenPayload;
+      const { userId, requestId } = tokenPayload;
+      const { query, limit } = input;
+
+      logger.info({ userId, requestId, queryLength: query.length, limit }, 'Hub semantic search request');
+
+      try {
+        // Step 1: Generate embedding from query text
+        const { generateEmbedding } = await import('@synap/ai-embeddings');
+        const embedding = await generateEmbedding(query);
+
+        // Step 2: Search entities by embedding similarity
+        const { vectorService } = await import('@synap/domain');
+        const results = await vectorService.searchByEmbedding({
+          userId,
+          embedding,
+          limit,
+        });
+
+        // Step 3: Transform results to match SemanticSearchResult format
+        const searchResults = results.map((result) => ({
+          entityId: result.entityId,
+          title: result.title || 'Untitled',
+          type: result.entityType,
+          preview: result.preview || undefined,
+          fileUrl: result.fileUrl || undefined,
+          relevanceScore: result.relevanceScore,
+        }));
+
+        await logHubAccess(userId, requestId, 'semantic.search', {
+          queryLength: query.length,
+          resultsCount: searchResults.length,
+        });
+
+        logger.info({ userId, requestId, resultsCount: searchResults.length }, 'Semantic search completed');
+
+        return {
+          results: searchResults,
+          query,
+          limit,
+          count: searchResults.length,
+        };
+      } catch (error) {
+        logger.error({ err: error, userId, requestId, query: query.slice(0, 50) }, 'Semantic search failed');
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: `Semantic search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
     }),
 });

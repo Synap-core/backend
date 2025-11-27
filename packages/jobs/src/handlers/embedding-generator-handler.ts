@@ -18,9 +18,7 @@ import { IEventHandler, type InngestStep, type HandlerResult } from './interface
 import { type SynapEvent } from '@synap/types';
 import { storage } from '@synap/storage';
 import { vectorService } from '@synap/domain';
-// NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)
-// Embedding generation is now handled by Intelligence Hub via Hub Protocol
-// import { generateEmbedding } from '@synap/ai';
+import { generateEmbedding } from '@synap/ai-embeddings';
 import { createLogger, config, ValidationError, InternalServerError } from '@synap/core';
 
 const logger = createLogger({ module: 'embedding-generator-handler' });
@@ -83,7 +81,6 @@ export class EmbeddingGeneratorHandler implements IEventHandler {
         'Embedding generation is now handled by Intelligence Hub. Please use Hub Protocol.',
         { entityId }
       );
-      /*
       const embedding = await step.run('generate-embedding', async () => {
         try {
           const vector = await generateEmbedding(content);
@@ -97,20 +94,16 @@ export class EmbeddingGeneratorHandler implements IEventHandler {
           throw error;
         }
       });
-      */
 
       // Step 3: Store embedding in entity_vectors table
       await step.run('store-embedding', async () => {
-        // Get entity details for denormalized fields
-        // Note: In a real implementation, we might want to fetch from entities table
-        // For now, we'll use the data from the event
         const embeddingModel = config.ai.embeddings.model;
 
         await vectorService.upsertEntityEmbedding({
           entityId,
           userId,
           entityType: 'note',
-          title: undefined, // Could be fetched from entities table if needed
+          title: undefined,
           preview: content.slice(0, 500),
           fileUrl,
           embedding,

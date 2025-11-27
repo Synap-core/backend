@@ -17,8 +17,8 @@ import { ProjectCreationHandler } from './project-creation-handler.js';
 
 // Create handler instances
 const noteCreationHandler = new NoteCreationHandler();
-// NOTE: These handlers are disabled as they use @synap/ai which has been moved to synap-intelligence-hub
-// const embeddingGeneratorHandler = new EmbeddingGeneratorHandler();
+const embeddingGeneratorHandler = new EmbeddingGeneratorHandler();
+// NOTE: Conversation handler is disabled as it uses LangGraph agents which are in Intelligence Hub
 // const conversationMessageHandler = new ConversationMessageHandler();
 const taskCreationHandler = new TaskCreationHandler();
 const taskCompletionHandler = new TaskCompletionHandler();
@@ -26,8 +26,8 @@ const projectCreationHandler = new ProjectCreationHandler();
 
 // Register handlers
 handlerRegistry.register(noteCreationHandler);
-// NOTE: Embedding and conversation handlers disabled - use Intelligence Hub via Hub Protocol
-// handlerRegistry.register(embeddingGeneratorHandler);
+handlerRegistry.register(embeddingGeneratorHandler);
+// NOTE: Conversation handler disabled - use Intelligence Hub via Hub Protocol for advanced agents
 // handlerRegistry.register(conversationMessageHandler);
 handlerRegistry.register(taskCreationHandler);
 handlerRegistry.register(taskCompletionHandler);

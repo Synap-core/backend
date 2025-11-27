@@ -80,7 +80,8 @@ export class ConversationMessageHandler implements IEventHandler {
       // NOTE: Agent execution is now handled by Intelligence Hub via Hub Protocol
       // This handler is disabled as @synap/ai has been moved to synap-intelligence-hub
       logger.warn({ threadId }, 'Conversation handler disabled - use Intelligence Hub via Hub Protocol');
-      let agentState = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const agentState: any = null;
       /*
       try {
         agentState = await step.run('run-synap-agent', async () => {
@@ -117,12 +118,12 @@ export class ConversationMessageHandler implements IEventHandler {
                     retrievedFactsCount: agentState.context.memoryFacts.length,
                   }
                 : undefined,
-              plan: agentState.plan?.actions.map((action) => ({
+              plan: agentState.plan?.actions.map((action: { tool: string; params: unknown; justification?: string }) => ({
                 tool: action.tool,
                 params: action.params,
                 reasoning: action.justification ?? agentState.plan?.reasoning ?? 'Aucune justification fournie.',
               })) ?? [],
-              executionSummaries: (agentState.execution ?? []).map((log) => ({
+              executionSummaries: (agentState.execution ?? []).map((log: { tool: string; status: string; result: unknown; errorMessage?: string }) => ({
                 tool: log.tool,
                 status: log.status,
                 result: log.result,
@@ -130,7 +131,7 @@ export class ConversationMessageHandler implements IEventHandler {
               })),
               finalResponse: agentState.response ?? NO_RESPONSE_FALLBACK,
               suggestedActions:
-                agentState.plan?.actions.map((action) => ({
+                agentState.plan?.actions.map((action: { tool: string; params: unknown; justification?: string }) => ({
                   type: action.tool,
                   description: action.justification ?? agentState.plan?.reasoning ?? 'Aucune justification fournie.',
                   params: action.params,
