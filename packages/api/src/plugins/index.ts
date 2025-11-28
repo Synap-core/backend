@@ -6,5 +6,5 @@
 
 export * from './types.js';
 export { pluginManager } from './plugin-manager.js';
-export { intelligenceHubPlugin } from './intelligence-hub-plugin.js';
+// export { intelligenceHubPlugin } from './intelligence-hub-plugin.js';
 

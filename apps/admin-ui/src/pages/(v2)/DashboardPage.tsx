@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Title, Text, Stack, Card, Group, Badge, Button, ActionIcon, Skeleton } from '@mantine/core';
+import { Title, Text, Stack, Card, Group, Button, ActionIcon } from '@mantine/core';
 import SearchModal from '../../components/search/SearchModal';
 import {
   IconActivity,
@@ -37,13 +37,15 @@ export default function DashboardPage() {
   );
 
   // Fetch recent events
-  const { data: events, refetch: refetchEvents, isLoading: isLoadingEvents } = trpc.system.getRecentEvents.useQuery(
+  const { data: recentEventsData, refetch: refetchEvents, isLoading: isLoadingEvents } = trpc.system.getRecentEvents.useQuery(
     { limit: 10 },
     {
       refetchInterval: isAutoRefreshEnabled ? 5000 : false,
       refetchOnWindowFocus: true,
     }
   );
+
+  const events = recentEventsData?.events;
 
   // Update last refresh timestamp
   useEffect(() => {
@@ -338,7 +340,7 @@ export default function DashboardPage() {
             </Text>
           ) : (
             <VirtualizedEventList
-              events={events}
+              events={events.map(e => ({ ...e, eventId: e.id, eventType: e.type }))}
               onEventClick={(eventId) => navigate(`/investigate?eventId=${encodeURIComponent(eventId)}`)}
               onPublishSimilar={(event) => {
                 // Navigate to event publisher with pre-filled data

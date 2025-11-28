@@ -271,6 +271,12 @@ app.use(
   })
 );
 
+// Hub Protocol receiver endpoint (for Intelligence Hub insights)
+// Protected with OAuth2 client credentials authentication
+const { hubInsightsRouter } = await import('./routes/hub-insights.js');
+app.use('/hub/*', authMiddleware); // Require OAuth2 token
+app.route('/', hubInsightsRouter);
+
 // 404 handler
 app.notFound((c) => {
   return c.json({ error: 'Not found' }, 404);

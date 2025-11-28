@@ -28,7 +28,7 @@ import {
 } from '@tabler/icons-react';
 import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
 import { trpc } from '../../lib/trpc';
-import type { ExecutionHistoryItem, ToolExecutionInput, ToolExecutionOutput, PublishEventResult } from '../../types';
+import type { ToolExecutionInput, ToolExecutionOutput, PublishEventResult } from '../../types';
 import ToolFormGenerator from '../../components/forms/ToolFormGenerator';
 import { showSuccessNotification, showErrorNotification } from '../../lib/notifications';
 
@@ -76,13 +76,13 @@ export default function TestingPage() {
       addToHistory({
         type: 'tool',
         name: selectedTool!,
-        input: toolInput,
+        input: JSON.parse(toolInput || '{}'),
         output: data,
         success: true,
       });
     },
     onError: (error) => {
-      setToolOutput({ error: error.message });
+      setToolOutput({ error: error.message, success: false } as unknown as ToolExecutionOutput);
       setIsExecutingTool(false);
       showErrorNotification({
         message: `Tool execution failed: ${error.message}`,
@@ -90,7 +90,7 @@ export default function TestingPage() {
       addToHistory({
         type: 'tool',
         name: selectedTool!,
-        input: toolInput,
+        input: JSON.parse(toolInput || '{}'),
         error: error.message,
         success: false,
       });

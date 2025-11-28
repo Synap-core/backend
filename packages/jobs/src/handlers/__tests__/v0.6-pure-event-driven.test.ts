@@ -24,7 +24,7 @@ import { TaskCreationHandler } from '../task-creation-handler.js';
 import { TaskCompletionHandler } from '../task-completion-handler.js';
 import { ProjectCreationHandler } from '../project-creation-handler.js';
 import { randomUUID } from 'crypto';
-import { eq } from 'drizzle-orm';
+import { eq } from '@synap/database';
 
 // Register all handlers for testing
 const noteCreationHandler = new NoteCreationHandler();

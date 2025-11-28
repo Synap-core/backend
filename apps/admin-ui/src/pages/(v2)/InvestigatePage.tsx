@@ -38,7 +38,7 @@ export default function InvestigatePage() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
   // Fetch events based on search
-  const { data: events, refetch: refetchEvents, isLoading } = trpc.system.searchEvents.useQuery(
+  const { data, refetch: refetchEvents, isLoading } = trpc.system.searchEvents.useQuery(
     {
       limit: 50,
       userId: searchTerm && !searchTerm.match(/^[0-9a-f-]{36}$/i) ? searchTerm : undefined,
@@ -48,6 +48,8 @@ export default function InvestigatePage() {
       enabled: true,
     }
   );
+
+  const events = data?.events;
 
   // Fetch event trace when an event is selected
   const { data: traceData, isLoading: isLoadingTrace } = trpc.system.getEventTrace.useQuery(
@@ -174,30 +176,30 @@ export default function InvestigatePage() {
                 ) : (
                   events.map((event) => (
                     <div
-                      key={event.eventId}
-                      onClick={() => handleEventClick(event.eventId)}
+                      key={event.id}
+                      onClick={() => handleEventClick(event.id)}
                       style={{
                         padding: spacing[3],
                         borderRadius: borderRadius.base,
                         border: `1px solid ${
-                          selectedEventId === event.eventId
+                          selectedEventId === event.id
                             ? colors.border.interactive
                             : colors.border.light
                         }`,
                         backgroundColor:
-                          selectedEventId === event.eventId
+                          selectedEventId === event.id
                             ? '#EFF6FF'
                             : colors.background.secondary,
                         cursor: 'pointer',
                         transition: 'all 0.1s ease',
                       }}
                       onMouseEnter={(e) => {
-                        if (selectedEventId !== event.eventId) {
+                        if (selectedEventId !== event.id) {
                           e.currentTarget.style.backgroundColor = colors.background.hover;
                         }
                       }}
                       onMouseLeave={(e) => {
-                        if (selectedEventId !== event.eventId) {
+                        if (selectedEventId !== event.id) {
                           e.currentTarget.style.backgroundColor = colors.background.secondary;
                         }
                       }}
@@ -205,11 +207,11 @@ export default function InvestigatePage() {
                       <Group justify="space-between" mb={spacing[1]}>
                         <Badge
                           variant="light"
-                          color={event.isError ? 'red' : 'blue'}
+                          color="blue"
                           size="sm"
                           style={{ fontFamily: typography.fontFamily.mono }}
                         >
-                          {event.eventType}
+                          {event.type}
                         </Badge>
                         <Text
                           size="xs"
@@ -224,7 +226,7 @@ export default function InvestigatePage() {
                         c={colors.text.primary}
                         style={{ fontFamily: typography.fontFamily.mono }}
                       >
-                        ID: {event.eventId}
+                        ID: {event.id}
                       </Text>
                       {event.userId && (
                         <Text size="xs" c={colors.text.secondary} mt={2}>

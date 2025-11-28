@@ -169,7 +169,7 @@ export default function SearchModal({
                     }}
                     onClick={() => handleHistoryClick(item)}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = colors.background.tertiary;
+                      e.currentTarget.style.backgroundColor = colors.background.secondary;
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.backgroundColor = colors.background.secondary;

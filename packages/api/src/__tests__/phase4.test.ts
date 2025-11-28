@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createSynapEvent } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { db, entities } from '@synap/database';
-import { eq } from 'drizzle-orm';
+import { eq } from '@synap/database';
 import { randomUUID } from 'crypto';
 import { inngest } from '../utils/inngest-client.js';
 

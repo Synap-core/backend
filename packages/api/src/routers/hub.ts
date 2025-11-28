@@ -16,8 +16,8 @@ import { transformInsightToEvents } from './hub-transform.js';
 import { validateHubInsight, type HubInsight } from '@synap/hub-protocol';
 import { getEventRepository } from '@synap/database';
 import { db, entities } from '@synap/database';
-import { eq, and, desc, gte, lte } from 'drizzle-orm';
-import type { SQL } from 'drizzle-orm';
+import { eq, and, desc, gte, lte } from '@synap/database';
+import type { SQL } from '@synap/database';
 
 const logger = createLogger({ module: 'hub-router' });
 

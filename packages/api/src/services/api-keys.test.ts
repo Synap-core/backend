@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { apiKeyService } from './api-keys.js';
 import { db } from '@synap/database';
 import { apiKeys } from '@synap/database/schema';
-import { eq } from 'drizzle-orm';
+import { eq } from '@synap/database';
 import bcrypt from 'bcrypt';
 
 describe('ApiKeyService', () => {

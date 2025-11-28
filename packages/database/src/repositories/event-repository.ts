@@ -122,6 +122,22 @@ export class EventRepository {
   }
 
   /**
+   * Get event by ID
+   */
+  async findById(id: string): Promise<EventRecord | null> {
+    const result = await this.pool.query(`
+      SELECT * FROM events_v2
+      WHERE id = $1
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    return this.mapRow(result.rows[0]);
+  }
+
+  /**
    * Append event to stream
    *
    * Phase 1: This is the single validation point for all events.

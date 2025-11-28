@@ -31,7 +31,7 @@ export default function ArchitectureVisualizerPage() {
     return (
       <Container size="xl">
         <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
-          Failed to load architecture: {(error as Error).message}
+          Failed to load architecture: {(error as unknown as Error).message}
         </Alert>
       </Container>
     );

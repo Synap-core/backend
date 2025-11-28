@@ -49,7 +49,21 @@ registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', des
 // This enables plugins to add routers without modifying core code
 export const appRouter = buildAppRouter();
 
-export type AppRouter = typeof appRouter;
+// Explicitly define AppRouter type with core routers for client type safety
+// This ensures clients like admin-ui can see the core router structure
+import { router } from './trpc.js';
+const coreRouter = router({
+  events: eventsRouter,
+  capture: captureRouter,
+  notes: notesRouter,
+  chat: chatRouter,
+  suggestions: suggestionsRouter,
+  system: systemRouter,
+  hub: hubRouter,
+  apiKeys: apiKeysRouter,
+});
+
+export type AppRouter = typeof coreRouter;
 
 // Re-export router registry functions for plugin developers
 export {
@@ -63,7 +77,7 @@ export {
 // Re-export plugin system
 export {
   pluginManager,
-  intelligenceHubPlugin,
+  // intelligenceHubPlugin,
   type DataPodPlugin,
   type ThoughtInput,
   type ThoughtResponse,

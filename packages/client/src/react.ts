@@ -4,7 +4,7 @@
  * Provides React hooks for using Synap Client with React Query.
  */
 
-import { createTRPCReact } from '@trpc/react-query';
+import { createTRPCReact, type CreateTRPCReact } from '@trpc/react-query';
 import { httpBatchLink, createTRPCProxyClient } from '@trpc/client';
 import type { AppRouter } from './types.js';
 
@@ -29,7 +29,7 @@ import type { AppRouter } from './types.js';
  * }
  * ```
  */
-export const trpc = createTRPCReact<AppRouter>();
+export const trpc: CreateTRPCReact<AppRouter, unknown> = createTRPCReact<AppRouter>();
 
 /**
  * Create a React Query client with tRPC integration

@@ -14,7 +14,6 @@ import {
   Code,
   ScrollArea,
   Tabs,
-  Skeleton,
 } from '@mantine/core';
 import {
   IconSearch,
@@ -46,7 +45,8 @@ export default function ExplorePage() {
   });
 
   // Fetch recent events for examples
-  const { data: recentEvents, isLoading: isLoadingEvents } = trpc.system.getRecentEvents.useQuery({ limit: 5 });
+  const { data: recentEventsData, isLoading: isLoadingEvents } = trpc.system.getRecentEvents.useQuery({ limit: 5 });
+  const recentEvents = recentEventsData?.events;
 
   const architectureComponents = [
     {
@@ -346,7 +346,7 @@ export default function ExplorePage() {
                 ) : (
                   recentEvents.map((event) => (
                     <Card
-                      key={event.eventId}
+                      key={event.id}
                       padding={spacing[3]}
                       style={{
                         backgroundColor: colors.background.secondary,
@@ -360,7 +360,7 @@ export default function ExplorePage() {
                           size="sm"
                           style={{ fontFamily: typography.fontFamily.mono }}
                         >
-                          {event.eventType}
+                          {event.type}
                         </Badge>
                         <Text
                           size="xs"
@@ -380,7 +380,7 @@ export default function ExplorePage() {
                       >
                         {JSON.stringify(
                           {
-                            eventId: event.eventId,
+                            id: event.id,
                             userId: event.userId,
                             timestamp: event.timestamp,
                           },

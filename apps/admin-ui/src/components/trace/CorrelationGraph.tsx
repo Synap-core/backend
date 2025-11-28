@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Card, Title, Text, Stack, Alert } from '@mantine/core';
 import { IconInfoCircle } from '@tabler/icons-react';
 import cytoscape from 'cytoscape';
-import type { Core, NodeSingular } from 'cytoscape';
+import type { Core, EdgeDataDefinition, NodeSingular } from 'cytoscape';
 
 interface CorrelationGraphProps {
   events: Array<{

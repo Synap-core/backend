@@ -3,9 +3,9 @@
 # Note: version is obsolete in Docker Compose v2+, but kept for compatibility
 
 services:
-  # PostgreSQL with TimescaleDB + pgvector
+  # PostgreSQL with pgvector
   postgres:
-    image: timescale/timescaledb-ha:pg16-latest
+    image: pgvector/pgvector:pg16
     container_name: synap-postgres
     restart: unless-stopped
     environment:

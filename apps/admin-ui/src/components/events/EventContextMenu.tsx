@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 interface Event {
   eventId: string;
   eventType: string;
+  timestamp: string;
   userId?: string;
   correlationId?: string;
   data?: Record<string, unknown>;

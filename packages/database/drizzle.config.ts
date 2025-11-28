@@ -10,8 +10,8 @@
 import type { Config } from 'drizzle-kit';
 
 const config: Config = {
-  // PostgreSQL with TimescaleDB + pgvector
-  schema: './src/schema/index.ts',
+  // PostgreSQL with pgvector
+  schema: './dist/schema/index.js', // Use compiled JavaScript (built with tsc)
   out: './migrations-drizzle', // Auto-generated migrations
   dialect: 'postgresql',
   dbCredentials: {

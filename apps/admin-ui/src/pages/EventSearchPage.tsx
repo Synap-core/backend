@@ -52,7 +52,7 @@ export default function EventSearchPage() {
       }
     : undefined;
 
-  const { data, isLoading, error, refetch } = trpc.system.searchEvents.useQuery(
+  const { data, isLoading, error } = trpc.system.searchEvents.useQuery(
     queryInput || {},
     {
       enabled: !!currentFilters,
@@ -120,7 +120,7 @@ export default function EventSearchPage() {
         {/* Error State */}
         {error && (
           <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
-            Failed to search events: {(error as Error).message}
+            Failed to search events: {(error as unknown as Error).message}
           </Alert>
         )}
 

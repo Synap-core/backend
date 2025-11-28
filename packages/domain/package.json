@@ -25,7 +25,6 @@
     "@synap/database": "workspace:*",
     "@synap/storage": "workspace:*",
     "@synap/core": "workspace:*",
-    "drizzle-orm": "^0.33.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
@@ -33,4 +32,3 @@
     "vitest": "^1.6.1"
   }
 }
-

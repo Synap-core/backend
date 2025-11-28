@@ -5,10 +5,8 @@
  * Provides type-safe wrappers for showing success, error, warning, and info notifications.
  */
 
-import React from 'react';
 import { notifications } from '@mantine/notifications';
 import { IconCheck, IconX, IconAlertCircle, IconInfoCircle } from '@tabler/icons-react';
-import { colors } from '../theme/tokens';
 
 interface NotificationOptions {
   title?: string;
@@ -26,8 +24,7 @@ export function showSuccessNotification(options: NotificationOptions): void {
     message: options.message,
     color: 'green',
     icon: <IconCheck size={18} />,
-    autoClose: options.autoClose ?? true,
-    duration: options.duration ?? 4000,
+    autoClose: options.duration ?? 4000,
   });
 }
 
@@ -40,8 +37,7 @@ export function showErrorNotification(options: NotificationOptions): void {
     message: options.message,
     color: 'red',
     icon: <IconX size={18} />,
-    autoClose: options.autoClose ?? true,
-    duration: options.duration ?? 6000,
+    autoClose: options.duration ?? 6000,
   });
 }
 
@@ -54,8 +50,7 @@ export function showWarningNotification(options: NotificationOptions): void {
     message: options.message,
     color: 'yellow',
     icon: <IconAlertCircle size={18} />,
-    autoClose: options.autoClose ?? true,
-    duration: options.duration ?? 5000,
+    autoClose: options.duration ?? 5000,
   });
 }
 
@@ -68,8 +63,7 @@ export function showInfoNotification(options: NotificationOptions): void {
     message: options.message,
     color: 'blue',
     icon: <IconInfoCircle size={18} />,
-    autoClose: options.autoClose ?? true,
-    duration: options.duration ?? 4000,
+    autoClose: options.duration ?? 4000,
   });
 }
 

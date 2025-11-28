@@ -1,5 +1,5 @@
 {
-  "name": "@synap/jobs",
+  "name": "@synap/ai",
   "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,24 +17,30 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "dev": "npx inngest-cli@latest dev"
+    "test": "vitest"
   },
   "dependencies": {
-    "inngest": "^3.15.0",
-    "@synap/core": "workspace:*",
-    "@synap/database": "workspace:*",
-    "@synap/domain": "workspace:*",
-    "@synap/storage": "workspace:*",
-    "@synap/types": "workspace:*",
-    "@synap/ai-embeddings": "workspace:*",
-    "ai": "^4.0.0",
     "@ai-sdk/anthropic": "^1.0.0",
-    "zod": "^3.22.0",
-    "@neondatabase/serverless": "^0.9.0"
+    "@langchain/core": "^1.0.3",
+    "@langchain/langgraph": "^1.0.1",
+    "@synap/core": "workspace:*",
+    "@synap/types": "workspace:*",
+    "ai": "^4.0.0",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.24.6"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "typescript": "^5.3.3",
-    "vitest": "^1.6.1"
-  }
+    "vitest": "^4.0.7"
+  },
+  "keywords": [
+    "synap",
+    "ai",
+    "anthropic",
+    "langchain",
+    "tools",
+    "agents"
+  ],
+  "license": "MIT"
 }

@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'react';
 import {
   TextInput,
   Textarea,
   NumberInput,
   Switch,
   Select,
-  MultiSelect,
   Stack,
   Group,
   Button,
@@ -16,15 +14,6 @@ import {
 import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { colors, spacing, typography } from '../../theme/tokens';
 import { trpc } from '../../lib/trpc';
-
-interface SchemaField {
-  name: string;
-  type: string;
-  required: boolean;
-  description?: string;
-  options?: string[];
-  defaultValue?: unknown;
-}
 
 interface SchemaFormGeneratorProps {
   eventType: string;
@@ -87,7 +76,7 @@ export default function SchemaFormGenerator({
       {fields.map((field) => {
         const fieldValue = value[field.name] ?? field.defaultValue;
         const fieldError = errors?.[field.name];
-        const hasError = !!fieldError;
+
 
         switch (field.type) {
           case 'string':

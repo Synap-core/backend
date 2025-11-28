@@ -11,8 +11,7 @@ import { randomUUID } from 'crypto';
 import { createSynapEvent, EventTypes } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
-import { db, entities } from '@synap/database';
-import { eq, desc } from 'drizzle-orm';
+import { db, entities, eq, desc, and } from '@synap/database';
 import { createLogger } from '@synap/core';
 
 const notesLogger = createLogger({ module: 'notes-router' });
@@ -125,7 +124,6 @@ export const notesRouter = router({
 
       // Read directly from projection (entities table)
       // RLS automatically filters by userId
-      const { and } = await import('drizzle-orm');
       
       let whereCondition: any;
       if (input.type === 'all') {

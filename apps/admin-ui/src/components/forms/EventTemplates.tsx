@@ -1,4 +1,4 @@
-import { Button, Group, Stack, Text, Badge } from '@mantine/core';
+import { Button, Group, Stack, Text } from '@mantine/core';
 import { IconTemplate } from '@tabler/icons-react';
 import { colors, spacing, typography } from '../../theme/tokens';
 

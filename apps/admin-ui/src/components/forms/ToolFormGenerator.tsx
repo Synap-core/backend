@@ -1,19 +1,14 @@
-import { useState } from 'react';
 import {
   TextInput,
   Textarea,
   NumberInput,
   Switch,
-  Select,
-  MultiSelect,
   Stack,
   Group,
-  Button,
-  ActionIcon,
   Text,
   Badge,
 } from '@mantine/core';
-import { IconPlus, IconTrash } from '@tabler/icons-react';
+
 import { colors, spacing, typography } from '../../theme/tokens';
 import { trpc } from '../../lib/trpc';
 
@@ -99,7 +94,6 @@ export default function ToolFormGenerator({
       {fields.map((field) => {
         const fieldValue = value[field.name];
         const fieldError = errors?.[field.name];
-        const hasError = !!fieldError;
 
         switch (field.type) {
           case 'string':

@@ -9,7 +9,7 @@
 import { router, protectedProcedure } from '../trpc.js';
 import { z } from 'zod';
 import { apiKeyService } from '../services/api-keys.js';
-import { API_KEY_SCOPES, ApiKeyScope } from '@synap/database';
+import { API_KEY_SCOPES, type ApiKeyScope } from '@synap/database';
 import { TRPCError } from '@trpc/server';
 
 /**

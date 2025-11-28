@@ -14,9 +14,8 @@ import {
   Badge,
   Skeleton,
   SegmentedControl,
-  Tabs,
 } from '@mantine/core';
-import { IconSend, IconInfoCircle, IconCheck, IconX, IconCode, IconForms } from '@tabler/icons-react';
+import { IconSend, IconInfoCircle, IconCheck, IconX } from '@tabler/icons-react';
 import { trpc } from '../lib/trpc';
 import SchemaFormGenerator from '../components/forms/SchemaFormGenerator';
 import EventTemplates from '../components/forms/EventTemplates';
@@ -125,7 +124,7 @@ export default function EventPublisherPage() {
         }
         if (Object.keys(errors).length > 0) {
           setFormErrors(errors);
-          showErrorNotification('Please fill in all required fields');
+          showErrorNotification({ message: 'Please fill in all required fields' });
           return;
         }
       }
@@ -138,16 +137,16 @@ export default function EventPublisherPage() {
         source: 'system',
       });
 
-      showSuccessNotification(`Event published successfully! ID: ${result.eventId}`);
+      showSuccessNotification({ message: `Event published successfully! ID: ${result.eventId}` });
       setFormErrors({});
     } catch (error) {
       if (error instanceof SyntaxError) {
         setEditorError(`Invalid JSON: ${error.message}`);
-        showErrorNotification(`Invalid JSON: ${error.message}`);
+        showErrorNotification({ message: `Invalid JSON: ${error.message}` });
       } else {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         setEditorError(errorMessage);
-        showErrorNotification(errorMessage);
+        showErrorNotification({ message: errorMessage });
       }
     }
   };
@@ -208,7 +207,7 @@ export default function EventPublisherPage() {
 
         {(publishMutation.isError || editorError) && (
           <Alert icon={<IconX size={16} />} title="Error" color="red">
-            {editorError || (publishMutation.error as Error)?.message}
+            {editorError || (publishMutation.error as unknown as Error)?.message}
           </Alert>
         )}
 

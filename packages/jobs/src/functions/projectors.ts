@@ -7,7 +7,7 @@
 
 import { inngest } from '../client.js';
 import { db, entities, taskDetails, tags, entityTags } from '@synap/database';
-import { eq, and } from 'drizzle-orm';
+import { eq, and } from '@synap/database';
 
 /**
  * Type for event data that includes userId

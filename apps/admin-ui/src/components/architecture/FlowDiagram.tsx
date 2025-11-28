@@ -3,12 +3,12 @@ import { Card, Title, Text, Stack, TextInput, Group, Badge, SegmentedControl } f
 import { IconSearch } from '@tabler/icons-react';
 import cytoscape from 'cytoscape';
 import type { Core, NodeSingular, NodeDataDefinition, EdgeDataDefinition } from 'cytoscape';
-import type { CytoscapeNode, CytoscapeEdge } from '../../types';
+
 
 interface Capability {
   eventTypes: Array<{ type: string; hasSchema: boolean }>;
   handlers: Array<{ eventType: string; handlers: Array<{ name: string }> }>;
-  tools: Array<{ name: string; description: string }>;
+  tools: Array<{ name: string; description?: string }>;
 }
 
 interface FlowDiagramProps {

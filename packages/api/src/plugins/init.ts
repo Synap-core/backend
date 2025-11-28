@@ -4,7 +4,7 @@
  * Registers default plugins and initializes the plugin system.
  */
 
-import { pluginManager, intelligenceHubPlugin } from './index.js';
+import { pluginManager } from './index.js';
 import { createLogger } from '@synap/core';
 
 const logger = createLogger({ module: 'plugin-init' });
@@ -19,29 +19,15 @@ export async function initializePlugins(): Promise<void> {
   try {
     logger.info('Initializing plugin system');
 
-    // Register Intelligence Hub plugin (if enabled)
-    if (intelligenceHubPlugin.enabled) {
-      await pluginManager.register(intelligenceHubPlugin);
-      logger.info('Intelligence Hub plugin registered');
-    } else {
-      logger.debug('Intelligence Hub plugin disabled (INTELLIGENCE_HUB_ENABLED != "true")');
-    }
-
+    // Register built-in plugins here if needed
+    // e.g. await pluginManager.register(somePlugin);
+    
     // Initialize all plugins
     await pluginManager.initialize();
-
-    const stats = pluginManager.getStats();
-    logger.info(
-      {
-        totalPlugins: stats.totalPlugins,
-        enabledPlugins: stats.enabledPlugins,
-        pluginNames: stats.pluginNames,
-      },
-      'Plugin system initialized'
-    );
+    
+    logger.info('Plugin system initialized successfully');
   } catch (error) {
-    logger.error({ err: error }, 'Failed to initialize plugins');
-    // Don't throw - allow app to start even if plugins fail
+    logger.error({ error }, 'Failed to initialize plugin system');
+    throw error;
   }
 }
-

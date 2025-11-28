@@ -5,9 +5,8 @@
  */
 
 import type { AnyRouter } from '@trpc/server';
-// NOTE: LangGraph is now in Intelligence Hub (proprietary)
-// import type { StateGraph } from '@langchain/langgraph';
-// Note: DynamicToolRegistry is a class instance, we'll use typeof for the type
+import type { StateGraph } from '@synap/ai';
+import type { dynamicToolRegistry } from '@synap/ai';
 
 /**
  * Thought Input for plugins
@@ -50,15 +49,18 @@ export interface DataPodPlugin {
   /** For REST plugins: process a thought via external service */
   processThought?(input: ThoughtInput): Promise<ThoughtResponse>;
   
-  /** For Agent plugins: register a LangGraph agent */
-  // NOTE: Agents are now in Intelligence Hub (proprietary)
-  // registerAgent?(graph: StateGraph): void;
-  
+  /**
+   * For Agent plugins: register a LangGraph agent
+   */
+  registerAgent?(graph: StateGraph<any, any, any, any, any, any, any, any, any, any>): void;
+
   /** For API plugins: register a tRPC router */
   registerRouter?(): AnyRouter;
   
-  /** For Tool plugins: register AI tools */
-  registerTools?(registry: { register: (tool: unknown, metadata?: { version?: string; source?: string }) => void }): void;
+  /**
+   * For Tool plugins: register tools
+   */
+  registerTools?(registry: typeof dynamicToolRegistry): void;
   
   /** Hook called when plugin is initialized */
   onInit?(): Promise<void>;

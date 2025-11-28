@@ -1,36 +1,67 @@
 /**
- * PostgreSQL Database Client
- * For cloud multi-tenant deployment (Phase 2)
+ * Universal Database Client
+ * 
+ * Automatically selects optimal driver:
+ * - Local/Traditional Cloud: postgres.js (fast, simple)
+ * - Serverless (Neon/Vercel): @neondatabase/serverless (WebSocket/HTTP)
  */
 
-import { drizzle } from 'drizzle-orm/neon-serverless';
-import { sql } from 'drizzle-orm';
-import { Pool } from '@neondatabase/serverless';
+import { createDriver } from './driver-factory.js';
+import type { DatabaseDriver } from './types.js';
 import * as schema from './schema/index.js';
+import { sql } from 'drizzle-orm';
 import { createLogger, ValidationError, InternalServerError } from '@synap/core';
 
-const dbLogger = createLogger({ module: 'database-pg' });
+const dbLogger = createLogger({ module: 'database' });
 
-// Create connection pool - use process.env to avoid circular dependency
-// Config can be used in higher-level packages, but database client should be low-level
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Lazy initialization
+let driverInstance: DatabaseDriver | null = null;
 
-// Create Drizzle instance
-export const db = drizzle(pool, { schema });
+/**
+ * Get database instance (async initialization)
+ * 
+ * @example
+ * const db = await getDb();
+ * await db.select().from(users);
+ */
+export async function getDb() {
+  if (!driverInstance) {
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      throw new Error('DATABASE_URL environment variable is required');
+    }
+    
+    driverInstance = await createDriver({
+      url: dbUrl,
+      schema,
+      poolSize: parseInt(process.env.DB_POOL_SIZE || '10'),
+    });
+  }
+  return driverInstance.db;
+}
+
+/**
+ * Synchronous database access (for compatibility)
+ * 
+ * Important: Call getDb() first to initialize!
+ * 
+ * @example
+ * await getDb(); // Initialize
+ * const users = await db.select().from(users); // Use synchronously
+ */
+export const db = new Proxy({} as any, {
+  get(_target, prop) {
+    if (!driverInstance) {
+      throw new Error('Database not initialized. Call getDb() first.');
+    }
+    return driverInstance.db[prop];
+  }
+});
 
 /**
  * Set current user for Row-Level Security (RLS)
  * 
- * This function uses parameterized queries to prevent SQL injection.
- * 
  * @param userId - User ID to set as current user
- * @throws Error if userId is invalid or query fails
- * 
- * @example
- * ```typescript
- * await setCurrentUser('user-123');
- * // All subsequent queries will be filtered by RLS for this user
- * ```
  */
 export async function setCurrentUser(userId: string): Promise<void> {
   if (!userId || typeof userId !== 'string') {
@@ -38,36 +69,33 @@ export async function setCurrentUser(userId: string): Promise<void> {
   }
 
   try {
-    // Use the set_current_user() function for better validation and security
-    // This function validates the user_id and sets it in the session
-    await db.execute(sql`SELECT set_current_user(${userId})`);
+    const dbInstance = await getDb();
+    await dbInstance.execute(sql`SELECT set_current_user(${userId})`);
     dbLogger.debug({ userId }, 'RLS current user set');
   } catch (error) {
     dbLogger.error({ err: error, userId }, 'Failed to set RLS current user');
-    throw new InternalServerError(`Failed to set current user: ${error instanceof Error ? error.message : 'Unknown error'}`, { userId, originalError: error instanceof Error ? error.message : String(error) });
+    throw new InternalServerError(
+      `Failed to set current user: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      { userId, originalError: error instanceof Error ? error.message : String(error) }
+    );
   }
 }
 
 /**
  * Clear current user for Row-Level Security (RLS)
- * 
- * Resets the RLS context, allowing queries without user filtering.
- * 
- * @example
- * ```typescript
- * await clearCurrentUser();
- * // RLS context cleared
- * ```
  */
 export async function clearCurrentUser(): Promise<void> {
   try {
-    await db.execute(sql`RESET app.current_user_id`);
+    const dbInstance = await getDb();
+    await dbInstance.execute(sql`RESET app.current_user_id`);
     dbLogger.debug('RLS current user cleared');
   } catch (error) {
     dbLogger.error({ err: error }, 'Failed to clear RLS current user');
-    throw new InternalServerError(`Failed to clear current user: ${error instanceof Error ? error.message : 'Unknown error'}`, { originalError: error instanceof Error ? error.message : String(error) });
+    throw new InternalServerError(
+      `Failed to clear current user: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      { originalError: error instanceof Error ? error.message : String(error) }
+    );
   }
 }
 
-dbLogger.info('PostgreSQL database connected');
-
+dbLogger.info('Database client ready (lazy initialization)');

@@ -23,7 +23,7 @@ import { handlerRegistry } from '../registry.js';
 import { NoteCreationHandler } from '../note-creation-handler.js';
 import { EmbeddingGeneratorHandler } from '../embedding-generator-handler.js';
 import { randomUUID } from 'crypto';
-import { eq } from 'drizzle-orm';
+import { eq } from '@synap/database';
 
 // Register handlers for testing
 const noteCreationHandler = new NoteCreationHandler();

@@ -26,15 +26,15 @@
     "db:drop": "drizzle-kit drop"
   },
   "dependencies": {
-    "@synap/types": "workspace:*",
+    "@neondatabase/serverless": "^0.9.0",
     "@synap/core": "workspace:*",
-    "drizzle-orm": "^0.33.0",
-    "@neondatabase/serverless": "^0.9.0"
+    "@synap/types": "workspace:*",
+    "drizzle-orm": "^0.33.0"
   },
   "devDependencies": {
     "drizzle-kit": "^0.24.0",
-    "typescript": "^5.3.3",
-    "tsx": "^4.7.0"
+    "postgres": "^3.4.7",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
   }
 }
-

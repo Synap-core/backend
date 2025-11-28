@@ -5,8 +5,8 @@
  * This provides application-level multi-tenancy isolation.
  */
 
-import { eq, and } from 'drizzle-orm';
-import type { SQL } from 'drizzle-orm';
+import { eq, and } from '@synap/database';
+import type { SQL } from '@synap/database';
 import { UnauthorizedError, ValidationError } from '@synap/core';
 
 /**

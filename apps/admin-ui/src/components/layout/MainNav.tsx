@@ -1,4 +1,4 @@
-import { NavLink, ActionIcon, Group, Text } from '@mantine/core';
+import { NavLink, ActionIcon, Group } from '@mantine/core';
 import { Link, useLocation } from 'react-router-dom';
 import {
   IconHome,

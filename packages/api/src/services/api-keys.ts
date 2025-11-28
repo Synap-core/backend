@@ -10,8 +10,8 @@
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcrypt';
 import { db } from '@synap/database';
-import { apiKeys, KEY_PREFIXES, ApiKeyRecord, ApiKeyScope } from '@synap/database';
-import { eq, and, or, isNull, gt, sql } from 'drizzle-orm';
+import { apiKeys, KEY_PREFIXES, type ApiKeyRecord, type ApiKeyScope } from '@synap/database';
+import { eq, and, or, isNull, gt, sql } from '@synap/database';
 
 /**
  * Bcrypt cost factor
@@ -320,10 +320,10 @@ export class ApiKeyService {
    * @returns Number of keys cleaned up
    */
   async cleanupExpiredKeys(): Promise<number> {
-    const result = await db.execute<{ cleanup_expired_api_keys: number }>(
+    const result = await db.execute(
       sql`SELECT cleanup_expired_api_keys() as cleanup_expired_api_keys`
-    );
-    return result.rows[0]?.cleanup_expired_api_keys ?? 0;
+    ) as unknown as { cleanup_expired_api_keys: number }[];
+    return result[0]?.cleanup_expired_api_keys ?? 0;
   }
   
   /**

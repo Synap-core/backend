@@ -13,9 +13,7 @@ import { z } from 'zod';
 import { publicProcedure, router } from '../trpc.js';
 import { getAllEventTypes, EventTypeSchemas } from '@synap/types';
 import { handlerRegistry, inngest } from '@synap/jobs';
-// NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)
-// Tools are now managed by Intelligence Hub
-// import { dynamicToolRegistry } from '@synap/ai';
+import { dynamicToolRegistry } from '@synap/ai';
 import { dynamicRouterRegistry } from '../router-registry.js';
 import { createSynapEvent } from '@synap/types';
 import { eventRepository } from '@synap/database';
@@ -52,10 +50,6 @@ export const systemRouter = router({
     });
 
     // Get all tools
-    // NOTE: Tools are now managed by Intelligence Hub (proprietary)
-    // Tools are no longer available in the open-source Data Pod
-    const tools: Array<{ name: string; description?: string; version: string; source: string }> = [];
-    /*
     const toolsStats = dynamicToolRegistry.getStats();
     const tools = dynamicToolRegistry.getAllTools().map((tool: { name: string; description?: string }) => {
       const metadata = dynamicToolRegistry.getToolMetadata(tool.name);
@@ -66,7 +60,6 @@ export const systemRouter = router({
         source: metadata?.source || 'unknown',
       };
     });
-    */
 
     // Get all routers
     const routersStats = dynamicRouterRegistry.getStats();
@@ -91,10 +84,10 @@ export const systemRouter = router({
       stats: {
         totalEventTypes: eventTypes.length,
         totalHandlers: handlers.reduce((acc: number, h: { handlers: unknown[] }) => acc + h.handlers.length, 0),
-        totalTools: 0, // Tools are now in Intelligence Hub
+        totalTools: toolsStats.totalTools,
         totalRouters: routersStats.totalRouters,
         connectedSSEClients: sseStats.totalClients,
-        toolsBySource: {}, // Tools are now in Intelligence Hub
+        toolsBySource: toolsStats.toolsBySource,
         routersBySource: routersStats.routersBySource,
       },
     };
@@ -320,6 +313,50 @@ export const systemRouter = router({
     }),
 
   /**
+   * Get event trace by Event ID
+   *
+   * Finds the event, then fetches all related events with the same correlation ID.
+   */
+  getEventTrace: publicProcedure
+    .input(z.object({ eventId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      // 1. Get the main event
+      const event = await eventRepository.findById(input.eventId);
+      
+      if (!event) {
+        throw new Error(`Event ${input.eventId} not found`);
+      }
+
+      // 2. Get related events if correlation ID exists
+      let relatedEvents: typeof event[] = [];
+      if (event.correlationId) {
+        relatedEvents = await eventRepository.getCorrelatedEvents(event.correlationId);
+        // Exclude the main event from related list
+        relatedEvents = relatedEvents.filter(e => e.id !== event.id);
+      }
+
+      return {
+        event: {
+          eventId: event.id, // Frontend expects eventId
+          eventType: event.eventType, // Frontend expects eventType
+          timestamp: event.timestamp.toISOString(),
+          userId: event.userId,
+          data: event.data,
+          metadata: event.metadata,
+          correlationId: event.correlationId,
+        },
+        relatedEvents: relatedEvents.map(e => ({
+          eventId: e.id,
+          eventType: e.eventType,
+          timestamp: e.timestamp.toISOString(),
+          userId: e.userId,
+          data: e.data,
+          correlationId: e.correlationId,
+        })),
+      };
+    }),
+
+  /**
    * Search events with advanced filters
    *
    * Supports filtering by user, event type, aggregate, date range, etc.
@@ -439,19 +476,22 @@ export const systemRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const result = await dynamicToolRegistry.executeTool(
-        input.toolName,
-        input.parameters,
-        {
-          userId: input.userId,
-          threadId: input.threadId,
-        }
-      );
+      const tool = dynamicToolRegistry.getTool(input.toolName);
+      
+      if (!tool) {
+        throw new Error(`Tool "${input.toolName}" not found`);
+      }
+      
+      // Execute the tool with parameters
+      // Note: tool.execute expects (params, context?)
+      const result = await tool.execute(input.parameters, {
+        userId: input.userId,
+        threadId: input.threadId,
+      });
 
       return {
-        success: result.success,
-        result: result.result,
-        error: result.error,
+        success: true,
+        result: result,
         toolName: input.toolName,
         executedAt: new Date().toISOString(),
       };

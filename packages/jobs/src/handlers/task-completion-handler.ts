@@ -14,7 +14,7 @@ import { createSynapEvent, EventTypes, type SynapEvent } from '@synap/types';
 import { db, entities, taskDetails } from '@synap/database';
 import { inngest } from '../client.js';
 import { createLogger } from '@synap/core';
-import { eq } from 'drizzle-orm';
+import { eq } from '@synap/database';
 
 const logger = createLogger({ module: 'task-completion-handler' });
 

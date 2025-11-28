@@ -1,5 +1,4 @@
-import { db, entities } from '@synap/database';
-import { eq } from 'drizzle-orm';
+import { db, entities, eq } from '@synap/database';
 import { EntitySchema, EntitySummarySchema, type Entity, type EntitySummary } from '../types.js';
 
 export class EntityService {
@@ -12,7 +11,7 @@ export class EntityService {
       .where(eq(entities.userId, userId))
       .limit(limit);
 
-    return rows.map((row) => EntitySummarySchema.parse(row));
+    return rows.map((row: any) => EntitySummarySchema.parse(row));
   }
 
   async getEntity(entityId: string): Promise<Entity | null> {

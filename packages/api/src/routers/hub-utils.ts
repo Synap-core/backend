@@ -120,18 +120,24 @@ export function validateHubToken(token: string): HubTokenPayload | null {
 // AUDIT LOGGING
 // ============================================================================
 
+export type HubAccessEventType =
+  | 'token.generated'
+  | 'data.requested'
+  | 'insight.submitted'
+  | 'semantic.search';
+
 /**
  * Log a Hub access event for audit trail
  * 
  * @param userId - User ID
  * @param requestId - Request ID
- * @param action - Action type ('token.generated' | 'data.requested' | 'insight.submitted')
+ * @param action - Action type ('token.generated' | 'data.requested' | 'insight.submitted' | 'semantic.search')
  * @param metadata - Additional metadata
  */
 export async function logHubAccess(
   userId: string,
   requestId: string,
-  action: 'token.generated' | 'data.requested' | 'insight.submitted',
+  action: HubAccessEventType,
   metadata?: Record<string, unknown>
 ): Promise<void> {
   try {

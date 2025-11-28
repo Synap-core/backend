@@ -57,19 +57,18 @@ class PluginManager {
     }
 
     // Register tools if present
-    // NOTE: Tools are now managed by Intelligence Hub (proprietary)
-    // Tool registration is disabled as @synap/ai has been moved to synap-intelligence-hub
     if (plugin.registerTools) {
-      logger.warn({ plugin: plugin.name }, 'Tool registration disabled - tools are now in Intelligence Hub');
-      // plugin.registerTools(dynamicToolRegistry);
-      // logger.info({ plugin: plugin.name }, 'Plugin tools registered');
+      const { dynamicToolRegistry } = await import('@synap/ai');
+      plugin.registerTools(dynamicToolRegistry);
+      logger.info({ plugin: plugin.name }, 'Plugin tools registered');
     }
 
     // Register agent if present
-    // NOTE: Agents are now managed by Intelligence Hub (proprietary)
-    // Agent registration is disabled as @synap/ai has been moved to synap-intelligence-hub
+    // NOTE: Agents are now enabled via @synap/ai framework
+    // Plugins can register LangGraph agents
     if (plugin.registerAgent) {
-      logger.warn({ plugin: plugin.name }, 'Agent registration disabled - agents are now in Intelligence Hub');
+      logger.warn({ plugin: plugin.name }, 'Agent registration available - implement LangGraph integration');
+      // TODO: Implement LangGraph agent registration when needed
       // const graph = new StateGraph({});
       // plugin.registerAgent(graph);
       // logger.info({ plugin: plugin.name }, 'Plugin agent registered');

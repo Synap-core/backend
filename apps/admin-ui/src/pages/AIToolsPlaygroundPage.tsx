@@ -57,7 +57,6 @@ export default function AIToolsPlaygroundPage() {
         parameters: JSON.parse(parametersJson),
         result: data.result,
         success: data.success,
-        error: data.error,
       });
     },
     onError: (error) => {
