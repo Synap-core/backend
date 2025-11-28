@@ -11,7 +11,7 @@
  * Usage: node test-event-loop.js
  */
 
-import fetch from 'node-fetch';
+// Native fetch is available in Node.js 18+
 
 const DATA_POD_URL = process.env.DATA_POD_URL || 'http://localhost:3000';
 const HUB_URL = process.env.INTELLIGENCE_HUB_URL || 'http://localhost:3001';
@@ -23,12 +23,11 @@ const mockInsight = {
       version: '1.0',
       type: 'action_plan',
       correlationId: crypto.randomUUID(),
-      title: 'Create note from thought',
-      description: 'User said: "Meeting with client tomorrow. Prepare slides."',
+      confidence: 0.95,
+      reasoning: 'User explicitly requested note creation',
       actions: [
         {
-          type: 'create_entity',
-          entityType: 'note',
+          eventType: 'note.creation.requested',
           data: {
             entityId: crypto.randomUUID(),
             title: 'Meeting with client tomorrow',
@@ -40,8 +39,7 @@ const mockInsight = {
           }
         },
         {
-          type: 'create_entity',
-          entityType: 'task',
+          eventType: 'task.creation.requested',
           data: {
             entityId: crypto.randomUUID(),
             title: 'Prepare slides',
@@ -71,8 +69,9 @@ async function testEventLoop() {
       headers: {
         'Content-Type': 'application/json',
         // Note: In real scenario, you'd need a valid OAuth2 token
-        // For testing, you might need to disable auth or use a test token
+        // For testing, we use the dev-mode bypass header
         'Authorization': `Bearer ${process.env.TEST_TOKEN || 'test-token'}`,
+        'x-test-user-id': 'test-user-123',
       },
       body: JSON.stringify(mockInsight),
     });

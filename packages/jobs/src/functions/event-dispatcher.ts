@@ -130,49 +130,44 @@ export const eventDispatcher = inngest.createFunction(
     );
 
     // Execute each handler independently
-    // Each handler is wrapped in its own step.run() for independent retry
+    // We do NOT wrap in step.run here because handlers use step.run internally
+    // and Inngest does not support nested steps.
     const results = await Promise.allSettled(
-      handlers.map((handler, index) =>
-        step.run(`handler-${index}-${handler.eventType}`, async () => {
-          try {
-            logger.debug(
-              { handlerEventType: handler.eventType, eventId: synapEvent.id },
-              'Executing handler'
-            );
-            // Create a step adapter that matches our interface
-            // parseSynapEvent already ensures timestamp is a Date
-            const stepAdapter = {
-              run: async <T>(name: string, handler: () => Promise<T> | T): Promise<T> => {
-                return step.run(name, handler) as Promise<T>;
-              },
-            };
-            const result = await handler.handle(synapEvent, stepAdapter);
-            logger.info(
-              {
-                handlerEventType: handler.eventType,
-                eventId: synapEvent.id,
-                success: result.success,
-              },
-              'Handler completed'
-            );
-            return result;
-          } catch (error) {
-            logger.error(
-              {
-                err: error,
-                handlerEventType: handler.eventType,
-                eventId: synapEvent.id,
-              },
-              'Handler execution failed'
-            );
-            return {
-              success: false,
-              message: `Handler failed: ${error instanceof Error ? error.message : String(error)}`,
-              error: error instanceof Error ? error.message : String(error),
-            };
-          }
-        })
-      )
+      handlers.map(async (handler) => {
+        try {
+          logger.debug(
+            { handlerEventType: handler.eventType, eventId: synapEvent.id },
+            'Executing handler'
+          );
+          
+          // Pass the step object directly
+          const result = await handler.handle(synapEvent, step);
+          
+          logger.info(
+            {
+              handlerEventType: handler.eventType,
+              eventId: synapEvent.id,
+              success: result.success,
+            },
+            'Handler completed'
+          );
+          return result;
+        } catch (error) {
+          logger.error(
+            {
+              err: error,
+              handlerEventType: handler.eventType,
+              eventId: synapEvent.id,
+            },
+            'Handler execution failed'
+          );
+          return {
+            success: false,
+            message: `Handler failed: ${error instanceof Error ? error.message : String(error)}`,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
     );
 
     // Summarize results

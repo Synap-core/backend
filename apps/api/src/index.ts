@@ -274,7 +274,13 @@ app.use(
 // Hub Protocol receiver endpoint (for Intelligence Hub insights)
 // Protected with OAuth2 client credentials authentication
 const { hubInsightsRouter } = await import('./routes/hub-insights.js');
-app.use('/hub/*', authMiddleware); // Require OAuth2 token
+app.use('/hub/*', async (c, next) => {
+  // DEV MODE ONLY: Allow bypassing auth for testing
+  if (config.server.nodeEnv === 'development' && c.req.header('x-test-user-id')) {
+    return next();
+  }
+  return authMiddleware(c, next);
+});
 app.route('/', hubInsightsRouter);
 
 // 404 handler

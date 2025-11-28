@@ -128,7 +128,17 @@ hubInsightsRouter.post('/hub/insights', async (c) => {
     );
     
     // 2. Get userId from auth context (set by auth middleware)
-    const userId = c.get('userId' as any) as string;
+    let userId = c.get('userId' as any) as string;
+    
+    // DEV MODE ONLY: Allow bypassing auth for testing
+    if (!userId && process.env.NODE_ENV === 'development') {
+      const testUserId = c.req.header('x-test-user-id');
+      if (testUserId) {
+        userId = testUserId;
+        logger.warn({ testUserId }, 'Using test user ID from header (DEV ONLY)');
+      }
+    }
+
     if (!userId) {
       logger.error('No userId found in auth context');
       return c.json({ error: 'Unauthorized' }, 401);
