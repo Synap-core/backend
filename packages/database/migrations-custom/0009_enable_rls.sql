@@ -49,7 +49,7 @@ $$ LANGUAGE sql STABLE;
 
 -- Core tables with direct user_id column
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE events_v2 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events_timescale ENABLE ROW LEVEL SECURITY;
 ALTER TABLE entities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE relations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
@@ -81,9 +81,9 @@ CREATE POLICY user_isolation_events ON events
   USING (user_id = current_setting('app.current_user_id', true))
   WITH CHECK (user_id = current_setting('app.current_user_id', true));
 
--- Events_v2 table (TimescaleDB hypertable)
-DROP POLICY IF EXISTS user_isolation_events_v2 ON events_v2;
-CREATE POLICY user_isolation_events_v2 ON events_v2
+-- Events_timescale table (TimescaleDB hypertable)
+DROP POLICY IF EXISTS user_isolation_events_timescale ON events_timescale;
+CREATE POLICY user_isolation_events_timescale ON events_timescale
   FOR ALL
   USING (user_id = current_setting('app.current_user_id', true))
   WITH CHECK (user_id = current_setting('app.current_user_id', true));
@@ -227,7 +227,7 @@ COMMENT ON FUNCTION set_current_user IS 'Sets the current user for RLS policies.
 COMMENT ON FUNCTION get_current_user IS 'Gets the current user from session context (for debugging).';
 
 COMMENT ON POLICY user_isolation_events ON events IS 'RLS policy: Users can only access their own events';
-COMMENT ON POLICY user_isolation_events_v2 ON events_v2 IS 'RLS policy: Users can only access their own events (TimescaleDB)';
+COMMENT ON POLICY user_isolation_events_timescale ON events_timescale IS 'RLS policy: Users can only access their own events (TimescaleDB)';
 COMMENT ON POLICY user_isolation_entities ON entities IS 'RLS policy: Users can only access their own entities';
 COMMENT ON POLICY user_isolation_relations ON relations IS 'RLS policy: Users can only access their own relations';
 COMMENT ON POLICY user_isolation_tags ON tags IS 'RLS policy: Users can only access their own tags';
@@ -245,7 +245,7 @@ COMMENT ON POLICY user_isolation_task_details ON task_details IS 'RLS policy: Us
 DO $$
 BEGIN
   RAISE NOTICE '✅ V1.0 Row-Level Security (RLS) enabled!';
-  RAISE NOTICE '   Tables protected: events, events_v2, entities, relations, tags, conversation_messages, knowledge_facts, ai_suggestions, entity_vectors, entity_tags, task_details';
+  RAISE NOTICE '   Tables protected: events, events_timescale, entities, relations, tags, conversation_messages, knowledge_facts, ai_suggestions, entity_vectors, entity_tags, task_details';
   RAISE NOTICE '   Security: Database-level user isolation enforced';
   RAISE NOTICE '   Next step: Update API middleware to call set_current_user() before each request';
 END $$;

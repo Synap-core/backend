@@ -12,7 +12,7 @@
 import { z } from 'zod';
 import { publicProcedure, router } from '../trpc.js';
 import { getAllEventTypes, EventTypeSchemas } from '@synap/types';
-import { handlerRegistry, inngest } from '@synap/jobs';
+import { inngest } from '@synap/jobs';
 import { dynamicToolRegistry } from '@synap/ai';
 import { dynamicRouterRegistry } from '../router-registry.js';
 import { createSynapEvent } from '@synap/types';
@@ -37,17 +37,9 @@ export const systemRouter = router({
     }));
 
     // Get all event handlers
-    const handlerEventTypes = handlerRegistry.getRegisteredEventTypes();
-    const handlers = handlerEventTypes.map((eventType: string) => {
-      const handlersForType = handlerRegistry.getHandlers(eventType);
-      return {
-        eventType,
-        handlers: handlersForType.map((handler: { eventType: string; handle: unknown }) => ({
-          name: handler.constructor.name,
-          eventType: handler.eventType,
-        })),
-      };
-    });
+    // Phase 4: Handlers are now independent Inngest functions, not registered in a central registry
+    // TODO: Fetch functions from Inngest API if needed
+    const handlers: any[] = [];
 
     // Get all tools
     const toolsStats = dynamicToolRegistry.getStats();
@@ -532,7 +524,8 @@ export const systemRouter = router({
     // Get system stats
     const sseStats = eventStreamManager.getStats();
     const toolsStats = dynamicToolRegistry.getStats();
-    const handlersStats = handlerRegistry.getRegisteredEventTypes().length;
+    // Phase 4: Handlers are independent, no registry count available
+    const handlersStats = 0;
 
     // Determine overall health status
     let healthStatus: 'healthy' | 'degraded' | 'critical';

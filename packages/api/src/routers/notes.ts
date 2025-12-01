@@ -53,14 +53,20 @@ export const notesRouter = router({
   create: protectedProcedure
     .input(CreateNoteInputSchema)
     .mutation(async ({ ctx, input }) => {
+      console.log('DEBUG: notes.create START', { userId: ctx.userId, input });
       const userId = ctx.userId as string; // Already validated by protectedProcedure
+      console.log('DEBUG: userId extracted', userId);
+      
       const requestId = randomUUID();
       const entityId = randomUUID();
       const correlationId = randomUUID();
+      console.log('DEBUG: UUIDs generated', { requestId, entityId, correlationId });
 
       notesLogger.info({ userId, requestId, entityId }, 'Publishing note.creation.requested event');
+      console.log('DEBUG: Logger called');
 
       // Create SynapEvent
+      console.log('DEBUG: About to call createSynapEvent');
       const event = createSynapEvent({
         type: EventTypes.NOTE_CREATION_REQUESTED,
         userId,
@@ -74,27 +80,42 @@ export const notesRouter = router({
         requestId,
         correlationId,
       });
+      console.log('DEBUG: Event created', event.id);
 
       // Append to Event Store
       const eventRepo = getEventRepository();
-      await eventRepo.append(event);
+      console.log('DEBUG: Appending event to store', event.id);
+      try {
+        await eventRepo.append(event);
+        console.log('DEBUG: Event appended to store', event.id);
+      } catch (error) {
+        console.error('DEBUG: Failed to append event to store', error);
+        throw error;
+      }
 
       // Publish to Inngest (for async processing)
-      await publishEvent('api/event.logged', {
-        id: event.id,
-        type: event.type,
-        aggregateId: event.aggregateId,
-        aggregateType: 'entity',
-        userId: event.userId,
-        version: 1,
-        timestamp: event.timestamp.toISOString(),
-        data: event.data,
-        metadata: { version: event.version, requestId: event.requestId },
-        source: event.source,
-        causationId: event.causationId,
-        correlationId: event.correlationId,
-        requestId: event.requestId,
-      }, userId);
+      console.log('DEBUG: Publishing to Inngest', event.id);
+      try {
+        await publishEvent('api/event.logged', {
+          id: event.id,
+          type: event.type,
+          aggregateId: event.aggregateId,
+          aggregateType: 'entity',
+          userId: event.userId,
+          version: 1,
+          timestamp: event.timestamp.toISOString(),
+          data: event.data,
+          metadata: { version: event.version, requestId: event.requestId },
+          source: event.source,
+          causationId: event.causationId,
+          correlationId: event.correlationId,
+          requestId: event.requestId,
+        }, userId);
+        console.log('DEBUG: Published to Inngest', event.id);
+      } catch (error) {
+        console.error('DEBUG: Failed to publish to Inngest', error);
+        throw error;
+      }
 
       // Return immediately with pending status
       return {

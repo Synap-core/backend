@@ -1,6 +1,5 @@
 version: v1.0.0
-
-# Serve Configuration
+dsn: postgres://ory:ory_dev_password@postgres-ory:5432/ory?sslmode=disable
 serve:
   public:
     port: 4444
@@ -8,52 +7,39 @@ serve:
     cors:
       enabled: true
       allowed_origins:
-        - ${ORY_UI_URL:-http://localhost:3000}
+        - http://localhost:3000
       allowed_methods:
-        - GET
         - POST
+        - GET
         - PUT
+        - PATCH
         - DELETE
-        - OPTIONS
       allowed_headers:
-        - Content-Type
         - Authorization
+        - Cookie
+        - Content-Type
       exposed_headers:
         - Content-Type
-      allow_credentials: true
+        - Set-Cookie
   admin:
     port: 4445
     host: 0.0.0.0
-
-# URLs
 urls:
   self:
-    issuer: ${ORY_HYDRA_ISSUER_URL:-http://localhost:4444}
-  consent: ${ORY_CONSENT_URL:-http://localhost:3000/consent}
-  login: ${ORY_LOGIN_URL:-http://localhost:3000/login}
-  error: ${ORY_ERROR_URL:-http://localhost:3000/error}
-  logout: ${ORY_LOGOUT_URL:-http://localhost:3000/logout}
-
-# Strategies
-strategies:
-  access_token: jwt
-  scope: exact
-
-# OAuth2 Configuration
-oauth2:
-  expose_internal_errors: false
-  hashers:
-    algorithm: bcrypt
-    bcrypt:
-      cost: 12
-  grant_types:
-    - authorization_code
-    - client_credentials
-    - refresh_token
-    - urn:ietf:params:oauth:grant-type:token-exchange  # Token Exchange for websites
-
-# Logging
+    issuer: http://localhost:4444
+  consent: http://localhost:3000/consent
+  login: http://localhost:3000/login
+  logout: http://localhost:3000/logout
+secrets:
+  system:
+    - please-change-this-secret-key-in-production
+oidc:
+  subject_identifiers:
+    supported_types:
+      - public
+      - pairwise
+    pairwise:
+      salt: you-really-should-change-this
 log:
-  level: ${LOG_LEVEL:-info}
+  level: info
   format: json
-

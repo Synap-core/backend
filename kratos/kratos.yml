@@ -1,108 +1,102 @@
 version: v1.0.0
-
-# Identity Schema
-identity:
-  default_schema_id: default
-  schemas:
-    default:
-      url: file:///etc/config/kratos/identity.schema.json
-
-# Self-Service Flows
+dsn: postgres://ory:ory_dev_password@postgres-ory:5432/ory?sslmode=disable
+serve:
+  public:
+    base_url: http://localhost:4433
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:3000
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+      allowed_headers:
+        - Authorization
+        - Cookie
+        - Content-Type
+      exposed_headers:
+        - Content-Type
+        - Set-Cookie
+  admin:
+    base_url: http://localhost:4434
 selfservice:
-  # Login
+  default_browser_return_url: http://localhost:3000
+  allowed_return_urls:
+    - http://localhost:3000
+    - http://localhost:3000/*
   methods:
     password:
       enabled: true
-      config:
-        password_hasher:
-          algorithm: bcrypt
-          bcrypt:
-            cost: 12
+      config: {}
     oidc:
       enabled: true
       config:
         providers:
           - id: google
             provider: google
-            client_id: ${GOOGLE_CLIENT_ID}
-            client_secret: ${GOOGLE_CLIENT_SECRET}
+            client_id: "mock-client-id"
+            client_secret: "mock-client-secret"
             mapper_url: file:///etc/config/kratos/oidc.google.jsonnet
             scope:
               - email
               - profile
           - id: github
             provider: github
-            client_id: ${GITHUB_CLIENT_ID}
-            client_secret: ${GITHUB_CLIENT_SECRET}
+            client_id: "mock-client-id"
+            client_secret: "mock-client-secret"
             mapper_url: file:///etc/config/kratos/oidc.github.jsonnet
             scope:
               - user:email
               - read:user
-
-  # Registration
   flows:
-    registration:
-      enabled: true
-      ui_url: ${KRATOS_UI_URL:-http://localhost:3000/registration}
-      lifespan: 1h
-    login:
-      enabled: true
-      ui_url: ${KRATOS_UI_URL:-http://localhost:3000/login}
-      lifespan: 1h
+    error:
+      ui_url: http://localhost:3000/error
+    settings:
+      ui_url: http://localhost:3000/settings
+      privileged_session_max_age: 15m
     recovery:
       enabled: true
-      ui_url: ${KRATOS_UI_URL:-http://localhost:3000/recovery}
-      lifespan: 1h
+      ui_url: http://localhost:3000/recovery
     verification:
       enabled: true
-      ui_url: ${KRATOS_UI_URL:-http://localhost:3000/verification}
-      lifespan: 1h
-
-  # Allowed Return URLs (for security)
-  allowed_return_urls:
-    - ${KRATOS_UI_URL:-http://localhost:3000}
-    - ${KRATOS_UI_URL:-http://localhost:3000}/*
-
-# Session Configuration
-session:
-  lifespan: 168h # 7 days
+      ui_url: http://localhost:3000/verification
+    logout:
+      after:
+        default_browser_return_url: http://localhost:3000/login
+    login:
+      ui_url: http://localhost:3000/login
+      lifespan: 10m
+    registration:
+      lifespan: 10m
+      ui_url: http://localhost:3000/registration
+      after:
+        password:
+          hooks:
+            - hook: session
+        oidc:
+          hooks:
+            - hook: session
+log:
+  level: info
+  format: json
+secrets:
   cookie:
-    domain: ${KRATOS_COOKIE_DOMAIN:-localhost}
+    - "11111111111111111111111111111111"
+  cipher:
+    - "11111111111111111111111111111111"
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///etc/config/kratos/identity.schema.json
+session:
+  cookie:
+    domain: localhost
     same_site: Lax
-    secure: ${KRATOS_COOKIE_SECURE:-false} # Set to true in production with HTTPS
-
-# Courier (Email) - Disabled for now
 courier:
   smtp:
-    connection_uri: ${SMTP_CONNECTION_URI}
-    from_address: ${SMTP_FROM_ADDRESS:-noreply@synap.io}
-    from_name: ${SMTP_FROM_NAME:-Synap}
-
-# Serve Configuration
-serve:
-  public:
-    base_url: ${KRATOS_PUBLIC_URL:-http://localhost:4433}
-    cors:
-      enabled: true
-      allowed_origins:
-        - ${KRATOS_UI_URL:-http://localhost:3000}
-      allowed_methods:
-        - GET
-        - POST
-        - PUT
-        - DELETE
-        - OPTIONS
-      allowed_headers:
-        - Content-Type
-        - Authorization
-      exposed_headers:
-        - Content-Type
-      allow_credentials: true
-  admin:
-    base_url: ${KRATOS_ADMIN_URL:-http://localhost:4434}
-
-# Logging
-log:
-  level: ${LOG_LEVEL:-info}
-  format: json
-
+    connection_uri: smtps://test:test@mailslurper:1025/?skip_ssl_verify=true
+    from_address: noreply@synap.io

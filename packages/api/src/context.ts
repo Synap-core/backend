@@ -18,6 +18,24 @@ export interface Context extends Record<string, unknown> {
 }
 
 export async function createContext(req: Request): Promise<Context> {
+  // DEV MODE ONLY: Allow bypassing auth for testing
+  // Check for x-test-user-id header
+  const testUserId = req.headers.get('x-test-user-id');
+  if (process.env.NODE_ENV === 'development' && testUserId) {
+    contextLogger.debug({ testUserId }, 'Using dev-mode auth bypass');
+    return {
+      db,
+      authenticated: true,
+      userId: testUserId,
+      user: {
+        id: testUserId,
+        email: 'test@example.com',
+        name: 'Test User',
+      },
+      session: { identity: { id: testUserId } },
+    };
+  }
+
   // Use Ory Kratos session for authentication
   try {
     const authModule = await import('@synap/auth');

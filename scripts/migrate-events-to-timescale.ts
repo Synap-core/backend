@@ -1,12 +1,12 @@
 /**
- * Event Migration Script: Old events → TimescaleDB events_v2
+ * Event Migration Script: Old events → TimescaleDB events_timescale
  * 
  * V0.3: Migrate historical events from old table to new event store
  * 
  * This script:
  * 1. Reads all events from old 'events' table
  * 2. Transforms to new event sourcing structure
- * 3. Inserts into 'events_v2' hypertable
+ * 3. Inserts into 'events_timescale' hypertable
  * 4. Maintains version numbers per aggregate
  * 5. Preserves timestamps and user IDs
  */
@@ -100,7 +100,7 @@ async function migrateEventsToTimescale(options: MigrationOptions = {}): Promise
           continue;
         }
 
-        // Insert into events_v2
+        // Insert into events_timescale
         await eventRepository.append({
           aggregateId,
           aggregateType: AggregateType.ENTITY, // Default, can be inferred from event type
@@ -165,9 +165,9 @@ function printFinalReport(stats: MigrationStats, dryRun: boolean) {
   } else {
     console.log('\n✅ Migration complete!');
     console.log('\nNext steps:');
-    console.log('1. Verify events_v2 table: psql $DATABASE_URL -c "SELECT COUNT(*) FROM events_v2;"');
+    console.log('1. Verify events_timescale table: psql $DATABASE_URL -c "SELECT COUNT(*) FROM events_timescale;"');
     console.log('2. Test event replay: tsx scripts/test-event-replay.ts');
-    console.log('3. Switch API to use events_v2');
+    console.log('3. Switch API to use events_timescale');
     console.log('4. Drop old events table (after validation)');
   }
 

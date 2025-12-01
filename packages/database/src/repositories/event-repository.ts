@@ -49,7 +49,7 @@ export enum EventSource {
  * EventRecord - Database representation of an event
  * 
  * This is the format returned from the database.
- * It maps directly to the events_v2 table structure.
+ * It maps directly to the events_timescale table structure.
  */
 export interface EventRecord {
   id: string;
@@ -126,7 +126,7 @@ export class EventRepository {
    */
   async findById(id: string): Promise<EventRecord | null> {
     const result = await this.pool.query(`
-      SELECT * FROM events_v2
+      SELECT * FROM events_timescale
       WHERE id = $1
     `, [id]);
 
@@ -174,7 +174,7 @@ export class EventRepository {
     };
 
     const result = await this.pool.query(`
-      INSERT INTO events_v2 (
+      INSERT INTO events_timescale (
         id,
         aggregate_id,
         aggregate_type,
@@ -285,7 +285,7 @@ export class EventRepository {
     });
 
     const result = await this.pool.query(`
-      INSERT INTO events_v2 (
+      INSERT INTO events_timescale (
         id, aggregate_id, aggregate_type, event_type, user_id, data,
         metadata, version, causation_id, correlation_id, source, timestamp
       ) VALUES ${valuePlaceholders.join(', ')}
@@ -305,7 +305,7 @@ export class EventRepository {
     const { fromVersion = 0, toVersion, eventTypes } = options;
 
     let query = `
-      SELECT * FROM events_v2
+      SELECT * FROM events_timescale
       WHERE aggregate_id = $1
         AND version > $2
     `;
@@ -337,7 +337,7 @@ export class EventRepository {
   async getAggregateVersion(aggregateId: string): Promise<number | null> {
     const result = await this.pool.query(`
       SELECT MAX(version) as version
-      FROM events_v2
+      FROM events_timescale
       WHERE aggregate_id = $1
     `, [aggregateId]);
 
@@ -359,7 +359,7 @@ export class EventRepository {
     } = options;
 
     let query = `
-      SELECT * FROM events_v2
+      SELECT * FROM events_timescale
       WHERE user_id = $1
         AND timestamp >= NOW() - ($2 || ' days')::INTERVAL
     `;
@@ -391,7 +391,7 @@ export class EventRepository {
    */
   async getCorrelatedEvents(correlationId: string): Promise<EventRecord[]> {
     const result = await this.pool.query(`
-      SELECT * FROM events_v2
+      SELECT * FROM events_timescale
       WHERE correlation_id = $1
       ORDER BY timestamp ASC
     `, [correlationId]);
@@ -407,7 +407,7 @@ export class EventRepository {
     limit: number = 100
   ): Promise<EventRecord[]> {
     const result = await this.pool.query(`
-      SELECT * FROM events_v2
+      SELECT * FROM events_timescale
       WHERE event_type = $1
       ORDER BY timestamp DESC
       LIMIT $2
@@ -430,7 +430,7 @@ export class EventRepository {
     limit?: number;
     offset?: number;
   } = {}): Promise<EventRecord[]> {
-    let query = 'SELECT * FROM events_v2 WHERE 1=1';
+    let query = 'SELECT * FROM events_timescale WHERE 1=1';
     const params: unknown[] = [];
     let paramIndex = 1;
 
@@ -504,7 +504,7 @@ export class EventRepository {
     fromDate?: Date;
     toDate?: Date;
   } = {}): Promise<number> {
-    let query = 'SELECT COUNT(*) as count FROM events_v2 WHERE 1=1';
+    let query = 'SELECT COUNT(*) as count FROM events_timescale WHERE 1=1';
     const params: unknown[] = [];
     let paramIndex = 1;
 

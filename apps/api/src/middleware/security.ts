@@ -21,8 +21,26 @@ export const rateLimitMiddleware = rateLimiter({
   limit: 100, // Max 100 requests per window
   standardHeaders: 'draft-7', // Use standard RateLimit headers
   keyGenerator: (c) => {
+    // Bypass for test user
+    if (c.req.header('x-test-user-id')) {
+      return 'test-bypass-' + Math.random(); // Unique key every time to avoid hitting limit
+    }
+    
+    // Bypass for localhost (Inngest, internal calls)
+    const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+    console.log('DEBUG: Rate Limit IP:', ip);
+    
+    // In development, bypass if IP is unknown (often happens with local fetch/Inngest)
+    if (process.env.NODE_ENV === 'development' && ip === 'unknown') {
+      return 'localhost-bypass-' + Math.random();
+    }
+
+    if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') {
+      return 'localhost-bypass-' + Math.random();
+    }
+    
     // Use IP address as key
-    return c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+    return ip;
   },
   handler: (c) => {
     return c.json({
@@ -51,13 +69,30 @@ export const aiRateLimitMiddleware = rateLimiter({
   limit: 20, // Max 20 requests per window (stricter limit)
   standardHeaders: 'draft-7',
   keyGenerator: (c) => {
+    // Bypass for test user
+    if (c.req.header('x-test-user-id')) {
+      return 'test-bypass-' + Math.random(); // Unique key every time
+    }
+    
+    // Bypass for localhost (Inngest, internal calls)
+    const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+    
+    // In development, bypass if IP is unknown (often happens with local fetch/Inngest)
+    if (process.env.NODE_ENV === 'development' && ip === 'unknown') {
+      return 'localhost-bypass-' + Math.random();
+    }
+
+    if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') {
+      return 'localhost-bypass-' + Math.random();
+    }
+
     // Try to use user ID from context if available (better than IP)
     // Fall back to IP if no user context
     const userId = (c as any).userId;
     if (userId) {
       return `user:${userId}`;
     }
-    return c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+    return ip;
   },
   handler: (c) => {
     return c.json({

@@ -8,26 +8,17 @@
  */
 
 import { Inngest } from 'inngest';
-import { config } from '@synap/core';
-import { createLogger } from '@synap/core';
+import { config, createLogger } from '@synap/core';
 
 const logger = createLogger({ module: 'api-inngest-client' });
 
-const isProduction = config.server.nodeEnv === 'production';
-const resolvedEventKey = config.inngest.eventKey ?? (isProduction ? undefined : 'dev-local-key');
-const baseUrl = config.inngest.baseUrl ?? (isProduction ? undefined : 'http://127.0.0.1:8288');
-
-if (!config.inngest.eventKey && !isProduction) {
-  logger.warn('INNGEST_EVENT_KEY not provided. Using default "dev-local-key" for local development.');
-}
-
+// Allow Inngest SDK to handle defaults/env vars automatically
+// This matches the working implementation in capture.ts
 export const inngest = new Inngest({
   id: 'synap-api-commands',
-  eventKey: resolvedEventKey,
-  baseUrl,
 });
 
-const canPublish = Boolean(resolvedEventKey);
+const canPublish = Boolean(config.inngest.eventKey || config.server.nodeEnv !== 'production');
 
 /**
  * Publish an event to Inngest

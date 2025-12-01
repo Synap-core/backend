@@ -2,10 +2,10 @@
 -- Simplified for Neon's Apache-licensed TimescaleDB
 
 -- Drop old table if exists (from failed migration)
-DROP TABLE IF EXISTS events_v2 CASCADE;
+DROP TABLE IF EXISTS events_timescale CASCADE;
 
--- Create the events_v2 table (new structure for event sourcing)
-CREATE TABLE events_v2 (
+-- Create the events_timescale table (TimescaleDB hypertable for event sourcing)
+CREATE TABLE events_timescale (
   -- Event identification
   id UUID DEFAULT gen_random_uuid(),
   timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -58,7 +58,7 @@ CREATE TABLE events_v2 (
 -- 
 -- Convert to TimescaleDB hypertable (time-series optimized)
 SELECT create_hypertable(
-  'events_v2',
+  'events_timescale',
   'timestamp',
   chunk_time_interval => INTERVAL '1 day',
   if_not_exists => TRUE
@@ -69,42 +69,42 @@ SELECT create_hypertable(
 -- ============================================================================
 
 -- Primary lookup: aggregate stream (for event replay)
-CREATE INDEX idx_events_v2_aggregate ON events_v2(aggregate_id, timestamp DESC, version DESC);
+CREATE INDEX idx_events_timescale_aggregate ON events_timescale(aggregate_id, timestamp DESC, version DESC);
 
 -- User isolation
-CREATE INDEX idx_events_v2_user ON events_v2(user_id, timestamp DESC);
+CREATE INDEX idx_events_timescale_user ON events_timescale(user_id, timestamp DESC);
 
 -- Event type filtering
-CREATE INDEX idx_events_v2_type ON events_v2(event_type, timestamp DESC);
+CREATE INDEX idx_events_timescale_type ON events_timescale(event_type, timestamp DESC);
 
 -- Correlation tracking (for workflow debugging)
-CREATE INDEX idx_events_v2_correlation ON events_v2(correlation_id, timestamp DESC) 
+CREATE INDEX idx_events_timescale_correlation ON events_timescale(correlation_id, timestamp DESC) 
   WHERE correlation_id IS NOT NULL;
 
 -- Source tracking
-CREATE INDEX idx_events_v2_source ON events_v2(source, timestamp DESC);
+CREATE INDEX idx_events_timescale_source ON events_timescale(source, timestamp DESC);
 
 -- Composite indexes for common query patterns
-CREATE INDEX idx_events_v2_user_type ON events_v2(user_id, event_type, timestamp DESC);
-CREATE INDEX idx_events_v2_aggregate_type ON events_v2(aggregate_type, timestamp DESC);
+CREATE INDEX idx_events_timescale_user_type ON events_timescale(user_id, event_type, timestamp DESC);
+CREATE INDEX idx_events_timescale_aggregate_type ON events_timescale(aggregate_type, timestamp DESC);
 
 -- Timestamp range queries (time-series optimization)
-CREATE INDEX idx_events_v2_timestamp ON events_v2(timestamp DESC);
+CREATE INDEX idx_events_timescale_timestamp ON events_timescale(timestamp DESC);
 
 -- ============================================================================
 -- COMMENTS
 -- ============================================================================
 
-COMMENT ON TABLE events_v2 IS 'Event sourcing event store (TimescaleDB hypertable)';
-COMMENT ON COLUMN events_v2.id IS 'Unique event ID';
-COMMENT ON COLUMN events_v2.timestamp IS 'Event timestamp (hypertable partition key)';
-COMMENT ON COLUMN events_v2.aggregate_id IS 'ID of the entity being modified';
-COMMENT ON COLUMN events_v2.aggregate_type IS 'Type of aggregate (entity, relation, user, system)';
-COMMENT ON COLUMN events_v2.event_type IS 'Event type (e.g., entity.created, task.completed)';
-COMMENT ON COLUMN events_v2.data IS 'Event data (deltas only, NOT full object state)';
-COMMENT ON COLUMN events_v2.version IS 'Optimistic locking version for the aggregate';
-COMMENT ON COLUMN events_v2.causation_id IS 'ID of event that caused this event';
-COMMENT ON COLUMN events_v2.correlation_id IS 'Group related events (e.g., workflow ID)';
+COMMENT ON TABLE events_timescale IS 'Event sourcing event store (TimescaleDB hypertable)';
+COMMENT ON COLUMN events_timescale.id IS 'Unique event ID';
+COMMENT ON COLUMN events_timescale.timestamp IS 'Event timestamp (hypertable partition key)';
+COMMENT ON COLUMN events_timescale.aggregate_id IS 'ID of the entity being modified';
+COMMENT ON COLUMN events_timescale.aggregate_type IS 'Type of aggregate (entity, relation, user, system)';
+COMMENT ON COLUMN events_timescale.event_type IS 'Event type (e.g., entity.created, task.completed)';
+COMMENT ON COLUMN events_timescale.data IS 'Event data (deltas only, NOT full object state)';
+COMMENT ON COLUMN events_timescale.version IS 'Optimistic locking version for the aggregate';
+COMMENT ON COLUMN events_timescale.causation_id IS 'ID of event that caused this event';
+COMMENT ON COLUMN events_timescale.correlation_id IS 'Group related events (e.g., workflow ID)';
 
 -- ============================================================================
 -- HELPER FUNCTIONS
@@ -178,7 +178,7 @@ COMMENT ON MATERIALIZED VIEW events_daily IS 'Daily event counts (refresh with: 
 DO $$
 BEGIN
   RAISE NOTICE '✅ TimescaleDB hypertable created successfully!';
-  RAISE NOTICE '   Table: events_v2';
+  RAISE NOTICE '   Table: events_timescale';
   RAISE NOTICE '   Chunk interval: 1 day';
   RAISE NOTICE '   Note: Compression/retention require Timescale Cloud (commercial license)';
   RAISE NOTICE '   For analytics, run: REFRESH MATERIALIZED VIEW events_daily;';

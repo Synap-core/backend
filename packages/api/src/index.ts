@@ -19,6 +19,7 @@ export { suggestionsRouter } from './routers/suggestions.js';
 export { systemRouter } from './routers/system.js';
 export { hubRouter } from './routers/hub.js';
 export { apiKeysRouter } from './routers/api-keys.js';
+export { healthRouter } from './routers/health.js';
 export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
 export { eventStreamManager } from './event-stream-manager.js';
 export { setupEventBroadcasting } from './setup-event-broadcasting.js';
@@ -31,6 +32,7 @@ import { suggestionsRouter } from './routers/suggestions.js';
 import { systemRouter } from './routers/system.js';
 import { hubRouter } from './routers/hub.js';
 import { apiKeysRouter } from './routers/api-keys.js';
+import { healthRouter } from './routers/health.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -44,6 +46,7 @@ registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'co
 registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
 registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
 registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', description: 'API key management for Hub authentication' });
+registerRouter('health', healthRouter, { version: '1.0.0', source: 'core', description: 'Health checks and system monitoring' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -61,6 +64,7 @@ const coreRouter = router({
   system: systemRouter,
   hub: hubRouter,
   apiKeys: apiKeysRouter,
+  health: healthRouter,
 });
 
 export type AppRouter = typeof coreRouter;

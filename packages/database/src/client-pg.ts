@@ -70,7 +70,7 @@ export async function setCurrentUser(userId: string): Promise<void> {
 
   try {
     const dbInstance = await getDb();
-    await dbInstance.execute(sql`SELECT set_current_user(${userId})`);
+    await dbInstance.execute(sql`SELECT set_current_user(${userId}::text)`);
     dbLogger.debug({ userId }, 'RLS current user set');
   } catch (error) {
     dbLogger.error({ err: error, userId }, 'Failed to set RLS current user');

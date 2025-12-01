@@ -18,10 +18,27 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - synap-network
+
+  # Database Initialization & Migrations
+  db-init:
+    image: postgres:15-alpine
+    container_name: synap-db-init
+    restart: "no" # Only run once
+    volumes:
+      - ./scripts/init-db.sh:/init-db.sh:ro
+      - ./packages/database/migrations-custom:/migrations:ro
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-synap_dev_password}@postgres:5432/synap
+    command: [ "sh", "/init-db.sh" ]
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - synap-network
 
@@ -40,7 +57,7 @@ services:
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -57,7 +74,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -78,10 +95,24 @@ services:
     volumes:
       - ory_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ory"]
+      test: [ "CMD-SHELL", "pg_isready -U ory" ]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - synap-network
+
+  # Ory Kratos Migration
+  kratos-migrate:
+    image: oryd/kratos:v1.0.0
+    environment:
+      - DSN=postgres://ory:${ORY_DB_PASSWORD:-ory_dev_password}@postgres-ory:5432/ory?sslmode=disable
+    volumes:
+      - ./kratos:/etc/config/kratos
+    command: -c /etc/config/kratos/kratos.yml migrate sql -e --yes
+    depends_on:
+      postgres-ory:
+        condition: service_healthy
     networks:
       - synap-network
 
@@ -105,15 +136,31 @@ services:
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
     volumes:
       - ./kratos:/etc/config/kratos
-    command: serve -c /etc/config/kratos/kratos.yml
+    command: serve -c /etc/config/kratos/kratos.yml --dev
     depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
       postgres-ory:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4433/health/ready"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4433/health/ready" ]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - synap-network
+
+  # Ory Hydra Migration
+  hydra-migrate:
+    image: oryd/hydra:v2.0.0
+    environment:
+      - DSN=postgres://ory:${ORY_DB_PASSWORD:-ory_dev_password}@postgres-ory:5432/ory?sslmode=disable
+    volumes:
+      - ./hydra:/etc/config/hydra
+    command: migrate sql -e --yes
+    depends_on:
+      postgres-ory:
+        condition: service_healthy
     networks:
       - synap-network
 
@@ -134,62 +181,64 @@ services:
       SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM:-please-change-this-secret-key-in-production}
     volumes:
       - ./hydra:/etc/config/hydra
-    command: serve all -c /etc/config/hydra/hydra.yml
+    command: serve all -c /etc/config/hydra/hydra.yml --dev
     depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
       postgres-ory:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4444/health/ready"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4444/health/ready" ]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - synap-network
 
-  # PostgreSQL for Mem0 (separate from main postgres)
-  postgres-mem0:
-    image: postgres:15-alpine
-    container_name: synap-postgres-mem0
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: mem0
-      POSTGRES_USER: mem0
-      POSTGRES_PASSWORD: ${MEM0_DB_PASSWORD:-mem0_dev_password}
-    ports:
-      - "5434:5432"
-    volumes:
-      - mem0_db_data:/var/lib/postgresql/data
-      - ./scripts/init-mem0-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mem0"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - synap-network
-
-  # Mem0 - Super Memory System
-  mem0:
-    image: mem0ai/mem0:latest
-    container_name: synap-mem0
-    restart: unless-stopped
-    ports:
-      - "8765:8765" # API Server
-    environment:
-      - MEM0_DATABASE_URL=postgresql://mem0:${MEM0_DB_PASSWORD:-mem0_dev_password}@postgres-mem0:5432/mem0?sslmode=disable
-      - MEM0_API_KEY=${MEM0_API_KEY:-change-me-in-production}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - MEM0_LOG_LEVEL=${MEM0_LOG_LEVEL:-info}
-    depends_on:
-      postgres-mem0:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    networks:
-      - synap-network
+  #   # PostgreSQL for Mem0 (separate from main postgres)
+  #   postgres-mem0:
+  #     image: postgres:15-alpine
+  #     container_name: synap-postgres-mem0
+  #     restart: unless-stopped
+  #     environment:
+  #       POSTGRES_DB: mem0
+  #       POSTGRES_USER: mem0
+  #       POSTGRES_PASSWORD: ${MEM0_DB_PASSWORD:-mem0_dev_password}
+  #     ports:
+  #       - "5434:5432"
+  #     volumes:
+  #       - mem0_db_data:/var/lib/postgresql/data
+  #       - ./scripts/init-mem0-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
+  #     healthcheck:
+  #       test: ["CMD-SHELL", "pg_isready -U mem0"]
+  #       interval: 5s
+  #       timeout: 5s
+  #       retries: 5
+  #     networks:
+  #       - synap-network
+  #
+  #   # Mem0 - Super Memory System
+  #   mem0:
+  #     image: mem0ai/mem0:latest
+  #     container_name: synap-mem0
+  #     restart: unless-stopped
+  #     ports:
+  #       - "8765:8765" # API Server
+  #     environment:
+  #       - MEM0_DATABASE_URL=postgresql://mem0:${MEM0_DB_PASSWORD:-mem0_dev_password}@postgres-mem0:5432/mem0?sslmode=disable
+  #       - MEM0_API_KEY=${MEM0_API_KEY:-change-me-in-production}
+  #       - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #       - MEM0_LOG_LEVEL=${MEM0_LOG_LEVEL:-info}
+  #     depends_on:
+  #       postgres-mem0:
+  #         condition: service_healthy
+  #     healthcheck:
+  #       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+  #       interval: 30s
+  #       timeout: 10s
+  #       retries: 5
+  #     networks:
+  #       - synap-network
 
   # API Server (Synap Backend)
   api:
@@ -226,12 +275,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      mem0:
-        condition: service_healthy
+    #      mem0:
+    #        condition: service_healthy
     networks:
       - synap-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3

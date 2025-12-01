@@ -192,10 +192,10 @@ async function main() {
     // Cleanup (optional - comment out to keep test data)
     // Note: Cleanup requires direct database access, which is not exposed by EventRepository
     // For now, test data will remain in the database
-    // To clean up manually: DELETE FROM events_v2 WHERE user_id = '<userId>';
+    // To clean up manually: DELETE FROM events_timescale WHERE user_id = '<userId>';
     console.log(`\n📝 Test data user ID: ${userId}`);
     console.log('   To clean up manually, run:');
-    console.log(`   DELETE FROM events_v2 WHERE user_id = '${userId}';`);
+    console.log(`   DELETE FROM events_timescale WHERE user_id = '${userId}';`);
     
   } catch (error) {
     console.error('\n❌ Test failed:', error);

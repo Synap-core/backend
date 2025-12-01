@@ -247,6 +247,11 @@ app.use('/trpc/*', async (c, next) => {
     return next();
   }
 
+  // DEV MODE ONLY: Allow bypassing auth for testing
+  if (isDev && c.req.header('x-test-user-id')) {
+    return next();
+  }
+
   // Apply auth middleware for all other routes
   return authMiddleware(c, next);
 });

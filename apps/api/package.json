@@ -18,13 +18,15 @@
     "@synap/jobs": "workspace:*",
     "@synap/types": "workspace:*",
     "@trpc/server": "^11.0.0",
-    "zod": "^3.22.0",
     "hono": "^4.0.0",
     "hono-rate-limiter": "^0.4.2",
-    "inngest": "^3.15.0"
+    "inngest": "^3.15.0",
+    "zod": "^3.22.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.15.6",
     "dotenv": "^17.2.3",
+    "pg": "^8.16.3",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

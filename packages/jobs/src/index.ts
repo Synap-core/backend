@@ -1,16 +1,12 @@
 /**
  * Jobs Package - Main Export
  * 
- * Phase 2: Worker Layer
+ * Phase 3: Refactored Handler Architecture
  * 
  * This package exports:
- * - Event dispatcher (central Inngest function)
- * - Event handlers (registered automatically)
+ * - Handler functions (Inngest functions with direct event subscriptions)
  * - Legacy functions (for backward compatibility)
  */
-
-// Import handlers to register them (side effect)
-import './handlers/index.js';
 
 export * from './client.js';
 export { handleNewEvent } from './functions/projectors.js';
@@ -19,30 +15,40 @@ export { processAnalyzedThought } from './functions/thought-processor.js';
 export { insightPatternDetector } from './functions/insights.js';
 export { indexEntityEmbedding } from './functions/entity-embedding.js';
 
-// Phase 2: Export event dispatcher and handlers
-export { eventDispatcher } from './functions/event-dispatcher.js';
-export * from './handlers/index.js';
+// Export new handler functions
+export { handleTaskCreation } from './functions/task-creation.js';
+export { handleNoteCreation } from './functions/note-creation.js';
+export { handleConversationMessage } from './functions/conversation-message.js';
+export { handleProjectCreation } from './functions/project-creation.js';
+export { handleTaskCompletion } from './functions/task-completion.js';
+export { handleEmbeddingGeneration } from './functions/embedding-generation.js';
 
-// Export all functions for Inngest
+// Import all functions for Inngest
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
 import { insightPatternDetector } from './functions/insights.js';
 import { indexEntityEmbedding } from './functions/entity-embedding.js';
-import { eventDispatcher } from './functions/event-dispatcher.js';
-// Note: ingestionEngineV1 has been moved to synap-intelligence-hub repository
-// import { ingestionEngineV1 } from './functions/ingestion-engine.js';
+import { handleTaskCreation } from './functions/task-creation.js';
+import { handleNoteCreation } from './functions/note-creation.js';
+import { handleConversationMessage } from './functions/conversation-message.js';
+import { handleProjectCreation } from './functions/project-creation.js';
+import { handleTaskCompletion } from './functions/task-completion.js';
+import { handleEmbeddingGeneration } from './functions/embedding-generation.js';
 
 export const functions = [
-  // Phase 2: Event dispatcher (replaces direct event handling)
-  eventDispatcher,
-  // Note: Ingestion Engine V1 is now in synap-intelligence-hub (proprietary)
-  // ingestionEngineV1,
   // Legacy functions (kept for backward compatibility)
   handleNewEvent,
   analyzeCapturedThought,
   processAnalyzedThought,
   insightPatternDetector,
   indexEntityEmbedding,
+  
+  // Phase 3: Direct event subscription handlers
+  handleTaskCreation,
+  handleNoteCreation,
+  handleConversationMessage,
+  handleProjectCreation,
+  handleTaskCompletion,
+  handleEmbeddingGeneration,
 ];
-
