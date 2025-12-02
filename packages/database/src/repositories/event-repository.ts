@@ -173,47 +173,74 @@ export class EventRepository {
       requestId: validated.requestId,
     };
 
-    const result = await this.pool.query(`
-      INSERT INTO events_timescale (
-        id,
-        aggregate_id,
-        aggregate_type,
-        event_type,
-        user_id,
-        data,
-        metadata,
-        version,
-        causation_id,
-        correlation_id,
-        source,
-        timestamp
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *
-    `, [
-      validated.id,
-      validated.aggregateId || validated.id, // Use event ID as aggregate if not provided
-      aggregateType,
-      validated.type,
-      validated.userId,
-      JSON.stringify(validated.data),
-      JSON.stringify(metadata),
-      1, // Aggregate version (simplified for Phase 1)
-      validated.causationId || null,
-      validated.correlationId || null,
-      validated.source,
-      validated.timestamp,
-    ]);
+    try {
+      const result = await this.pool.query(`
+        INSERT INTO events_timescale (
+          id,
+          aggregate_id,
+          aggregate_type,
+          event_type,
+          user_id,
+          data,
+          metadata,
+          version,
+          causation_id,
+          correlation_id,
+          source,
+          timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *
+      `, [
+        validated.id,
+        validated.aggregateId || validated.id, // Use event ID as aggregate if not provided
+        aggregateType,
+        validated.type,
+        validated.userId,
+        JSON.stringify(validated.data),
+        JSON.stringify(metadata),
+        1, // Aggregate version (simplified for Phase 1)
+        validated.causationId || null,
+        validated.correlationId || null,
+        validated.source,
+        validated.timestamp,
+      ]);
 
-    const eventRecord = this.mapRow(result.rows[0]);
+      const eventRecord = this.mapRow(result.rows[0]);
 
-    // Notify hooks (real-time broadcasting, etc.)
-    // Fire and forget - don't block the response
-    this.notifyHooks(eventRecord).catch(err => {
-      // Log but don't throw - hooks failing shouldn't break event storage
-      console.error('Event hook error:', err);
-    });
+      // Notify hooks (real-time broadcasting, etc.)
+      // Fire and forget - don't block the response
+      this.notifyHooks(eventRecord).catch(err => {
+        // Log but don't throw - hooks failing shouldn't break event storage
+        console.error('Event hook error:', err);
+      });
 
-    return eventRecord;
+      return eventRecord;
+    } catch (error) {
+      // Detailed error logging for debugging
+      console.error('❌ Event append failed:', {
+        eventId: validated.id,
+        eventType: validated.type,
+        userId: validated.userId,
+        aggregateId: validated.aggregateId,
+        error: {
+          name: error?.name || 'Unknown',
+          message: error?.message || 'No message',
+          code: error?.code,
+          detail: error?.detail,
+          hint: error?.hint,
+          where: error?.where,
+          schema: error?.schema,
+          table: error?.table,
+          column: error?.column,
+          constraint: error?.constraint,
+          stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
+        }
+      });
+      
+      // Throw a proper Error with message
+      const errorMessage = error?.message || error?.detail || 'Unknown database error';
+      throw new Error(`Failed to append event to store: ${errorMessage}`);
+    }
   }
   
   /**
