@@ -1,62 +1,58 @@
 /**
- * Universal Database Client
+ * Database Client - Pure PostgreSQL with postgres.js
  * 
- * Automatically selects optimal driver:
- * - Local/Traditional Cloud: postgres.js (fast, simple)
- * - Serverless (Neon/Vercel): @neondatabase/serverless (WebSocket/HTTP)
+ * Simple, single-driver approach for pod-per-user architecture.
+ * Works everywhere: local development, cloud VMs, traditional hosting.
  */
 
-import { createDriver } from './driver-factory.js';
-import type { DatabaseDriver } from './types.js';
-import * as schema from './schema/index.js';
-import { sql } from 'drizzle-orm';
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import { createLogger, ValidationError, InternalServerError } from '@synap/core';
+import * as schema from './schema/index.js';
 
-const dbLogger = createLogger({ module: 'database' });
+const logger = createLogger({ module: 'database' });
 
-// Lazy initialization
-let driverInstance: DatabaseDriver | null = null;
+// PostgreSQL connection configuration
+const connectionConfig = {
+  max: parseInt(process.env.DB_POOL_SIZE || '10'),      // Connection pool size
+  idle_timeout: 20,                                      // Close idle connections after 20s
+  connect_timeout: 10,                                   // Fail fast if DB unreachable
+  onnotice: () => {},                                    // Suppress NOTICE messages
+  debug: process.env.DB_DEBUG === 'true',                // Enable query logging if needed
+};
 
 /**
- * Get database instance (async initialization)
+ * PostgreSQL connection pool (postgres.js)
  * 
- * @example
- * const db = await getDb();
- * await db.select().from(users);
+ * Use this for raw SQL queries:
+ * ```typescript
+ * const result = await sql`SELECT * FROM users WHERE id = ${userId}`;
+ * ```
+ */
+export const sql = postgres(process.env.DATABASE_URL!, connectionConfig);
+
+/**
+ * Drizzle ORM instance (type-safe query builder)
+ * 
+ * Use this for type-safe queries:
+ * ```typescript
+ * const users = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+ * ```
+ */
+export const db = drizzle(sql, { schema });
+
+/**
+ * Get database instance (for compatibility with existing code)
+ * @returns Drizzle database instance
  */
 export async function getDb() {
-  if (!driverInstance) {
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-      throw new Error('DATABASE_URL environment variable is required');
-    }
-    
-    driverInstance = await createDriver({
-      url: dbUrl,
-      schema,
-      poolSize: parseInt(process.env.DB_POOL_SIZE || '10'),
-    });
-  }
-  return driverInstance.db;
+  return db;
 }
 
-/**
- * Synchronous database access (for compatibility)
- * 
- * Important: Call getDb() first to initialize!
- * 
- * @example
- * await getDb(); // Initialize
- * const users = await db.select().from(users); // Use synchronously
- */
-export const db = new Proxy({} as any, {
-  get(_target, prop) {
-    if (!driverInstance) {
-      throw new Error('Database not initialized. Call getDb() first.');
-    }
-    return driverInstance.db[prop];
-  }
-});
+logger.info({
+  poolSize: connectionConfig.max,
+  url: process.env.DATABASE_URL?.substring(0, 30) + '...'
+}, 'PostgreSQL connection pool initialized (postgres.js + Drizzle)');
 
 /**
  * Set current user for Row-Level Security (RLS)
@@ -69,11 +65,10 @@ export async function setCurrentUser(userId: string): Promise<void> {
   }
 
   try {
-    const dbInstance = await getDb();
-    await dbInstance.execute(sql`SELECT set_current_user(${userId}::text)`);
-    dbLogger.debug({ userId }, 'RLS current user set');
+    await sql`SELECT set_current_user(${userId}::text)`;
+    logger.debug({ userId }, 'RLS current user set');
   } catch (error) {
-    dbLogger.error({ err: error, userId }, 'Failed to set RLS current user');
+    logger.error({ err: error, userId }, 'Failed to set RLS current user');
     throw new InternalServerError(
       `Failed to set current user: ${error instanceof Error ? error.message : 'Unknown error'}`,
       { userId, originalError: error instanceof Error ? error.message : String(error) }
@@ -86,11 +81,10 @@ export async function setCurrentUser(userId: string): Promise<void> {
  */
 export async function clearCurrentUser(): Promise<void> {
   try {
-    const dbInstance = await getDb();
-    await dbInstance.execute(sql`RESET app.current_user_id`);
-    dbLogger.debug('RLS current user cleared');
+    await sql`RESET app.current_user_id`;
+    logger.debug('RLS current user cleared');
   } catch (error) {
-    dbLogger.error({ err: error }, 'Failed to clear RLS current user');
+    logger.error({ err: error }, 'Failed to clear RLS current user');
     throw new InternalServerError(
       `Failed to clear current user: ${error instanceof Error ? error.message : 'Unknown error'}`,
       { originalError: error instanceof Error ? error.message : String(error) }
@@ -98,4 +92,15 @@ export async function clearCurrentUser(): Promise<void> {
   }
 }
 
-dbLogger.info('Database client ready (lazy initialization)');
+/**
+ * Close database connections gracefully
+ * Call this during application shutdown
+ */
+export async function closeDatabase(): Promise<void> {
+  await sql.end({ timeout: 5 });
+  logger.info('Database connections closed');
+}
+
+// Handle process termination
+process.on('SIGTERM', closeDatabase);
+process.on('SIGINT', closeDatabase);

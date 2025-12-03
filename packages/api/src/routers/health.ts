@@ -66,10 +66,10 @@ export const healthRouter = router({
   /**
    * System metrics - basic operational metrics
    */
-  metrics: publicProcedure.query(async ({ ctx }) => {
+  metrics: publicProcedure.query(async () => {
     const [eventCount, entityCount] = await Promise.allSettled([
-      ctx.db.execute(sql`SELECT COUNT(*) as count FROM events_timescale WHERE timestamp > NOW() - INTERVAL '24 hours'`),
-      ctx.db.execute(sql`SELECT COUNT(*) as count FROM entities`),
+      sql`SELECT COUNT(*) as count FROM events_timescale WHERE timestamp > NOW() - INTERVAL '24 hours'`,
+      sql`SELECT COUNT(*) as count FROM entities`,
     ]);
 
     return {
@@ -80,11 +80,11 @@ export const healthRouter = router({
         total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
         rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
       },
-      events24h: eventCount.status === 'fulfilled' && eventCount.value.rows?.[0]?.count
-        ? Number(eventCount.value.rows[0].count)
+      events24h: eventCount.status === 'fulfilled' && eventCount.value?.[0]?.count
+        ? Number(eventCount.value[0].count)
         : 0,
-      totalEntities: entityCount.status === 'fulfilled' && entityCount.value.rows?.[0]?.count
-        ? Number(entityCount.value.rows[0].count)
+      totalEntities: entityCount.status === 'fulfilled' && entityCount.value?.[0]?.count
+        ? Number(entityCount.value[0].count)
         : 0,
     };
   }),
@@ -94,11 +94,10 @@ export const healthRouter = router({
  * Check database connectivity
  */
 async function checkDatabase(): Promise<void> {
-  // Import getDb to get the initialized database instance  
-  const { getDb } = await import('@synap/database');
-  const database = await getDb();
-  const result = await database.execute(sql`SELECT 1 as healthy`);
-  if (!result.rows[0]?.healthy) {
+  // Import sql (postgres.js) for raw SQL query
+  const { sql } = await import('@synap/database');
+  const result = await sql`SELECT 1 as healthy`;
+  if (!result[0]?.healthy) {
     throw new Error('Database ping failed');
   }
 }

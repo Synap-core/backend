@@ -12,10 +12,11 @@
  * - Event replay (get aggregate stream)
  * - User event streams
  * - Correlation tracking
+ * - Row-Level Security integration
  * - Event hooks for real-time broadcasting
  */
 
-import { Pool } from '@neondatabase/serverless';
+import type postgres from 'postgres';
 import { SynapEventSchema, type SynapEvent } from '@synap/types';
 
 /**
@@ -86,7 +87,19 @@ export interface UserStreamOptions {
 export class EventRepository {
   private eventHooks: EventHook[] = [];
 
-  constructor(private pool: Pool) {}
+  // Accept postgres.js Sql instance
+  constructor(private sql: ReturnType<typeof postgres>) {}
+
+  /**
+   * Query wrapper for postgres.js
+   * Converts .query(sqlString, params[]) to postgres.js template literal format
+   * This maintains compatibility with existing query code
+   */
+  private async query(sqlString: string, params?: any[]): Promise<{ rows: any[] }> {
+    // Convert to safe postgres.js query
+    const rows = await this.sql.unsafe(sqlString, params || []);
+    return { rows };
+  }
 
   /**
    * Add an event hook
@@ -125,7 +138,7 @@ export class EventRepository {
    * Get event by ID
    */
   async findById(id: string): Promise<EventRecord | null> {
-    const result = await this.pool.query(`
+    const result = await this.query(`
       SELECT * FROM events_timescale
       WHERE id = $1
     `, [id]);
@@ -174,7 +187,7 @@ export class EventRepository {
     };
 
     try {
-      const result = await this.pool.query(`
+      const result = await this.query(`
         INSERT INTO events_timescale (
           id,
           aggregate_id,
@@ -202,8 +215,9 @@ export class EventRepository {
         validated.causationId || null,
         validated.correlationId || null,
         validated.source,
-        validated.timestamp,
+        validated.timestamp instanceof Date ? validated.timestamp.toISOString() : validated.timestamp,
       ]);
+
 
       const eventRecord = this.mapRow(result.rows[0]);
 
@@ -316,7 +330,7 @@ export class EventRepository {
       );
     });
 
-    const result = await this.pool.query(`
+    const result = await this.query(`
       INSERT INTO events_timescale (
         id, aggregate_id, aggregate_type, event_type, user_id, data,
         metadata, version, causation_id, correlation_id, source, timestamp
@@ -359,7 +373,7 @@ export class EventRepository {
 
     query += ` ORDER BY version ASC`;
 
-    const result = await this.pool.query(query, params);
+    const result = await this.query(query, params);
     return result.rows.map(row => this.mapRow(row));
   }
 
@@ -367,7 +381,7 @@ export class EventRepository {
    * Get current version of aggregate (for optimistic locking)
    */
   async getAggregateVersion(aggregateId: string): Promise<number | null> {
-    const result = await this.pool.query(`
+    const result = await this.query(`
       SELECT MAX(version) as version
       FROM events_timescale
       WHERE aggregate_id = $1
@@ -414,7 +428,7 @@ export class EventRepository {
     query += ` ORDER BY timestamp DESC LIMIT $${paramIndex}`;
     params.push(limit);
 
-    const result = await this.pool.query(query, params);
+    const result = await this.query(query, params);
     return result.rows.map(row => this.mapRow(row));
   }
 
@@ -422,7 +436,7 @@ export class EventRepository {
    * Get events by correlation ID (workflow tracking)
    */
   async getCorrelatedEvents(correlationId: string): Promise<EventRecord[]> {
-    const result = await this.pool.query(`
+    const result = await this.query(`
       SELECT * FROM events_timescale
       WHERE correlation_id = $1
       ORDER BY timestamp ASC
@@ -438,7 +452,7 @@ export class EventRepository {
     eventType: string,
     limit: number = 100
   ): Promise<EventRecord[]> {
-    const result = await this.pool.query(`
+    const result = await this.query(`
       SELECT * FROM events_timescale
       WHERE event_type = $1
       ORDER BY timestamp DESC
@@ -522,7 +536,7 @@ export class EventRepository {
       paramIndex++;
     }
 
-    const result = await this.pool.query(query, params);
+    const result = await this.query(query, params);
     return result.rows.map(row => this.mapRow(row));
   }
 
@@ -570,7 +584,7 @@ export class EventRepository {
       paramIndex++;
     }
 
-    const result = await this.pool.query(query, params);
+    const result = await this.query(query, params);
     return parseInt(result.rows[0].count, 10);
   }
 
@@ -598,25 +612,25 @@ export class EventRepository {
 }
 
 // ============================================================================
-// SINGLETON EXPORT
+// SINGLETON EXPORT  
 // ============================================================================
+
+import { sql } from '../client-pg.js';
 
 /**
  * Singleton EventRepository instance
- * 
- * Uses DATABASE_URL from environment
+ * Uses pure postgres.js for maximum simplicity and performance
  */
-let _eventRepository: EventRepository | null = null;
+export const eventRepository = new EventRepository(sql);
 
+/**
+ * Get EventRepository instance (for compatibility)
+ * @deprecated Use `eventRepository` directly instead
+ */
 export function getEventRepository(): EventRepository {
-  if (!_eventRepository) {
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-    });
-    _eventRepository = new EventRepository(pool);
-  }
-  return _eventRepository;
+  return eventRepository;
 }
 
-export const eventRepository = getEventRepository();
+
+
 

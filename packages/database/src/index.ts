@@ -1,24 +1,29 @@
 /**
  * Database Package - Main Export
+ * Pure PostgreSQL with postgres.js
  */
 
-export * from './client.js';
+// Export PostgreSQL clients
+export { sql, db, getDb } from './client-pg.js';
+
+// Export RLS functions
+export { setCurrentUser, clearCurrentUser, closeDatabase } from './client-pg.js';
+
+// Export all schemas
 export * from './schema/index.js';
+
+// Export all repositories
 export * from './repositories/index.js';
 export type { EventHook } from './repositories/event-repository.js';
 
-// Export RLS functions for PostgreSQL
-export { setCurrentUser, clearCurrentUser } from './client-pg.js';
-
 // Re-export commonly used drizzle-orm functions
-// This ensures all packages use the same drizzle-orm instance
 export {
   // Query builders
   eq,
   and,
   or,
   not,
-  sql,
+  sql as sqlTemplate,
   // Comparison operators
   isNull,
   isNotNull,
