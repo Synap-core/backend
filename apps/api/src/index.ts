@@ -233,17 +233,19 @@ app.get('/api/events/stream', (c) => {
   });
 });
 
-// tRPC routes (protected by auth, except system.* routes in development)
+// tRPC routes (protected by auth, except public routes)
 app.use('/trpc/*', async (c, next) => {
   const path = c.req.path;
 
-  // In development, allow public access to system.* routes for the admin dashboard
-  // In production, you should add proper auth for the admin dashboard
+  // Public routes that don't require authentication
+  const isHealthRoute = path.includes('health.');
   const isSystemRoute = path.includes('system.');
   const isDev = config.server.nodeEnv === 'development';
 
-  if (isSystemRoute && isDev) {
-    apiLogger.debug({ path }, 'Bypassing auth for system route in development');
+  // In development, allow public access to system.* and health.* routes
+  // In production, health.* routes are always public for monitoring
+  if (isHealthRoute || (isSystemRoute && isDev)) {
+    apiLogger.debug({ path }, 'Bypassing auth for public route');
     return next();
   }
 

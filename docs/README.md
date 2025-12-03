@@ -124,9 +124,9 @@ Pour améliorer la documentation :
 
 ## 🔗 Liens Utiles
 
-- **Repository GitHub** : [synap-core-os](https://github.com/synap/core-os)
-- **Issues** : [GitHub Issues](https://github.com/synap/core-os/issues)
-- **Discussions** : [GitHub Discussions](https://github.com/synap/core-os/discussions)
+- **Repository GitHub** : [synap-core-os](https://github.com/Synap-core/backend-os)
+- **Issues** : [GitHub Issues](https://github.com/Synap-core/backend-os/issues)
+- **Discussions** : [GitHub Discussions](https://github.com/Synap-core/backend-os/discussions)
 
 ---
 

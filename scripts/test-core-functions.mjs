@@ -134,15 +134,14 @@ const tests = {
       results.push({ endpoint: 'create', passed: false });
     }
     
-    // Test list
+    // Test list (GET for tRPC queries)
     try {
-      const listRes = await fetch(`${API_URL}/trpc/notes.list?batch=1`, {
-        method: 'POST',
+      const input = encodeURIComponent(JSON.stringify({ limit: 10 }));
+      const listRes = await fetch(`${API_URL}/trpc/notes.list?input=${input}`, {
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
           'x-test-user-id': TEST_USER,
         },
-        body: JSON.stringify({ 0: { limit: 10 } }),
       });
       
       if (listRes.ok) {

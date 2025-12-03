@@ -4,13 +4,22 @@
  * PostgreSQL-only with Ory Kratos session authentication for multi-user support.
  */
 
-import { db } from '@synap/database';
+import { getDb } from '@synap/database';
 import { createLogger, InternalServerError } from '@synap/core';
 
 const contextLogger = createLogger({ module: 'api-context' });
 
+// Initialize database connection once at module load
+let dbInstance: Awaited<ReturnType<typeof getDb>> | null = null;
+async function getDbInstance() {
+  if (!dbInstance) {
+    dbInstance = await getDb();
+  }
+  return dbInstance;
+}
+
 export interface Context extends Record<string, unknown> {
-  db: typeof db;
+  db: Awaited<ReturnType<typeof getDb>>;
   authenticated: boolean;
   userId?: string | null;
   user?: any;
@@ -18,6 +27,8 @@ export interface Context extends Record<string, unknown> {
 }
 
 export async function createContext(req: Request): Promise<Context> {
+  // Initialize database
+  const db = await getDbInstance();
   // DEV MODE ONLY: Allow bypassing auth for testing
   // Check for x-test-user-id header
   const testUserId = req.headers.get('x-test-user-id');

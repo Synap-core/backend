@@ -217,29 +217,34 @@ export class EventRepository {
       return eventRecord;
     } catch (error) {
       // Detailed error logging for debugging
+      // Cast to any to access all possible error properties
+      const err = error as any;
       console.error('❌ Event append failed:', {
         eventId: validated.id,
         eventType: validated.type,
         userId: validated.userId,
         aggregateId: validated.aggregateId,
         error: {
-          name: error?.name || 'Unknown',
-          message: error?.message || 'No message',
-          code: error?.code,
-          detail: error?.detail,
-          hint: error?.hint,
-          where: error?.where,
-          schema: error?.schema,
-          table: error?.table,
-          column: error?.column,
-          constraint: error?.constraint,
-          stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
+          name: err?.name || 'Unknown',
+          message: err?.message || 'No message',
+          code: err?.code,
+          detail: err?.detail,
+          hint: err?.hint,
+          where: err?.where,
+          schema: err?.schema,
+          table: err?.table,
+          column: err?.column,
+          constraint: err?.constraint,
+          stack: err?.stack?.split('\n').slice(0, 5).join('\n'),
         }
       });
+
+      // CRITICAL FIX: Throw proper Error object, not ErrorEvent
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : err?.detail || err?.message || 'Failed to append event to store';
       
-      // Throw a proper Error with message
-      const errorMessage = error?.message || error?.detail || 'Unknown database error';
-      throw new Error(`Failed to append event to store: ${errorMessage}`);
+      throw new Error(`Failed to append event: ${errorMessage}`);
     }
   }
   
