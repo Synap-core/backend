@@ -36,7 +36,7 @@ Installation complète de **Mem0** (Super Memory System) en mode auto-hébergé 
 
 ### Infrastructure
 
-1. **`docker-compose.yml`** - Services Mem0 + PostgreSQL ajoutés
+1. **`docker compose.yml`** - Services Mem0 + PostgreSQL ajoutés
 
 ### Configuration
 

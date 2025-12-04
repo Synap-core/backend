@@ -297,7 +297,7 @@ Le Data Pod n'est pas un client OAuth2, mais un **Resource Server** qui :
 
 #### **Infrastructure Ory**
 
-1. **`docker-compose.ory.yml`** ✨ NOUVEAU
+1. **`docker compose.ory.yml`** ✨ NOUVEAU
    ```yaml
    # Configuration Docker Compose pour Ory Stack
    services:
@@ -968,7 +968,7 @@ Voir `scripts/migrate-users-to-kratos.ts` (section 4.2, fichier #15)
 
 #### **Jour 1-2 : Setup Docker**
 
-- [ ] Créer `docker-compose.ory.yml`
+- [ ] Créer `docker compose.ory.yml`
 - [ ] Créer `kratos/kratos.yml`
 - [ ] Créer `kratos/identity.schema.json`
 - [ ] Créer `hydra/hydra.yml`

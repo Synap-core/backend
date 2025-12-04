@@ -1,20 +1,19 @@
 import { defineConfig } from 'vitest/config';
 import { loadEnv } from 'vite';
-import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
   // Load .env.test for test environment
   const env = loadEnv(mode, process.cwd(), '');
   
   return {
-    plugins: [react()],
     test: {
       globals: true,
-      environment: 'jsdom',
+      environment: 'node',
       setupFiles: ['./tests/setup.ts'],
       env: {
         // Ensure environment variables available for tests
         DATABASE_URL: env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/synap',
+        OPENAI_API_KEY: env.OPENAI_API_KEY || 'test-key',
         NODE_ENV: 'test',
       },
       coverage: {
@@ -24,7 +23,6 @@ export default defineConfig(({ mode }) => {
           'node_modules/',
           'dist/',
           '**/*.test.ts',
-          '**/*.test.tsx',
           '**/tests/**',
         ],
       },

@@ -10,7 +10,7 @@
 Guide pour déployer avec Docker Compose (self-hosted complet).
 
 **Contenu :**
-- Configuration docker-compose.yml
+- Configuration docker compose.yml
 - Services inclus (PostgreSQL, MinIO, API)
 - Variables d'environnement
 - Démarrage en une commande

@@ -9,9 +9,9 @@
 
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcrypt';
-import { db } from '@synap/database';
+import { db, sql as pgSql, drizzleSql as sql } from '@synap/database';  // pgSql = postgres.js, sql = Drizzle
 import { apiKeys, KEY_PREFIXES, type ApiKeyRecord, type ApiKeyScope } from '@synap/database';
-import { eq, and, or, isNull, gt, sql } from '@synap/database';
+import { eq, and, or, isNull, gt } from '@synap/database';
 
 /**
  * Bcrypt cost factor
@@ -320,9 +320,7 @@ export class ApiKeyService {
    * @returns Number of keys cleaned up
    */
   async cleanupExpiredKeys(): Promise<number> {
-    const result = await db.execute(
-      sql`SELECT cleanup_expired_api_keys() as cleanup_expired_api_keys`
-    ) as unknown as { cleanup_expired_api_keys: number }[];
+    const result = await pgSql`SELECT cleanup_expired_api_keys() as cleanup_expired_api_keys`;
     return result[0]?.cleanup_expired_api_keys ?? 0;
   }
   

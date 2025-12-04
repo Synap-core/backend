@@ -109,7 +109,7 @@ Agent → MemoryLayer.searchMemory() → Mem0 API → PostgreSQL → Résultats
 
 ### 3.1. Infrastructure Docker
 
-#### **`docker-compose.yml`** (Modification)
+#### **`docker compose.yml`** (Modification)
 
 **Ajouter service Mem0 :**
 
@@ -594,7 +594,7 @@ case 'mem0':
 
 ### 4.1. Infrastructure
 
-1. **`docker-compose.yml`** ✏️ MODIFIER
+1. **`docker compose.yml`** ✏️ MODIFIER
    - Ajouter service `postgres-mem0`
    - Ajouter service `mem0`
    - Ajouter volume `mem0_db_data`
@@ -633,7 +633,7 @@ case 'mem0':
 #### **Jour 1 : Docker Setup**
 
 - [ ] Créer `scripts/init-mem0-extensions.sql`
-- [ ] Modifier `docker-compose.yml`
+- [ ] Modifier `docker compose.yml`
   - [ ] Ajouter service `postgres-mem0`
   - [ ] Ajouter service `mem0`
   - [ ] Ajouter volume `mem0_db_data`

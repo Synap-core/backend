@@ -193,7 +193,7 @@ synap-backend/
 - ✅ STORAGE-ABSTRACTION.md (technical reference)
 - ✅ CHANGELOG.md (version history)
 - ✅ ROADMAP.md (if current)
-- ✅ docker-compose.yml (configuration)
+- ✅ docker compose.yml (configuration)
 
 ---
 

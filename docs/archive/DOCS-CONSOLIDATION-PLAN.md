@@ -29,7 +29,7 @@
 - DEVELOPMENT.md (new)
 - CHANGELOG.md (keep)
 - STORAGE-ABSTRACTION.md (keep, technical reference)
-- docker-compose.yml (keep)
+- docker compose.yml (keep)
 - env.example files (keep)
 
 ## Files to Archive

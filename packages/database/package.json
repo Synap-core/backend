@@ -32,9 +32,12 @@
     "drizzle-orm": "^0.33.0"
   },
   "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.0.15",
     "drizzle-kit": "^0.24.0",
     "postgres": "^3.4.7",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.15"
   }
 }

@@ -70,7 +70,7 @@ pnpm dev
 
 #### 1. Docker Compose ✅
 
-**File:** `docker-compose.yml`
+**File:** `docker compose.yml`
 
 **Services:**
 - ✅ PostgreSQL 16 with TimescaleDB + pgvector
@@ -415,7 +415,7 @@ import { db } from '@synap/database';
 ## 📎 Related Documents
 
 - `README.md` - Updated quick start guide
-- `docker-compose.yml` - Local development setup
+- `docker compose.yml` - Local development setup
 - `migrations-drizzle/README.md` - Drizzle migrations guide
 - `migrations-custom/README.md` - Custom SQL migrations guide
 - `API_KEYS_IMPLEMENTATION_STATUS.md` - Phase 2 status

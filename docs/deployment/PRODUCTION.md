@@ -22,7 +22,7 @@ Complete guide for deploying Synap Backend to production.
 
 ### Required Services
 
-- **Database**: PostgreSQL (Neon, Supabase, Railway, or self-hosted)
+- **Database**: PostgreSQL 14+ (any provider: self-hosted, Supabase, Railway, RDS, etc.)
 - **Storage**: Cloudflare R2 (recommended) or MinIO
 - **AI Services**: 
   - Anthropic API key (for conversational AI)
@@ -101,43 +101,55 @@ pnpm tsx scripts/test-system.ts
 
 ## Database Setup
 
-### Option 1: Neon (Recommended for Serverless)
+> **Note:** Synap uses **pure PostgreSQL 14+** with pgvector extension. Any PostgreSQL provider works (cloud, managed, or self-hosted).
 
-1. **Create Neon Account**: https://neon.tech
-2. **Create Database**: 
-   - Project name: `synap-production`
-   - Region: Choose closest to your users
-   - PostgreSQL version: 16
-3. **Get Connection String**: Copy from Neon dashboard
-4. **Enable Extensions**: Run initialization script
+### Automated Setup (Recommended)
+
+With the automated Docker migration system, database setup is automatic:
 
 ```bash
-export DATABASE_URL=postgresql://...
-pnpm --filter database db:init
+# All tables and extensions are created automatically
+docker compose up -d
 ```
 
-Or manually:
+The `db-init` service automatically:
+- ✅ Creates pgvector extension
+- ✅ Creates uuid-ossp extension  
+- ✅ Applies all SQL migrations
+- ✅ Creates 13 database tables
+
+### Manual Setup (If Needed)
+
+If deploying without Docker, run migrations manually:
 
 ```bash
-# Enable pgvector
+# Enable required extensions
 psql "$DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql "$DATABASE_URL" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
 
-# Push schemas
-cd packages/database
-export DB_DIALECT=postgres
-pnpm drizzle-kit push
+# Apply migrations (run from project root)
+./scripts/init-db.sh
 ```
 
-### Option 2: Supabase
+### Provider-Specific Instructions
+
+#### Supabase
 
 1. **Create Supabase Project**: https://supabase.com
 2. **Get Connection String**: Settings → Database → Connection string
 3. **Enable Extensions**: Supabase dashboard → Database → Extensions → Enable `vector`
-4. **Push Schemas**: Same as Neon
+4. **Apply Migrations**: Use automated or manual setup above
 
-### Option 3: Self-Hosted PostgreSQL
+#### Railway
 
-1. **Install PostgreSQL 16+** with TimescaleDB extension
+1. **Add PostgreSQL**: `railway add postgresql`
+2. **Get Connection String**: Automatically available in `DATABASE_URL`
+3. **Enable Extensions**: Run CREATE EXTENSION commands
+4. **Apply Migrations**: Use automated or manual setup above
+
+#### Self-Hosted PostgreSQL
+
+1. **Install PostgreSQL 16+**
 2. **Create Database**:
    ```sql
    CREATE DATABASE synap;
@@ -145,9 +157,9 @@ pnpm drizzle-kit push
 3. **Enable Extensions**:
    ```sql
    CREATE EXTENSION IF NOT EXISTS vector;
-   CREATE EXTENSION IF NOT EXISTS timescaledb;
+   CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
    ```
-4. **Run Migrations**: Same as Neon
+4. **Apply Migrations**: Use automated or manual setup above
 
 ---
 
@@ -293,7 +305,7 @@ pnpm drizzle-kit push
 
 3. **Docker Compose** (with PostgreSQL + MinIO):
    ```bash
-   docker-compose -f docker-compose.production.yml up -d
+   docker compose -f docker-compose.production.yml up -d
    ```
 
 ### Option 4: Self-Hosted (PM2)

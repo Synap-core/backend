@@ -2,7 +2,7 @@
 
 **Version :** 1.0 | **Date :** 2025-01-20
 
-Ce document valide que le `docker-compose.yml` installe et configure tous les systèmes nécessaires pour un déploiement self-hosted complet du Synap Core OS.
+Ce document valide que le `docker compose.yml` installe et configure tous les systèmes nécessaires pour un déploiement self-hosted complet du Synap Core OS.
 
 ---
 
@@ -173,7 +173,7 @@ MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
 
 ### Documentation
 
-- [x] Commentaires dans docker-compose.yml
+- [x] Commentaires dans docker compose.yml
 - [x] Variables d'environnement documentées
 - [x] Instructions de démarrage
 - [x] Tests de validation
@@ -270,7 +270,7 @@ docker compose exec minio-client /usr/bin/mc mb local/synap-storage
 
 ## ✅ Conclusion
 
-Le `docker-compose.yml` est **complet** et **validé** pour un déploiement self-hosted :
+Le `docker compose.yml` est **complet** et **validé** pour un déploiement self-hosted :
 
 - ✅ **PostgreSQL + TimescaleDB** : Base de données prête
 - ✅ **MinIO** : Stockage objet configuré

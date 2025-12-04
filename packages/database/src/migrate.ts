@@ -39,7 +39,7 @@ const sql = neon(databaseUrl);
  * Initialize migrations tracking table
  */
 async function initMigrationsTable() {
-  await sql`
+  await sql(`
     CREATE TABLE IF NOT EXISTS _migrations (
       id SERIAL PRIMARY KEY,
       type TEXT NOT NULL CHECK (type IN ('drizzle', 'custom')),
@@ -47,7 +47,7 @@ async function initMigrationsTable() {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (type, filename)
     )
-  `;
+  `);
   console.log('✅ Migrations tracking table ready\n');
 }
 
@@ -55,9 +55,9 @@ async function initMigrationsTable() {
  * Get applied migrations
  */
 async function getAppliedMigrations(): Promise<Map<string, Set<string>>> {
-  const result = await sql`
+  const result = await sql(`
     SELECT type, filename FROM _migrations ORDER BY id
-  `;
+  `);
   
   const migrations = new Map<string, Set<string>>();
   migrations.set('drizzle', new Set());
@@ -83,10 +83,10 @@ async function applyMigration(type: 'drizzle' | 'custom', filename: string, file
     await sql(migrationSQL);
     
     // Record in tracking table
-    await sql`
-      INSERT INTO _migrations (type, filename)
-      VALUES (${type}, ${filename})
-    `;
+    await sql(
+      `INSERT INTO _migrations (type, filename) VALUES ($1, $2)`,
+      [type, filename]
+    );
     
     console.log(`✅ Applied [${type}]: ${filename}\n`);
   } catch (error) {
@@ -187,12 +187,12 @@ async function runMigrations() {
     }
     
     // 6. Verify tables
-    const tables = await sql`
+    const tables = await sql(`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public'
       ORDER BY table_name
-    `;
+    `);
     
     console.log('📊 Database tables:');
     tables.forEach((table) => console.log(`  - ${table.table_name}`));

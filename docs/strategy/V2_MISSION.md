@@ -24,7 +24,7 @@ Notre écosystème se compose de trois produits principaux qui interagissent ave
 -   **Quoi :** Un backend headless, open source, et auto-hébergeable. C'est l'implémentation technique du "Data Pod".
 -   **Rôle :** C'est le **cœur** du système. Il gère la persistance des données, la sécurité, et expose une API standardisée.
 -   **Philosophie :** Il est agnostique. Il ne connaît rien des interfaces utilisateur. Il peut être configuré pour tourner en mode `local` (SQLite + Fichiers locaux) ou en mode `cloud` (PostgreSQL + Stockage Objet).
--   **Distribution :** Un repository GitHub public avec un `docker-compose.yml` pour un déploiement en une commande.
+-   **Distribution :** Un repository GitHub public avec un `docker compose.yml` pour un déploiement en une commande.
 
 ### **Produit 2 : The Architech (Le Constructeur d'Écosystème)**
 -   **Quoi :** Une CLI de génération de code "industrielle".
@@ -118,7 +118,7 @@ graph TD
 -   **Actions :**
     1.  Finaliser l'implémentation de l'architecture "Event-Driven Pure" (la mission de refactoring V0.6).
     2.  Implémenter les adaptateurs interchangeables pour la DB (`drizzle-sqlite` vs `drizzle-neon`) et le stockage (`minio-provider` vs `r2-provider`).
-    3.  Créer le `docker-compose.yml` pour le déploiement self-hosted facile.
+    3.  Créer le `docker compose.yml` pour le déploiement self-hosted facile.
     4.  Publier le repo `synap-core-os` et le `client-sdk` sur GitHub.
 -   🏆 **"Little Win" :** Nous avons un produit open source que la communauté peut utiliser et sur lequel nous pouvons construire.
 

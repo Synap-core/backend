@@ -8,17 +8,19 @@ services:
     image: pgvector/pgvector:pg16
     container_name: synap-postgres
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synap_dev_password}
-      POSTGRES_DB: synap
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-synap}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -26,15 +28,22 @@ services:
       - synap-network
 
   # Database Initialization & Migrations
+  # Runs automatically on first startup to create tables and apply migrations
   db-init:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: synap-db-init
-    restart: "no" # Only run once
+    restart: "no" # Only run once per docker compose up
+    env_file:
+      - .env
     volumes:
       - ./scripts/init-db.sh:/init-db.sh:ro
       - ./packages/database/migrations-custom:/migrations:ro
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-synap_dev_password}@postgres:5432/synap
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-synap}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
     command: [ "sh", "/init-db.sh" ]
     depends_on:
       postgres:

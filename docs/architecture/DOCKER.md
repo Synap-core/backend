@@ -7,7 +7,7 @@
 
 ## 📋 Vue d'Ensemble
 
-Le `docker-compose.yml` configure les services nécessaires pour le Data Pod :
+Le `docker compose.yml` configure les services nécessaires pour le Data Pod :
 
 1. **PostgreSQL + TimescaleDB** : Base de données principale
 2. **MinIO** : Stockage objet S3-compatible
@@ -189,7 +189,7 @@ docker compose up -d
 
 ### Ports déjà utilisés
 
-Modifiez les ports dans `docker-compose.yml` ou arrêtez les services qui utilisent ces ports.
+Modifiez les ports dans `docker compose.yml` ou arrêtez les services qui utilisent ces ports.
 
 ---
 
@@ -208,7 +208,7 @@ Pour un déploiement production :
 ## 🎯 Prochaines Étapes
 
 1. **Créer un Dockerfile** pour le backend API
-2. **Ajouter le service API** dans `docker-compose.yml`
+2. **Ajouter le service API** dans `docker compose.yml`
 3. **Configurer les backups** automatiques
 4. **Ajouter le monitoring** (Prometheus/Grafana)
 

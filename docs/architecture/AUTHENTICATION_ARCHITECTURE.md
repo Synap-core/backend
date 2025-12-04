@@ -261,7 +261,7 @@
 ### Phase 1 : Intelligence Hub Ory Instance
 
 **Tâches :**
-1. [ ] Ajouter Ory Hydra au docker-compose pour Hub
+1. [ ] Ajouter Ory Hydra au docker compose pour Hub
 2. [ ] Créer service d'authentification Hub
 3. [ ] Créer API de marketplace
 4. [ ] Créer endpoint d'enregistrement de plugins

@@ -2,13 +2,13 @@
 
 **Version :** 1.0 | **Date :** 2025-01-20
 
-Ce document valide et documente le `docker-compose.yml` pour permettre un déploiement self-hosted du Synap Core OS en une seule commande.
+Ce document valide et documente le `docker compose.yml` pour permettre un déploiement self-hosted du Synap Core OS en une seule commande.
 
 ---
 
 ## 📋 Vue d'Ensemble
 
-Le `docker-compose.yml` actuel configure :
+Le `docker compose.yml` actuel configure :
 
 1. **PostgreSQL + TimescaleDB** : Base de données principale
 2. **MinIO** : Stockage objet S3-compatible (pour développement local)
@@ -18,7 +18,7 @@ Le `docker-compose.yml` actuel configure :
 
 ---
 
-## ✅ Validation du docker-compose.yml Actuel
+## ✅ Validation du docker compose.yml Actuel
 
 ### Services Configurés
 
@@ -148,7 +148,7 @@ MINIO_ROOT_PASSWORD=your_minio_password
 
 ## 🔧 Configuration Backend
 
-Après avoir démarré Docker Compose, configurez le backend :
+> **Note:** With the automated migration system, database setup is automatic. No manual `db:push` needed!
 
 ### Fichier `.env` du Backend
 
@@ -169,12 +169,20 @@ MINIO_USE_SSL=false
 ### Lancer le Backend
 
 ```bash
-# Initialiser la base de données
-pnpm --filter database db:push
-
-# Lancer le backend
+# Database is already initialized by docker compose!
+# Just start the backend:
 pnpm dev
 ```
+
+### Automated Migration System
+
+The `db-init` service runs automatically when you start Docker Compose:
+- ✅ Creates pgvector and uuid-ossp extensions
+- ✅ Applies all SQL migrations from `packages/database/migrations-custom/`
+- ✅ Creates 13 database tables
+- ✅ Idempotent (safe to run multiple times)
+
+For details, see `docs/AUTOMATED_DOCKER_STARTUP.md`
 
 ---
 
@@ -258,19 +266,69 @@ redis:
 
 ## 🎯 Conclusion
 
-Le `docker-compose.yml` actuel est **valide** pour un déploiement self-hosted de base. Il configure :
+Le `docker compose.yml` actuel est **valide** pour un déploiement self-hosted de base. Il configure :
 - ✅ Base de données PostgreSQL + TimescaleDB
 - ✅ Stockage objet MinIO
 - ✅ Initialisation automatique
 
 **Pour un déploiement complet en une commande**, il faudrait :
 1. Créer un `Dockerfile` pour le backend
-2. Ajouter le service `api` dans `docker-compose.yml`
+2. Ajouter le service `api` dans `docker compose.yml`
 3. (Optionnel) Ajouter Inngest et Redis
 
 **Recommandation :** Pour l'instant, le backend reste à lancer avec `pnpm dev` car il nécessite Node.js et les dépendances npm. Pour un déploiement production, créer un `Dockerfile` multi-stage serait idéal.
 
 ---
 
-**Prochaine étape :** Créer un `Dockerfile` et ajouter le service `api` au `docker-compose.yml` pour un déploiement complet en une commande.
+## 🔧 Troubleshooting
 
+### I/O Errors on macOS
+
+**Symptoms:** "input/output error", "overlay2", "pg_filenode.map"
+
+**Solution:**
+```bash
+docker compose down
+docker compose up -d
+# This recreates containers, preserves data
+```
+
+**Prevention:** Restart Docker Desktop weekly
+
+### Container Won't Restart
+
+**Solution:** Don't use `docker restart`, use docker compose:
+```bash
+docker compose down
+docker compose up -d
+```
+
+### Migration Fails
+
+Check `db-init` logs:
+```bash
+docker compose logs db-init
+```
+
+If stuck, clean restart (⚠️ DESTROYS DATA):
+```bash
+docker compose down --volumes
+docker compose up -d
+```
+
+### Services Not Starting
+
+Check all service status:
+```bash
+docker compose ps
+```
+
+View logs for specific service:
+```bash
+docker compose logs postgres
+docker compose logs minio
+```
+
+---
+
+**Prochaine étape :** Créer un `Dockerfile` et ajouter le service `api` au `docker-compose.yml` pour un déploiement complet en une commande.

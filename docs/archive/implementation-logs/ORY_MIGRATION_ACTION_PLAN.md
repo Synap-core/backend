@@ -82,7 +82,7 @@ packages/auth/
 - ❌ Supprimer variables Better Auth
 - ✨ Ajouter variables Ory (Kratos + Hydra)
 
-### 5. `docker-compose.yml`
+### 5. `docker compose.yml`
 
 **Changements :**
 - ✨ Ajouter services Ory (Kratos + Hydra + PostgreSQL Ory)
@@ -115,7 +115,7 @@ packages/auth/
 
 ### Phase 1 : Infrastructure Ory (Docker)
 
-- [ ] Créer `docker-compose.ory.yml`
+- [ ] Créer `docker compose.ory.yml`
 - [ ] Créer `kratos/kratos.yml`
 - [ ] Créer `kratos/identity.schema.json`
 - [ ] Créer `hydra/hydra.yml`
@@ -154,7 +154,7 @@ packages/auth/
 
 ### Phase 5 : Docker Compose
 
-- [ ] Modifier `docker-compose.yml`
+- [ ] Modifier `docker compose.yml`
   - [ ] Ajouter services Ory
 
 ### Phase 6 : Tests & Validation
@@ -369,7 +369,7 @@ export { getKratosSession as getSession } from './ory-kratos.js';
 7. **Mettre à jour `packages/api/src/context.ts`**
 8. **Mettre à jour `packages/core/src/config.ts`**
 9. **Mettre à jour `.env.example`**
-10. **Mettre à jour `docker-compose.yml`**
+10. **Mettre à jour `docker compose.yml`**
 11. **Tests & Validation**
 12. **Cleanup final**
 

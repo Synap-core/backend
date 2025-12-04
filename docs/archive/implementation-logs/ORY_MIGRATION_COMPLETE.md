@@ -16,7 +16,7 @@ Migration complète de **Better Auth** vers **Ory Stack** (Kratos + Hydra) dans 
 
 ### Infrastructure Ory
 
-1. **`docker-compose.ory.yml`** - Services Ory (Kratos + Hydra + PostgreSQL)
+1. **`docker compose.ory.yml`** - Services Ory (Kratos + Hydra + PostgreSQL)
 2. **`kratos/kratos.yml`** - Configuration Kratos
 3. **`kratos/identity.schema.json`** - Schéma d'identité
 4. **`kratos/oidc.google.jsonnet`** - Mapper OAuth Google
@@ -51,7 +51,7 @@ Migration complète de **Better Auth** vers **Ory Stack** (Kratos + Hydra) dans 
 6. **`packages/core/src/config.ts`** - Validation Ory (remplace Better Auth)
 7. **`env.example`** - Variables Ory (remplace Better Auth)
 8. **`env.production.example`** - Variables Ory (remplace Better Auth)
-9. **`docker-compose.yml`** - Services Ory ajoutés
+9. **`docker compose.yml`** - Services Ory ajoutés
 10. **`apps/api/src/middleware/security.ts`** - CORS mis à jour
 
 ---
@@ -127,9 +127,9 @@ Hub → Hydra (Client Credentials) → OAuth2 token → Data Pod
 
 ```bash
 # Démarrer services Ory
-docker compose -f docker-compose.ory.yml up -d
+docker compose -f docker compose.ory.yml up -d
 
-# Ou avec docker-compose.yml principal
+# Ou avec docker compose.yml principal
 docker compose up -d
 ```
 

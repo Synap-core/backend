@@ -383,7 +383,7 @@ const tools = [
 - Tester API de base
 
 **Livrables :**
-- `docker-compose.yml` avec service Mem0
+- `docker compose.yml` avec service Mem0
 - Variables d'environnement configurées
 - Tests de santé API
 

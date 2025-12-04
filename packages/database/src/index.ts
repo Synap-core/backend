@@ -23,7 +23,7 @@ export {
   and,
   or,
   not,
-  sql as sqlTemplate,
+  sql as sqlTemplate,        // Drizzle sql template tag
   // Comparison operators
   isNull,
   isNotNull,
@@ -47,3 +47,6 @@ export {
   type SQL,
   type Column,
 } from 'drizzle-orm';
+
+// Also export sql from drizzle-orm as drizzleSql for clarity
+export { sql as drizzleSql } from 'drizzle-orm';

@@ -127,7 +127,7 @@ apps/api/
 - `pnpm-workspace.yaml`
 - `tsconfig.json`
 - `turbo.json`
-- `docker-compose.yml` (adapté)
+- `docker compose.yml` (adapté)
 - `.env.example`
 - `README.md`
 
@@ -199,7 +199,7 @@ Garder un monorepo mais avec des repositories séparés pour chaque composant.
 
 1. **`README.md`** - Documentation open-source
 2. **`.env.example`** - Variables d'environnement
-3. **`docker-compose.yml`** - Services locaux
+3. **`docker compose.yml`** - Services locaux
 4. **`CONTRIBUTING.md`** - Guide contributeurs
 5. **`LICENSE`** - MIT License
 
@@ -208,14 +208,14 @@ Garder un monorepo mais avec des repositories séparés pour chaque composant.
 1. **`README.md`** - Documentation interne
 2. **`.env.example`** - Variables d'environnement
 3. **`Dockerfile`** - Image Docker
-4. **`docker-compose.yml`** - Services locaux
+4. **`docker compose.yml`** - Services locaux
 
 ### Backend App
 
 1. **`README.md`** - Documentation interne
 2. **`.env.example`** - Variables d'environnement
 3. **`Dockerfile`** - Image Docker
-4. **`docker-compose.yml`** - Services locaux
+4. **`docker compose.yml`** - Services locaux
 
 ---
 
@@ -286,7 +286,7 @@ Chaque composant aura sa propre documentation :
 - [ ] Copier packages appropriés
 - [ ] Créer README pour chaque composant
 - [ ] Créer .env.example pour chaque composant
-- [ ] Créer docker-compose.yml pour chaque composant
+- [ ] Créer docker compose.yml pour chaque composant
 - [ ] Publier packages npm partagés (ou utiliser git submodules)
 - [ ] Tester chaque composant indépendamment
 - [ ] Tester le flow complet (Backend App → Intelligence Hub → Data Pod)
