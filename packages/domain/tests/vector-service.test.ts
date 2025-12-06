@@ -110,11 +110,8 @@ describe('VectorService', () => {
     });
   });
 
-  // TODO: Vector SELECT tests temporarily skipped due to vitest integration issue
-  // All components (PostgreSQL, postgres.js, pgvector, Drizzle) verified independently
-  // INSERT tests pass, only SELECT operations fail in test environment
-  // See: walkthrough.md for full investigation details
-  describe.skip('searchByEmbedding', () => {
+  // Vector search tests - now using Drizzle's native cosineDistance helper
+  describe('searchByEmbedding', () => {
     it('should find semantically similar entities', async () => {
       const userId = generateTestUserId();
 

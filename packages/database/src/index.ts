@@ -43,6 +43,10 @@ export {
   // Sorting
   asc,
   desc,
+  // pgvector distance functions
+  cosineDistance,
+  l2Distance,
+  innerProduct,
   // Types
   type SQL,
   type Column,

@@ -1,5 +1,4 @@
 import { sql } from '../client-pg.js';
-import pgvector from 'pgvector';
 
 export interface VectorSearchParams {
   userId: string;
@@ -25,15 +24,9 @@ export async function searchEntityVectorsRaw(
   _database: VectorRepositoryDatabase,
   params: VectorSearchParams
 ): Promise<VectorSearchRow[] | null> {
-  // Use raw postgres.js directly, bypassing Drizzle
-  // Drizzle's SQL builder unwraps pgvector.toSql() values and re-parameterizes them,
-  // which breaks the postgres.js type serialization
-  
-  const embeddingWrapped = pgvector.toSql(params.embedding);
-  
-  console.log('[DEBUG] embeddingWrapped type:', typeof embeddingWrapped);
-  console.log('[DEBUG] embeddingWrapped value (first 50):', String(embeddingWrapped).substring(0, 50));
-  console.log('[DEBUG] Using postgres.js sql instance:', sql.constructor.name);
+  // Use JSON.stringify with ::vector cast (proven pattern from repository tests)
+  // This is the same approach used in all 10 passing repository tests
+  // See: packages/database/src/__tests__/vector-repository.test.ts
   
   const results = await sql<VectorSearchRow[]>`
     SELECT
@@ -43,13 +36,12 @@ export async function searchEntityVectorsRaw(
       title,
       preview,
       file_url as "fileUrl",
-      (1 - (embedding <-> ${embeddingWrapped})) AS "relevanceScore"
+      (1 - (embedding <=> ${JSON.stringify(params.embedding)}::vector)) AS "relevanceScore"
     FROM entity_vectors
     WHERE user_id = ${params.userId}
-    ORDER BY embedding <-> ${embeddingWrapped}
+    ORDER BY embedding <=> ${JSON.stringify(params.embedding)}::vector
     LIMIT ${params.limit}
   `;
 
-  console.log('[DEBUG] Query returned:', results.length, 'rows');
   return results;
 }
