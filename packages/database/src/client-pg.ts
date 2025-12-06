@@ -12,6 +12,16 @@ import * as schema from './schema/index.js';
 
 const logger = createLogger({ module: 'database' });
 
+
+// Use DATABASE_URL from environment with correct fallback password
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:synap_dev_password@localhost:5432/synap';
+
+logger.info({
+  poolSize: 10,
+  url: DATABASE_URL.replace(/:[^:@]+@/, ':***@'), // Hide password in logs
+  msg: 'PostgreSQL connection pool initialized (postgres.js + Drizzle)'
+});
+
 // PostgreSQL connection configuration
 const connectionConfig = {
   max: parseInt(process.env.DB_POOL_SIZE || '10'),      // Connection pool size
@@ -29,7 +39,7 @@ const connectionConfig = {
  * const result = await sql`SELECT * FROM users WHERE id = ${userId}`;
  * ```
  */
-export const sql = postgres(process.env.DATABASE_URL!, connectionConfig);
+export const sql = postgres(DATABASE_URL, connectionConfig);
 
 /**
  * Drizzle ORM instance (type-safe query builder)

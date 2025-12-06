@@ -9,7 +9,7 @@
  */
 
 // @ts-nocheck - This script is executed by tsx, not compiled
-import { neon } from '@neondatabase/serverless';
+import postgres from 'postgres';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -29,17 +29,19 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
-console.log('📦 PostgreSQL Migration Tool (Hybrid)\n');
-console.log(`Database: ${databaseUrl.replace(/:[^:]*@/, ':****@')}\n');
+console.log(`Database: ${databaseUrl.replace(/:[^:]*@/, ':****@')}\n`);
 
-// Create SQL client
-const sql = neon(databaseUrl);
+// Create SQL client (postgres.js)
+const sql = postgres(databaseUrl, {
+  max: 1, // Migration script only needs one connection
+  onnotice: () => {}, // Suppress notices during migration
+});
 
 /**
  * Initialize migrations tracking table
  */
 async function initMigrationsTable() {
-  await sql(`
+  await sql`
     CREATE TABLE IF NOT EXISTS _migrations (
       id SERIAL PRIMARY KEY,
       type TEXT NOT NULL CHECK (type IN ('drizzle', 'custom')),
@@ -47,7 +49,7 @@ async function initMigrationsTable() {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (type, filename)
     )
-  `);
+  `;
   console.log('✅ Migrations tracking table ready\n');
 }
 
@@ -55,9 +57,9 @@ async function initMigrationsTable() {
  * Get applied migrations
  */
 async function getAppliedMigrations(): Promise<Map<string, Set<string>>> {
-  const result = await sql(`
+  const result = await sql`
     SELECT type, filename FROM _migrations ORDER BY id
-  `);
+  `;
   
   const migrations = new Map<string, Set<string>>();
   migrations.set('drizzle', new Set());
@@ -80,13 +82,12 @@ async function applyMigration(type: 'drizzle' | 'custom', filename: string, file
   
   try {
     // Execute migration
-    await sql(migrationSQL);
+    await sql.unsafe(migrationSQL);
     
     // Record in tracking table
-    await sql(
-      `INSERT INTO _migrations (type, filename) VALUES ($1, $2)`,
-      [type, filename]
-    );
+    await sql`
+      INSERT INTO _migrations (type, filename) VALUES (${type}, ${filename})
+    `;
     
     console.log(`✅ Applied [${type}]: ${filename}\n`);
   } catch (error) {
@@ -187,12 +188,12 @@ async function runMigrations() {
     }
     
     // 6. Verify tables
-    const tables = await sql(`
+    const tables = await sql`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public'
       ORDER BY table_name
-    `);
+    `;
     
     console.log('📊 Database tables:');
     tables.forEach((table) => console.log(`  - ${table.table_name}`));

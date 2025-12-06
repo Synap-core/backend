@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
       setupFiles: ['./tests/setup.ts'],
       env: {
         // Ensure environment variables available for tests
-        DATABASE_URL: env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/synap',
+        DATABASE_URL: (env.DATABASE_URL || 'postgresql://postgres:synap_dev_password@localhost:5432/synap').replace(/^'|'$/g, ''),
         OPENAI_API_KEY: env.OPENAI_API_KEY || 'test-key',
         NODE_ENV: 'test',
       },

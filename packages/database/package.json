@@ -19,6 +19,9 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
@@ -29,7 +32,8 @@
     "@neondatabase/serverless": "^0.9.0",
     "@synap/core": "workspace:*",
     "@synap/types": "workspace:*",
-    "drizzle-orm": "^0.33.0"
+    "drizzle-orm": "^0.33.0",
+    "pgvector": "^0.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
@@ -38,6 +42,7 @@
     "postgres": "^3.4.7",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
+    "vite": "^7.2.2",
     "vitest": "^4.0.15"
   }
 }

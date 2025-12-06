@@ -21,14 +21,16 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@synap/types": "workspace:*",
+    "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/storage": "workspace:*",
-    "@synap/core": "workspace:*",
+    "@synap/types": "workspace:*",
+    "@synap/ai-embeddings": "workspace:*",
     "zod": "^3.22.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
+    "vite": "^7.2.2",
     "vitest": "^1.6.1"
   }
 }

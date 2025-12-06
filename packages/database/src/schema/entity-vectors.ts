@@ -25,7 +25,8 @@ export const entityVectors = pgTable('entity_vectors', {
   userId: text('user_id').notNull(),
   
   // Embedding vector (pgvector, 1536 dimensions for OpenAI text-embedding-3-small)
-  embedding: (vector('embedding', { dimensions: 1536 }) as any),
+  // Note: Drizzle handles number[] -> vector conversion automatically
+  embedding: vector('embedding', { dimensions: 1536 }),
   embeddingModel: text('embedding_model').default('text-embedding-3-small').notNull(),
   
   // Denormalized fields for search performance

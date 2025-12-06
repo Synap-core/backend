@@ -1,6 +1,9 @@
 -- V0.3 Migration: TimescaleDB Events Hypertable
 -- Simplified for Neon's Apache-licensed TimescaleDB
 
+-- Ensure TimescaleDB extension is enabled
+CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
+
 -- Drop old table if exists (from failed migration)
 DROP TABLE IF EXISTS events_timescale CASCADE;
 
@@ -114,7 +117,7 @@ COMMENT ON COLUMN events_timescale.correlation_id IS 'Group related events (e.g.
 CREATE OR REPLACE FUNCTION get_aggregate_version(p_aggregate_id UUID)
 RETURNS INTEGER AS $$
   SELECT COALESCE(MAX(version), 0)
-  FROM events_v2
+  FROM events_timescale
   WHERE aggregate_id = p_aggregate_id;
 $$ LANGUAGE SQL STABLE;
 
@@ -123,9 +126,9 @@ CREATE OR REPLACE FUNCTION get_aggregate_stream(
   p_aggregate_id UUID,
   p_from_version INTEGER DEFAULT 0
 )
-RETURNS SETOF events_v2 AS $$
+RETURNS SETOF events_timescale AS $$
   SELECT *
-  FROM events_v2
+  FROM events_timescale
   WHERE aggregate_id = p_aggregate_id
     AND version > p_from_version
   ORDER BY version ASC;
@@ -137,9 +140,9 @@ CREATE OR REPLACE FUNCTION get_user_event_stream(
   p_days INTEGER DEFAULT 7,
   p_limit INTEGER DEFAULT 1000
 )
-RETURNS SETOF events_v2 AS $$
+RETURNS SETOF events_timescale AS $$
   SELECT *
-  FROM events_v2
+  FROM events_timescale
   WHERE user_id = p_user_id
     AND timestamp >= NOW() - (p_days || ' days')::INTERVAL
   ORDER BY timestamp DESC
@@ -163,7 +166,7 @@ SELECT
   aggregate_type,
   count(*) as event_count,
   count(DISTINCT aggregate_id) as unique_aggregates
-FROM events_v2
+FROM events_timescale
 GROUP BY day, user_id, event_type, aggregate_type;
 
 CREATE INDEX idx_events_daily_day ON events_daily(day DESC);

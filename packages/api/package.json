@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
+    "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
+    "build": "tsc"
+  },
   "dependencies": {
     "@hono/trpc-server": "^0.3.2",
     "@synap/ai": "workspace:*",

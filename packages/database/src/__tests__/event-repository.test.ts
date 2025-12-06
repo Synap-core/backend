@@ -40,7 +40,7 @@ describe('EventRepository', () => {
       const userId = generateTestUserId();
       
       const events: SynapEvent[] = Array.from({ length: 10 }, (_, i) => ({
-        id: `event-${i}`,
+        id: crypto.randomUUID(),
         type: 'test.event',
         userId,
         data: { index: i },
@@ -63,7 +63,7 @@ describe('EventRepository', () => {
       const user2 = generateTestUserId();
       
       await eventRepository.append({
-        id: 'u1-event',
+        id: crypto.randomUUID(),
         type: 'test.event',
         userId: user1,
         data: {},
@@ -73,7 +73,7 @@ describe('EventRepository', () => {
       });
       
       await eventRepository.append({
-        id: 'u2-event',
+        id: crypto.randomUUID(),
         type: 'test.event',
         userId: user2,
         data: {},

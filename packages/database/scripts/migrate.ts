@@ -9,7 +9,7 @@
  */
 
 // @ts-nocheck - This script is executed by tsx, not compiled
-import { neon } from '@neondatabase/serverless';
+import postgres from 'postgres';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -30,10 +30,13 @@ if (!databaseUrl) {
 }
 
 console.log('📦 PostgreSQL Migration Tool (Hybrid)\n');
-console.log(`Database: ${databaseUrl.replace(/:[^:]*@/, ':****@')}\n');
+console.log(`Database: ${databaseUrl.replace(/:[^:]*@/, ':****@')}\n`);
 
 // Create SQL client
-const sql = neon(databaseUrl);
+const sql = postgres(databaseUrl, {
+  max: 1,
+  onnotice: () => {},
+});
 
 /**
  * Initialize migrations tracking table
@@ -79,8 +82,8 @@ async function applyMigration(type: 'drizzle' | 'custom', filename: string, file
   const migrationSQL = readFileSync(filePath, 'utf-8');
   
   try {
-    // Execute migration
-    await sql(migrationSQL);
+    // Execute migration using unsafe() for dynamic SQL
+    await sql.unsafe(migrationSQL);
     
     // Record in tracking table
     await sql`

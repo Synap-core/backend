@@ -1,6 +1,5 @@
-import { sql } from 'drizzle-orm';
-
-type VectorQuery = ReturnType<typeof sql>;
+import { sql } from '../client-pg.js';
+import pgvector from 'pgvector';
 
 export interface VectorSearchParams {
   userId: string;
@@ -19,34 +18,38 @@ export interface VectorSearchRow {
 }
 
 export interface VectorRepositoryDatabase {
-  execute?: (query: VectorQuery) => Promise<{ rows: VectorSearchRow[] }>;
   [key: string]: unknown;
 }
 
 export async function searchEntityVectorsRaw(
-  database: VectorRepositoryDatabase,
+  _database: VectorRepositoryDatabase,
   params: VectorSearchParams
 ): Promise<VectorSearchRow[] | null> {
-  if (!database.execute) {
-    return null;
-  }
+  // Use raw postgres.js directly, bypassing Drizzle
+  // Drizzle's SQL builder unwraps pgvector.toSql() values and re-parameterizes them,
+  // which breaks the postgres.js type serialization
+  
+  const embeddingWrapped = pgvector.toSql(params.embedding);
+  
+  console.log('[DEBUG] embeddingWrapped type:', typeof embeddingWrapped);
+  console.log('[DEBUG] embeddingWrapped value (first 50):', String(embeddingWrapped).substring(0, 50));
+  console.log('[DEBUG] Using postgres.js sql instance:', sql.constructor.name);
+  
+  const results = await sql<VectorSearchRow[]>`
+    SELECT
+      entity_id as "entityId",
+      user_id as "userId",
+      entity_type as "entityType",
+      title,
+      preview,
+      file_url as "fileUrl",
+      (1 - (embedding <-> ${embeddingWrapped})) AS "relevanceScore"
+    FROM entity_vectors
+    WHERE user_id = ${params.userId}
+    ORDER BY embedding <-> ${embeddingWrapped}
+    LIMIT ${params.limit}
+  `;
 
-  const result = await database.execute(
-    sql`
-      SELECT
-        entity_id as "entityId",
-        user_id as "userId",
-        entity_type as "entityType",
-        title,
-        preview,
-        file_url as "fileUrl",
-        (1 / (1 + (embedding <-> ${params.embedding}))) AS "relevanceScore"
-      FROM entity_vectors
-      WHERE user_id = ${params.userId}
-      ORDER BY embedding <-> ${params.embedding}
-      LIMIT ${params.limit}
-    `
-  );
-
-  return result.rows;
+  console.log('[DEBUG] Query returned:', results.length, 'rows');
+  return results;
 }

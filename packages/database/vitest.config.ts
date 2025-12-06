@@ -1,19 +1,19 @@
 import { defineConfig } from 'vitest/config';
 import { loadEnv } from 'vite';
+import path from 'path';
 
 export default defineConfig(({ mode }) => {
-  // Load .env.test for test environment
-  const env = loadEnv(mode, process.cwd(), '');
+  const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
   
   return {
     test: {
       globals: true,
       environment: 'node',
       setupFiles: ['./src/__tests__/setup.ts'],
+      exclude: ['**/node_modules/**', '**/dist/**'],  // Exclude compiled files
       env: {
-        // Ensure DATABASE_URL is available for tests
-        DATABASE_URL: env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/synap',
-        OPENAI_API_KEY: env.OPENAI_API_KEY || 'test-key',
+        DATABASE_URL: (process.env.DATABASE_URL || env.DATABASE_URL || 'postgresql://postgres:synap_dev_password@localhost:5432/synap').replace(/^'|'$/g, ''),
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || 'test-key',
         NODE_ENV: 'test',
       },
       coverage: {
@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => {
           'drizzle.config.ts',
         ],
       },
-      testTimeout: 30000, // 30s for database operations
+      testTimeout: 30000,
       hookTimeout: 30000,
     },
   };

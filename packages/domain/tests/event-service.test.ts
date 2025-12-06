@@ -32,17 +32,17 @@ const { EventService } = await import('../src/services/events.js');
 class InMemoryEventRepo {
   private readonly events = new Map<string, EventRecord[]>();
 
-  async append(input: AppendEventInput): Promise<EventRecord> {
+  async append(input: any): Promise<EventRecord> {
     const record: EventRecord = {
-      id: randomUUID(),
-      timestamp: new Date(),
+      id: input.id || randomUUID(),
+      timestamp: input.timestamp || new Date(),
       aggregateId: input.aggregateId,
-      aggregateType: input.aggregateType,
-      eventType: input.eventType,
+      aggregateType: 'entity', // Default for tests since SynapEvent doesn't carry it
+      eventType: input.type, // SynapEvent uses 'type', EventRecord uses 'eventType'
       userId: input.userId,
       data: input.data,
       metadata: input.metadata,
-      version: input.version,
+      version: typeof input.version === 'number' ? input.version : 1,
       causationId: input.causationId,
       correlationId: input.correlationId,
       source: input.source ?? 'api',

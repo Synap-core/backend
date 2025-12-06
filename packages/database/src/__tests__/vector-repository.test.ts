@@ -25,6 +25,12 @@ describe('VectorRepository', () => {
       const entityId = crypto.randomUUID();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
 
+      // Create parent entity first
+      await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES (${entityId}, ${userId}, 'note', NOW(), NOW())
+      `;
+
       await sql`
         INSERT INTO entity_vectors (
           entity_id, user_id, entity_type, title, embedding, embedding_model, indexed_at, updated_at
@@ -50,6 +56,12 @@ describe('VectorRepository', () => {
       const entityId = crypto.randomUUID();
       const embedding1 = Array.from({ length: 1536 }, () => 0.1);
       const embedding2 = Array.from({ length: 1536 }, () => 0.9);
+
+      // Create parent entity first
+      await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES (${entityId}, ${userId}, 'note', NOW(), NOW())
+      `;
 
       // Insert first
       await sql`
@@ -99,6 +111,14 @@ describe('VectorRepository', () => {
       const dissimilarId = crypto.randomUUID();
       const dissimilarEmbedding = Array.from({ length: 1536 }, (_, i) => i < 100 ? 0.0 : 1.0);
 
+      // Create parent entities
+      await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES 
+          (${similarId}, ${userId}, 'note', NOW(), NOW()),
+          (${dissimilarId}, ${userId}, 'note', NOW(), NOW())
+      `;
+
       // Store vectors
       await sql`
         INSERT INTO entity_vectors (entity_id, user_id, entity_type, title, embedding, embedding_model, indexed_at, updated_at)
@@ -131,13 +151,23 @@ describe('VectorRepository', () => {
       const user1 = generateTestUserId();
       const user2 = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
+      const id1 = crypto.randomUUID();
+      const id2 = crypto.randomUUID();
+
+      // Create parent entities
+      await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES 
+          (${id1}, ${user1}, 'note', NOW(), NOW()),
+          (${id2}, ${user2}, 'note', NOW(), NOW())
+      `;
 
       // Create vector for each user
       await sql`
         INSERT INTO entity_vectors (entity_id, user_id, entity_type, title, embedding, embedding_model, indexed_at, updated_at)
         VALUES 
-          (${crypto.randomUUID()}, ${user1}, 'note', 'User 1 Doc', ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW()),
-          (${crypto.randomUUID()}, ${user2}, 'note', 'User 2 Doc', ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW())
+          (${id1}, ${user1}, 'note', 'User 1 Doc', ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW()),
+          (${id2}, ${user2}, 'note', 'User 2 Doc', ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW())
       `;
 
       // Search for user 1 only
@@ -157,9 +187,14 @@ describe('VectorRepository', () => {
 
       // Create 10 vectors
       for (let i = 0; i < 10; i++) {
+        const id = crypto.randomUUID();
+        await sql`
+          INSERT INTO entities (id, user_id, type, created_at, updated_at)
+          VALUES (${id}, ${userId}, 'note', NOW(), NOW())
+        `;
         await sql`
           INSERT INTO entity_vectors (entity_id, user_id, entity_type, title, embedding, embedding_model, indexed_at, updated_at)
-          VALUES (${crypto.randomUUID()}, ${userId}, 'note', ${'Doc ' + i}, ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW())
+          VALUES (${id}, ${userId}, 'note', ${'Doc ' + i}, ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW())
         `;
       }
 
@@ -178,10 +213,16 @@ describe('VectorRepository', () => {
       const userId = generateTestUserId();
       const queryEmbedding = Array.from({ length: 1536 }, () => Math.random());
       const docEmbedding = Array.from({ length: 1536 }, () => Math.random());
+      const id = crypto.randomUUID();
+
+      await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES (${id}, ${userId}, 'note', NOW(), NOW())
+      `;
 
       await sql`
         INSERT INTO entity_vectors (entity_id, user_id, entity_type, title, embedding, embedding_model, indexed_at, updated_at)
-        VALUES (${crypto.randomUUID()}, ${userId}, 'note', 'Test Doc', ${JSON.stringify(docEmbedding)}, 'text-embedding-3-small', NOW(), NOW())
+        VALUES (${id}, ${userId}, 'note', 'Test Doc', ${JSON.stringify(docEmbedding)}, 'text-embedding-3-small', NOW(), NOW())
       `;
 
       const [result] = await sql`
@@ -219,6 +260,11 @@ describe('VectorRepository', () => {
       const fileUrl = 'https://example.com/file.pdf';
 
       await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES (${entityId}, ${userId}, 'document', NOW(), NOW())
+      `;
+
+      await sql`
         INSERT INTO entity_vectors (
           entity_id, user_id, entity_type, title, file_url, embedding, embedding_model, indexed_at, updated_at
         ) VALUES (
@@ -239,6 +285,11 @@ describe('VectorRepository', () => {
       const entityId = crypto.randomUUID();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
       const preview = 'This is a preview of the document content...';
+
+      await sql`
+        INSERT INTO entities (id, user_id, type, created_at, updated_at)
+        VALUES (${entityId}, ${userId}, 'note', NOW(), NOW())
+      `;
 
       await sql`
         INSERT INTO entity_vectors (

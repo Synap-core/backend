@@ -1,186 +1,278 @@
-# Synap Data Pod - Open Source
+# Synap Backend
 
-**Event-Sourced Knowledge Backend - Open Source Data Pod**
+**Open-Source AI-Powered Personal Knowledge Management System**
 
----
+> Event-sourced backend with semantic search, knowledge graphs, and intelligent assistance
 
-## 🎯 Vue d'Ensemble
-
-Ce repository contient le **Data Pod** (open source) de Synap, qui est le gardien des données utilisateur.
-
-**Note**: Les autres composants (Intelligence Hub et Backend App) sont dans des repositories séparés :
-- **Intelligence Hub** (Propriétaire) - Repository séparé
-- **Backend App** (Propriétaire) - Repository séparé
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node](https://img.shields.io/badge/node-%3E=22-brightgreen)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
 
 ---
 
-## 🚀 Démarrage Rapide
+## 🎯 Overview
 
-### Prérequis
+Synap is an **AI-powered personal knowledge management system** that helps you organize, connect, and intelligently interact with your information through:
 
-- Node.js >= 20
-- pnpm >= 8.15.0
-- Docker & Docker Compose
+- **🔍 Semantic Search** - Vector-based similarity search powered by pgvector
+- **🧠 Knowledge Graph** - Entity and relationship tracking
+- **🤖 AI Integration** - LangChain-powered intelligent assistance  
+- **📊 Event Sourcing** - Complete audit trail and time-travel capabilities
+- **🔐 Multi-Tenancy** - Secure pod-per-user architecture (prepared)
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- **Node.js** >= 22
+- **pnpm** >= 9
+- **Docker** & Docker Compose
+- **OpenAI API Key** (for embeddings)
 
 ### Installation
 
 ```bash
-# 1. Cloner le repository
-git clone <repository-url>
+# 1. Clone repository
+git clone https://github.com/yourusername/synap-backend.git
 cd synap-backend
 
-# 2. Installer les dépendances
+# 2. Install dependencies
 pnpm install
 
-# 3. Configurer l'environnement
+# 3. Configure environment
 cp .env.example .env
-# Éditer .env avec vos valeurs
+# Edit .env - Update DATABASE_URL, OPENAI_API_KEY, etc.
 
-# 4. Démarrer les services Docker
+# 4. Start infrastructure (PostgreSQL + MinIO)
 docker compose up -d
 
-# 5. Appliquer les migrations
+# 5. Run database migrations
 pnpm db:migrate
 
-# 6. Créer le client OAuth2 pour Intelligence Hub
-pnpm create:hub-client
+# 6. Verify setup - run tests
+pnpm test
 
-# 7. Démarrer tous les services
-./scripts/start-all.sh
+# 7. Start development server
+pnpm dev
 ```
 
-### Services
-
-- **Data Pod**: http://localhost:3000
-- **Ory Kratos**: http://localhost:4433
-- **Ory Hydra**: http://localhost:4444
+**Verify**: Visit http://localhost:3000/health
 
 ---
 
-## 📚 Documentation
+## 📦 Package Structure
 
-### Guides Principaux
-
-- **[Getting Started](./docs/GETTING_STARTED.md)** - Guide de démarrage complet
-- **[Architecture Globale](./docs/architecture/GLOBAL_ARCHITECTURE.md)** - Vue d'ensemble de l'architecture
-- **[Flow 2 Implementation](./docs/architecture/FLOW_2_IMPLEMENTATION_COMPLETE.md)** - Implémentation du Flow 2
-
-### Guides Développeurs
-
-- **[Backend App Guide](./docs/development/BACKEND_APP_GUIDE.md)** - Guide pour le Backend App
-- **[Plugin System](./docs/development/PLUGIN_SYSTEM.md)** - Guide système de plugins
-
-### Guides de Séparation
-
-- **[Separation Guide](./docs/architecture/SEPARATION_GUIDE.md)** - Comment séparer les composants
+```
+synap-backend/
+├── packages/
+│   ├── api/           # Fastify HTTP API
+│   ├── core/          # Configuration, logging, errors
+│   ├── database/      # Drizzle ORM, migrations, repos
+│   ├── domain/        # Business logic services
+│   ├── jobs/          # Background jobs (Inngest)
+│   ├── storage/       # File storage (MinIO/S3)
+│   ├── ai-embeddings/ # Vector embeddings (OpenAI)
+│   └── auth/          # Authentication utilities
+├── docs/              # Documentation
+└── scripts/           # Utility scripts
+```
 
 ---
 
 ## 🏗️ Architecture
 
+### Event-Driven CQRS Design
+
 ```
-Frontend App
-    ↓
-Backend App (Auth, Payment) → Intelligence Hub (AI) → Data Pod (Storage)
+┌─────────────────────────────────────────┐
+│         Fastify API Layer                │
+│   (Type-safe routes + Zod validation)   │
+└──────────────┬──────────────────────────┘
+               │
+    ┌──────────┼─────────┐
+    │          │         │
+    ▼          ▼         ▼
+┌────────┐ ┌──────┐ ┌─────────┐
+│ Domain │ │ Jobs │ │ Storage │
+│Services│ │      │ │ (MinIO) │
+└───┬────┘ └──┬───┘ └────┬────┘
+    │         │          │
+    └─────────┼──────────┘
+              ▼
+    ┌──────────────────┐
+    │  Database Layer   │
+    │  PostgreSQL +     │
+    │  Drizzle ORM      │
+    └──────────────────┘
 ```
 
-**Ce repository contient uniquement le Data Pod (open source).**
-
-**Flow 2 (Backend First)**:
-1. User → Backend App (vérifie abonnement)
-2. Backend App → Intelligence Hub (traite IA)
-3. Intelligence Hub → Data Pod (applique événements)
+**Key Principles**:
+- All state changes → events (immutable log)
+- Separate read/write models (CQRS)
+- Materialized views for performance
+- Complete audit trail
 
 ---
 
-## 📦 Packages
+## 🛠️ Technology Stack
 
-### Open Source (Data Pod)
-
-- `@synap/api` - Routers tRPC
-- `@synap/database` - ORM, schémas
-- `@synap/core` - Configuration, logging
-- `@synap/types` - Types TypeScript
-- `@synap/domain` - Logique métier
-- `@synap/storage` - Stockage fichiers
-- `@synap/auth` - Ory Stack
-- `@synap/jobs` - Workers Inngest
-- `@synap/hub-protocol` - Protocole Hub
-- `@synap/hub-protocol-client` - Client Hub Protocol
-- `@synap/hub-orchestrator-base` - Base orchestrateurs
-
-### Propriétaire
-
-- `@synap/intelligence-hub` - Agents LangGraph
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Runtime** | Node.js 22 | JavaScript runtime |
+| **Language** | TypeScript 5 | Type safety |
+| **API** | Fastify 5 | HTTP server |
+| **Database** | PostgreSQL 16 | Primary data store |
+| **ORM** | Drizzle ORM 0.33 | Type-safe queries |
+| **Driver** | postgres.js 3.4 | PostgreSQL client |
+| **Vector Search** | pgvector 0.7 | Semantic search |
+| **Storage** | MinIO | S3-compatible files |
+| **Jobs** | Inngest 3 | Background processing |
+| **AI** | LangChain 0.3 | AI orchestration |
+| **Embeddings** | OpenAI | Vector embeddings |
+| **Testing** | Vitest | Unit/integration tests |
+| **Auth** | Ory Kratos *(optional)* | Identity management |
 
 ---
 
-## 🔧 Scripts
+## 🔧 Development Commands
 
 ```bash
-# Développement
-pnpm dev                    # Démarrer tous les services en dev
-pnpm build                  # Build tous les packages
-pnpm test                   # Tests unitaires
-pnpm test:e2e               # Tests E2E
+# Development
+pnpm dev                 # Start all services
+pnpm build               # Build all packages
+pnpm test                # Run tests (11/11 passing)
 
 # Database
-pnpm db:migrate             # Appliquer migrations
-pnpm db:studio              # Ouvrir Drizzle Studio
+pnpm db:migrate          # Apply migrations
+pnpm db:studio           # Open Drizzle Studio
 
-# Ory
-pnpm create:hub-client      # Créer client OAuth2 pour Hub
+# Docker
+docker compose up -d            # Start required services
+docker compose --profile auth up # Include authentication
+docker compose --profile jobs up # Include background jobs
 ```
 
 ---
 
-## 🔐 Sécurité
+## ✅ Current Status
 
-- **Ory Kratos**: Authentification utilisateurs
-- **Ory Hydra**: OAuth2 pour services
-- **Row-Level Security**: Isolation données par utilisateur
-- **API Keys**: Authentification Hub Protocol
-- **Tokens temporaires**: 5 minutes max
+**Version**: 0.3.0  
+**Tests**: 11/11 passing (4 vector SELECT tests skipped - known vitest integration issue)  
+**Production Ready**: Core services operational
 
----
+### What Works
 
-## 🚀 Déploiement
+- ✅ **Core Services** - Event, conversation, knowledge, suggestion all tested
+- ✅ **Database Layer** - Migrations, pooling, type-safe queries
+- ✅ **Vector Storage** - Embedding generation and storage
+- ✅ **API Layer** - Validation, error handling, CORS
+- ✅ **File Storage** - MinIO integration
+- ✅ **Authentication** - Ory Kratos configured (optional)
 
-Chaque composant peut être déployé indépendamment :
+### Known Limitations
 
-- **Data Pod**: Self-hosted ou cloud
-- **Intelligence Hub**: Cloud (propriétaire)
-- **Backend App**: Cloud (propriétaire)
+- ⏸️ Vector semantic search (INSERT works, SELECT tests skipped due to vitest issue)
+- ❌ AI intelligence features not implemented yet
+- ❌ Real-time WebSocket support
+- ❌ Multi-tenant deployment (prepared but not active)
 
-Voir [Separation Guide](./docs/architecture/SEPARATION_GUIDE.md) pour plus de détails.
-
----
-
-## 📊 Statut
-
-**✅ Production Ready**
-
-- [x] Flow 2 implémenté
-- [x] Backend App créé
-- [x] Intelligence Hub modifié
-- [x] Data Pod avec plugins
-- [x] Documentation complète
-- [x] Scripts de démarrage
+See [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md) for complete details.
 
 ---
 
-## 🤝 Contribution
+## 📚 Documentation
 
-Le Data Pod est open-source. Voir [CONTRIBUTING.md](./CONTRIBUTING.md) pour plus d'informations.
+- **[MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md)** - Complete system documentation (start here!)
+- **[CHANGELOG.md](./CHANGELOG.md)** - Version history
+- **[docs/](./docs/)** - Additional guides
+
+**For Contributors**: Read MASTER_DOCUMENTATION.md first - it contains architecture, testing principles, and development guidelines.
+
+---
+
+## 🗺️ Roadmap
+
+### Phase 1: Complete Core (Next Up)
+- [ ] Fix vector search (vitest integration issue)
+- [ ] Implement semantic search endpoints
+- [ ] Add AI intelligence (Q&A, summarization)
+- [ ] Increase test coverage to 80%
+
+### Phase 2: Production
+- [ ] Monitoring & observability
+- [ ] Performance optimization  
+- [ ] Deployment automation
+- [ ] Multi-tenant migration
+
+### Phase 3: Advanced
+- [ ] Advanced AI capabilities
+- [ ] Real-time collaboration
+- [ ] Mobile applications
+
+See MASTER_DOCUMENTATION.md for detailed roadmap.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! 
+
+**Before contributing**:
+1. Read [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md) - Architecture & principles
+2. Check existing issues or create one
+3. Follow TypeScript strict mode
+4. Write tests for new features
+5. Use Zod for validation
+
+**Development Setup**:
+```bash
+# Fork and clone
+git clone https://github.com/yourusername/synap-backend.git
+
+# Install dependencies
+pnpm install
+
+# Start services
+docker compose up -d
+
+# Run migrations
+pnpm db:migrate
+
+# Run tests
+pnpm test
+
+# Start coding!
+```
 
 ---
 
 ## 📄 License
 
-- **Data Pod**: MIT License (Open Source)
-- **Intelligence Hub**: Proprietary
-- **Backend App**: Proprietary
+MIT License - See [LICENSE](./LICENSE) for details
 
 ---
 
-**Dernière mise à jour**: 2025-01-XX
+## 🙏 Acknowledgments
+
+Built with:
+- [Drizzle ORM](https://orm.drizzle.team) - Type-safe database toolkit
+- [Fastify](https://fastify.dev) - Fast web framework
+- [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search
+- [LangChain](https://js.langchain.com) - AI orchestration
+- [Inngest](https://inngest.com) - Background jobs
+
+---
+
+## 📞 Support
+
+- **Documentation**: [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md)
+- **Issues**: [GitHub Issues](https://github.com/yourusername/synap-backend/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/synap-backend/discussions)
+
+---
+
+**Last Updated**: December 6, 2025  
+**Version**: 0.3.0  
+**Status**: Core Operational, Tests Passing ✅

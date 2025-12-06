@@ -26,7 +26,7 @@ describe('ConversationRepository', () => {
 
       await sql`
         INSERT INTO conversation_messages (
-          id, user_id, conversation_id, role, content, created_at
+          id, user_id, thread_id, role, content, created_at
         ) VALUES (
           ${messageId}, ${userId}, ${conversationId}, 'user', 'Hello, how are you?', NOW()
         )
@@ -38,7 +38,7 @@ describe('ConversationRepository', () => {
 
       expect(stored.role).toBe('user');
       expect(stored.content).toBe('Hello, how are you?');
-      expect(stored.conversation_id).toBe(conversationId);
+      expect(stored.thread_id).toBe(conversationId);
     });
 
     it('should handle different message roles', async () => {
@@ -54,7 +54,7 @@ describe('ConversationRepository', () => {
       for (const msg of messages) {
         await sql`
           INSERT INTO conversation_messages (
-            id, user_id, conversation_id, role, content, created_at
+            id, user_id, thread_id, role, content, created_at
           ) VALUES (
             ${crypto.randomUUID()}, ${userId}, ${conversationId}, ${msg.role}, ${msg.content}, NOW()
           )
@@ -63,7 +63,7 @@ describe('ConversationRepository', () => {
 
       const stored = await sql`
         SELECT * FROM conversation_messages 
-        WHERE conversation_id = ${conversationId}
+        WHERE thread_id = ${conversationId}
         ORDER BY created_at ASC
       `;
 
@@ -81,7 +81,7 @@ describe('ConversationRepository', () => {
       for (let i = 1; i <= 5; i++) {
         await sql`
           INSERT INTO conversation_messages (
-            id, user_id, conversation_id, role, content, created_at
+            id, user_id, thread_id, role, content, created_at
           ) VALUES (
             ${crypto.randomUUID()}, ${userId}, ${conversationId}, 'user', 
             ${'Message ' + i}, NOW()
@@ -92,7 +92,7 @@ describe('ConversationRepository', () => {
 
       const messages = await sql`
         SELECT content FROM conversation_messages 
-        WHERE conversation_id = ${conversationId}
+        WHERE thread_id = ${conversationId}
         ORDER BY created_at ASC
       `;
 
@@ -113,7 +113,7 @@ describe('ConversationRepository', () => {
       const conv2 = crypto.randomUUID();
 
       await sql`
-        INSERT INTO conversation_messages (id, user_id, conversation_id, role, content, created_at)
+        INSERT INTO conversation_messages (id, user_id, thread_id, role, content, created_at)
         VALUES 
           (${crypto.randomUUID()}, ${userId}, ${conv1}, 'user', 'Conv1 Msg1', NOW()),
           (${crypto.randomUUID()}, ${userId}, ${conv1}, 'assistant', 'Conv1 Msg2', NOW()),
@@ -121,11 +121,11 @@ describe('ConversationRepository', () => {
       `;
 
       const conv1Messages = await sql`
-        SELECT * FROM conversation_messages WHERE conversation_id = ${conv1}
+        SELECT * FROM conversation_messages WHERE thread_id = ${conv1}
       `;
 
       const conv2Messages = await sql`
-        SELECT * FROM conversation_messages WHERE conversation_id = ${conv2}
+        SELECT * FROM conversation_messages WHERE thread_id = ${conv2}
       `;
 
       expect(conv1Messages.length).toBe(2);
@@ -138,7 +138,7 @@ describe('ConversationRepository', () => {
       const conversationId = crypto.randomUUID();
 
       await sql`
-        INSERT INTO conversation_messages (id, user_id, conversation_id, role, content, created_at)
+        INSERT INTO conversation_messages (id, user_id, thread_id, role, content, created_at)
         VALUES 
           (${crypto.randomUUID()}, ${user1}, ${conversationId}, 'user', 'User 1 message', NOW()),
           (${crypto.randomUUID()}, ${user2}, ${conversationId}, 'user', 'User 2 message', NOW())
@@ -161,14 +161,14 @@ describe('ConversationRepository', () => {
 
       await sql`
         INSERT INTO conversation_messages (
-          id, user_id, conversation_id, role, content, created_at
+          id, user_id, thread_id, role, content, created_at
         ) VALUES (
           ${crypto.randomUUID()}, ${userId}, ${conversationId}, 'user', ${longContent}, NOW()
         )
       `;
 
       const [stored] = await sql`
-        SELECT content FROM conversation_messages WHERE conversation_id = ${conversationId}
+        SELECT content FROM conversation_messages WHERE thread_id = ${conversationId}
       `;
 
       expect(stored.content.length).toBe(10000);
@@ -181,14 +181,14 @@ describe('ConversationRepository', () => {
 
       await sql`
         INSERT INTO conversation_messages (
-          id, user_id, conversation_id, role, content, created_at
+          id, user_id, thread_id, role, content, created_at
         ) VALUES (
           ${crypto.randomUUID()}, ${userId}, ${conversationId}, 'user', ${specialContent}, NOW()
         )
       `;
 
       const [stored] = await sql`
-        SELECT content FROM conversation_messages WHERE conversation_id = ${conversationId}
+        SELECT content FROM conversation_messages WHERE thread_id = ${conversationId}
       `;
 
       expect(stored.content).toBe(specialContent);
@@ -201,14 +201,14 @@ describe('ConversationRepository', () => {
 
       await sql`
         INSERT INTO conversation_messages (
-          id, user_id, conversation_id, role, content, created_at
+          id, user_id, thread_id, role, content, created_at
         ) VALUES (
           ${crypto.randomUUID()}, ${userId}, ${conversationId}, 'user', ${unicodeContent}, NOW()
         )
       `;
 
       const [stored] = await sql`
-        SELECT content FROM conversation_messages WHERE conversation_id = ${conversationId}
+        SELECT content FROM conversation_messages WHERE thread_id = ${conversationId}
       `;
 
       expect(stored.content).toBe(unicodeContent);
@@ -230,7 +230,7 @@ describe('ConversationRepository', () => {
       for (const msg of messages) {
         await sql`
           INSERT INTO conversation_messages (
-            id, user_id, conversation_id, role, content, created_at
+            id, user_id, thread_id, role, content, created_at
           ) VALUES (
             ${crypto.randomUUID()}, ${userId}, ${conversationId}, ${msg.role}, ${msg.content}, NOW()
           )
@@ -240,7 +240,7 @@ describe('ConversationRepository', () => {
 
       const history = await sql`
         SELECT role, content FROM conversation_messages 
-        WHERE conversation_id = ${conversationId}
+        WHERE thread_id = ${conversationId}
         ORDER BY created_at ASC
       `;
 
@@ -251,7 +251,7 @@ describe('ConversationRepository', () => {
       const conversationId = crypto.randomUUID();
 
       const messages = await sql`
-        SELECT * FROM conversation_messages WHERE conversation_id = ${conversationId}
+        SELECT * FROM conversation_messages WHERE thread_id = ${conversationId}
       `;
 
       expect(messages).toEqual([]);

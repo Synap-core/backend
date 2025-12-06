@@ -360,12 +360,18 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.25
+      '@vitejs/plugin-react':
+        specifier: ^5.1.0
+        version: 5.1.1(vite@7.2.2)
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(tsx@4.20.6)(typescript@5.9.3)
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
+      vite:
+        specifier: ^7.2.2
+        version: 7.2.2(@types/node@20.19.25)(tsx@4.20.6)
 
   packages/core:
     dependencies:
@@ -427,6 +433,9 @@ importers:
       drizzle-orm:
         specifier: ^0.33.0
         version: 0.33.0(@neondatabase/serverless@0.9.5)(postgres@3.4.7)
+      pgvector:
+        specifier: ^0.2.1
+        version: 0.2.1
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -446,12 +455,18 @@ importers:
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
+      vite:
+        specifier: ^7.2.2
+        version: 7.2.2(@types/node@24.10.1)(tsx@4.20.6)
       vitest:
         specifier: ^4.0.15
         version: 4.0.15(@types/node@24.10.1)(@vitest/ui@4.0.7)(tsx@4.20.6)
 
   packages/domain:
     dependencies:
+      '@synap/ai-embeddings':
+        specifier: workspace:*
+        version: link:../ai-embeddings
       '@synap/core':
         specifier: workspace:*
         version: link:../core
@@ -471,6 +486,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vite:
+        specifier: ^7.2.2
+        version: 7.2.2(@types/node@20.19.25)(tsx@4.20.6)
       vitest:
         specifier: ^1.6.1
         version: 1.6.1(@types/node@22.19.0)(@vitest/ui@4.0.7)
@@ -7315,7 +7333,7 @@ packages:
       vite: 7.2.2(@types/node@24.10.1)(tsx@4.20.6)
     dev: true
 
-  /@vitest/mocker@4.0.7(vite@7.2.1):
+  /@vitest/mocker@4.0.7(vite@7.2.2):
     resolution: {integrity: sha512-OsDwLS7WnpuNslOV6bJkXVYVV/6RSc4eeVxV7h9wxQPNxnjRvTTrIikfwCbMyl8XJmW6oOccBj2Q07YwZtQcCw==}
     peerDependencies:
       msw: ^2.4.9
@@ -7329,7 +7347,7 @@ packages:
       '@vitest/spy': 4.0.7
       estree-walker: 3.0.3
       magic-string: 0.30.21
-      vite: 7.2.1(@types/node@20.19.25)(tsx@4.20.6)
+      vite: 7.2.2(@types/node@20.19.25)(tsx@4.20.6)
     dev: true
 
   /@vitest/pretty-format@4.0.15:
@@ -9825,6 +9843,11 @@ packages:
       split2: 4.2.0
     dev: true
 
+  /pgvector@0.2.1:
+    resolution: {integrity: sha512-nKaQY9wtuiidwLMdVIce1O3kL0d+FxrigCVzsShnoqzOSaWWWOvuctb/sYwlai5cTwwzRSNa+a/NtN2kVZGNJw==}
+    engines: {node: '>= 18'}
+    dev: false
+
   /picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
     dev: true
@@ -11166,8 +11189,8 @@ packages:
       fsevents: 2.3.3
     dev: true
 
-  /vite@7.2.1(@types/node@20.19.25)(tsx@4.20.6):
-    resolution: {integrity: sha512-qTl3VF7BvOupTR85Zc561sPEgxyUSNSvTQ9fit7DEMP7yPgvvIGm5Zfa1dOM+kOwWGNviK9uFM9ra77+OjK7lQ==}
+  /vite@7.2.2(@types/node@20.19.25)(tsx@4.20.6):
+    resolution: {integrity: sha512-BxAKBWmIbrDgrokdGZH1IgkIk/5mMHDreLDmCJ0qpyJaAteP8NvMhkwr/ZCQNqNH97bw/dANTE9PDzqwJghfMQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -11434,7 +11457,7 @@ packages:
     dependencies:
       '@types/node': 20.19.25
       '@vitest/expect': 4.0.7
-      '@vitest/mocker': 4.0.7(vite@7.2.1)
+      '@vitest/mocker': 4.0.7(vite@7.2.2)
       '@vitest/pretty-format': 4.0.7
       '@vitest/runner': 4.0.7
       '@vitest/snapshot': 4.0.7
@@ -11452,7 +11475,7 @@ packages:
       tinyexec: 0.3.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vite: 7.2.1(@types/node@20.19.25)(tsx@4.20.6)
+      vite: 7.2.2(@types/node@20.19.25)(tsx@4.20.6)
       why-is-node-running: 2.3.0
     transitivePeerDependencies:
       - jiti

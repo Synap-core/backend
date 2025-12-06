@@ -51,8 +51,10 @@
     "@trpc/react-query": "^11.0.0",
     "@trpc/server": "^11.0.0",
     "@types/node": "^20.0.0",
+    "@vitejs/plugin-react": "^5.1.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vite": "^7.2.2"
   },
   "keywords": [
     "synap",

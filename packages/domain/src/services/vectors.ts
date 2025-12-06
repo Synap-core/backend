@@ -19,6 +19,7 @@ export class VectorService {
     const parsed = UpsertEntityEmbeddingInputSchema.parse(input);
     const timestamp = new Date();
 
+    // Pass plain number[] - the database layer will handle pgvector.toSql() wrapping
     const baseRecord: NewEntityVector = {
       entityId: parsed.entityId,
       userId: parsed.userId,
@@ -27,7 +28,7 @@ export class VectorService {
       preview: parsed.preview ?? null,
       fileUrl: parsed.fileUrl ?? null,
       embeddingModel: parsed.embeddingModel,
-      embedding: parsed.embedding as NewEntityVector['embedding'],
+      embedding: parsed.embedding as any, // Drizzle handles number[] -> vector conversion for INSERT
       indexedAt: timestamp,
       updatedAt: timestamp,
     };
@@ -38,7 +39,7 @@ export class VectorService {
       .onConflictDoUpdate({
         target: entityVectors.entityId,
         set: {
-          embedding: parsed.embedding as NewEntityVector['embedding'],
+          embedding: parsed.embedding as any,
           title: parsed.title ?? null,
           preview: parsed.preview ?? null,
           fileUrl: parsed.fileUrl ?? null,
@@ -53,7 +54,7 @@ export class VectorService {
   async searchByEmbedding(input: VectorSearchInput): Promise<VectorSearchResult[]> {
     const parsed = VectorSearchInputSchema.parse(input);
 
-    // Use pgvector for fast semantic search
+    // Pass plain number[] - the vector repository will handle pgvector.toSql() wrapping
     const rawRows = await searchEntityVectorsRaw(this.database as unknown as VectorRepositoryDatabase, {
       userId: parsed.userId,
       embedding: parsed.embedding,
