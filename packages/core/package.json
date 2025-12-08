@@ -44,5 +44,18 @@
     "config",
     "logging"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "description": "Core utilities for Synap (config, logging, telemetry)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synaptik-ai/synap.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/synaptik-ai/synap/issues"
+  },
+  "homepage": "https://github.com/synaptik-ai/synap/tree/main/packages/core#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -89,7 +89,7 @@ describe('Hub Router', () => {
       await expect(
         caller.generateAccessToken({
           requestId: 'test-request-123',
-          scope: ['invalid-scope'],
+          scope: ['invalid-scope'] as any,
           expiresIn: 300,
         })
       ).rejects.toThrow();
@@ -220,7 +220,7 @@ describe('Hub Router', () => {
             version: '1.0',
             type: 'invalid-type',
             correlationId: 'test-123',
-          } as HubInsight,
+          } as any as HubInsight,
         })
       ).rejects.toThrow();
     });

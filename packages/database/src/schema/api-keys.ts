@@ -88,6 +88,11 @@ export const API_KEY_SCOPES = [
   'entities',
   'relations',
   'knowledge_facts',
+  // n8n integration scopes
+  'write:entities',      // Create/update/delete entities via n8n
+  'read:entities',       // Search and read entities via n8n
+  'ai:analyze',          // AI content analysis
+  'webhook:manage',      // Manage webhook subscriptions (Phase 2)
 ] as const;
 
 export type ApiKeyScope = typeof API_KEY_SCOPES[number];

@@ -35,10 +35,17 @@
     "data-pod",
     "intelligence-hub"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synaptik-ai/synap.git",
+    "directory": "packages/hub-protocol"
+  },
+  "bugs": {
+    "url": "https://github.com/synaptik-ai/synap/issues"
+  },
+  "homepage": "https://github.com/synaptik-ai/synap/tree/main/packages/hub-protocol#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }
-
-
-
-
-

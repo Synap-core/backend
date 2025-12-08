@@ -48,5 +48,8 @@ export interface ExpertiseResponse {
   
   /** Error message (if failed) */
   error?: string;
+  
+  /** Additional metadata */
+  metadata?: Record<string, unknown>;
 }
 

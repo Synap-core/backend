@@ -21,13 +21,33 @@
     "test:watch": "vitest watch"
   },
   "dependencies": {
-    "@synap/hub-protocol": "workspace:*",
-    "@synap/hub-protocol-client": "workspace:*"
+    "@synap/hub-protocol": "file:../hub-protocol",
+    "@synap/hub-protocol-client": "file:../hub-protocol-client"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.3.3",
     "vitest": "^4.0.7"
+  },
+  "description": "Abstract base class for building custom Hub Orchestrators",
+  "keywords": [
+    "synap",
+    "hub",
+    "orchestrator",
+    "intelligence-hub",
+    "base-class"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synaptik-ai/synap.git",
+    "directory": "packages/hub-orchestrator-base"
+  },
+  "bugs": {
+    "url": "https://github.com/synaptik-ai/synap/issues"
+  },
+  "homepage": "https://github.com/synaptik-ai/synap/tree/main/packages/hub-orchestrator-base#readme",
+  "publishConfig": {
+    "access": "public"
   }
 }
-

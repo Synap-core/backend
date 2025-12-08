@@ -21,15 +21,35 @@
     "test:watch": "vitest watch"
   },
   "dependencies": {
-    "@synap/hub-protocol": "workspace:*",
-    "@synap/api": "workspace:*",
-    "@synap/core": "workspace:*",
+    "@synap/hub-protocol": "file:../hub-protocol",
+    "@synap/api": "file:../api",
+    "@synap/core": "file:../core",
     "@trpc/client": "^11.7.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.3.3",
     "vitest": "^4.0.7"
+  },
+  "description": "Type-safe client for Hub Protocol V1.0 - Data Pod communication",
+  "keywords": [
+    "synap",
+    "hub-protocol",
+    "data-pod",
+    "client",
+    "trpc"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synaptik-ai/synap.git",
+    "directory": "packages/hub-protocol-client"
+  },
+  "bugs": {
+    "url": "https://github.com/synaptik-ai/synap/issues"
+  },
+  "homepage": "https://github.com/synaptik-ai/synap/tree/main/packages/hub-protocol-client#readme",
+  "publishConfig": {
+    "access": "public"
   }
 }
-

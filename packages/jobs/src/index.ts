@@ -22,6 +22,7 @@ export { handleConversationMessage } from './functions/conversation-message.js';
 export { handleProjectCreation } from './functions/project-creation.js';
 export { handleTaskCompletion } from './functions/task-completion.js';
 export { handleEmbeddingGeneration } from './functions/embedding-generation.js';
+export { handleWebhookDelivery } from './functions/webhook-broker.js';
 
 // Import all functions for Inngest
 import { handleNewEvent } from './functions/projectors.js';
@@ -35,6 +36,7 @@ import { handleConversationMessage } from './functions/conversation-message.js';
 import { handleProjectCreation } from './functions/project-creation.js';
 import { handleTaskCompletion } from './functions/task-completion.js';
 import { handleEmbeddingGeneration } from './functions/embedding-generation.js';
+import { handleWebhookDelivery } from './functions/webhook-broker.js';
 
 export const functions = [
   // Legacy functions (kept for backward compatibility)
@@ -51,4 +53,5 @@ export const functions = [
   handleProjectCreation,
   handleTaskCompletion,
   handleEmbeddingGeneration,
+  handleWebhookDelivery,
 ];

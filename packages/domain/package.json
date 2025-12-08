@@ -21,11 +21,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@synap/core": "workspace:*",
-    "@synap/database": "workspace:*",
-    "@synap/storage": "workspace:*",
-    "@synap/types": "workspace:*",
-    "@synap/ai-embeddings": "workspace:*",
+    "@synap/core": "file:../core",
+    "@synap/database": "file:../database",
+    "@synap/storage": "file:../storage",
+    "@synap/types": "file:../types",
+    "@synap/ai-embeddings": "file:../ai-embeddings",
     "zod": "^3.22.0"
   },
   "devDependencies": {

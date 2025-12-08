@@ -19,11 +19,12 @@ async function getDbInstance() {
 }
 
 export interface Context extends Record<string, unknown> {
-  db: Awaited<ReturnType<typeof getDb>>;
+  db: any; // Awaited<ReturnType<typeof getDb>>; // Fix TS2742
   authenticated: boolean;
   userId?: string | null;
   user?: any;
   session?: any;
+  req?: Request;
 }
 
 export async function createContext(req: Request): Promise<Context> {
@@ -44,6 +45,7 @@ export async function createContext(req: Request): Promise<Context> {
         name: 'Test User',
       },
       session: { identity: { id: testUserId } },
+      req,
     };
   }
 
@@ -67,6 +69,7 @@ export async function createContext(req: Request): Promise<Context> {
           name: session.identity.traits.name,
         },
         session,
+        req,
       };
     }
     
@@ -77,6 +80,7 @@ export async function createContext(req: Request): Promise<Context> {
       userId: null,
       user: null,
       session: null,
+      req,
     };
   } catch (error) {
     contextLogger.error({ err: error }, 'Error getting session');
@@ -86,6 +90,7 @@ export async function createContext(req: Request): Promise<Context> {
       userId: null,
       user: null,
       session: null,
+      req,
     };
   }
 }

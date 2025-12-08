@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./dist/schema/index.js": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js",
+      "default": "./dist/schema/index.js"
     }
   },
   "files": [
@@ -30,8 +35,8 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.9.0",
-    "@synap/core": "workspace:*",
-    "@synap/types": "workspace:*",
+    "@synap/core": "file:../core",
+    "@synap/types": "file:../types",
     "drizzle-orm": "^0.33.0",
     "pgvector": "^0.2.1"
   },
