@@ -12,6 +12,7 @@ import type { Context } from './context.js';
 import { requireUserId } from './utils/user-scoped.js';
 import { config } from '@synap/core';
 import { createLogger } from '@synap/core';
+import '@synap/database'; // Fix TS2742: inferred type portability
 
 const logger = createLogger({ module: 'trpc' });
 const isPostgres = config.database.dialect === 'postgres';

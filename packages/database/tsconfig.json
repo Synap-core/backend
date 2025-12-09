@@ -3,8 +3,25 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/migrate.ts"]
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../types"
+    }
+  ],
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/migrate.ts"
+  ]
 }

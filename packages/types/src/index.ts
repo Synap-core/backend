@@ -17,6 +17,10 @@ export {
   parseSynapEvent,
 } from './synap-event.js';
 
+/**
+ * Synap Types - Shared TypeScript types
+ */
+
 export {
   EventTypes,
   type EventType,
@@ -24,3 +28,11 @@ export {
   getAllEventTypes,
 } from './event-types.js';
 
+// Chat types
+export * from './chat.js';
+
+// Event metadata types (AI, import, sync, automation)
+export * from './event-metadata.js';
+
+// Legacy: Keep enrichment-events for backward compatibility (will be deprecated)
+// export * from './enrichment-events.js';

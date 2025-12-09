@@ -4,10 +4,10 @@
  * Tests pour la gestion des clés API avec bcrypt
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { apiKeyService } from './api-keys.js';
 import { db } from '@synap/database';
-import { apiKeys } from '@synap/database/schema';
+import { apiKeys } from '@synap/database';
 import { eq } from '@synap/database';
 import bcrypt from 'bcrypt';
 

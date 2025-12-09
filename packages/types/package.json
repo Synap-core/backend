@@ -20,7 +20,7 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@synap/core": "workspace:*",
+    "@synap/core": "file:../core",
     "zod": "^3.22.0"
   },
   "devDependencies": {
@@ -33,6 +33,18 @@
     "types",
     "typescript"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "description": "Shared TypeScript types for Synap ecosystem",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synaptik-ai/synap.git",
+    "directory": "packages/types"
+  },
+  "bugs": {
+    "url": "https://github.com/synaptik-ai/synap/issues"
+  },
+  "homepage": "https://github.com/synaptik-ai/synap/tree/main/packages/types#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }
-

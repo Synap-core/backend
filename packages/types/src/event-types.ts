@@ -81,6 +81,28 @@ export const EventTypes = {
   HUB_TOKEN_GENERATED: 'hub.token.generated',
   HUB_DATA_REQUESTED: 'hub.data.requested',
   HUB_INSIGHT_SUBMITTED: 'hub.insight.submitted',
+
+  // ============================================================================
+  // DEPRECATED: AI Enrichment Events
+  // ============================================================================
+  // These event types are deprecated in favor of the unified metadata approach.
+  // Instead of emitting separate enrichment events, use the metadata field on
+  // regular events (entity.created, etc.) with AI context.
+  // See: @synap/types/event-metadata for the new approach.
+  //
+  // Kept for backward compatibility - will be removed in v2.0
+  /** @deprecated Use metadata.ai instead */
+  ENRICHMENT_ENTITY_EXTRACTED: 'enrichment.entity.extracted',
+  /** @deprecated Use metadata.ai instead */
+  ENRICHMENT_PROPERTIES_INFERRED: 'enrichment.entity.properties.inferred',
+  /** @deprecated Use metadata.ai instead */
+  ENRICHMENT_RELATIONSHIPS_DISCOVERED: 'enrichment.entity.relationships.discovered',
+  /** @deprecated Use metadata.ai instead */
+  ENRICHMENT_ENTITY_CLASSIFIED: 'enrichment.entity.classified',
+  /** @deprecated Use metadata.ai instead */
+  ENRICHMENT_KNOWLEDGE_EXTRACTED: 'enrichment.knowledge.extracted',
+  /** @deprecated Use metadata.ai instead */
+  ENRICHMENT_REASONING_RECORDED: 'enrichment.reasoning.recorded',
 } as const;
 
 /**

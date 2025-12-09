@@ -1,4 +1,10 @@
-import { Pool } from '@neondatabase/serverless';
+/**
+ * Knowledge Repository - Knowledge Facts Management
+ * 
+ * Uses shared postgres.js client from client-pg.ts
+ */
+
+import { sql } from '../client-pg.js';
 import { randomUUID } from 'crypto';
 import type { KnowledgeFactRow } from '../schema/knowledge-facts.js';
 
@@ -30,12 +36,12 @@ export interface SearchKnowledgeFactsInput {
 type MemoryStore = Map<string, KnowledgeFactRecord[]>;
 
 export class KnowledgeRepository {
-  private readonly pool?: Pool;
+  private readonly useDatabase: boolean;
   private readonly memoryStore?: MemoryStore;
 
-  constructor(pool?: Pool) {
-    this.pool = pool;
-    if (!pool) {
+  constructor(useDatabase: boolean = true) {
+    this.useDatabase = useDatabase;
+    if (!useDatabase) {
       this.memoryStore = new Map();
     }
   }
@@ -43,30 +49,29 @@ export class KnowledgeRepository {
   async saveFact(input: SaveKnowledgeFactInput): Promise<KnowledgeFactRecord> {
     this.ensureEmbeddingDimensions(input.embedding);
 
-    if (this.pool) {
+    if (this.useDatabase) {
       const embeddingVector = this.embedToPgVector(input.embedding);
 
-      const result = await this.pool.query(
-        `INSERT INTO knowledge_facts (
+      const result = await sql`
+        INSERT INTO knowledge_facts (
           user_id,
           fact,
           confidence,
           source_entity_id,
           source_message_id,
           embedding
-        ) VALUES ($1, $2, $3, $4, $5, $6::vector)
-        RETURNING *`,
-        [
-          input.userId,
-          input.fact,
-          input.confidence,
-          input.sourceEntityId || null,
-          input.sourceMessageId || null,
-          embeddingVector,
-        ]
-      );
+        ) VALUES (
+          ${input.userId}, 
+          ${input.fact}, 
+          ${input.confidence}, 
+          ${input.sourceEntityId || null}, 
+          ${input.sourceMessageId || null}, 
+          ${embeddingVector}::vector
+        )
+        RETURNING *
+      `;
 
-      return this.mapRow(result.rows[0]);
+      return this.mapRow(result[0]);
     }
 
     if (!this.memoryStore) {
@@ -115,16 +120,15 @@ export class KnowledgeRepository {
   }
 
   private async fetchFacts(userId: string, limit: number): Promise<KnowledgeFactRecord[]> {
-    if (this.pool) {
-      const dbResult = await this.pool.query(
-        `SELECT * FROM knowledge_facts
-         WHERE user_id = $1
-         ORDER BY created_at DESC
-         LIMIT $2`,
-        [userId, limit]
-      );
+    if (this.useDatabase) {
+      const dbResult = await sql`
+        SELECT * FROM knowledge_facts
+        WHERE user_id = ${userId}
+        ORDER BY created_at DESC
+        LIMIT ${limit}
+      `;
 
-      return dbResult.rows.map((row) => this.mapRow(row));
+      return dbResult.map((row) => this.mapRow(row));
     }
 
     if (!this.memoryStore) {
@@ -205,12 +209,9 @@ export function getKnowledgeRepository(): KnowledgeRepository {
     const connectionString = process.env.DATABASE_URL;
 
     if (isPostgres && connectionString) {
-      const pool = new Pool({
-        connectionString,
-      });
-      _knowledgeRepository = new KnowledgeRepository(pool);
+      _knowledgeRepository = new KnowledgeRepository(true);
     } else {
-      _knowledgeRepository = new KnowledgeRepository();
+      _knowledgeRepository = new KnowledgeRepository(false);
     }
   }
 
@@ -218,5 +219,3 @@ export function getKnowledgeRepository(): KnowledgeRepository {
 }
 
 export const knowledgeRepository = getKnowledgeRepository();
-
-

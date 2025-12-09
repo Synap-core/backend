@@ -1,4 +1,10 @@
-import { Pool } from '@neondatabase/serverless';
+/**
+ * Suggestion Repository - AI Suggestions Management
+ * 
+ * Uses shared postgres.js client from client-pg.ts
+ */
+
+import { sql } from '../client-pg.js';
 import { randomUUID } from 'crypto';
 import type { AISuggestionRow } from '../schema/ai-suggestions.js';
 
@@ -41,20 +47,20 @@ export interface RelatedEntitySummary {
 }
 
 export class SuggestionRepository {
-  private readonly pool?: Pool;
+  private readonly useDatabase: boolean;
   private readonly memoryStore?: MemorySuggestionStore;
 
-  constructor(pool?: Pool) {
-    this.pool = pool;
-    if (!pool) {
+  constructor(useDatabase: boolean = true) {
+    this.useDatabase = useDatabase;
+    if (!useDatabase) {
       this.memoryStore = new Map();
     }
   }
 
   async createSuggestion(input: CreateSuggestionInput): Promise<SuggestionRecord> {
-    if (this.pool) {
-      const result = await this.pool.query(
-        `INSERT INTO ai_suggestions (
+    if (this.useDatabase) {
+      const result = await sql`
+        INSERT INTO ai_suggestions (
           user_id,
           type,
           status,
@@ -62,19 +68,19 @@ export class SuggestionRepository {
           description,
           payload,
           confidence
-        ) VALUES ($1, $2, 'pending', $3, $4, $5, $6)
-        RETURNING *`,
-        [
-          input.userId,
-          input.type,
-          input.title,
-          input.description,
-          input.payload ? JSON.stringify(input.payload) : null,
-          input.confidence,
-        ]
-      );
+        ) VALUES (
+          ${input.userId},
+          ${input.type},
+          'pending',
+          ${input.title},
+          ${input.description},
+          ${input.payload ? JSON.stringify(input.payload) : null},
+          ${input.confidence}
+        )
+        RETURNING *
+      `;
 
-      return this.mapRow(result.rows[0]);
+      return this.mapRow(result[0]);
     }
 
     if (!this.memoryStore) {
@@ -112,19 +118,18 @@ export class SuggestionRepository {
     payloadKey: string,
     payloadValue: string
   ): Promise<SuggestionRecord | null> {
-    if (this.pool) {
-      const result = await this.pool.query(
-        `SELECT * FROM ai_suggestions
-         WHERE user_id = $1
-           AND type = $2
-           AND status = 'pending'
-           AND payload ->> $3 = $4
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [userId, type, payloadKey, payloadValue]
-      );
+    if (this.useDatabase) {
+      const result = await sql`
+        SELECT * FROM ai_suggestions
+        WHERE user_id = ${userId}
+          AND type = ${type}
+          AND status = 'pending'
+          AND payload ->> ${payloadKey} = ${payloadValue}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
 
-      return result.rows.length > 0 ? this.mapRow(result.rows[0]) : null;
+      return result.length > 0 ? this.mapRow(result[0]) : null;
     }
 
     if (!this.memoryStore) {
@@ -147,17 +152,16 @@ export class SuggestionRepository {
     suggestionId: string,
     status: AISuggestionStatus
   ): Promise<SuggestionRecord | null> {
-    if (this.pool) {
-      const result = await this.pool.query(
-        `UPDATE ai_suggestions
-         SET status = $1,
-             updated_at = NOW()
-         WHERE id = $2 AND user_id = $3
-         RETURNING *`,
-        [status, suggestionId, userId]
-      );
+    if (this.useDatabase) {
+      const result = await sql`
+        UPDATE ai_suggestions
+        SET status = ${status},
+            updated_at = NOW()
+        WHERE id = ${suggestionId} AND user_id = ${userId}
+        RETURNING *
+      `;
 
-      return result.rows.length > 0 ? this.mapRow(result.rows[0]) : null;
+      return result.length > 0 ? this.mapRow(result[0]) : null;
     }
 
     if (!this.memoryStore) {
@@ -177,23 +181,22 @@ export class SuggestionRepository {
   }
 
   async getRecentTagUsage(hours: number, minUsage: number): Promise<TagUsageCandidate[]> {
-    if (!this.pool) {
+    if (!this.useDatabase) {
       return [];
     }
 
-    const result = await this.pool.query({
-      text: `SELECT t.user_id, t.id AS tag_id, t.name AS tag_name, COUNT(*)::int AS usage_count
-             FROM tags t
-             JOIN entity_tags et ON et.tag_id = t.id
-             JOIN entities e ON e.id = et.entity_id
-             WHERE e.deleted_at IS NULL
-               AND e.created_at >= NOW() - ($1 || ' hours')::INTERVAL
-             GROUP BY t.user_id, t.id, t.name
-             HAVING COUNT(*) >= $2`,
-      values: [hours, minUsage],
-    });
+    const result = await sql`
+      SELECT t.user_id, t.id AS tag_id, t.name AS tag_name, COUNT(*)::int AS usage_count
+      FROM tags t
+      JOIN entity_tags et ON et.tag_id = t.id
+      JOIN entities e ON e.id = et.entity_id
+      WHERE e.deleted_at IS NULL
+        AND e.created_at >= NOW() - (${hours} || ' hours')::INTERVAL
+      GROUP BY t.user_id, t.id, t.name
+      HAVING COUNT(*) >= ${minUsage}
+    `;
 
-    return result.rows.map((row) => ({
+    return result.map((row) => ({
       userId: row.user_id as string,
       tagId: row.tag_id as string,
       tagName: row.tag_name as string,
@@ -202,52 +205,49 @@ export class SuggestionRepository {
   }
 
   async hasProjectForTag(tagId: string): Promise<boolean> {
-    if (!this.pool) {
+    if (!this.useDatabase) {
       return false;
     }
 
-    const result = await this.pool.query({
-      text: `SELECT COUNT(*)::int AS count
-             FROM entity_tags et
-             JOIN entities e ON e.id = et.entity_id
-             WHERE et.tag_id = $1 AND e.type = 'project' AND e.deleted_at IS NULL`,
-      values: [tagId],
-    });
+    const result = await sql`
+      SELECT COUNT(*)::int AS count
+      FROM entity_tags et
+      JOIN entities e ON e.id = et.entity_id
+      WHERE et.tag_id = ${tagId} AND e.type = 'project' AND e.deleted_at IS NULL
+    `;
 
-    return Number(result.rows[0]?.count ?? 0) > 0;
+    return Number(result[0]?.count ?? 0) > 0;
   }
 
   async getRelatedEntitiesForTag(tagId: string, limit: number): Promise<RelatedEntitySummary[]> {
-    if (!this.pool) {
+    if (!this.useDatabase) {
       return [];
     }
 
-    const result = await this.pool.query({
-      text: `SELECT e.id, e.title
-             FROM entity_tags et
-             JOIN entities e ON e.id = et.entity_id
-             WHERE et.tag_id = $1 AND e.deleted_at IS NULL
-             ORDER BY e.created_at DESC
-             LIMIT $2`,
-      values: [tagId, limit],
-    });
+    const result = await sql`
+      SELECT e.id, e.title
+      FROM entity_tags et
+      JOIN entities e ON e.id = et.entity_id
+      WHERE et.tag_id = ${tagId} AND e.deleted_at IS NULL
+      ORDER BY e.created_at DESC
+      LIMIT ${limit}
+    `;
 
-    return result.rows.map((row) => ({
+    return result.map((row) => ({
       entityId: row.id as string,
       title: (row.title as string | null) ?? null,
     }));
   }
 
   private async fetchSuggestions(userId: string): Promise<SuggestionRecord[]> {
-    if (this.pool) {
-      const result = await this.pool.query(
-        `SELECT * FROM ai_suggestions
-         WHERE user_id = $1
-         ORDER BY created_at DESC`,
-        [userId]
-      );
+    if (this.useDatabase) {
+      const result = await sql`
+        SELECT * FROM ai_suggestions
+        WHERE user_id = ${userId}
+        ORDER BY created_at DESC
+      `;
 
-      return result.rows.map((row) => this.mapRow(row));
+      return result.map((row) => this.mapRow(row));
     }
 
     if (!this.memoryStore) {
@@ -299,10 +299,9 @@ export function getSuggestionRepository(): SuggestionRepository {
     const connectionString = process.env.DATABASE_URL;
 
     if (isPostgres && connectionString) {
-      const pool = new Pool({ connectionString });
-      _suggestionRepository = new SuggestionRepository(pool);
+      _suggestionRepository = new SuggestionRepository(true);
     } else {
-      _suggestionRepository = new SuggestionRepository();
+      _suggestionRepository = new SuggestionRepository(false);
     }
   }
 
@@ -310,5 +309,3 @@ export function getSuggestionRepository(): SuggestionRepository {
 }
 
 export const suggestionRepository = getSuggestionRepository();
-
-

@@ -33,6 +33,9 @@ import { systemRouter } from './routers/system.js';
 import { hubRouter } from './routers/hub.js';
 import { apiKeysRouter } from './routers/api-keys.js';
 import { healthRouter } from './routers/health.js';
+import { n8nActionsRouter } from './routers/n8n/actions.js';
+import { webhooksRouter } from './routers/webhooks.js';
+import { documentsRouter } from './routers/documents.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -47,6 +50,9 @@ registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', descr
 registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
 registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', description: 'API key management for Hub authentication' });
 registerRouter('health', healthRouter, { version: '1.0.0', source: 'core', description: 'Health checks and system monitoring' });
+registerRouter('n8n', n8nActionsRouter, { version: '1.0.0', source: 'core', description: 'n8n integration - Entity operations and AI analysis' });
+registerRouter('webhooks', webhooksRouter, { version: '1.0.0', source: 'core', description: 'Webhook subscription management' });
+registerRouter('documents', documentsRouter, { version: '1.0.0', source: 'core', description: 'Document management and collaboration' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -65,6 +71,8 @@ const coreRouter = router({
   hub: hubRouter,
   apiKeys: apiKeysRouter,
   health: healthRouter,
+  n8n: n8nActionsRouter,
+  webhooks: webhooksRouter,
 });
 
 export type AppRouter = typeof coreRouter;

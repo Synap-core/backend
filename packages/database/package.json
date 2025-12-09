@@ -9,6 +9,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js",
+      "default": "./dist/schema/index.js"
+    },
+    "./dist/schema/index.js": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js",
+      "default": "./dist/schema/index.js"
     }
   },
   "files": [
@@ -29,11 +39,11 @@
     "db:drop": "drizzle-kit drop"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.9.0",
     "@synap/core": "workspace:*",
     "@synap/types": "workspace:*",
     "drizzle-orm": "^0.33.0",
-    "pgvector": "^0.2.1"
+    "pgvector": "^0.2.1",
+    "postgres": "^3.4.7"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
@@ -44,5 +54,8 @@
     "typescript": "^5.3.3",
     "vite": "^7.2.2",
     "vitest": "^4.0.15"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

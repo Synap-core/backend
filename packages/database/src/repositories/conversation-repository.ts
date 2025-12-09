@@ -1,7 +1,7 @@
 /**
  * Conversation Repository - Chat History Management
  * 
- * V0.4: Hash-chained conversation storage
+ * V0.4: Hash-chained conversation storage using postgres.js
  * 
  * Features:
  * - Append messages with hash chain integrity
@@ -10,9 +10,8 @@
  * - Hash verification
  */
 
-import { Pool } from '@neondatabase/serverless';
-import { createHash } from 'crypto';
-import { randomUUID } from 'crypto';
+import { sql } from '../client-pg.js';
+import { createHash, randomUUID } from 'crypto';
 import type { ConversationMessageMetadata } from '@synap/core';
 
 // ============================================================================
@@ -60,8 +59,6 @@ export interface ThreadInfo {
 // ============================================================================
 
 export class ConversationRepository {
-  constructor(private pool: Pool) {}
-
   /**
    * Append message to conversation with hash chain
    */
@@ -71,16 +68,15 @@ export class ConversationRepository {
     // Get parent's hash if this is a reply
     let previousHash: string | null = null;
     if (data.parentId) {
-      const parentResult = await this.pool.query(
-        'SELECT hash FROM conversation_messages WHERE id = $1',
-        [data.parentId]
-      );
+      const parentResult = await sql`
+        SELECT hash FROM conversation_messages WHERE id = ${data.parentId}
+      `;
       
-      if (parentResult.rows.length === 0) {
+      if (parentResult.length === 0) {
         throw new Error(`Parent message ${data.parentId} not found`);
       }
       
-      previousHash = parentResult.rows[0].hash;
+      previousHash = parentResult[0].hash;
     }
     
     // Calculate hash for this message
@@ -93,7 +89,7 @@ export class ConversationRepository {
     });
     
     // Insert message
-    const result = await this.pool.query(`
+    const result = await sql`
       INSERT INTO conversation_messages (
         id,
         thread_id,
@@ -105,21 +101,22 @@ export class ConversationRepository {
         timestamp,
         previous_hash,
         hash
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9)
+      ) VALUES (
+        ${messageId},
+        ${data.threadId},
+        ${data.parentId || null},
+        ${data.role},
+        ${data.content},
+        ${data.metadata ? JSON.stringify(data.metadata) : null},
+        ${data.userId},
+        NOW(),
+        ${previousHash},
+        ${hash}
+      )
       RETURNING *
-    `, [
-      messageId,
-      data.threadId,
-      data.parentId || null,
-      data.role,
-      data.content,
-      data.metadata ? JSON.stringify(data.metadata) : null,
-      data.userId,
-      previousHash,
-      hash,
-    ]);
+    `;
     
-    return this.mapRow(result.rows[0]);
+    return this.mapRow(result[0]);
   }
 
   /**
@@ -129,30 +126,30 @@ export class ConversationRepository {
     threadId: string,
     limit: number = 100
   ): Promise<ConversationMessage[]> {
-    const result = await this.pool.query(`
+    const result = await sql`
       SELECT * FROM conversation_messages
-      WHERE thread_id = $1
+      WHERE thread_id = ${threadId}
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
-      LIMIT $2
-    `, [threadId, limit]);
+      LIMIT ${limit}
+    `;
     
-    return result.rows.map(row => this.mapRow(row));
+    return result.map(row => this.mapRow(row));
   }
 
   /**
    * Get latest message in thread
    */
   async getLatestMessage(threadId: string): Promise<ConversationMessage | null> {
-    const result = await this.pool.query(`
+    const result = await sql`
       SELECT * FROM conversation_messages
-      WHERE thread_id = $1
+      WHERE thread_id = ${threadId}
         AND deleted_at IS NULL
       ORDER BY timestamp DESC
       LIMIT 1
-    `, [threadId]);
+    `;
     
-    return result.rows.length > 0 ? this.mapRow(result.rows[0]) : null;
+    return result.length > 0 ? this.mapRow(result[0]) : null;
   }
 
   /**
@@ -163,16 +160,15 @@ export class ConversationRepository {
     userId: string
   ): Promise<string> {
     // Verify parent exists
-    const parentResult = await this.pool.query(
-      'SELECT * FROM conversation_messages WHERE id = $1',
-      [parentMessageId]
-    );
+    const parentResult = await sql`
+      SELECT * FROM conversation_messages WHERE id = ${parentMessageId}
+    `;
     
-    if (parentResult.rows.length === 0) {
+    if (parentResult.length === 0) {
       throw new Error(`Parent message ${parentMessageId} not found`);
     }
     
-    const parent = this.mapRow(parentResult.rows[0]);
+    const parent = this.mapRow(parentResult[0]);
     
     // Verify user owns the conversation
     if (parent.userId !== userId) {
@@ -183,7 +179,7 @@ export class ConversationRepository {
     const newThreadId = randomUUID();
     
     // Copy all messages up to (and including) the parent into new thread
-    await this.pool.query(`
+    await sql`
       INSERT INTO conversation_messages (
         id,
         thread_id,
@@ -198,7 +194,7 @@ export class ConversationRepository {
       )
       SELECT
         gen_random_uuid(),
-        $1,  -- New thread ID
+        ${newThreadId},
         parent_id,
         role,
         content,
@@ -208,11 +204,11 @@ export class ConversationRepository {
         previous_hash,
         hash
       FROM conversation_messages
-      WHERE thread_id = $2
-        AND timestamp <= (SELECT timestamp FROM conversation_messages WHERE id = $3)
+      WHERE thread_id = ${parent.threadId}
+        AND timestamp <= (SELECT timestamp FROM conversation_messages WHERE id = ${parentMessageId})
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
-    `, [newThreadId, parent.threadId, parentMessageId]);
+    `;
     
     return newThreadId;
   }
@@ -221,14 +217,14 @@ export class ConversationRepository {
    * Get branches from a parent message
    */
   async getBranches(parentId: string): Promise<ConversationMessage[]> {
-    const result = await this.pool.query(`
+    const result = await sql`
       SELECT * FROM conversation_messages
-      WHERE parent_id = $1
+      WHERE parent_id = ${parentId}
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
-    `, [parentId]);
+    `;
     
-    return result.rows.map(row => this.mapRow(row));
+    return result.map(row => this.mapRow(row));
   }
 
   /**
@@ -239,12 +235,11 @@ export class ConversationRepository {
     brokenAt: string | null;
     message: string;
   }> {
-    const result = await this.pool.query(
-      'SELECT * FROM verify_hash_chain($1)',
-      [threadId]
-    );
+    const result = await sql`
+      SELECT * FROM verify_hash_chain(${threadId})
+    `;
     
-    const row = result.rows[0];
+    const row = result[0];
     return {
       isValid: row.is_valid,
       brokenAt: row.broken_at,
@@ -256,32 +251,31 @@ export class ConversationRepository {
    * Get thread info (metadata)
    */
   async getThreadInfo(threadId: string): Promise<ThreadInfo> {
-    const countResult = await this.pool.query(
-      'SELECT count_thread_messages($1) as count',
-      [threadId]
-    );
+    const countResult = await sql`
+      SELECT count_thread_messages(${threadId}) as count
+    `;
     
     const latestMessage = await this.getLatestMessage(threadId);
     
     // Count branches (messages with multiple children)
-    const branchResult = await this.pool.query(`
+    const branchResult = await sql`
       SELECT COUNT(DISTINCT parent_id) as branches
       FROM (
         SELECT parent_id, COUNT(*) as children
         FROM conversation_messages
-        WHERE thread_id = $1
+        WHERE thread_id = ${threadId}
           AND parent_id IS NOT NULL
           AND deleted_at IS NULL
         GROUP BY parent_id
         HAVING COUNT(*) > 1
       ) branching_points
-    `, [threadId]);
+    `;
     
     return {
       threadId,
-      messageCount: countResult.rows[0].count,
+      messageCount: countResult[0].count,
       latestMessage,
-      branches: branchResult.rows[0].branches || 0,
+      branches: branchResult[0].branches || 0,
     };
   }
 
@@ -296,7 +290,7 @@ export class ConversationRepository {
     latestMessage: ConversationMessage;
     messageCount: number;
   }>> {
-    const result = await this.pool.query(`
+    const result = await sql`
       WITH thread_latest AS (
         SELECT DISTINCT ON (thread_id)
           thread_id,
@@ -304,7 +298,7 @@ export class ConversationRepository {
           content,
           timestamp
         FROM conversation_messages
-        WHERE user_id = $1
+        WHERE user_id = ${userId}
           AND deleted_at IS NULL
         ORDER BY thread_id, timestamp DESC
       ),
@@ -313,7 +307,7 @@ export class ConversationRepository {
           thread_id,
           COUNT(*) as message_count
         FROM conversation_messages
-        WHERE user_id = $1
+        WHERE user_id = ${userId}
           AND deleted_at IS NULL
         GROUP BY thread_id
       )
@@ -325,10 +319,10 @@ export class ConversationRepository {
       JOIN thread_counts tc ON tl.thread_id = tc.thread_id
       JOIN conversation_messages cm ON tl.id = cm.id
       ORDER BY tl.timestamp DESC
-      LIMIT $2
-    `, [userId, limit]);
+      LIMIT ${limit}
+    `;
     
-    return result.rows.map(row => ({
+    return result.map(row => ({
       threadId: row.thread_id,
       messageCount: parseInt(row.message_count, 10),
       latestMessage: this.mapRow(row),
@@ -339,16 +333,16 @@ export class ConversationRepository {
    * Soft delete message
    */
   async deleteMessage(messageId: string, userId: string): Promise<void> {
-    const result = await this.pool.query(`
+    const result = await sql`
       UPDATE conversation_messages
       SET deleted_at = NOW()
-      WHERE id = $1
-        AND user_id = $2
+      WHERE id = ${messageId}
+        AND user_id = ${userId}
         AND deleted_at IS NULL
       RETURNING id
-    `, [messageId, userId]);
+    `;
     
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       throw new Error('Message not found or already deleted');
     }
   }
@@ -406,13 +400,9 @@ let _conversationRepository: ConversationRepository | null = null;
 
 export function getConversationRepository(): ConversationRepository {
   if (!_conversationRepository) {
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-    });
-    _conversationRepository = new ConversationRepository(pool);
+    _conversationRepository = new ConversationRepository();
   }
   return _conversationRepository;
 }
 
 export const conversationRepository = getConversationRepository();
-

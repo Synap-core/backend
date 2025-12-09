@@ -8,6 +8,38 @@
     "sourceMap": true,
     "composite": true
   },
+  "references": [
+    {
+      "path": "../database"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../storage"
+    },
+    {
+      "path": "../auth"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../ai"
+    },
+    {
+      "path": "../ai-embeddings"
+    },
+    {
+      "path": "../jobs"
+    },
+    {
+      "path": "../types"
+    },
+    {
+      "path": "../hub-protocol"
+    }
+  ],
   "include": [
     "src/**/*"
   ],

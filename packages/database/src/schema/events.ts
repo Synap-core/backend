@@ -21,8 +21,12 @@ export const events = pgTable('events', {
   // What type of event is this?
   type: text('type').notNull(),
   
-  // Event payload (JSONB for efficient queries)
+  // Event data payload - WHAT happened (JSONB for efficient queries)
   data: jsonb('data').notNull(),
+  
+  // Event metadata - HOW/WHY it happened (AI enrichment, import context, sync info, etc.)
+  // This is the extensibility point - any intelligence or integration can add context here
+  metadata: jsonb('metadata'),
   
   // Where did this event come from?
   source: text('source').default('api'),

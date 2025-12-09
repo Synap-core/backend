@@ -12,7 +12,7 @@
  * - Security is enforced (RLS prevents cross-user access)
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { createSynapEvent } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { db, entities } from '@synap/database';
