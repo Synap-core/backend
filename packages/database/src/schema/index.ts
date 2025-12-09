@@ -16,3 +16,10 @@ export * from './ai-suggestions.js';
 export * from './api-keys.js';
 export * from './webhook_subscriptions.js';
 
+// New schemas for chat system
+export * from './chat-threads.js';
+export * from './agents.js';
+export * from './projects.js';
+
+// AI Enrichment schemas (event-based)
+export * from './enrichments.js';

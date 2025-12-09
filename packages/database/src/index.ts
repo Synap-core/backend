@@ -16,6 +16,9 @@ export * from './schema/index.js';
 export * from './repositories/index.js';
 export type { EventHook } from './repositories/event-repository.js';
 
+// Export projectors (event handlers for materialized views)
+export * from './projectors/index.js';
+
 // Re-export commonly used drizzle-orm functions
 export {
   // Query builders
@@ -52,5 +55,11 @@ export {
   type Column,
 } from 'drizzle-orm';
 
-// Also export sql from drizzle-orm as drizzleSql for clarity
+// Also export sql from drizzle-orm as drizzleSql for clarity (for SQL template literals)
 export { sql as drizzleSql } from 'drizzle-orm';
+
+// Also export as sqlDrizzle for even more clarity
+export { sql as sqlDrizzle } from 'drizzle-orm';
+
+// Export postgres type for repositories that need raw SQL
+export { type Sql } from 'postgres';

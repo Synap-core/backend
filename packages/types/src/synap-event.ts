@@ -34,12 +34,16 @@ export const SynapEventSchema = z.object({
   type: z.string().min(1).max(128), // e.g., 'note.creation.requested', 'task.completed'
   aggregateId: z.string().uuid().optional(), // Optional for system events
   
-  // Event Data
+  // Event Data (the core payload - what happened)
   data: z.record(z.unknown()), // Event payload (validated by specific event type schemas)
   
-  // Metadata
+  // Event Metadata (extensible context - how/why it happened)
+  // This is where AI enrichments, import context, sync info, etc. live
+  metadata: z.record(z.unknown()).optional(),
+  
+  // Ownership
   userId: z.string().min(1), // Required for multi-tenant isolation
-  source: z.enum(['api', 'automation', 'sync', 'migration', 'system']).default('api'),
+  source: z.enum(['api', 'automation', 'sync', 'migration', 'system', 'intelligence']).default('api'),
   timestamp: z.date().default(() => new Date()),
   
   // Tracing
@@ -159,6 +163,7 @@ export function createSynapEvent(input: {
     type: input.type,
     aggregateId: input.aggregateId,
     data: validatedData,
+    metadata: input.metadata,
     userId: input.userId,
     source: input.source || 'api',
     timestamp: new Date(),

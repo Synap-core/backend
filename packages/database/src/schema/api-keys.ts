@@ -93,7 +93,11 @@ export const API_KEY_SCOPES = [
   'read:entities',       // Search and read entities via n8n
   'ai:analyze',          // AI content analysis
   'webhook:manage',      // Manage webhook subscriptions (Phase 2)
+  // Hub Protocol scopes (for Intelligence Hub)
+  'hub-protocol.read',   // Read context from Data Pod
+  'hub-protocol.write',  // Write results back to Data Pod
 ] as const;
+
 
 export type ApiKeyScope = typeof API_KEY_SCOPES[number];
 
