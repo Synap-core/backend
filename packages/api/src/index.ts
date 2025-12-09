@@ -26,6 +26,7 @@ export { setupEventBroadcasting } from './setup-event-broadcasting.js';
 
 import { eventsRouter } from './routers/events.js';
 import { captureRouter } from './routers/capture.js';
+import { entitiesRouter } from './routers/entities.js';
 import { notesRouter } from './routers/notes.js';
 import { chatRouter } from './routers/chat.js';
 import { suggestionsRouter } from './routers/suggestions.js';
@@ -43,6 +44,7 @@ import { registerRouter, buildAppRouter } from './router-registry.js';
 // These are the built-in routers that come with the kernel
 registerRouter('events', eventsRouter, { version: '1.0.0', source: 'core', description: 'Event logging API' });
 registerRouter('capture', captureRouter, { version: '1.0.0', source: 'core', description: 'Thought capture API' });
+registerRouter('entities', entitiesRouter, { version: '1.0.0', source: 'core', description: 'Entity management API' });
 registerRouter('notes', notesRouter, { version: '1.0.0', source: 'core', description: 'Notes management API' });
 registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Conversational interface API' });
 registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
@@ -64,6 +66,7 @@ import { router } from './trpc.js';
 const coreRouter = router({
   events: eventsRouter,
   capture: captureRouter,
+  entities: entitiesRouter,
   notes: notesRouter,
   chat: chatRouter,
   suggestions: suggestionsRouter,

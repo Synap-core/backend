@@ -93,3 +93,10 @@ export function createSynapReactClient(config: {
 // Re-export types
 export type { AppRouter } from './types.js';
 
+// Export new hooks and provider
+export { SynapProvider, useSynap, useSynapClient } from './react/provider.js';
+export { useEntities, useEntity, useEntitySearch, useCreateEntity, useUpdateEntity, useDeleteEntity } from './react/useEntities.js';
+export { useThreads, useThread, useBranches, useSendMessage, useCreateBranch } from './react/useThreads.js';
+export { useEvents, useAggregateEvents } from './react/useEvents.js';
+
+
