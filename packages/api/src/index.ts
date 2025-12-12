@@ -37,6 +37,8 @@ import { healthRouter } from './routers/health.js';
 import { n8nActionsRouter } from './routers/n8n/actions.js';
 import { webhooksRouter } from './routers/webhooks.js';
 import { documentsRouter } from './routers/documents.js';
+import { contentRouter } from './routers/content.js';
+import { filesRouter } from './routers/files.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -55,6 +57,8 @@ registerRouter('health', healthRouter, { version: '1.0.0', source: 'core', descr
 registerRouter('n8n', n8nActionsRouter, { version: '1.0.0', source: 'core', description: 'n8n integration - Entity operations and AI analysis' });
 registerRouter('webhooks', webhooksRouter, { version: '1.0.0', source: 'core', description: 'Webhook subscription management' });
 registerRouter('documents', documentsRouter, { version: '1.0.0', source: 'core', description: 'Document management and collaboration' });
+registerRouter('content', contentRouter, { version: '1.0.0', source: 'core', description: 'Unified content creation (notes and files)' });
+registerRouter('files', filesRouter, { version: '1.0.0', source: 'core', description: 'File storage browsing and management' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -76,6 +80,9 @@ const coreRouter = router({
   health: healthRouter,
   n8n: n8nActionsRouter,
   webhooks: webhooksRouter,
+  documents: documentsRouter,
+  content: contentRouter,
+  files: filesRouter,
 });
 
 export type AppRouter = typeof coreRouter;

@@ -25,6 +25,7 @@
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/domain": "workspace:*",
+    "@synap/events": "workspace:*",
     "@synap/storage": "workspace:*",
     "@synap/types": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",

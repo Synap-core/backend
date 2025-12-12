@@ -7,6 +7,10 @@ import {
   IconMap,
   IconChevronLeft,
   IconChevronRight,
+  IconCpu,
+  IconDatabase,
+  IconWebhook,
+  IconHierarchy,
 } from '@tabler/icons-react';
 import { colors, layout, spacing, typography } from '../../theme/tokens';
 
@@ -44,6 +48,30 @@ export default function MainNav({ collapsed = false, onToggleCollapse, showToggl
       label: 'Explore',
       icon: IconMap,
       description: 'System Exploration',
+    },
+    {
+      path: '/workers',
+      label: 'Background Workers',
+      icon: IconCpu,
+      description: 'Inngest Functions',
+    },
+    {
+      path: '/database',
+      label: 'Database Explorer',
+      icon: IconDatabase,
+      description: 'System Entities',
+    },
+    {
+      path: '/subscribers',
+      label: 'Event Subscribers',
+      icon: IconWebhook,
+      description: 'Webhooks & Integrations',
+    },
+    {
+      path: '/flow',
+      label: 'System Flow',
+      icon: IconHierarchy,
+      description: 'Data Flow Visualization',
     },
   ];
 
@@ -150,18 +178,7 @@ export default function MainNav({ collapsed = false, onToggleCollapse, showToggl
               }}
               aria-label="System Capabilities"
             />
-            <NavLink
-              component={Link}
-              to="/publish"
-              label="Event Publisher"
-              onClick={onNavigate}
-              style={{
-                borderRadius: '6px',
-                fontSize: typography.fontSize.xs,
-                color: colors.text.secondary,
-              }}
-              aria-label="Event Publisher"
-            />
+
           </div>
         </div>
       )}

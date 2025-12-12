@@ -5,7 +5,6 @@ import {
   IconHome,
   IconSearch,
   IconFlask,
-  IconMap,
   IconUser,
   IconTimeline,
   IconTool,
@@ -15,6 +14,7 @@ import {
   IconRefresh,
   IconCopy,
   IconSettings,
+  IconFolder,
 } from '@tabler/icons-react';
 import { colors, typography, spacing, shadows, borderRadius } from '../theme/tokens';
 import { showInfoNotification } from '../lib/notifications';
@@ -125,7 +125,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
           {/* Pages Section */}
           <Command.Group
-            heading="Pages"
+            heading="Modules"
             style={{
               padding: spacing[2],
               fontSize: typography.fontSize.xs,
@@ -137,17 +137,45 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           >
             <CommandItem
               icon={<IconHome size={18} />}
-              label="Dashboard"
-              description="Health monitoring & quick access"
-              keywords={['home', 'main', 'overview', 'health', 'metrics']}
+              label="Health"
+              description="System health & metrics dashboard"
+              keywords={['home', 'main', 'overview', 'health', 'metrics', 'dashboard']}
               onSelect={() => handleNavigate('/')}
             />
             <CommandItem
               icon={<IconSearch size={18} />}
-              label="Investigate"
-              description="Incident investigation & event tracing"
-              keywords={['debug', 'trace', 'events', 'search', 'logs']}
-              onSelect={() => handleNavigate('/investigate')}
+              label="Events"
+              description="Event explorer & trace viewer"
+              keywords={['events', 'search', 'trace', 'investigate', 'logs']}
+              onSelect={() => handleNavigate('/events')}
+            />
+            <CommandItem
+              icon={<IconCpu size={18} />}
+              label="Data"
+              description="Database tables & vectors"
+              keywords={['database', 'tables', 'data', 'postgres', 'vector']}
+              onSelect={() => handleNavigate('/data')}
+            />
+            <CommandItem
+              icon={<IconFolder size={18} />}
+              label="Files"
+              description="Browse & manage files in storage"
+              keywords={['files', 'storage', 'minio', 's3', 'bucket', 'upload']}
+              onSelect={() => handleNavigate('/files')}
+            />
+            <CommandItem
+              icon={<IconTool size={18} />}
+              label="Automation"
+              description="Workers, webhooks & n8n"
+              keywords={['automation', 'workers', 'webhooks', 'n8n', 'subscribers']}
+              onSelect={() => handleNavigate('/automation')}
+            />
+            <CommandItem
+              icon={<IconLayoutGrid size={18} />}
+              label="Architecture"
+              description="Data Pod architecture overview"
+              keywords={['architecture', 'flow', 'diagram', 'overview']}
+              onSelect={() => handleNavigate('/flow')}
             />
             <CommandItem
               icon={<IconFlask size={18} />}
@@ -155,13 +183,6 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               description="Development & testing tools"
               keywords={['test', 'playground', 'ai', 'tools', 'publish']}
               onSelect={() => handleNavigate('/testing')}
-            />
-            <CommandItem
-              icon={<IconMap size={18} />}
-              label="Explore"
-              description="System exploration & architecture"
-              keywords={['architecture', 'visualizer', 'system', 'overview']}
-              onSelect={() => handleNavigate('/explore')}
             />
           </Command.Group>
 
@@ -180,39 +201,24 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           >
             <CommandItem
               icon={<IconUser size={18} />}
-              label="Investigate User"
-              description="Search events for a specific user"
+              label="Search Events"
+              description="Search events by user or correlation ID"
               keywords={['user', 'search', 'filter']}
-              onSelect={() => {
-                // Navigate to investigate page - user can search there
-                navigate('/investigate');
-                onClose();
-              }}
+              onSelect={() => handleNavigate('/events')}
             />
             <CommandItem
               icon={<IconTimeline size={18} />}
               label="View Event Trace"
               description="Trace an event and its correlations"
               keywords={['trace', 'event', 'correlation', 'causation']}
-              onSelect={() => {
-                // Navigate to investigate page - user can search there
-                navigate('/investigate');
-                onClose();
-              }}
+              onSelect={() => handleNavigate('/events')}
             />
             <CommandItem
-              icon={<IconTool size={18} />}
-              label="Test AI Tool"
-              description="Open AI Tools Playground"
-              keywords={['ai', 'tool', 'test', 'playground']}
+              icon={<IconSend size={18} />}
+              label="Publish Event"
+              description="Manually publish a test event"
+              keywords={['publish', 'event', 'send', 'test']}
               onSelect={() => handleNavigate('/testing')}
-            />
-            <CommandItem
-              icon={<IconLayoutGrid size={18} />}
-              label="View Architecture"
-              description="Explore system architecture"
-              keywords={['architecture', 'diagram', 'structure']}
-              onSelect={() => handleNavigate('/explore')}
             />
             <CommandItem
               icon={<IconRefresh size={18} />}
@@ -252,39 +258,10 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             />
             <CommandItem
               icon={<IconSettings size={18} />}
-              label="System Capabilities"
-              description="View system capabilities and configuration"
-              keywords={['capabilities', 'system', 'config', 'settings']}
-              onSelect={() => handleNavigate('/capabilities')}
-            />
-          </Command.Group>
-
-          {/* Legacy Pages Section */}
-          <Command.Group
-            heading="Legacy"
-            style={{
-              padding: spacing[2],
-              fontSize: typography.fontSize.xs,
-              fontWeight: typography.fontWeight.semibold,
-              color: colors.text.tertiary,
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              marginTop: spacing[2],
-            }}
-          >
-            <CommandItem
-              icon={<IconCpu size={18} />}
-              label="System Capabilities"
-              description="Legacy capabilities page"
-              keywords={['capabilities', 'system', 'old']}
-              onSelect={() => handleNavigate('/capabilities')}
-            />
-            <CommandItem
-              icon={<IconSend size={18} />}
-              label="Event Publisher"
-              description="Legacy event publisher"
-              keywords={['publish', 'event', 'send', 'old']}
-              onSelect={() => handleNavigate('/publish')}
+              label="View Automation"
+              description="View webhooks and integrations"
+              keywords={['automation', 'webhooks', 'n8n', 'integrations']}
+              onSelect={() => handleNavigate('/automation')}
             />
           </Command.Group>
         </Command.List>

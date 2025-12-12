@@ -26,19 +26,21 @@ const queryClient = new QueryClient({
 
 const TRPCProvider = trpc.Provider;
 
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <GlobalErrorBoundary>
-      <TRPCProvider client={trpcClient} queryClient={queryClient}>
-        <QueryClientProvider client={queryClient}>
-          <MantineProvider>
+    <TRPCProvider client={trpcClient} queryClient={queryClient}>
+      <QueryClientProvider client={queryClient}>
+        <MantineProvider>
+          <GlobalErrorBoundary>
             <Notifications position="top-right" zIndex={1000} />
             <BrowserRouter>
               <App />
             </BrowserRouter>
-          </MantineProvider>
-        </QueryClientProvider>
-      </TRPCProvider>
-    </GlobalErrorBoundary>
+          </GlobalErrorBoundary>
+        </MantineProvider>
+      </QueryClientProvider>
+    </TRPCProvider>
   </StrictMode>
 );
+

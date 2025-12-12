@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@synap/core": "file:../core",
+    "@synap/events": "workspace:*",
     "zod": "^3.22.0"
   },
   "devDependencies": {

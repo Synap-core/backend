@@ -12,8 +12,8 @@ import {
   Code,
   ScrollArea,
   Tabs,
-  JsonInput,
   Alert,
+  SegmentedControl,
   Divider,
   Skeleton,
 } from '@mantine/core';
@@ -31,6 +31,12 @@ import { trpc } from '../../lib/trpc';
 import type { ToolExecutionInput, ToolExecutionOutput, PublishEventResult } from '../../types';
 import ToolFormGenerator from '../../components/forms/ToolFormGenerator';
 import { showSuccessNotification, showErrorNotification } from '../../lib/notifications';
+import SchemaFormGenerator from '../../components/forms/SchemaFormGenerator';
+import EventTemplates from '../../components/forms/EventTemplates';
+
+// Lazy load Monaco Editor
+import React from 'react';
+const Editor = React.lazy(() => import('@monaco-editor/react'));
 
 interface ExecutionHistoryItemInternal {
   id: string;
@@ -53,17 +59,29 @@ export default function TestingPage() {
   const [toolOutput, setToolOutput] = useState<ToolExecutionOutput | null>(null);
   const [isExecutingTool, setIsExecutingTool] = useState(false);
 
-  // Event Publisher State
-  const [eventType, setEventType] = useState<string | null>(null);
+
+
+  const [selectedEventType, setSelectedEventType] = useState<string>('');
   const [eventData, setEventData] = useState('{}');
-  const [userId, setUserId] = useState('');
+  const [eventDataObject, setEventDataObject] = useState<Record<string, unknown>>({});
+  const [userId, setUserId] = useState('test-user');
   const [publishResult, setPublishResult] = useState<PublishEventResult | null>(null);
+  const [inputMode, setInputMode] = useState<'form' | 'json'>('form');
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   // Execution History
   const [executionHistory, setExecutionHistory] = useState<ExecutionHistoryItemInternal[]>([]);
 
   // Fetch available capabilities
   const { data: capabilities, isLoading: isLoadingCapabilities } = trpc.system.getCapabilities.useQuery();
+
+  // Fetch event schema
+  const { data: schemaData } = trpc.system.getEventTypeSchema.useQuery(
+    { eventType: selectedEventType },
+    { enabled: !!selectedEventType }
+  );
+  const hasSchema = schemaData?.hasSchema ?? false;
 
   // Tool execution mutation
   const executeTool = trpc.system.executeTool.useMutation({
@@ -102,13 +120,13 @@ export default function TestingPage() {
     onSuccess: (data) => {
       setPublishResult({ success: true, data });
       showSuccessNotification({
-        message: `Event "${eventType}" published successfully`,
+        message: `Event "${selectedEventType}" published successfully`,
         title: 'Event Published',
       });
       addToHistory({
         type: 'event',
-        name: eventType!,
-        input: { eventType, data: JSON.parse(eventData), userId },
+        name: selectedEventType!,
+        input: { eventType: selectedEventType, data: JSON.parse(eventData), userId },
         output: data,
         success: true,
       });
@@ -121,8 +139,8 @@ export default function TestingPage() {
       });
       addToHistory({
         type: 'event',
-        name: eventType!,
-        input: { eventType, data: eventData, userId },
+        name: selectedEventType!,
+        input: { eventType: selectedEventType, data: eventData, userId },
         error: error.message,
         success: false,
       });
@@ -165,19 +183,57 @@ export default function TestingPage() {
   };
 
   const handlePublishEvent = () => {
-    if (!eventType) return;
+    if (!selectedEventType) return;
 
     try {
-      const parsedData = JSON.parse(eventData);
+      let parsedData: Record<string, unknown>;
+
+      if (inputMode === 'form' && hasSchema) {
+         parsedData = eventDataObject;
+      } else {
+         parsedData = JSON.parse(eventData);
+      }
+
+      // Validate required fields if using form
+      if (inputMode === 'form' && hasSchema && schemaData?.fields) {
+        const errors: Record<string, string> = {};
+        for (const field of schemaData.fields) {
+          if (field.required && !parsedData[field.name]) {
+            errors[field.name] = `${field.name} is required`;
+          }
+        }
+        if (Object.keys(errors).length > 0) {
+          setFormErrors(errors);
+          showErrorNotification({ message: 'Please fill in all required fields' });
+          return;
+        }
+      }
+
       publishEvent.mutate({
-        type: eventType,
+        type: selectedEventType,
         data: parsedData,
         userId: userId || 'test-user',
       });
+      setFormErrors({});
+      setEditorError(null);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Invalid JSON in event data';
       setPublishResult({ success: false, error: errorMessage });
+      setEditorError(errorMessage);
     }
+  };
+
+  const handleTemplateSelect = (template: { eventType: string; data: Record<string, unknown> }) => {
+    setSelectedEventType(template.eventType);
+    setEventDataObject(template.data);
+    setEventData(JSON.stringify(template.data, null, 2));
+    setFormErrors({});
+  };
+
+  const handleFormDataChange = (newData: Record<string, unknown>) => {
+    setEventDataObject(newData);
+    setEventData(JSON.stringify(newData, null, 2));
+    setFormErrors({});
   };
 
   return (
@@ -321,37 +377,77 @@ export default function TestingPage() {
                 backgroundColor: colors.background.primary,
               }}
             >
-              <Text size="lg" fw={typography.fontWeight.semibold} mb={spacing[4]}>
-                Publish Event
-              </Text>
               <Stack gap={spacing[3]}>
+                <EventTemplates onSelectTemplate={handleTemplateSelect} />
+
                 <Select
                   label="Event Type"
                   placeholder="Select event type"
-                  data={[
-                    { value: 'USER_CREATED', label: 'User Created' },
-                    { value: 'USER_UPDATED', label: 'User Updated' },
-                    { value: 'NOTE_CREATED', label: 'Note Created' },
-                    { value: 'NOTE_UPDATED', label: 'Note Updated' },
-                    { value: 'NOTE_DELETED', label: 'Note Deleted' },
-                    { value: 'AI_CONVERSATION_MESSAGE', label: 'AI Conversation Message' },
-                    { value: 'TOOL_EXECUTED', label: 'Tool Executed' },
-                    { value: 'CUSTOM_EVENT', label: 'Custom Event' },
-                  ]}
-                  value={eventType}
-                  onChange={setEventType}
+                  data={
+                    capabilities?.eventTypes.map((et) => ({
+                      value: et.type,
+                      label: et.type,
+                    })) || []
+                  }
+                  value={selectedEventType}
+                  onChange={(value) => setSelectedEventType(value || '')}
+                  searchable
+                  required
                 />
 
-                <JsonInput
-                  label="Event Data (JSON)"
-                  placeholder='{"key": "value"}'
-                  value={eventData}
-                  onChange={setEventData}
-                  minRows={10}
-                  validationError="Invalid JSON"
-                  formatOnBlur
-                  style={{ fontFamily: typography.fontFamily.mono }}
-                />
+                <Group justify="space-between" mb="xs">
+                  <Text size="sm" fw={500}>
+                    Event Data
+                  </Text>
+                  {hasSchema && (
+                    <SegmentedControl
+                      value={inputMode}
+                      onChange={(value) => setInputMode(value as 'form' | 'json')}
+                      data={[
+                        { label: 'Form', value: 'form' },
+                        { label: 'JSON', value: 'json' },
+                      ]}
+                      size="xs"
+                    />
+                  )}
+                </Group>
+
+                {inputMode === 'form' && hasSchema ? (
+                  <SchemaFormGenerator
+                    eventType={selectedEventType}
+                    value={eventDataObject}
+                    onChange={handleFormDataChange}
+                    errors={formErrors}
+                  />
+                ) : (
+                  <React.Suspense fallback={<Skeleton height={300} />}>
+                    <div
+                      style={{
+                        border: '1px solid #dee2e6',
+                        borderRadius: '4px',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <Editor
+                        height="300px"
+                        defaultLanguage="json"
+                        value={eventData}
+                        onChange={(value: string | undefined) => {
+                           setEventData(value || '{}');
+                           setEditorError(null);
+                        }}
+                        options={{
+                          minimap: { enabled: false },
+                          fontSize: 14,
+                          lineNumbers: 'on',
+                          scrollBeyondLastLine: false,
+                          automaticLayout: true,
+                        }}
+                        theme="vs-light"
+                      />
+                    </div>
+                  </React.Suspense>
+                )}
 
                 <Textarea
                   label="User ID (Optional)"
@@ -364,7 +460,7 @@ export default function TestingPage() {
                   leftSection={<IconSend size={16} />}
                   onClick={handlePublishEvent}
                   loading={publishEvent.isPending}
-                  disabled={!eventType}
+                  disabled={!selectedEventType || publishResult?.success === false && false /* dummy logic to avoid typescript complaint on unused prop if needed */} 
                   fullWidth
                 >
                   Publish Event
@@ -375,13 +471,23 @@ export default function TestingPage() {
                     icon={publishResult.success ? <IconCheck size={16} /> : <IconX size={16} />}
                     color={publishResult.success ? 'green' : 'red'}
                     mt={spacing[3]}
+                    title={publishResult.success ? 'Success' : 'Error'}
                   >
-                    {publishResult.success ? (
-                      <Text size="sm">Event published successfully!</Text>
-                    ) : (
-                      <Text size="sm">Error: {publishResult.error}</Text>
-                    )}
+                     {publishResult.success ? (
+                        <>
+                          Event published successfully!
+                          <Text size="xs" mt={4}>ID: {(publishResult.data as any).eventId}</Text>
+                        </>
+                     ) : (
+                        publishResult.error
+                     )}
                   </Alert>
+                )}
+
+                {editorError && (
+                    <Alert icon={<IconX size={16}/>} color="red" title="JSON Error">
+                        {editorError}
+                    </Alert>
                 )}
               </Stack>
             </Card>

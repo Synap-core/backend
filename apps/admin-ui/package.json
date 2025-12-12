@@ -16,12 +16,14 @@
     "@mantine/notifications": "^7.15.4",
     "@monaco-editor/react": "^4.6.0",
     "@synap/api": "workspace:*",
+    "@synap/client": "workspace:*",
     "@tabler/icons-react": "^3.35.0",
     "@tanstack/react-query": "^5.62.13",
     "@tanstack/react-virtual": "^3.13.12",
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
     "@types/cytoscape": "^3.31.0",
+    "@xyflow/react": "^12.10.0",
     "cmdk": "^1.1.1",
     "cytoscape": "^3.33.1",
     "date-fns": "^4.1.0",
@@ -31,6 +33,7 @@
     "react-cytoscapejs": "^2.0.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.2.0",
+    "reactflow": "^11.11.4",
     "recharts": "^3.4.1"
   },
   "devDependencies": {
