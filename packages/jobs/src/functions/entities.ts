@@ -77,8 +77,10 @@ export const entitiesWorker = inngest.createFunction(
     // CREATE
     // ========================================================================
     if (action === 'create') {
+      logger.info({ eventData: event.data }, '📦 EVENT DATA');
       const data = event.data as EntitiesCreateRequestedData;
       const entityId = data.id || randomUUID();
+      logger.info({ entityId, hasId: !!data.id }, '🆔 Entity ID');
       
       // Step 1: Handle file content (if present)
       let fileInfo: { 
@@ -120,31 +122,49 @@ export const entitiesWorker = inngest.createFunction(
       
       // Step 2: Insert entity into database
       await step.run('insert-entity', async () => {
-        const { getDb } = await import('@synap/database');
-        const db = await getDb();
+        logger.info({ entityId, userId }, 'Starting entity insert');
         
-        const entityTitle = data.title || 
-          (data.content?.split('\n')[0]?.slice(0, 100)) || 
-          `Untitled ${data.entityType}`;
-        const entityPreview = data.preview || data.content?.slice(0, 500);
-        
-        await db.insert(entities).values({
-          id: entityId,
-          userId,
-          type: data.entityType,
-          title: entityTitle,
-          preview: entityPreview,
-          fileUrl: fileInfo?.url,
-          filePath: fileInfo?.path,
-          fileSize: fileInfo?.size,
-          fileType: fileInfo?.type,
-          checksum: fileInfo?.checksum,
-          version: 1,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        } as any);
-        
-        logger.debug({ entityId, type: data.entityType }, 'Inserted entity');
+        try {
+          const { getDb } = await import('@synap/database');
+          logger.info('getDb imported');
+          
+          const db = await getDb();
+          logger.info('db instance obtained');
+          
+          const entityTitle = data.title || 
+            (data.content?.split('\n')[0]?.slice(0, 100)) || 
+            `Untitled ${data.entityType}`;
+          const entityPreview = data.preview || data.content?.slice(0, 500);
+          
+          // CRITICAL FIX: entityType must not be null
+          const entityType = data.entityType || 'note'; // Default to 'note' if missing
+          logger.info({ entityType, dataEntityType: data.entityType }, '🏷️ Entity type');
+          
+          const insertData = {
+            id: entityId,
+            userId,
+            type: entityType, // Use the variable with fallback
+            title: entityTitle,
+            preview: entityPreview,
+            fileUrl: fileInfo?.url,
+            filePath: fileInfo?.path,
+            fileSize: fileInfo?.size,
+            fileType: fileInfo?.type,
+            checksum: fileInfo?.checksum,
+            version: 1,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          
+          logger.info({ insertData }, 'About to insert entity');
+          
+          await db.insert(entities).values(insertData as any);
+          
+          logger.info({ entityId, type: entityType }, '✅ Entity inserted successfully');
+        } catch (error) {
+          logger.error({ error, entityId, userId }, '❌ Entity insert failed');
+          throw error;
+        }
       });
       
       // Step 3: Handle type-specific extensions
@@ -169,7 +189,7 @@ export const entitiesWorker = inngest.createFunction(
       // Step 4: Emit completion event
       await step.run('emit-completion', async () => {
         await inngest.send({
-          name: 'entities.create.completed',
+          name: 'entities.create.validated',
           data: {
             entityId,
             entityType: data.entityType,
@@ -183,7 +203,7 @@ export const entitiesWorker = inngest.createFunction(
           user: { id: userId },
         });
         
-        logger.info({ entityId }, 'Published entities.create.completed');
+        logger.info({ entityId }, 'Published entities.create.validated');
       });
       
       // Step 5: Broadcast to SSE clients
@@ -193,7 +213,7 @@ export const entitiesWorker = inngest.createFunction(
           userId,
           requestId: data.requestId,
           message: {
-            type: 'entities.create.completed',
+            type: 'entities.create.validated',
             data: {
               entityId,
               entityType: data.entityType,
@@ -242,7 +262,7 @@ export const entitiesWorker = inngest.createFunction(
       
       await step.run('emit-update-completion', async () => {
         await inngest.send({
-          name: 'entities.update.completed',
+          name: 'entities.update.validated',
           data: {
             entityId: data.entityId,
             title: data.title,
@@ -282,7 +302,7 @@ export const entitiesWorker = inngest.createFunction(
       
       await step.run('emit-delete-completion', async () => {
         await inngest.send({
-          name: 'entities.delete.completed',
+          name: 'entities.delete.validated',
           data: { entityId },
           user: { id: userId },
         });

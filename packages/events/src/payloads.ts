@@ -81,7 +81,7 @@ export const EntitiesCreateRequestedPayload = z.object({
 });
 
 /**
- * entities.create.completed payload
+ * entities.create.validated payload
  */
 export const EntitiesCreateCompletedPayload = z.object({
   entityId: z.string().uuid(),
@@ -138,7 +138,7 @@ export const DocumentsCreateRequestedPayload = z.object({
 });
 
 /**
- * documents.create.completed payload
+ * documents.create.validated payload
  */
 export const DocumentsCreateCompletedPayload = z.object({
   documentId: z.string().uuid(),
@@ -227,10 +227,10 @@ export const TaskDetailsCreateRequestedPayload = z.object({
  */
 export const GeneratedPayloadSchemas = {
   'entities.create.requested': EntitiesCreateRequestedPayload,
-  'entities.create.completed': EntitiesCreateCompletedPayload,
+  'entities.create.validated': EntitiesCreateCompletedPayload,
   'entities.update.requested': EntitiesUpdateRequestedPayload,
   'documents.create.requested': DocumentsCreateRequestedPayload,
-  'documents.create.completed': DocumentsCreateCompletedPayload,
+  'documents.create.validated': DocumentsCreateCompletedPayload,
   'conversationMessages.create.requested': ConversationMessagesCreateRequestedPayload,
   'chatThreads.create.requested': ChatThreadsCreateRequestedPayload,
   'taskDetails.create.requested': TaskDetailsCreateRequestedPayload,

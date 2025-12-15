@@ -146,7 +146,7 @@ export const documentsWorker = inngest.createFunction(
       // Step 4: Emit completion
       await step.run('emit-completion', async () => {
         await inngest.send({
-          name: 'documents.create.completed',
+          name: 'documents.create.validated',
           data: {
             documentId,
             title: data.title,
@@ -158,7 +158,7 @@ export const documentsWorker = inngest.createFunction(
           user: { id: userId },
         });
         
-        logger.info({ documentId }, 'Published documents.create.completed');
+        logger.info({ documentId }, 'Published documents.create.validated');
       });
       
       return {
@@ -247,7 +247,7 @@ export const documentsWorker = inngest.createFunction(
       // Step 5: Emit completion
       await step.run('emit-update-completion', async () => {
         await inngest.send({
-          name: 'documents.update.completed',
+          name: 'documents.update.validated',
           data: {
             documentId,
             version: newVersion,

@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { randomUUID } from 'crypto';
-import { createSynapEvent, EventTypes } from '@synap/types';
+import { createSynapEvent, GeneratedEventTypes } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
 import { db, entities, eq, desc, and } from '@synap/database';
@@ -68,10 +68,11 @@ export const notesRouter = router({
       // Create SynapEvent
       console.log('DEBUG: About to call createSynapEvent');
       const event = createSynapEvent({
-        type: EventTypes.NOTE_CREATION_REQUESTED,
+        type: GeneratedEventTypes.entities['create.requested'],
         userId,
         aggregateId: entityId,
         data: {
+          entityType: 'note', // Required by entitiesWorker
           content: input.content,
           title: input.title,
           tags: input.tags,
@@ -96,20 +97,11 @@ export const notesRouter = router({
       // Publish to Inngest (for async processing)
       console.log('DEBUG: Publishing to Inngest', event.id);
       try {
-        await publishEvent('api/event.logged', {
-          id: event.id,
-          type: event.type,
-          aggregateId: event.aggregateId,
-          aggregateType: 'entity',
-          userId: event.userId,
-          version: 1,
-          timestamp: event.timestamp.toISOString(),
-          data: event.data,
-          metadata: { version: event.version, requestId: event.requestId },
-          source: event.source,
-          causationId: event.causationId,
-          correlationId: event.correlationId,
-          requestId: event.requestId,
+        // Inngest will wrap this in event.data
+        // So worker will receive: event.data = { entityType, content, title, tags, id }
+        await publishEvent(event.type, {
+          ...event.data,
+          id: entityId, // Worker extracts directly from event.data
         }, userId);
         console.log('DEBUG: Published to Inngest', event.id);
       } catch (error) {

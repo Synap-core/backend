@@ -12,7 +12,6 @@
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import type { EventType } from './event-types.js';
 import { ValidationError } from '@synap/core';
 
 // ============================================================================
@@ -72,22 +71,36 @@ export type SynapEvent = z.infer<typeof SynapEventSchema>;
  * 3. Use validateEventData() to validate event data
  */
 export const EventTypeSchemas = {
-  'note.creation.requested': z.object({
-    content: z.string().min(1),
+  // Entity creation intent
+  'entities.create.requested': z.object({
+    content: z.string().optional(),
     title: z.string().optional(),
+    type: z.string().optional(), // note | task | project
     tags: z.array(z.string()).optional(),
-    inputType: z.enum(['text', 'audio']).optional(),
-    autoEnrich: z.boolean().optional(),
-    useRAG: z.boolean().optional(),
+    metadata: z.record(z.unknown()).optional(),
   }),
   
-  'note.creation.completed': z.object({
+  // Entity creation confirmed
+  'entities.create.validated': z.object({
     entityId: z.string().uuid(),
-    fileUrl: z.string().url().optional(),
+    type: z.string(),
     filePath: z.string().optional(),
-    fileSize: z.number().int().nonnegative().optional(),
-    fileType: z.string().optional(),
-    checksum: z.string().optional(),
+    fileUrl: z.string().url().optional(),
+  }),
+  
+  // Entity update intent
+  'entities.update.requested': z.object({
+    entityId: z.string().uuid(),
+    changes: z.record(z.unknown()).optional(),
+    content: z.string().optional(),
+    title: z.string().optional(),
+  }),
+  
+  // Entity update confirmed
+  'entities.update.validated': z.object({
+    entityId: z.string().uuid(),
+    previousVersion: z.number().int().nonnegative().optional(),
+    newVersion: z.number().int().positive().optional(),
   }),
 } as const;
 
@@ -136,7 +149,7 @@ export function validateEventData<T extends EventTypeWithSchema>(
  * @returns Validated SynapEvent
  */
 export function createSynapEvent(input: {
-  type: EventType;
+  type: string; // Accepts generated (e.g., 'entities.create.requested') and system event types
   data: Record<string, unknown>; // Event payload
   userId: string;
   aggregateId?: string;

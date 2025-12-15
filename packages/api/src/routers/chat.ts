@@ -19,7 +19,7 @@ import { ForbiddenError, ValidationError } from '@synap/core';
 import { createLogger } from '@synap/core';
 import { aiRateLimitMiddleware } from '../middleware/ai-rate-limit.js';
 import { publishEvent } from '../utils/inngest-client.js';
-import { createSynapEvent, EventTypes } from '@synap/types';
+import { createSynapEvent, GeneratedEventTypes } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 
 const chatLogger = createLogger({ module: 'chat-router' });
@@ -55,7 +55,7 @@ export const chatRouter = router({
       // V1.0 Event-Driven: Publish event instead of calling services directly
       // The handler will process the message and generate the response
       const event = createSynapEvent({
-        type: EventTypes.CONVERSATION_MESSAGE_SENT,
+        type: GeneratedEventTypes.conversationMessages['create.requested'],
         userId,
         aggregateId: threadId,
         data: {
@@ -251,7 +251,7 @@ export const chatRouter = router({
             
             // Create and publish intent event
             const event = createSynapEvent({
-              type: EventTypes.TASK_CREATION_REQUESTED,
+              type: GeneratedEventTypes.entities['create.requested'],
               userId,
               aggregateId,
               data: {
@@ -297,7 +297,7 @@ export const chatRouter = router({
               title,
               status: 'todo',
             };
-            eventType = EventTypes.TASK_CREATION_REQUESTED;
+            eventType = GeneratedEventTypes.entities['create.requested'];
             break;
           }
           
@@ -307,7 +307,7 @@ export const chatRouter = router({
             
             // Create and publish intent event
             const event = createSynapEvent({
-              type: EventTypes.TASK_COMPLETION_REQUESTED,
+              type: GeneratedEventTypes.entities['update.requested'],
               userId,
               aggregateId: taskId,
               data: {
@@ -345,7 +345,7 @@ export const chatRouter = router({
             }, userId);
             
             result = { taskId, status: 'pending' };
-            eventType = EventTypes.TASK_COMPLETION_REQUESTED;
+            eventType = GeneratedEventTypes.entities['update.requested'];
             break;
           }
           
@@ -357,7 +357,7 @@ export const chatRouter = router({
             
             // Create and publish intent event
             const event = createSynapEvent({
-              type: EventTypes.NOTE_CREATION_REQUESTED,
+              type: GeneratedEventTypes.entities['create.requested'],
               userId,
               aggregateId,
               data: {
@@ -401,7 +401,7 @@ export const chatRouter = router({
               noteId: aggregateId,
               title: title || 'Untitled',
             };
-            eventType = EventTypes.NOTE_CREATION_REQUESTED;
+            eventType = GeneratedEventTypes.entities['create.requested'];
             break;
           }
           
@@ -413,7 +413,7 @@ export const chatRouter = router({
             
             // Create and publish project creation intent event
             const projectEvent = createSynapEvent({
-              type: EventTypes.PROJECT_CREATION_REQUESTED,
+              type: GeneratedEventTypes.entities['create.requested'],
               userId,
               aggregateId,
               data: {
@@ -459,7 +459,7 @@ export const chatRouter = router({
               for (const taskTitle of tasks) {
                 const taskId = randomUUID();
                 const taskEvent = createSynapEvent({
-                  type: EventTypes.TASK_CREATION_REQUESTED,
+                  type: GeneratedEventTypes.entities['create.requested'],
                   userId,
                   aggregateId: taskId,
                   data: {
@@ -502,7 +502,7 @@ export const chatRouter = router({
               title,
               tasksCreated: tasks?.length || 0,
             };
-            eventType = EventTypes.PROJECT_CREATION_REQUESTED;
+            eventType = GeneratedEventTypes.entities['create.requested'];
             break;
           }
           

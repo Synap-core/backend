@@ -9,7 +9,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { randomUUID } from 'crypto';
-import { createSynapEvent, EventTypes } from '@synap/types';
+import { createSynapEvent, GeneratedEventTypes } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
 import { storage } from '@synap/storage';
@@ -63,7 +63,7 @@ export const contentRouter = router({
       
       // Create event
       const event = createSynapEvent({
-        type: EventTypes.CONTENT_CREATION_REQUESTED,
+        type: GeneratedEventTypes.entities['create.requested'],
         userId,
         aggregateId,
         data: {
@@ -138,7 +138,7 @@ export const contentRouter = router({
         
         // PHASE 2: Publish event
         const event = createSynapEvent({
-          type: EventTypes.CONTENT_CREATION_REQUESTED,
+          type: GeneratedEventTypes.entities['create.requested'],
           userId,
           aggregateId,
           data: {

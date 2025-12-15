@@ -28,6 +28,7 @@
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/domain": "workspace:*",
+    "@synap/events": "workspace:*",
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/storage": "workspace:*",

@@ -12,7 +12,8 @@
 import { z } from 'zod';
 import { publicProcedure, router } from '../trpc.js';
 import { getAllEventTypes, EventTypeSchemas } from '@synap/types';
-import { inngest } from '@synap/jobs';
+import { getAllGeneratedEventTypes, parseEventType } from '@synap/events';
+import { inngest, getAllWorkers } from '@synap/jobs';
 import { dynamicToolRegistry } from '@synap/ai';
 import { dynamicRouterRegistry } from '../router-registry.js';
 import { createSynapEvent } from '@synap/types';
@@ -32,30 +33,28 @@ export const systemRouter = router({
    * This gives a complete overview of the system's architecture.
    */
   getCapabilities: publicProcedure.query(async () => {
-    // Get all event types
-    const eventTypes = getAllEventTypes().map(type => ({
+    // Get all event types - combine custom/legacy + generated
+    const customEventTypes = getAllEventTypes().map(type => ({
       type,
       hasSchema: type in EventTypeSchemas,
+      category: 'custom' as const,
     }));
 
-    // Get all event handlers (Inngest Functions)
-    // We import the registry from @synap/jobs to statically analyze triggers
-    let workers: any[] = [];
-    try {
-      const { functions } = await import('@synap/jobs');
-      
-      workers = functions.map((fn: any) => {
-         return {
-           id: fn.id || fn.name, // Fallback
-           name: fn.name,
-           triggers: (fn as any)['triggers'] || (fn as any)['_trigger'] || [], // Try to access triggers if exposed
-         };
-      });
-    } catch (error) {
-      console.error('[SystemRouter] Failed to load workers:', error);
-      // Fallback to empty array if import fails
-      workers = [];
-    }
+    const generatedEventTypes = getAllGeneratedEventTypes().map(type => {
+      const parsed = parseEventType(type);
+      return {
+        type,
+        hasSchema: true, // Generated events always have schemas
+        category: 'generated' as const,
+        table: parsed?.table,
+        action: parsed?.action,
+      };
+    });
+
+    const eventTypes = [...generatedEventTypes, ...customEventTypes];
+
+    // Get all workers from registry
+    const workers = getAllWorkers();
 
     // Get all tools
     const toolsStats = dynamicToolRegistry.getStats();

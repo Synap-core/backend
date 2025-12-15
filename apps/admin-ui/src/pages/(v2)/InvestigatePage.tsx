@@ -35,6 +35,10 @@ import {
   IconBolt,
   IconSend,
   IconList,
+  IconDatabase,
+  IconPlus,
+  IconPencil,
+  IconTrash,
 } from '@tabler/icons-react';
 import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
 import { AdminSDK } from '../../lib/sdk';
@@ -270,37 +274,132 @@ export default function InvestigatePage() {
                 onClose={() => setSelectedEventType(null)} 
               />
             ) : (
-              <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
-                <Text size="lg" fw={600} mb="md">Event Types ({capabilities?.eventTypes?.length || 0})</Text>
-                <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm">
-                  {capabilities?.eventTypes?.map((et: any) => (
-                    <Card 
-                      key={et.type} 
-                      padding="sm" 
-                      radius="md"
-                      style={{ 
-                        cursor: 'pointer', 
-                        border: `1px solid ${colors.border.light}`,
-                        transition: 'all 0.15s ease',
-                      }}
-                      onClick={() => setSelectedEventType(et.type)}
-                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = colors.border.interactive; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = colors.border.light; }}
-                    >
-                      <Group gap="xs">
-                        <ThemeIcon size={32} radius="md" color="blue" variant="light">
-                          <IconBolt size={18} />
-                        </ThemeIcon>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <Text size="sm" fw={500} truncate>{et.type.split('.').slice(-2).join('.')}</Text>
-                          <Text size="xs" c="dimmed" truncate>{et.type}</Text>
-                        </div>
-                        {et.hasSchema && <Badge size="xs" color="green">Schema</Badge>}
-                      </Group>
-                    </Card>
-                  ))}
-                </SimpleGrid>
-              </Card>
+              <Stack gap="md">
+                <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
+                  <Text size="lg" fw={600} mb="md">Event Types ({capabilities?.eventTypes?.length || 0})</Text>
+                  <Text size="sm" c="dimmed" mb="md">Pattern: table.action.modifier</Text>
+                </Card>
+                
+                {/* Group events by table */}
+                {(() => {
+                  const eventTypes = capabilities?.eventTypes || [];
+                  // Group by first segment (table name)
+                  const grouped = eventTypes.reduce((acc: Record<string, any[]>, et: any) => {
+                    const parts = et.type.split('.');
+                    const table = parts[0];
+                    if (!acc[table]) acc[table] = [];
+                    acc[table].push({
+                      ...et,
+                      action: parts[1] || '',
+                      modifier: parts[2] || '',
+                      fullAction: parts.slice(1).join('.'),
+                    });
+                    return acc;
+                  }, {});
+                  
+                  // Sort tables and render
+                  return Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0])).map(([table, events]: [string, any[]]) => {
+                    // Group by action within table
+                    const byAction = events.reduce((acc: Record<string, any[]>, e: any) => {
+                      const action = e.action || 'other';
+                      if (!acc[action]) acc[action] = [];
+                      acc[action].push(e);
+                      return acc;
+                    }, {});
+                    
+                    return (
+                      <Card 
+                        key={table} 
+                        padding="md" 
+                        radius={borderRadius.lg} 
+                        style={{ border: `1px solid ${colors.border.default}` }}
+                      >
+                        {/* Table Header */}
+                        <Group gap="sm" mb="md">
+                          <ThemeIcon size={40} radius="md" color="blue" variant="light">
+                            <IconDatabase size={24} />
+                          </ThemeIcon>
+                          <div>
+                            <Text size="lg" fw={600}>{table}</Text>
+                            <Text size="sm" c="dimmed">{events.length} event types</Text>
+                          </div>
+                        </Group>
+                        
+                        {/* Actions Grid */}
+                        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm">
+                          {Object.entries(byAction).sort((a, b) => a[0].localeCompare(b[0])).map(([action, actionEvents]: [string, any[]]) => {
+                            // Get modifiers for this action
+                            const modifiers = actionEvents.map(e => e.modifier).filter(Boolean);
+                            const hasModifiers = modifiers.length > 0;
+                            
+                            return (
+                              <Card 
+                                key={`${table}.${action}`}
+                                padding="sm"
+                                radius="md"
+                                style={{ 
+                                  background: colors.background.secondary,
+                                  border: `1px solid ${colors.border.light}`,
+                                }}
+                              >
+                                {/* Action Header */}
+                                <Group gap="xs" mb={hasModifiers ? 'xs' : 0}>
+                                  <ThemeIcon 
+                                    size={28} 
+                                    radius="sm" 
+                                    color={action === 'create' ? 'green' : action === 'update' ? 'orange' : action === 'delete' ? 'red' : 'gray'}
+                                    variant="light"
+                                  >
+                                    {action === 'create' && <IconPlus size={16} />}
+                                    {action === 'update' && <IconPencil size={16} />}
+                                    {action === 'delete' && <IconTrash size={16} />}
+                                    {!['create', 'update', 'delete'].includes(action) && <IconBolt size={16} />}
+                                  </ThemeIcon>
+                                  <Text size="sm" fw={500}>{action}</Text>
+                                </Group>
+                                
+                                {/* Modifiers */}
+                                {hasModifiers && (
+                                  <Stack gap={4} ml={36}>
+                                    {actionEvents.map((e: any) => (
+                                      <Group 
+                                        key={e.type} 
+                                        gap="xs" 
+                                        style={{ cursor: 'pointer' }}
+                                        onClick={() => setSelectedEventType(e.type)}
+                                      >
+                                        <Text size="xs" c="dimmed">→</Text>
+                                        <Badge 
+                                          size="xs" 
+                                          variant="dot"
+                                          color={e.modifier === 'requested' ? 'blue' : e.modifier === 'completed' ? 'green' : 'gray'}
+                                        >
+                                          {e.modifier || action}
+                                        </Badge>
+                                        {e.hasSchema && <Badge size="xs" color="violet" variant="light">Schema</Badge>}
+                                      </Group>
+                                    ))}
+                                  </Stack>
+                                )}
+                                
+                                {/* If no modifiers, make the whole card clickable */}
+                                {!hasModifiers && (
+                                  <div 
+                                    style={{ cursor: 'pointer', marginTop: 4 }}
+                                    onClick={() => setSelectedEventType(actionEvents[0]?.type)}
+                                  >
+                                    <Text size="xs" c="dimmed">{actionEvents[0]?.type}</Text>
+                                  </div>
+                                )}
+                              </Card>
+                            );
+                          })}
+                        </SimpleGrid>
+                      </Card>
+                    );
+                  });
+                })()}
+              </Stack>
             )}
           </Tabs.Panel>
 

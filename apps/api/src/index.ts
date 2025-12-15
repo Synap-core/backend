@@ -110,7 +110,7 @@ app.use('*', cors({
   origin: getCorsOrigins(),
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'x-test-user-id'],
   exposeHeaders: ['Content-Length', 'X-Request-Id'],
   maxAge: 86400, // 24 hours
 }));

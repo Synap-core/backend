@@ -16,7 +16,7 @@ import { TRPCError } from '@trpc/server';
 import { createLogger } from '@synap/core';
 import { db } from '@synap/database';
 import { events } from '@synap/database';
-import { createSynapEvent, EventTypes } from '@synap/types';
+import { createSynapEvent, GeneratedEventTypes } from '@synap/types';
 
 const logger = createLogger({ module: 'n8n-router' });
 
@@ -72,7 +72,7 @@ export const n8nActionsRouter = router({
       try {
         // Create generic entity event
         const event = createSynapEvent({
-          type: EventTypes.ENTITY_CREATED,
+          type: GeneratedEventTypes.entities['create.validated'],
           userId,
           data: {
             entityType: type,

@@ -23,9 +23,19 @@ export {
 
 export {
   EventTypes,
+  SystemEventTypes,
   type EventType,
+  type SystemEventType,
   isValidEventType,
   getAllEventTypes,
+  // Re-export generated event types from @synap/events
+  GeneratedEventTypes,
+  getAllGeneratedEventTypes,
+  isGeneratedEventType,
+  parseEventType,
+  type GeneratedEventType,
+  type TableAction,
+  type CoreTable,
 } from './event-types.js';
 
 // Chat types

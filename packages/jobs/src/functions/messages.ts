@@ -163,7 +163,7 @@ export const messagesWorker = inngest.createFunction(
     // Step 4: Emit completion event
     await step.run('emit-completion', async () => {
       await inngest.send({
-        name: 'conversationMessages.create.completed',
+        name: 'conversationMessages.create.validated',
         data: {
           messageId,
           threadId: data.threadId,
@@ -173,7 +173,7 @@ export const messagesWorker = inngest.createFunction(
         user: { id: userId },
       });
       
-      logger.info({ messageId }, 'Published conversationMessages.create.completed');
+      logger.info({ messageId }, 'Published conversationMessages.create.validated');
     });
     
     // Step 5: Broadcast to SSE clients
@@ -183,7 +183,7 @@ export const messagesWorker = inngest.createFunction(
         userId,
         requestId: data.requestId,
         message: {
-          type: 'conversationMessages.create.completed',
+          type: 'conversationMessages.create.validated',
           data: {
             messageId,
             threadId: data.threadId,

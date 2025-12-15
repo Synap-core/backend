@@ -291,6 +291,9 @@ importers:
       '@synap/domain':
         specifier: workspace:*
         version: link:../domain
+      '@synap/events':
+        specifier: workspace:*
+        version: link:../events
       '@synap/hub-protocol':
         specifier: workspace:*
         version: link:../hub-protocol
@@ -10856,6 +10859,7 @@ packages:
       '@synap/core': link:packages/core
       '@synap/database': link:packages/database
       '@synap/domain': link:packages/domain
+      '@synap/events': link:packages/events
       '@synap/hub-protocol': link:packages/hub-protocol
       '@synap/jobs': link:packages/jobs
       '@synap/storage': link:packages/storage
