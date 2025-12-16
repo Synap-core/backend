@@ -16,6 +16,7 @@ import {
   TasksFacade,
   CaptureFacade,
   SystemFacade,
+  CapabilitiesFacade,
 } from './facade.js';
 import { ContentFacade } from './facades/content.js';
 
@@ -60,6 +61,9 @@ export class SynapClient {
   /** Content facade - Unified content creation (notes & files) */
   public readonly content: ContentFacade;
 
+  /** Capabilities facade - Discover available features and services */
+  public readonly capabilities: CapabilitiesFacade;
+
   private config: SynapClientConfig;
 
   constructor(config: SynapClientConfig) {
@@ -75,6 +79,7 @@ export class SynapClient {
     const capture = new CaptureFacade(rpc);
     const system = new SystemFacade(rpc);
     const content = new ContentFacade(rpc);
+    const capabilities = new CapabilitiesFacade(rpc);
 
     // Assign readonly properties
     this.rpc = rpc;
@@ -84,6 +89,7 @@ export class SynapClient {
     this.capture = capture;
     this.system = system;
     this.content = content;
+    this.capabilities = capabilities;
   }
 
   /**

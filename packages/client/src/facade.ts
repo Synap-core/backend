@@ -8,6 +8,9 @@
 import type { TRPCClient } from '@trpc/client';
 import type { AppRouter } from './types.js';
 
+export { ContentFacade } from './facades/content.js';
+export { CapabilitiesFacade } from './facades/capabilities.js';
+
 /**
  * Business Facade for Notes
  */

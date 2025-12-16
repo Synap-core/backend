@@ -23,3 +23,10 @@ export * from './projects.js';
 
 // AI Enrichment schemas (event-based)
 export * from './enrichments.js';
+
+// Life Feed schemas
+export * from './inbox-items.js';
+export * from './user-entity-state.js';
+
+// Intelligence Service Registry
+export * from './intelligence-services.js';

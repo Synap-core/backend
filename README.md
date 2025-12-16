@@ -182,6 +182,39 @@ See [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md) for complete details.
 
 ---
 
+## 🔌 Integrations
+
+### N8N Workflow Automation
+
+**Quick Setup** - Add webhook URL to `.env`:
+
+```bash
+# Get webhook URL from your N8N workflow (webhook trigger node)
+N8N_WEBHOOK_URL=https://yourinstance.app.n8n.cloud/webhook/synap-events
+
+# Optional: Customize event types (defaults to all entity events)
+N8N_EVENT_TYPES=entities.create.validated,entities.update.validated
+
+# Optional: Secret for signature verification
+N8N_WEBHOOK_SECRET=your-secret-key
+```
+
+**That's it!** N8N auto-subscribes on server start. Create an entity, it shows up in N8N.
+
+**Alternative**: Use Admin UI → Subscribers → Webhooks tab
+
+### LangFlow AI Agents
+
+```bash
+# Add to .env
+LANGFLOW_URL=http://localhost:7860
+LANGFLOW_API_KEY=your-api-key
+```
+
+See [docs/integrations/](./docs/integrations/) for detailed guides.
+
+---
+
 ## 📚 Documentation
 
 - **[MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md)** - Complete system documentation (start here!)

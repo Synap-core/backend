@@ -14,6 +14,7 @@
     "@synap/auth": "workspace:*",
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
+    "@synap/events": "workspace:*",
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/types": "workspace:*",

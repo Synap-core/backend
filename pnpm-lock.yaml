@@ -165,6 +165,9 @@ importers:
       '@synap/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@synap/events':
+        specifier: workspace:*
+        version: link:../../packages/events
       '@synap/hub-protocol':
         specifier: workspace:*
         version: link:../../packages/hub-protocol
@@ -5989,7 +5992,7 @@ packages:
   /@types/bunyan@1.8.11:
     resolution: {integrity: sha512-758fRH7umIMk5qt5ELmRMff4mLDlN+xyYzC+dkPTdKwbSkJFvz6xwyScrytPU0QIBbRRwbiE8/BIg8bpajerNQ==}
     dependencies:
-      '@types/node': 20.19.26
+      '@types/node': 24.10.2
     dev: false
 
   /@types/chai@5.2.3:
@@ -6002,7 +6005,7 @@ packages:
   /@types/connect@3.4.38:
     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
     dependencies:
-      '@types/node': 20.19.26
+      '@types/node': 24.10.2
     dev: false
 
   /@types/cytoscape@3.31.0:
@@ -6227,7 +6230,7 @@ packages:
   /@types/memcached@2.2.10:
     resolution: {integrity: sha512-AM9smvZN55Gzs2wRrqeMHVP7KE8KWgCJO/XL5yCly2xF6EKa4YlbpK+cLSAH4NG/Ah64HrlegmGqW8kYws7Vxg==}
     dependencies:
-      '@types/node': 20.19.26
+      '@types/node': 24.10.2
     dev: false
 
   /@types/ms@2.1.0:
@@ -6236,13 +6239,14 @@ packages:
   /@types/mysql@2.15.27:
     resolution: {integrity: sha512-YfWiV16IY0OeBfBCk8+hXKmdTKrKlwKN1MNKAPBu5JYxLwBEZl7QzeEpGnlZb3VMGJrrGmB84gXiH+ofs/TezA==}
     dependencies:
-      '@types/node': 20.19.26
+      '@types/node': 24.10.2
     dev: false
 
   /@types/node@20.19.26:
     resolution: {integrity: sha512-0l6cjgF0XnihUpndDhk+nyD3exio3iKaYROSgvh/qSevPXax3L8p5DBRFjbvalnwatGgHEQn2R88y2fA3g4irg==}
     dependencies:
       undici-types: 6.21.0
+    dev: true
 
   /@types/node@22.19.2:
     resolution: {integrity: sha512-LPM2G3Syo1GLzXLGJAKdqoU35XvrWzGJ21/7sgZTUpbkBaOasTj8tjwn6w+hCkqaa1TfJ/w67rJSwYItlJ2mYw==}
@@ -6257,7 +6261,7 @@ packages:
   /@types/oracledb@6.5.2:
     resolution: {integrity: sha512-kK1eBS/Adeyis+3OlBDMeQQuasIDLUYXsi2T15ccNJ0iyUpQ4xDF7svFu3+bGVrI0CMBUclPciz+lsQR3JX3TQ==}
     dependencies:
-      '@types/node': 20.19.26
+      '@types/node': 24.10.2
     dev: false
 
   /@types/pg-pool@2.0.6:
@@ -6303,7 +6307,7 @@ packages:
   /@types/tedious@4.0.14:
     resolution: {integrity: sha512-KHPsfX/FoVbUGbyYvk1q9MMQHLPeRZhRJZdO45Q4YjvFkv4hMNghCWTvy7rdKessBsmtz4euWCWAB6/tVpI1Iw==}
     dependencies:
-      '@types/node': 20.19.26
+      '@types/node': 24.10.2
     dev: false
 
   /@types/trusted-types@2.0.7:

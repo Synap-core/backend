@@ -21,8 +21,11 @@ export { hubRouter } from './routers/hub.js';
 export { apiKeysRouter } from './routers/api-keys.js';
 export { healthRouter } from './routers/health.js';
 export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
-export { eventStreamManager } from './event-stream-manager.js';
-export { setupEventBroadcasting } from './setup-event-broadcasting.js';
+// Export event streaming utilities
+export { eventStreamManager, setupEventBroadcasting } from './event-stream.js';
+
+// Export event handlers
+export { startEventProcessor, processEvents } from './event-handlers/index.js';
 
 import { eventsRouter } from './routers/events.js';
 import { captureRouter } from './routers/capture.js';
@@ -34,11 +37,13 @@ import { systemRouter } from './routers/system.js';
 import { hubRouter } from './routers/hub.js';
 import { apiKeysRouter } from './routers/api-keys.js';
 import { healthRouter } from './routers/health.js';
-import { n8nActionsRouter } from './routers/n8n/actions.js';
 import { webhooksRouter } from './routers/webhooks.js';
 import { documentsRouter } from './routers/documents.js';
 import { contentRouter } from './routers/content.js';
 import { filesRouter } from './routers/files.js';
+import { inboxRouter } from './routers/inbox.js';
+import { intelligenceRegistryRouter } from './routers/intelligence-registry.js';
+import { capabilitiesRouter } from './routers/capabilities.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -54,11 +59,13 @@ registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', descr
 registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
 registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', description: 'API key management for Hub authentication' });
 registerRouter('health', healthRouter, { version: '1.0.0', source: 'core', description: 'Health checks and system monitoring' });
-registerRouter('n8n', n8nActionsRouter, { version: '1.0.0', source: 'core', description: 'n8n integration - Entity operations and AI analysis' });
 registerRouter('webhooks', webhooksRouter, { version: '1.0.0', source: 'core', description: 'Webhook subscription management' });
 registerRouter('documents', documentsRouter, { version: '1.0.0', source: 'core', description: 'Document management and collaboration' });
 registerRouter('content', contentRouter, { version: '1.0.0', source: 'core', description: 'Unified content creation (notes and files)' });
 registerRouter('files', filesRouter, { version: '1.0.0', source: 'core', description: 'File storage browsing and management' });
+registerRouter('inbox', inboxRouter, { version: '1.0.0', source: 'core', description: 'Life Feed inbox' });
+registerRouter('intelligenceRegistry', intelligenceRegistryRouter, { version: '1.0.0', source: 'core', description: 'Intelligence Service Registry' });
+registerRouter('capabilities', capabilitiesRouter, { version: '1.0.0', source: 'core', description: 'Feature and service discovery' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code

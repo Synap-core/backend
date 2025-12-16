@@ -2,6 +2,8 @@
  * @synap/events - Schema-Driven Event System
  * 
  * This package provides:
+ * - Type-safe domain event definitions
+ * - Type-safe event publisher
  * - Auto-generated event types from database tables
  * - Type-safe payload schemas (Zod)
  * - Runtime event registry
@@ -11,21 +13,75 @@
  * 
  * @example
  * ```typescript
- * import { GeneratedEventTypes, EntitiesCreateRequestedPayload } from '@synap/events';
+ * import { publishEvent, createInboxItemReceivedEvent } from '@synap/events';
  * 
- * // Use generated event type
- * const eventType = GeneratedEventTypes.entities['create.requested'];
- * // Result: 'entities.create.requested'
- * 
- * // Validate payload
- * const payload = EntitiesCreateRequestedPayload.parse({
- *   entityType: 'note',
- *   content: 'Hello World',
+ * // Type-safe event publishing
+ * const event = createInboxItemReceivedEvent(itemId, {
+ *   provider: 'gmail',
+ *   externalId: '123',
+ *   type: 'email',
+ *   title: 'Meeting invite',
+ *   timestamp: new Date(),
+ *   rawData: {}
  * });
+ * 
+ * await publishEvent(event, { userId: 'user_123' });
  * ```
  */
 
-// Generator - Event type generation from tables
+// ============================================================================
+// DOMAIN EVENTS (Type-Safe Event System)
+// ============================================================================
+
+export type {
+  // Base types
+  BaseEvent,
+  DomainEvent,
+  EventType,
+  SubjectType,
+  EventDataFor,
+  SubjectTypeFor,
+  EventsForSubject,
+  
+  // Inbox events
+  InboxItemReceivedEvent,
+  InboxItemAnalyzedEvent,
+  InboxItemStatusUpdatedEvent,
+  
+  // Entity events
+  EntityCreateRequestedEvent,
+  EntityCreateCompletedEvent,
+  EntityUpdateRequestedEvent,
+  
+  // Document events
+  DocumentCreateRequestedEvent,
+  DocumentCreateCompletedEvent,
+  
+  // Message events
+  MessageCreateRequestedEvent,
+  
+  // Chat thread events
+  ChatThreadCreateRequestedEvent,
+} from './domain-events.js';
+
+// ============================================================================
+// TYPE-SAFE PUBLISHER
+// ============================================================================
+
+export {
+  publishEvent,
+  createInboxItemReceivedEvent,
+  createInboxItemAnalyzedEvent,
+  createInboxItemStatusUpdatedEvent,
+  createEntityCreateRequestedEvent,
+  createEntityCreateCompletedEvent,
+  type PublishEventOptions,
+} from './publisher.js';
+
+// ============================================================================
+// GENERATOR (Auto-generated event types from tables)
+// ============================================================================
+
 export {
   generateTableEventTypes,
   GeneratedEventTypes,
@@ -39,7 +95,10 @@ export {
   type GeneratedEventType,
 } from './generator.js';
 
-// Payloads - Zod schemas for event payloads
+// ============================================================================
+// PAYLOADS (Zod schemas for validation)
+// ============================================================================
+
 export {
   // Base schemas
   MetadataSchema,
@@ -75,7 +134,10 @@ export {
   type GeneratedPayloadSchemaType,
 } from './payloads.js';
 
-// Registry - Runtime event tracking
+// ============================================================================
+// REGISTRY (Runtime event tracking)
+// ============================================================================
+
 export {
   eventRegistry,
   registerGeneratedEvents,

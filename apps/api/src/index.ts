@@ -34,6 +34,7 @@ import {
   getCorsOrigins,
 } from './middleware/security.js';
 import { eventStreamManager, setupEventBroadcasting } from '@synap/api';
+import { webhookRouter } from './webhooks/index.js';
 
 // Setup event broadcasting to SSE clients
 setupEventBroadcasting();
@@ -258,13 +259,17 @@ app.use('/trpc/*', async (c, next) => {
   return authMiddleware(c, next);
 });
 
+// Webhook routes (before auth - uses webhook secret auth)
+app.route('/webhooks', webhookRouter);
+
+// tRPC endpoint
 app.use(
   '/trpc/*',
   trpcServer({
     router: appRouter,
-    createContext: async (opts) => {
-      const ctx = await createContext(opts.req);
-      return ctx as unknown as Record<string, unknown>;
+    createContext,
+    onError({ error, path }) {
+      apiLogger.error({ err: error, path }, 'tRPC error');
     },
   })
 );
@@ -339,24 +344,32 @@ app.onError((err, c) => {
 });
 
 // Start server
-const port = config.server.port;
-apiLogger.info({ port }, 'Synap API starting');
-
-serve({
+const server = serve({
   fetch: app.fetch,
-  port,
-}, (info) => {
-  apiLogger.info(
-    {
-      port: info.port,
-      tRPC: `http://localhost:${info.port}/trpc`,
-      auth: `http://localhost:${info.port}/api/auth`,
-      health: `http://localhost:${info.port}/health`,
-    },
-    'Server running'
-  );
+  port: config.server.port,
+  hostname: '0.0.0.0',
+}, async (info) => {
+  apiLogger.info({
+    port: info.port,
+    host: '0.0.0.0',
+    nodeEnv: config.server.nodeEnv,
+  }, 'API server started');
+  
+  // ✨ Start event processor
+  const { startEventProcessor } = await import('@synap/api');
+  startEventProcessor();
+  apiLogger.info('Event processor started');
+});
+
+// Run startup hooks after server is listening
+import { runStartupHooks } from './startup-hooks.js';
+runStartupHooks().catch(err => {
+  apiLogger.error({ err }, 'Startup hooks failed (non-fatal)');
+});
+
+process.on('SIGTERM', () => {
+  apiLogger.info('SIGTERM received, shutting down gracefully');
+  process.exit(0);
 });
 
 export default app;
-
-
