@@ -16,7 +16,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {

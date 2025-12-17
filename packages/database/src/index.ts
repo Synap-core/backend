@@ -15,6 +15,12 @@ export * from './schema/index.js';
 // Export all repositories
 export * from './repositories/index.js';
 export type { EventHook } from './repositories/event-repository.js';
+export type { 
+  VectorSearchParams,
+  VectorSearchRow,
+  VectorRepositoryDatabase 
+} from './repositories/vector-repository.js';
+export { searchEntityVectorsRaw } from './repositories/vector-repository.js';
 
 // Export projectors (event handlers for materialized views)
 export * from './projectors/index.js';

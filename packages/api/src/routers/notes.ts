@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { randomUUID } from 'crypto';
-import { createSynapEvent, GeneratedEventTypes } from '@synap/types';
+import { createSynapEvent } from '@synap/types';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
 import { db, entities, eq, desc, and } from '@synap/database';
@@ -68,7 +68,7 @@ export const notesRouter = router({
       // Create SynapEvent
       console.log('DEBUG: About to call createSynapEvent');
       const event = createSynapEvent({
-        type: GeneratedEventTypes.entities['create.requested'],
+        type: 'entities.create.requested',
         userId,
         aggregateId: entityId,
         data: {
@@ -233,6 +233,10 @@ export const notesRouter = router({
    * - Uses existing search service (which reads from projections)
    * - No events generated
    */
+  
+  // TEMPORARILY DISABLED - Depends on removed domain package
+  // TODO: Refactor to use entity repository directly
+  /* DISABLED
   search: protectedProcedure
     .input(
       z.object({
@@ -255,5 +259,5 @@ export const notesRouter = router({
 
       return results;
     }),
+  */
 });
-

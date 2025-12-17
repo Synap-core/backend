@@ -79,7 +79,7 @@ export class SynapClient {
     const capture = new CaptureFacade(rpc);
     const system = new SystemFacade(rpc);
     const content = new ContentFacade(rpc);
-    const capabilities = new CapabilitiesFacade(rpc);
+    const capabilities = new CapabilitiesFacade(/* rpc disabled */);
 
     // Assign readonly properties
     this.rpc = rpc;

@@ -82,12 +82,13 @@ n8nWebhookRouter.post('/inbox', webhookAuth, async (c) => {
         // ✅ Type-safe event publishing
         const event = createInboxItemReceivedEvent(itemId, {
           provider: validated.provider,
+          account: validated.provider, // Use provider as account identifier
           externalId: validated.externalId,
           type: validated.type,
           title: validated.title,
           preview: validated.preview,
-          timestamp: validated.timestamp,
-          deepLink: validated.deepLink,
+          timestamp: new Date(validated.timestamp),
+          deepLink: validated.deepLink,  
           rawData: validated.data,
         });
         

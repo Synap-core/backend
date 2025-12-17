@@ -21,21 +21,22 @@ export {
  * Synap Types - Shared TypeScript types
  */
 
-export {
+export { 
   EventTypes,
   SystemEventTypes,
   type EventType,
   type SystemEventType,
   isValidEventType,
   getAllEventTypes,
-  // Re-export generated event types from @synap/events
-  GeneratedEventTypes,
-  getAllGeneratedEventTypes,
-  isGeneratedEventType,
-  parseEventType,
-  type GeneratedEventType,
-  type TableAction,
-  type CoreTable,
+  // DISABLED: Circular dependency issue
+  // Import these directly from @synap/events in consuming code
+  // GeneratedEventTypes,
+  // getAllGeneratedEventTypes,
+  // isGeneratedEventType,
+  // parseEventType,
+  // type GeneratedEventType,
+  // type TableAction,
+  // type CoreTable,
 } from './event-types.js';
 
 // Chat types

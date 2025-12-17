@@ -45,6 +45,7 @@ export type InboxItemReceivedEvent = BaseEvent<
   'inbox_item',
   {
     provider: string;
+    account: string;       // ✅ Email/account identifier
     externalId: string;
     type: string;
     title: string;

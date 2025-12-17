@@ -27,7 +27,9 @@
 // GENERATED EVENTS (from @synap/events)
 // ============================================================================
 
-// Re-export generated event types from @synap/events
+// DISABLED: Circular dependency - events package depends on types
+// Re-export these from @synap/events directly in consuming code instead
+/*
 export { 
   GeneratedEventTypes,
   getAllGeneratedEventTypes,
@@ -37,6 +39,7 @@ export {
   type TableAction,
   type CoreTable,
 } from '@synap/events';
+*/
 
 // ============================================================================
 // SYSTEM EVENTS (cross-cutting operations)

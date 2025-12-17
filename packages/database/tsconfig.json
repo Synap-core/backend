@@ -3,10 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "skipLibCheck": true,
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true
+    "skipLibCheck": true
   },
   "references": [
     {

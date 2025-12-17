@@ -32,6 +32,7 @@ export async function handleInboxItemReceived(
       id: event.subjectId,
       userId: event.userId,
       provider: event.data.provider,
+      account: event.data.account, // ✅ Required field
       externalId: event.data.externalId,
       type: event.data.type,
       title: event.data.title,

@@ -21,7 +21,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "vitest"
   },
   "dependencies": {

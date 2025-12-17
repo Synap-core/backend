@@ -1,33 +1,36 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "lib": ["ES2022"],
-    "moduleResolution": "bundler",
+    "module": "Node16",
+    "lib": [
+      "ES2022"
+    ],
+    "moduleResolution": "node16",
+    // Composite project defaults (inherited by all packages)
+    "composite": true,
+    "declaration": true,
+    // declarationMap REMOVED - causes .d.ts generation failure with Node16+composite
+    "incremental": true,
+    // DO NOT set outDir/rootDir here - each package has different structure
+    // Packages define: outDir: "./dist", rootDir: "./src"
+    "sourceMap": true,
+    "noEmit": false,
+    // Module resolution
     "resolveJsonModule": true,
-    "allowJs": true,
-    "checkJs": false,
-    "outDir": "dist",
-    "rootDir": ".",
-    
-    // Strict mode
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    // Performance
+    "skipLibCheck": true,
+    // Strict type checking
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    
-    // Module resolution
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    
-    // Type checking
-    "skipLibCheck": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true
+    "noFallthroughCasesInSwitch": true
   },
-  "exclude": ["node_modules", "dist"]
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }
-

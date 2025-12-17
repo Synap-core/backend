@@ -7,7 +7,7 @@
  * automated with an event bus/dispatcher system.
  */
 
-import { db, events, eq, desc } from '@synap/database';
+import { db, events, desc } from '@synap/database';
 import { handleInboxItemReceived } from './inbox-storage.js';
 import { handleInboxItemIntelligence } from './inbox-intelligence.js';
 import { handleInboxItemAnalyzed } from './inbox-analysis.js';
@@ -45,7 +45,7 @@ export async function processEvents() {
             await handleInboxItemReceived({
               type: 'inbox.item.received',
               subjectId: event.subjectId,
-              subjectType: event.subjectType,
+              subjectType: event.subjectType as "inbox_item", // ✅ Type cast
               data: event.data as any,
               id: event.id,
               userId: event.userId,
@@ -55,7 +55,7 @@ export async function processEvents() {
             await handleInboxItemIntelligence({
               type: 'inbox.item.received',
               subjectId: event.subjectId,
-              subjectType: event.subjectType,
+              subjectType: event.subjectType as "inbox_item", // ✅ Type cast
               data: event.data as any,
               id: event.id,
               userId: event.userId,
@@ -68,7 +68,7 @@ export async function processEvents() {
             await handleInboxItemAnalyzed({
               type: 'inbox.item.analyzed',
               subjectId: event.subjectId,
-              subjectType: event.subjectType,
+              subjectType: event.subjectType as "inbox_item", // ✅ Type cast
               data: event.data as any,
               id: event.id,
               userId: event.userId,

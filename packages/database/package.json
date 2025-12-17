@@ -28,7 +28,7 @@
     "migrations-drizzle"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",

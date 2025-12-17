@@ -16,7 +16,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "vitest run",
     "dev": "npx inngest-cli@latest dev"
   },
@@ -24,7 +24,6 @@
     "inngest": "^3.15.0",
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
-    "@synap/domain": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/storage": "workspace:*",
     "@synap/types": "workspace:*",

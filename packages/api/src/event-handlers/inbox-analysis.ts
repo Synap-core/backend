@@ -42,7 +42,7 @@ export async function handleInboxItemAnalyzed(
     
     // Merge analysis into data field
     const updatedData = {
-      ...item.data,
+      ...(item.data as object), // ✅ Cast jsonb to object
       analysis: event.data.analysis,
     };
     

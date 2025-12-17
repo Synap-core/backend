@@ -34,6 +34,8 @@ export const processAnalyzedThought = inngest.createFunction(
     await step.run('create-entity-event', async () => {
       await db.insert(events).values({
         type: 'entity.created',
+        subjectId: entityId,       // ✅ Entity being created
+        subjectType: 'entity',     // ✅ Type of subject
         data: {
           entityId,
           type: analysis.intent,

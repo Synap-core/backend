@@ -16,7 +16,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "tsx tests/phase1.test.ts",
     "test:local": "tsx tests/local-mvp.test.ts"
   },

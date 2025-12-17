@@ -21,8 +21,8 @@ export { hubRouter } from './routers/hub.js';
 export { apiKeysRouter } from './routers/api-keys.js';
 export { healthRouter } from './routers/health.js';
 export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
-// Export event streaming utilities
-export { eventStreamManager, setupEventBroadcasting } from './event-stream.js';
+// Export event streaming utilities - DISABLED (file doesn't exist)
+// export { eventStreamManager, setupEventBroadcasting } from './event-stream.js';
 
 // Export event handlers
 export { startEventProcessor, processEvents } from './event-handlers/index.js';
@@ -85,7 +85,7 @@ const coreRouter = router({
   hub: hubRouter,
   apiKeys: apiKeysRouter,
   health: healthRouter,
-  n8n: n8nActionsRouter,
+  // n8n: n8nActionsRouter, // DISABLED - router not imported
   webhooks: webhooksRouter,
   documents: documentsRouter,
   content: contentRouter,

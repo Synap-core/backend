@@ -18,7 +18,7 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "tsc"
+    "build": "tsc --build"
   },
   "dependencies": {
     "@hono/trpc-server": "^0.3.2",
@@ -27,7 +27,6 @@
     "@synap/auth": "workspace:*",
     "@synap/core": "workspace:*",
     "@synap/database": "workspace:*",
-    "@synap/domain": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",

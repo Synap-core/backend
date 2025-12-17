@@ -4,9 +4,13 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "composite": true,
-    "declaration": true,
-    "declarationMap": true
+    "declaration": true
   },
+  "references": [
+    {
+      "path": "../core"
+    }
+  ],
   "include": [
     "src/**/*"
   ],

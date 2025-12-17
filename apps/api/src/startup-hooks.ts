@@ -7,7 +7,7 @@
  * - Default integrations
  */
 
-import { config, createLogger } from '@synap/core';
+import { createLogger } from '@synap/core';
 import { db, webhookSubscriptions, eq } from '@synap/database';
 import { randomUUID } from 'crypto';
 
@@ -48,8 +48,8 @@ export async function configureN8NWebhook(): Promise<void> {
         .set({
           eventTypes,
           secret,
-          isActive: true,
-          updatedAt: new Date(),
+          active: true,
+          // updatedAt removed - managed by database
         })
         .where(eq(webhookSubscriptions.id, existing[0].id));
 
@@ -59,16 +59,14 @@ export async function configureN8NWebhook(): Promise<void> {
       const result = await db
         .insert(webhookSubscriptions)
         .values({
-          id: randomUUID(),
           userId: 'system', // System-level subscription
           name: 'N8N Integration (Auto-configured)',
           url: n8nUrl,
           eventTypes,
           secret,
-          description: 'Automatically configured from N8N_WEBHOOK_URL environment variable',
-          isActive: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          // description removed - not in schema
+          active: true,
+          // createdAt/updatedAt removed - managed by database
         })
         .returning();
 

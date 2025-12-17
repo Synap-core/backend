@@ -5,8 +5,12 @@
     "rootDir": "./src",
     "composite": true,
     "declaration": true,
-    "declarationMap": true
   },
+  "references": [
+    {
+      "path": "../database"
+    }
+  ],
   "include": [
     "src/**/*"
   ],
