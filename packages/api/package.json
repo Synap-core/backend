@@ -31,7 +31,6 @@
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/storage": "workspace:*",
-    "@synap/types": "workspace:*",
     "@aws-sdk/client-s3": "^3.926.0",
     "@trpc/server": "^11.0.0",
     "@types/ws": "^8.18.1",

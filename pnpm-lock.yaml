@@ -174,9 +174,6 @@ importers:
       '@synap/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
-      '@synap/types':
-        specifier: workspace:*
-        version: link:../../packages/types
       '@trpc/server':
         specifier: ^11.0.0
         version: 11.7.2(typescript@5.9.3)
@@ -223,9 +220,6 @@ importers:
       '@synap/core':
         specifier: file:../core
         version: file:packages/core(@opentelemetry/core@2.2.0)
-      '@synap/types':
-        specifier: file:../types
-        version: file:packages/types(@opentelemetry/core@2.2.0)
       ai:
         specifier: ^4.0.0
         version: 4.3.19(react@19.2.1)(zod@3.25.76)
@@ -303,9 +297,6 @@ importers:
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
-      '@synap/types':
-        specifier: workspace:*
-        version: link:../types
       '@trpc/server':
         specifier: ^11.0.0
         version: 11.7.2(typescript@5.9.3)
@@ -454,9 +445,6 @@ importers:
       '@synap/core':
         specifier: workspace:*
         version: link:../core
-      '@synap/types':
-        specifier: workspace:*
-        version: link:../types
       drizzle-orm:
         specifier: 0.33.0
         version: 0.33.0(postgres@3.4.7)
@@ -502,55 +490,20 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
-  packages/hub-orchestrator-base:
-    dependencies:
-      '@synap/hub-protocol':
-        specifier: file:../hub-protocol
-        version: file:packages/hub-protocol
-      '@synap/hub-protocol-client':
-        specifier: file:../hub-protocol-client
-        version: file:packages/hub-protocol-client(@opentelemetry/core@2.2.0)(@trpc/server@11.7.2)(hono@4.10.7)(typescript@5.9.3)
-    devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.26
-      typescript:
-        specifier: ^5.3.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.7
-        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@20.19.26)(@vitest/ui@4.0.15)(tsx@4.21.0)
-
   packages/hub-protocol:
     dependencies:
-      zod:
-        specifier: ^3.22.0
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.26
-      typescript:
-        specifier: ^5.3.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.7
-        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@20.19.26)(@vitest/ui@4.0.15)(tsx@4.21.0)
-
-  packages/hub-protocol-client:
-    dependencies:
       '@synap/api':
-        specifier: file:../api
-        version: file:packages/api(@opentelemetry/core@2.2.0)(hono@4.10.7)(typescript@5.9.3)
+        specifier: workspace:*
+        version: link:../api
       '@synap/core':
-        specifier: file:../core
-        version: file:packages/core(@opentelemetry/core@2.2.0)
-      '@synap/hub-protocol':
-        specifier: file:../hub-protocol
-        version: file:packages/hub-protocol
+        specifier: workspace:*
+        version: link:../core
       '@trpc/client':
         specifier: ^11.7.1
         version: 11.7.2(@trpc/server@11.7.2)(typescript@5.9.3)
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^20.0.0
@@ -582,9 +535,6 @@ importers:
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
-      '@synap/types':
-        specifier: workspace:*
-        version: link:../types
       ai:
         specifier: ^4.0.0
         version: 4.3.19(react@19.2.1)(zod@3.25.76)
@@ -639,47 +589,6 @@ importers:
       vitest:
         specifier: ^1.0.4
         version: 1.6.1(@types/node@22.19.2)(@vitest/ui@4.0.15)
-
-  packages/trpc-types:
-    dependencies:
-      '@synap/api':
-        specifier: file:../api
-        version: file:packages/api(@opentelemetry/core@2.2.0)(hono@4.10.7)(typescript@5.9.3)
-    devDependencies:
-      '@trpc/client':
-        specifier: ^11.0.0
-        version: 11.7.2(@trpc/server@11.7.2)(typescript@5.9.3)
-      '@trpc/react-query':
-        specifier: ^11.0.0
-        version: 11.7.2(@tanstack/react-query@5.90.12)(@trpc/client@11.7.2)(@trpc/server@11.7.2)(react-dom@19.2.1)(react@19.2.1)(typescript@5.9.3)
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(tsx@4.21.0)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/types:
-    dependencies:
-      '@synap/core':
-        specifier: file:../core
-        version: file:packages/core(@opentelemetry/core@2.2.0)
-      '@synap/events':
-        specifier: workspace:*
-        version: link:../events
-      zod:
-        specifier: ^3.22.0
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.26
-      tsx:
-        specifier: ^4.7.0
-        version: 4.21.0
-      typescript:
-        specifier: ^5.3.3
-        version: 5.9.3
 
   packages/ui:
     dependencies:
@@ -5846,6 +5755,7 @@ packages:
     dependencies:
       '@tanstack/query-core': 5.90.12
       react: 19.2.1
+    dev: false
 
   /@tanstack/react-virtual@3.13.13(react-dom@19.2.1)(react@19.2.1):
     resolution: {integrity: sha512-4o6oPMDvQv+9gMi8rE6gWmsOjtUZUYIJHv7EB+GblyYdi8U6OqLl8rhHWIUZSL1dUU2dPwTdTgybCKf9EjIrQg==}
@@ -5905,6 +5815,7 @@ packages:
       react: 19.2.1
       react-dom: 19.2.1(react@19.2.1)
       typescript: 5.9.3
+    dev: false
 
   /@trpc/server@11.7.2(typescript@5.9.3):
     resolution: {integrity: sha512-AgB26PXY69sckherIhCacKLY49rxE2XP5h38vr/KMZTbLCL1p8IuIoKPjALTcugC2kbyQ7Lbqo2JDVfRSmPmfQ==}
@@ -9174,6 +9085,7 @@ packages:
     dependencies:
       react: 19.2.1
       scheduler: 0.27.0
+    dev: false
 
   /react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
@@ -9337,6 +9249,7 @@ packages:
   /react@19.2.1:
     resolution: {integrity: sha512-DGrYcCWK7tvYMnWh79yrPHt+vdx9tY+1gPZa7nJQtO/p8bLTDaHp4dzwEhQB7pZ4Xe3ok4XKuEPrVuc+wlpkmw==}
     engines: {node: '>=0.10.0'}
+    dev: false
 
   /reactflow@11.11.4(@types/react@19.2.7)(react-dom@19.2.1)(react@19.2.1):
     resolution: {integrity: sha512-70FOtJkUWH3BAOsN+LU9lCrKoKbtOPnz2uq0CV2PLdNSwxTXOhCbsZr50GmZ+Rtw3jx8Uv7/vBFtCGixLfd4Og==}
@@ -10813,49 +10726,6 @@ packages:
       use-sync-external-store: 1.6.0(react@19.2.1)
     dev: false
 
-  file:packages/api(@opentelemetry/core@2.2.0)(hono@4.10.7)(typescript@5.9.3):
-    resolution: {directory: packages/api, type: directory}
-    id: file:packages/api
-    name: '@synap/api'
-    dependencies:
-      '@aws-sdk/client-s3': 3.947.0
-      '@hono/trpc-server': 0.3.4(@trpc/server@11.7.2)(hono@4.10.7)
-      '@synap/ai': link:packages/ai
-      '@synap/ai-embeddings': link:packages/ai-embeddings
-      '@synap/auth': link:packages/auth
-      '@synap/core': link:packages/core
-      '@synap/database': link:packages/database
-      '@synap/domain': link:packages/domain
-      '@synap/events': link:packages/events
-      '@synap/hub-protocol': link:packages/hub-protocol
-      '@synap/jobs': link:packages/jobs
-      '@synap/storage': link:packages/storage
-      '@synap/types': link:packages/types
-      '@trpc/server': 11.7.2(typescript@5.9.3)
-      '@types/ws': 8.18.1
-      inngest: 3.47.0(@opentelemetry/core@2.2.0)(hono@4.10.7)(typescript@5.9.3)(zod@3.25.76)
-      jsonwebtoken: 9.0.3
-      ws: 8.18.3
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@opentelemetry/core'
-      - '@sveltejs/kit'
-      - '@vercel/node'
-      - aws-crt
-      - aws-lambda
-      - bufferutil
-      - encoding
-      - express
-      - fastify
-      - h3
-      - hono
-      - koa
-      - next
-      - supports-color
-      - typescript
-      - utf-8-validate
-    dev: false
-
   file:packages/core(@opentelemetry/core@2.2.0):
     resolution: {directory: packages/core, type: directory}
     id: file:packages/core
@@ -10871,56 +10741,6 @@ packages:
       pino: 9.14.0
       pino-pretty: 13.1.3
       prom-client: 15.1.3
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@opentelemetry/core'
-      - encoding
-      - supports-color
-    dev: false
-
-  file:packages/hub-protocol:
-    resolution: {directory: packages/hub-protocol, type: directory}
-    name: '@synap/hub-protocol'
-    dependencies:
-      zod: 3.25.76
-    dev: false
-
-  file:packages/hub-protocol-client(@opentelemetry/core@2.2.0)(@trpc/server@11.7.2)(hono@4.10.7)(typescript@5.9.3):
-    resolution: {directory: packages/hub-protocol-client, type: directory}
-    id: file:packages/hub-protocol-client
-    name: '@synap/hub-protocol-client'
-    dependencies:
-      '@synap/api': file:packages/api(@opentelemetry/core@2.2.0)(hono@4.10.7)(typescript@5.9.3)
-      '@synap/core': file:packages/core(@opentelemetry/core@2.2.0)
-      '@synap/hub-protocol': file:packages/hub-protocol
-      '@trpc/client': 11.7.2(@trpc/server@11.7.2)(typescript@5.9.3)
-    transitivePeerDependencies:
-      - '@opentelemetry/core'
-      - '@sveltejs/kit'
-      - '@trpc/server'
-      - '@vercel/node'
-      - aws-crt
-      - aws-lambda
-      - bufferutil
-      - encoding
-      - express
-      - fastify
-      - h3
-      - hono
-      - koa
-      - next
-      - supports-color
-      - typescript
-      - utf-8-validate
-    dev: false
-
-  file:packages/types(@opentelemetry/core@2.2.0):
-    resolution: {directory: packages/types, type: directory}
-    id: file:packages/types
-    name: '@synap/types'
-    dependencies:
-      '@synap/core': file:packages/core(@opentelemetry/core@2.2.0)
-      '@synap/events': link:packages/events
       zod: 3.25.76
     transitivePeerDependencies:
       - '@opentelemetry/core'

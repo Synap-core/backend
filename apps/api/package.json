@@ -17,7 +17,6 @@
     "@synap/events": "workspace:*",
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
-    "@synap/types": "workspace:*",
     "@trpc/server": "^11.0.0",
     "hono": "^4.0.0",
     "hono-rate-limiter": "^0.4.2",

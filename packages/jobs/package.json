@@ -26,7 +26,6 @@
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/storage": "workspace:*",
-    "@synap/types": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "ai": "^4.0.0",
     "@ai-sdk/anthropic": "^1.0.0",
