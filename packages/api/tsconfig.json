@@ -30,7 +30,7 @@
       "path": "../jobs"
     },
     {
-      "path": "../types"
+      "path": "../events"
     },
     {
       "path": "../hub-protocol"

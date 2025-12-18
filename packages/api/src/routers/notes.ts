@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { randomUUID } from 'crypto';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent } from '@synap/core';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
 import { db, entities, eq, desc, and } from '@synap/database';

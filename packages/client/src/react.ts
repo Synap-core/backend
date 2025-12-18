@@ -1,102 +1,86 @@
 /**
- * React Integration - Hooks for React applications
+ * @synap/client/react - React Query hooks for Synap
  * 
- * Provides React hooks for using Synap Client with React Query.
- */
-
-import { createTRPCReact, type CreateTRPCReact } from '@trpc/react-query';
-import { httpBatchLink, createTRPCProxyClient } from '@trpc/client';
-import type { AppRouter } from './types.js';
-
-/**
- * tRPC React client
- * 
- * Use this to create a React Query client with tRPC integration.
+ * Provides tRPC React Query hooks with full type safety.
+ * Auto-syncs with API changes via AppRouter type.
  * 
  * @example
  * ```typescript
- * import { trpc } from '@synap/client/react';
+ * import { createSynapReact, SynapProvider } from '@synap/client/react';
  * 
+ * // Create hooks  
+ * export const api = createSynapReact();
+ * 
+ * // In your app
+ * function App() {
+ *   return (
+ *     <SynapProvider client={trpcClient} queryClient={queryClient}>
+ *       <MyComponent />
+ *     </SynapProvider>
+ *   );
+ * }
+ * 
+ * // In components
  * function MyComponent() {
- *   const { data } = trpc.notes.list.useQuery();
- *   const createNote = trpc.notes.create.useMutation();
+ *   const { data } = api.entities.list.useQuery({ limit: 20 });
+ *   const createTag = api.tags.create.useMutation();
+ *   
+ *   return <div>{data?.entities.map(...)}</div>;
+ * }
+ * ```
+ */
+
+import { createTRPCReact } from '@trpc/react-query';
+import type { AppRouter } from '@synap/api';
+
+/**
+ * Create tRPC React hooks for Synap API
+ * 
+ * This provides fully typed React Query hooks that auto-sync
+ * with the API's AppRouter type.
+ * 
+ * @example
+ * ```typescript
+ * // Create once in your app
+ * export const api = createSynapReact();
+ * 
+ * // Use in components
+ * function NotesScreen() {
+ *   const { data, isLoading } = api.entities.list.useQuery({ 
+ *     type: 'note',
+ *     limit: 50 
+ *   });
+ *   
+ *   const createEntity = api.entities.create.useMutation({
+ *     onSuccess: () => {
+ *       // Invalidate cache
+ *       api.useContext().entities.list.invalidate();
+ *     },
+ *   });
  *   
  *   return (
  *     <div>
- *       {data?.map(note => <div key={note.id}>{note.title}</div>)}
+ *       {data?.entities.map(entity => (
+ *         <div key={entity.id}>{entity.title}</div>
+ *       ))}
  *     </div>
  *   );
  * }
  * ```
  */
-export const trpc: CreateTRPCReact<AppRouter, unknown> = createTRPCReact<AppRouter>();
-
-/**
- * Create a React Query client with tRPC integration
- * 
- * @example
- * ```typescript
- * import { createSynapReactClient } from '@synap/client/react';
- * import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
- * 
- * const queryClient = new QueryClient();
- * const trpcClient = createSynapReactClient({
- *   url: 'http://localhost:3000',
- *   getToken: async () => await getSessionToken(),
- * });
- * 
- * function App() {
- *   return (
- *     <trpc.Provider client={trpcClient} queryClient={queryClient}>
- *       <MyComponent />
- *     </trpc.Provider>
- *   );
- * }
- * ```
- */
-export function createSynapReactClient(config: {
-  url: string;
-  getToken?: () => Promise<string | null> | string | null;
-  token?: string;
-  headers?: Record<string, string>;
-}) {
-  return createTRPCProxyClient<AppRouter>({
-    links: [
-      httpBatchLink({
-        url: `${config.url}/trpc`,
-        headers: async () => {
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            ...config.headers,
-          };
-
-          let token: string | null = null;
-          
-          if (config.token) {
-            token = config.token;
-          } else if (config.getToken) {
-            const result = await config.getToken();
-            token = result || null;
-          }
-
-          if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-          }
-
-          return headers;
-        },
-      }),
-    ],
-  });
+export function createSynapReact(): ReturnType<typeof createTRPCReact<AppRouter>> {
+  return createTRPCReact<AppRouter>();
 }
 
-// Re-export types
-export type { AppRouter } from './types.js';
+/**
+ * Type alias for the Synap tRPC React context
+ */
+export type SynapReactContext = ReturnType<typeof createSynapReact>;
 
-// Export new hooks and provider
-export { SynapProvider, useSynap, useSynapClient } from './react/provider.js';
-export { useEntities, useEntity, useEntitySearch, useCreateEntity, useUpdateEntity, useDeleteEntity } from './react/useEntities.js';
-export { useThreads, useThread, useBranches, useSendMessage, useCreateBranch } from './react/useThreads.js';
-export { useEvents, useAggregateEvents } from './react/useEvents.js';
+// Re-export Provider and utilities from @trpc/react-query
+// Re-export Provider from react-query (for setting up context)
+export { QueryClientProvider as SynapQueryClientProvider } from '@tanstack/react-query';
+export type { AppRouter } from '@synap/api';
 
-
+// Default export
+export default createSynapReact;

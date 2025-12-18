@@ -11,7 +11,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { HubInsightSchema, type HubInsight } from '@synap/hub-protocol';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent } from '@synap/core';
 import { inngest } from '@synap/jobs';
 import { createLogger } from '@synap/core';
 import { randomUUID } from 'crypto';

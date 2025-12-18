@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent } from '@synap/core';
 import { getEventRepository } from '@synap/database';
 import { db, entities } from '@synap/database';
 import { eq } from '@synap/database';

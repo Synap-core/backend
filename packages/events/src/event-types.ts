@@ -13,7 +13,7 @@
  * 
  * @example
  * ```typescript
- * import { GeneratedEventTypes } from '@synap/types';
+ * import { GeneratedEventTypes } from '@synap/core';
  * 
  * // Use generated table events
  * const event = createSynapEvent({
@@ -38,7 +38,7 @@ export {
   type GeneratedEventType,
   type TableAction,
   type CoreTable,
-} from '@synap/events';
+} from '@synap/core';
 */
 
 // ============================================================================
@@ -87,9 +87,9 @@ export function isValidEventType(eventType: string): boolean {
     return true;
   }
   
-  // Check generated
+  // Check generated - import locally to avoid circular dependency
   try {
-    const { isGeneratedEventType } = require('@synap/events');
+    const { isGeneratedEventType } = require('./generator.js');
     return isGeneratedEventType(eventType);
   } catch {
     return false;

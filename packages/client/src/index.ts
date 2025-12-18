@@ -1,138 +1,105 @@
 /**
- * @synap/client - Type-safe Client SDK for Synap Core OS
+ * @synap/client - Type-safe Client SDK for Synap
  * 
- * Hybrid 3-layer architecture:
- * 1. Core RPC (auto-generated): Direct tRPC access via client.rpc.*
- * 2. Business Facade: High-level convenience methods via client.notes.*, client.chat.*, etc.
- * 3. Authentication: Agnostic token management via getToken()
- */
-
-import { createRPCClient, type SynapClientConfig } from './core.js';
-import type { TRPCClient } from '@trpc/client';
-import type { AppRouter } from './types.js';
-import {
-  NotesFacade,
-  ChatFacade,
-  TasksFacade,
-  CaptureFacade,
-  SystemFacade,
-  CapabilitiesFacade,
-} from './facade.js';
-import { ContentFacade } from './facades/content.js';
-
-/**
- * Synap Client
- * 
- * Main client class providing both high-level and low-level access to the Synap API.
+ * Direct tRPC client export with full type safety.
+ * Auto-syncs with API changes via AppRouter type.
  * 
  * @example
  * ```typescript
- * // High-level API (recommended for most use cases)
- * const synap = new SynapClient({
- *   url: 'http://localhost:3000',
- *   getToken: async () => await getSessionToken(),
+ * import { createSynapClient } from '@synap/client';
+ * 
+ * const client = createSynapClient({
+ *   url: 'https://api.synap.app',
+ *   headers: () => ({
+ *     Authorization: `Bearer ${token}`,
+ *   }),
  * });
  * 
- * await synap.notes.create({ content: '# My Note' });
- * 
- * // Low-level API (for power users)
- * await synap.rpc.notes.create.mutate({ content: '# My Note' });
+ * // Fully typed API calls
+ * const entities = await client.entities.list.query({ limit: 20 });
+ * const tag = await client.tags.create.mutate({ name: 'Important' });
  * ```
  */
-export class SynapClient {
-  /** Core RPC client - Direct access to all tRPC procedures */
-  public readonly rpc: TRPCClient<AppRouter>;
 
-  /** Notes facade - High-level note operations */
-  public readonly notes: NotesFacade;
+import { createTRPCClient, httpBatchLink } from '@trpc/client';
+import type { AppRouter } from '@synap/api';
 
-  /** Chat facade - High-level chat operations */
-  public readonly chat: ChatFacade;
-
-  /** Tasks facade - High-level task operations */
-  public readonly tasks: TasksFacade;
-
-  /** Capture facade - Thought capture operations */
-  public readonly capture: CaptureFacade;
-
-  /** System facade - System information and health */
-  public readonly system: SystemFacade;
-
-  /** Content facade - Unified content creation (notes & files) */
-  public readonly content: ContentFacade;
-
-  /** Capabilities facade - Discover available features and services */
-  public readonly capabilities: CapabilitiesFacade;
-
-  private config: SynapClientConfig;
-
-  constructor(config: SynapClientConfig) {
-    this.config = { ...config };
-    
-    // Initialize core RPC client (Couche 1)
-    const rpc = createRPCClient(this.config);
-    
-    // Initialize business facades (Couche 2)
-    const notes = new NotesFacade(rpc);
-    const chat = new ChatFacade(rpc);
-    const tasks = new TasksFacade(rpc);
-    const capture = new CaptureFacade(rpc);
-    const system = new SystemFacade(rpc);
-    const content = new ContentFacade(rpc);
-    const capabilities = new CapabilitiesFacade(/* rpc disabled */);
-
-    // Assign readonly properties
-    this.rpc = rpc;
-    this.notes = notes;
-    this.chat = chat;
-    this.tasks = tasks;
-    this.capture = capture;
-    this.system = system;
-    this.content = content;
-    this.capabilities = capabilities;
-  }
+/**
+ * Configuration for Synap client
+ */
+export interface SynapClientConfig {
+  /** 
+   * Base URL for the Synap API 
+   * @example 'https://api.synap.app' or 'http://localhost:3000'
+   */
+  url: string;
 
   /**
-   * Update the authentication token
-   * 
-   * Useful when tokens expire and need to be refreshed.
-   * 
-   * Note: This creates a new client instance. Consider creating a new SynapClient instead.
+   * Optional headers to include with every request
+   * Can be a function for dynamic headers (e.g., authentication tokens)
    */
-  updateToken(getToken: () => Promise<string | null> | string | null): SynapClient {
-    return new SynapClient({
-      ...this.config,
-      getToken,
-    });
-  }
+  headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>);
 
   /**
-   * Get the real-time WebSocket URL for this client
-   * 
-   * This is useful for connecting to the real-time notification system.
+   * Optional fetch implementation
+   * Useful for React Native or custom fetch behavior
    */
-  getRealtimeUrl(userId: string): string {
-    // Use custom realtimeUrl if provided, otherwise convert http/https to wss
-    let baseUrl = this.config.realtimeUrl;
-    if (!baseUrl) {
-      if (this.config.url) {
-        baseUrl = this.config.url.replace(/^https?/, 'wss');
-      } else {
-        baseUrl = 'wss://realtime.synap.app';
-      }
-    }
-    
-    // Ensure base URL doesn't have trailing slash
-    baseUrl = baseUrl.replace(/\/$/, '');
-    
-    return `${baseUrl}/rooms/user_${userId}/subscribe`;
-  }
+  fetch?: typeof globalThis.fetch;
 }
 
-// Export types
-export type { SynapClientConfig, AppRouter } from './types.js';
+/**
+ * Create a type-safe Synap API client
+ * 
+ * This client auto-syncs with the API's AppRouter type,
+ * providing full autocomplete and type safety for all routes.
+ * 
+ * @param config - Client configuration
+ * @returns Fully typed tRPC client
+ * 
+ * @example
+ * ```typescript
+ * // Basic usage
+ * const client = createSynapClient({
+ *   url: 'https://api.synap.app',
+ * });
+ * 
+ * // With authentication
+ * const client = createSynapClient({
+ *   url: 'https://api.synap.app',
+ *   headers: {
+ *     Authorization: `Bearer ${token}`,
+ *   },
+ * });
+ * 
+ * // With dynamic headers
+ * const client = createSynapClient({
+ *   url: 'https://api.synap.app',
+ *   headers: async () => ({
+ *     Authorization: `Bearer ${await getToken()}`,
+ *   }),
+ * });
+ * ```
+ */
+export function createSynapClient(config: SynapClientConfig) {
+  return createTRPCClient<AppRouter>({
+    links: [
+      httpBatchLink({
+        url: `${config.url}/trpc`,
+        headers: config.headers,
+        fetch: config.fetch,
+      }),
+    ],
+  });
+}
+
+/**
+ * Type alias for the Synap TRP client
+ */
+export type SynapClient = ReturnType<typeof createSynapClient>;
+
+// Re-export types for convenience
+export type { AppRouter } from '@synap/api';
 export type { TRPCClient } from '@trpc/client';
 
 // Default export
-export default SynapClient;
-
+export default createSynapClient;

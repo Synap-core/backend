@@ -13,7 +13,7 @@
  * 
  * @example
  * ```typescript
- * import { publishEvent, createInboxItemReceivedEvent } from '@synap/events';
+ * import { publishEvent, createInboxItemReceivedEvent } from '@synap/core';
  * 
  * // Type-safe event publishing
  * const event = createInboxItemReceivedEvent(itemId, {
@@ -37,7 +37,7 @@ export type {
   // Base types
   BaseEvent,
   DomainEvent,
-  EventType,
+  // EventType, // ← Removed: conflicts with event-types.ts export
   SubjectType,
   EventDataFor,
   SubjectTypeFor,
@@ -145,3 +145,19 @@ export {
   type EventRegistration,
   type EventRegistryStats,
 } from './registry.js';
+
+// ============================================================================
+// EVENT TYPES (System event type constants)
+// ============================================================================
+
+export {
+  EventTypes,
+  SystemEventTypes,
+  type EventType,
+  type SystemEventType,
+  isValidEventType,
+  getAllEventTypes,
+} from './event-types.js';
+
+// Note: SynapEvent schema and event metadata types moved to @synap/core
+// to break circular dependency between database and events packages

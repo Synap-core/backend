@@ -4,8 +4,19 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "composite": true,
-    "declaration": true,
+    "declaration": true
   },
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../database"
+    },
+    {
+      "path": "../events"
+    }
+  ],
   "include": [
     "src/**/*"
   ],

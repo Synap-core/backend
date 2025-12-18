@@ -16,7 +16,7 @@ import { TRPCError } from '@trpc/server';
 import { createLogger } from '@synap/core';
 import { db } from '@synap/database';
 import { events } from '@synap/database';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent } from '@synap/core';
 
 const logger = createLogger({ module: 'n8n-router' });
 

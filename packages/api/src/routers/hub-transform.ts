@@ -5,7 +5,9 @@
  */
 
 import type { HubInsight } from '@synap/hub-protocol';
-import { createSynapEvent, type EventType, isValidEventType } from '@synap/types';
+import { createSynapEvent } from '@synap/core';
+import type { EventType } from '@synap/events';
+import { isValidEventType } from '@synap/events';
 import { ValidationError } from '@synap/core';
 import { createLogger } from '@synap/core';
 

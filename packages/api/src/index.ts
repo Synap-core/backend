@@ -44,6 +44,8 @@ import { filesRouter } from './routers/files.js';
 import { inboxRouter } from './routers/inbox.js';
 import { intelligenceRegistryRouter } from './routers/intelligence-registry.js';
 import { capabilitiesRouter } from './routers/capabilities.js';
+import { tagsRouter } from './routers/tags.js';
+import { searchRouter } from './routers/search.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -66,6 +68,8 @@ registerRouter('files', filesRouter, { version: '1.0.0', source: 'core', descrip
 registerRouter('inbox', inboxRouter, { version: '1.0.0', source: 'core', description: 'Life Feed inbox' });
 registerRouter('intelligenceRegistry', intelligenceRegistryRouter, { version: '1.0.0', source: 'core', description: 'Intelligence Service Registry' });
 registerRouter('capabilities', capabilitiesRouter, { version: '1.0.0', source: 'core', description: 'Feature and service discovery' });
+registerRouter('tags', tagsRouter, { version: '1.0.0', source: 'core', description: 'Tag management and entity tagging' });
+registerRouter('search', searchRouter, { version: '1.0.0', source: 'core', description: 'Full-text and semantic search' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -90,6 +94,8 @@ const coreRouter = router({
   documents: documentsRouter,
   content: contentRouter,
   files: filesRouter,
+  tags: tagsRouter,
+  search: searchRouter,
 });
 
 export type AppRouter = typeof coreRouter;
