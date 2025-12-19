@@ -22,12 +22,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "zod": "^3.22.0",
+    "@synap/types": "workspace:^",
     "@trpc/client": "^11.7.1",
-    "@synap/core": "workspace:*"
+    "zod": "^3.22.0"
   },
   "peerDependencies": {
-    "@synap/api": "workspace:*"
+    "@synap/api": "workspace:*",
+    "@synap/core": "*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

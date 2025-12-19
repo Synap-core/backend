@@ -6,7 +6,8 @@
  * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
-import { pgTable, uuid, timestamp, text, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, timestamp, text, integer, jsonb } from 'drizzle-orm/pg-core';
+import { documents } from './documents.js';
 
 export const entities = pgTable('entities', {
   // Primary key
@@ -15,14 +16,23 @@ export const entities = pgTable('entities', {
   // Which user owns this entity?
   userId: text('user_id').notNull(),
   
-  // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event'
+  // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event', 'person', 'file'
   type: text('type').notNull(),
   
   // Display metadata (NOT the full content!)
   title: text('title'),
   preview: text('preview'),
   
-  // File storage references (R2/S3/Local)
+  // Document reference (for entities with content)
+  // References documents table for full content storage
+  documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
+  
+  // Type-specific metadata (JSONB)
+  // Stores entity type-specific fields (task status, person email, etc.)
+  metadata: jsonb('metadata').default('{}'),
+  
+  // File storage references (R2/S3/Local) - DEPRECATED, use documents table
+  // TODO: Remove these columns after migration
   fileUrl: text('file_url'),        // Public URL: https://r2.../users/123/notes/456.md
   filePath: text('file_path'),      // Storage key: users/123/notes/456.md
   fileSize: integer('file_size'),   // Size in bytes

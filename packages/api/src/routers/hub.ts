@@ -1,5 +1,8 @@
 /**
- * Hub Protocol Router V1.0
+ * Hub Protocol Router
+ * 
+ * Handles communication with Intelligence Hub services.
+ * This is the tRPC endpoint that Intelligence Hub calls to submit insights.
  */
 
 import { z } from 'zod';
