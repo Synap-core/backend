@@ -7,7 +7,7 @@
     ],
     "moduleResolution": "node16",
     // Composite project defaults (inherited by all packages)
-    "composite": true,
+    "composite": false,
     "declaration": true,
     // declarationMap REMOVED - causes .d.ts generation failure with Node16+composite
     "incremental": true,

@@ -5,37 +5,8 @@
     "rootDir": "./src",
     "declaration": true,
     "sourceMap": true,
-    "composite": true
+    "composite": false
   },
-  "references": [
-    {
-      "path": "../database"
-    },
-    {
-      "path": "../core"
-    },
-    {
-      "path": "../storage"
-    },
-    {
-      "path": "../auth"
-    },
-    {
-      "path": "../ai"
-    },
-    {
-      "path": "../ai-embeddings"
-    },
-    {
-      "path": "../jobs"
-    },
-    {
-      "path": "../events"
-    },
-    {
-      "path": "../hub-protocol"
-    }
-  ],
   "include": [
     "src/**/*"
   ],

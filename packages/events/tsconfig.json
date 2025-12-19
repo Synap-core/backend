@@ -3,17 +3,9 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "composite": true,
-    "declaration": true,
+    "composite": false,
+    "declaration": true
   },
-  "references": [
-    {
-      "path": "../core"
-    },
-    {
-      "path": "../database"
-    }
-  ],
   "include": [
     "src/**/*"
   ],

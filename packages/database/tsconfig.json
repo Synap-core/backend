@@ -5,13 +5,8 @@
     "rootDir": "./src",
     "skipLibCheck": true,
     "declaration": true,
-    "composite": true
+    "composite": false
   },
-  "references": [
-    {
-      "path": "../core"
-    }
-  ],
   "include": [
     "src/**/*"
   ],

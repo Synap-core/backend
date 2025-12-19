@@ -4,20 +4,9 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "skipLibCheck": true,
-    "composite": true,
+    "composite": false,
     "declaration": true
   },
-  "references": [
-    {
-      "path": "../../packages/core"
-    },
-    {
-      "path": "../../packages/database"
-    },
-    {
-      "path": "../../packages/api"
-    }
-  ],
   "include": [
     "src/**/*"
   ],

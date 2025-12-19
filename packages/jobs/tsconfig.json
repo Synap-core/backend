@@ -3,20 +3,9 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "composite": true,
+    "composite": false,
     "declaration": true
   },
-  "references": [
-    {
-      "path": "../core"
-    },
-    {
-      "path": "../database"
-    },
-    {
-      "path": "../events"
-    }
-  ],
   "include": [
     "src/**/*"
   ],
