@@ -4,7 +4,7 @@
  * V2.0: Simplified Schema-Driven Event Architecture
  * 
  * This package exports:
- * - Table workers (entities, documents, messages)
+ * - Table workers (entities, documents, messages, relations)
  * - AI workers (analyzer, embeddings, insights)
  * - Shared workers (webhooks)
  * - Worker registry for admin UI
@@ -19,6 +19,7 @@ export * from './worker-registry.js';
 export { entitiesWorker } from './functions/entities.js';
 export { documentsWorker } from './functions/documents.js';
 export { messagesWorker } from './functions/messages.js';
+export { relationsWorker } from './functions/relations.js';
 
 // ============================================================================
 // AI Workers
@@ -42,6 +43,7 @@ export { handleWebhookDelivery } from './functions/webhook-broker.js';
 import { entitiesWorker } from './functions/entities.js';
 import { documentsWorker } from './functions/documents.js';
 import { messagesWorker } from './functions/messages.js';
+import { relationsWorker } from './functions/relations.js';
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
@@ -58,6 +60,7 @@ export const functions = [
   entitiesWorker,
   documentsWorker,
   messagesWorker,
+  relationsWorker,
   
   // AI workers
   analyzeCapturedThought,

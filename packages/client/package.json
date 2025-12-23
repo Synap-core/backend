@@ -1,8 +1,11 @@
 {
-  "name": "@synap/client",
+  "name": "@synap-core/client",
   "version": "0.1.0",
   "description": "Type-safe client SDK for Synap Core OS",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -47,6 +50,7 @@
     "react": "^18.0.0"
   },
   "devDependencies": {
+    "@synap-core/types": "^0.1.0",
     "@synap/api": "workspace:*",
     "@trpc/react-query": "^11.0.0",
     "@trpc/server": "^11.0.0",

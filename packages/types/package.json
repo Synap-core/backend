@@ -1,7 +1,10 @@
 {
-  "name": "@synap/types",
+  "name": "@synap-core/types",
   "version": "0.1.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
