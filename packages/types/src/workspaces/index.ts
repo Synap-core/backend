@@ -1,0 +1,42 @@
+/**
+ * Workspace Types
+ * 
+ * Re-exports workspace types from database schema (single source of truth).
+ * 
+ * @see {@link file:///.../packages/database/src/schema/workspaces.ts}
+ */
+
+// Direct re-exports from database (automatic sync, no manual maintenance needed)
+export type { 
+  Workspace,
+  NewWorkspace,
+  WorkspaceMember,
+  NewWorkspaceMember,
+  WorkspaceInvite,
+  NewWorkspaceInvite,
+} from '@synap/database/schema';
+
+// Derived types for API convenience
+import type { Workspace, WorkspaceMember } from '@synap/database/schema';
+
+export type WorkspaceType = Workspace['type'];
+export type WorkspaceRole = WorkspaceMember['role'];
+
+// Input types for API operations
+export interface CreateWorkspaceInput {
+  name: string;
+  description?: string;
+  type?: WorkspaceType;
+}
+
+export interface UpdateWorkspaceInput {
+  name?: string;
+  description?: string;
+  settings?: Record<string, unknown>;
+}
+
+export interface InviteMemberInput {
+  workspaceId: string;
+  email: string;
+  role: WorkspaceRole;
+}

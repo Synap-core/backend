@@ -74,6 +74,12 @@ export function generateTableEventTypes<T extends string>(tableName: T): TableEv
  * V2.0 CHANGES:
  * - Removed 'taskDetails' (extension table, not independent entity)
  * - Removed 'projects' (redundant with entities.type='project')
+ * 
+ * V3.0 ADDITIONS (Data Pod Enhancement):
+ * - workspaces: Multi-user collaboration spaces
+ * - workspaceMembers: Team member management
+ * - views: Whiteboards, timelines, kanban boards
+ * - userPreferences: User settings and preferences
  */
 export const CORE_TABLES = [
   'entities',           // Core knowledge graph nodes
@@ -85,6 +91,10 @@ export const CORE_TABLES = [
   'apiKeys',            // API key management
   'tags',               // User-defined labels
   'agents',             // AI agent configurations
+  'workspaces',         // Team workspaces (V3.0)
+  'workspaceMembers',   // Workspace membership (V3.0)
+  'views',              // Views system (V3.0)
+  'userPreferences',    // User preferences (V3.0)
 ] as const;
 
 export type CoreTable = typeof CORE_TABLES[number];
@@ -96,7 +106,8 @@ export type CoreTable = typeof CORE_TABLES[number];
 /**
  * All generated event types from core tables
  * 
- * V2.0: Only 9 tables × 6 events = 54 event types
+ * V2.0: 9 tables × 6 events = 54 event types
+ * V3.0: 13 tables × 6 events = 78 event types (added workspaces, views, preferences)
  */
 export const GeneratedEventTypes = {
   entities: generateTableEventTypes('entities'),
@@ -108,6 +119,10 @@ export const GeneratedEventTypes = {
   apiKeys: generateTableEventTypes('apiKeys'),
   tags: generateTableEventTypes('tags'),
   agents: generateTableEventTypes('agents'),
+  workspaces: generateTableEventTypes('workspaces'), // V3.0
+  workspaceMembers: generateTableEventTypes('workspaceMembers'), // V3.0
+  views: generateTableEventTypes('views'), // V3.0
+  userPreferences: generateTableEventTypes('userPreferences'), // V3.0
 } as const;
 
 /**

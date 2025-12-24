@@ -205,6 +205,162 @@ export type ChatThreadCreateRequestedEvent = BaseEvent<
 >;
 
 // ============================================================================
+// WORKSPACE EVENTS (V3.0)
+// ============================================================================
+
+/**
+ * Workspace creation requested
+ */
+export type WorkspaceCreateRequestedEvent = BaseEvent<
+  'workspaces.create.requested',
+  'workspace',
+  {
+    name: string;
+    type: 'personal' | 'team' | 'enterprise';
+    description?: string;
+  }
+>;
+
+/**
+ * Workspace creation validated
+ */
+export type WorkspaceCreateValidatedEvent = BaseEvent<
+  'workspaces.create.validated',
+  'workspace',
+  {
+    id: string;
+    name: string;
+    type: 'personal' | 'team' | 'enterprise';
+    ownerId: string;
+  }
+>;
+
+/**
+ * Workspace updated
+ */
+export type WorkspaceUpdateRequestedEvent = BaseEvent<
+  'workspaces.update.requested',
+  'workspace',
+  {
+    updates: {
+      name?: string;
+      description?: string;
+      settings?: Record<string, unknown>;
+    };
+  }
+>;
+
+export type WorkspaceUpdateValidatedEvent = BaseEvent<
+  'workspaces.update.validated',
+  'workspace',
+  {
+    id: string;
+    changes: Record<string, unknown>;
+  }
+>;
+
+/**
+ * Workspace member invited
+ */
+export type WorkspaceMemberCreateRequestedEvent = BaseEvent<
+  'workspaceMembers.create.requested',
+  'workspace_member',
+  {
+    workspaceId: string;
+    email: string;
+    role: 'owner' | 'admin' | 'editor' | 'viewer';
+  }
+>;
+
+export type WorkspaceMemberCreateValidatedEvent = BaseEvent<
+  'workspaceMembers.create.validated',
+  'workspace_member',
+  {
+    id: string;
+    workspaceId: string;
+    userId: string;
+    role: string;
+  }
+>;
+
+// ============================================================================
+// VIEW EVENTS (V3.0)
+// ============================================================================
+
+/**
+ * View creation requested
+ */
+export type ViewCreateRequestedEvent = BaseEvent<
+  'views.create.requested',
+  'view',
+  {
+    type: 'whiteboard' | 'timeline' | 'kanban' | 'table';
+    name: string;
+    workspaceId: string;
+  }
+>;
+
+export type ViewCreateValidatedEvent = BaseEvent<
+  'views.create.validated',
+  'view',
+  {
+    id: string;
+    type: string;
+    name: string;
+    documentId: string;
+  }
+>;
+
+/**
+ * View updated (manual save only)
+ */
+export type ViewUpdateRequestedEvent = BaseEvent<
+  'views.update.requested',
+  'view',
+  {
+    saveType: 'manual' | 'publish';
+  }
+>;
+
+export type ViewUpdateValidatedEvent = BaseEvent<
+  'views.update.validated',
+  'view',
+  {
+    id: string;
+    versionNumber: number;
+    savedAt: Date;
+  }
+>;
+
+// ============================================================================
+// USER PREFERENCES EVENTS (V3.0)
+// ============================================================================
+
+/**
+ * User preferences updated
+ */
+export type UserPreferencesUpdateRequestedEvent = BaseEvent<
+  'userPreferences.update.requested',
+  'user_preferences',
+  {
+    changes: {
+      theme?: 'light' | 'dark' | 'system';
+      uiPreferences?: Record<string, unknown>;
+      graphPreferences?: Record<string, unknown>;
+    };
+  }
+>;
+
+export type UserPreferencesUpdateValidatedEvent = BaseEvent<
+  'userPreferences.update.validated',
+  'user_preferences',
+  {
+    userId: string;
+    changes: Record<string, unknown>;
+  }
+>;
+
+// ============================================================================
 // DOMAIN EVENT UNION
 // ============================================================================
 
@@ -228,7 +384,22 @@ export type DomainEvent =
   // Message events
   | MessageCreateRequestedEvent
   // Chat thread events
-  | ChatThreadCreateRequestedEvent;
+  | ChatThreadCreateRequestedEvent
+  // Workspace events (V3.0)
+  | WorkspaceCreateRequestedEvent
+  | WorkspaceCreateValidatedEvent
+  | WorkspaceUpdateRequestedEvent
+  | WorkspaceUpdateValidatedEvent
+  | WorkspaceMemberCreateRequestedEvent
+  | WorkspaceMemberCreateValidatedEvent
+  // View events (V3.0)
+  | ViewCreateRequestedEvent
+  | ViewCreateValidatedEvent
+  | ViewUpdateRequestedEvent
+  | ViewUpdateValidatedEvent
+  // User preferences events (V3.0)
+  | UserPreferencesUpdateRequestedEvent
+  | UserPreferencesUpdateValidatedEvent;
 
 // ============================================================================
 // TYPE HELPERS

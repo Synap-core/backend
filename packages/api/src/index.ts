@@ -47,6 +47,10 @@ import { capabilitiesRouter } from './routers/capabilities.js';
 import { tagsRouter } from './routers/tags.js';
 import { searchRouter } from './routers/search.js';
 import { relationsRouter } from './routers/relations.js';
+import { graphRouter } from './routers/graph.js';
+import { workspacesRouter } from './routers/workspaces.js';
+import { viewsRouter } from './routers/views.js';
+import { preferencesRouter } from './routers/preferences.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -72,6 +76,10 @@ registerRouter('capabilities', capabilitiesRouter, { version: '1.0.0', source: '
 registerRouter('tags', tagsRouter, { version: '1.0.0', source: 'core', description: 'Tag management and entity tagging' });
 registerRouter('search', searchRouter, { version: '1.0.0', source: 'core', description: 'Full-text and semantic search' });
 registerRouter('relations', relationsRouter, { version: '1.0.0', source: 'core', description: 'Entity relationship management' });
+registerRouter('graph', graphRouter, { version: '1.0.0', source: 'core', description: 'Graph-optimized bulk queries' });
+registerRouter('workspaces', workspacesRouter, { version: '1.0.0', source: 'core', description: 'Workspace and team management' });
+registerRouter('views', viewsRouter, { version: '1.0.0', source: 'core', description: 'Views system (whiteboards, timelines, etc.)' });
+registerRouter('preferences', preferencesRouter, { version: '1.0.0', source: 'core', description: 'User preferences management' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code

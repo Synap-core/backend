@@ -30,3 +30,12 @@ export * from './user-entity-state.js';
 
 // Intelligence Service Registry
 export * from './intelligence-services.js';
+
+// NEW: Workspace system
+export * from './workspaces.js';
+
+// NEW: Views system (whiteboards, timelines, etc.)
+export * from './views.js';
+
+// NEW: User preferences
+export * from './user-preferences.js';

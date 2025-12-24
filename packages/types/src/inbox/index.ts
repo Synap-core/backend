@@ -1,11 +1,18 @@
 /**
  * Inbox Item Schemas & Types
  * 
- * Types for external items (emails, calendar events, etc.)
- * that are staged in the inbox before becoming entities.
+ * Re-exports inbox types from database and adds provider-specific schemas.
+ * 
+ * @see {@link file:///.../packages/database/src/schema/inbox-items.ts}
  */
 
 import { z } from 'zod';
+
+// Direct re-exports from database
+export type { 
+  InboxItem as DBInboxItem,  // Base DB type
+  NewInboxItem,
+} from '@synap/database/schema';
 
 /**
  * Inbox item data schemas - provider-specific

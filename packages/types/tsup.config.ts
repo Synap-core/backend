@@ -1,16 +1,19 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: {
-    index: 'src/index.ts',
-    'entities/index': 'src/entities/index.ts',
-    'documents/index': 'src/documents/index.ts',
-    'users/index': 'src/users/index.ts',
-    'inbox/index': 'src/inbox/index.ts',
-  },
+  entry: [
+    'src/index.ts',
+    'src/entities/index.ts',
+    'src/documents/index.ts',
+    'src/users/index.ts',
+    'src/inbox/index.ts',
+    'src/workspaces/index.ts',
+    'src/views/index.ts',
+    'src/preferences/index.ts',
+    'src/realtime/index.ts',
+  ],
   format: ['esm'],
   dts: true,
-  sourcemap: true,
   clean: true,
-  splitting: false,
+  external: ['@synap/database', 'yjs'],
 });

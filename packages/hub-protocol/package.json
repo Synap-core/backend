@@ -22,7 +22,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@synap/types": "workspace:^",
+    "@synap-core/types": "workspace:^",
     "@trpc/client": "^11.7.1",
     "zod": "^3.22.0"
   },

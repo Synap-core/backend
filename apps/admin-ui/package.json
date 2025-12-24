@@ -16,7 +16,7 @@
     "@mantine/notifications": "^7.15.4",
     "@monaco-editor/react": "^4.6.0",
     "@synap/api": "workspace:*",
-    "@synap/client": "workspace:*",
+    "@synap-core/client": "workspace:*",
     "@tabler/icons-react": "^3.35.0",
     "@tanstack/react-query": "^5.62.13",
     "@tanstack/react-virtual": "^3.13.12",

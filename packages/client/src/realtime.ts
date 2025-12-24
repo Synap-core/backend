@@ -1,173 +1,179 @@
 /**
- * Real-time Client - WebSocket connection for live updates
+ * Real-Time Client - WebSocket connection management for Synap
  * 
- * Connects to the Synap real-time notification system (Cloudflare Durable Objects)
- * to receive live updates about async operations.
+ * Manages two WebSocket namespaces:
+ * 1. /presence - Generic real-time presence and collaboration
+ * 2. /yjs - Yjs CRDT synchronization
  */
 
-/**
- * NotificationMessage type definition
- * 
- * Matches the type from @synap/realtime but defined here to avoid dependency.
- */
-export interface NotificationMessage {
-  type: string;
-  data: Record<string, unknown>;
-  requestId?: string;
-  timestamp?: string;
-  status?: 'success' | 'error' | 'pending';
-}
+import { io, Socket } from 'socket.io-client';
+import * as Y from 'yjs';
+import type { UserPresence, PresenceInit, CursorUpdate } from '@synap-core/types/realtime';
 
 export interface RealtimeConfig {
-  /** WebSocket URL (e.g., 'wss://realtime.synap.app/rooms/user_123/subscribe') */
   url: string;
-  
-  /** User ID for the connection */
-  userId: string;
-  
-  /** Callback when a message is received */
-  onMessage?: (message: NotificationMessage) => void;
-  
-  /** Callback when an error occurs */
-  onError?: (error: Error) => void;
-  
-  /** Callback when connection is established */
-  onConnect?: () => void;
-  
-  /** Callback when connection is closed */
-  onDisconnect?: () => void;
-  
-  /** Maximum number of reconnection attempts (default: 5) */
-  maxReconnectAttempts?: number;
-  
-  /** Reconnection delay in milliseconds (default: 1000) */
-  reconnectDelay?: number;
+  auth: {
+    userId: string;
+    userName: string;
+  };
 }
 
+type EventCallback = (...args: any[]) => void;
+
 /**
- * Real-time WebSocket Client
+ * Real-time collaboration client
  * 
- * Connects to the Synap real-time notification system to receive live updates.
+ * Handles presence tracking and Yjs document synchronization.
  * 
  * @example
  * ```typescript
- * const realtime = new SynapRealtimeClient({
- *   url: 'wss://realtime.synap.app/rooms/user_123/subscribe',
- *   userId: 'user-123',
- *   onMessage: (message) => {
- *     console.log('Received:', message);
- *     if (message.type === 'note.creation.completed') {
- *       // Refresh notes list
- *     }
- *   },
+ * const realtime = new RealtimeClient({
+ *   url: 'http://localhost:3001',
+ *   auth: { userId: 'user-123', userName: 'Alice' }
  * });
  * 
- * realtime.connect();
+ * // Connect to presence
+ * realtime.connectPresence('view-id', 'whiteboard');
+ * realtime.on('user-joined', (user) => console.log(user));
+ * 
+ * // Connect to Yjs
+ * const ydoc = realtime.connectYjs('view-id');
+ * const ymap = ydoc.getMap('shapes');
  * ```
  */
-export class SynapRealtimeClient {
-  private ws: WebSocket | null = null;
-  private config: RealtimeConfig;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts: number;
-  private reconnectDelay: number;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private isIntentionallyDisconnected = false;
-
-  constructor(config: RealtimeConfig) {
-    this.config = config;
-    this.maxReconnectAttempts = config.maxReconnectAttempts ?? 5;
-    this.reconnectDelay = config.reconnectDelay ?? 1000;
-  }
-
+export class RealtimeClient {
+  private presenceSocket: Socket | null = null;
+  private yjsSocket: Socket | null = null;
+  private listeners = new Map<string, Set<EventCallback>>();
+  
+  constructor(private config: RealtimeConfig) {}
+  
   /**
-   * Connect to the WebSocket server
+   * Connect to presence namespace for real-time collaboration
    */
-  connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      return; // Already connected
+  connectPresence(viewId: string, viewType: string = 'document') {
+    if (this.presenceSocket) {
+      this.presenceSocket.disconnect();
     }
-
-    this.isIntentionallyDisconnected = false;
-    const wsUrl = this.config.url;
     
-    try {
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.onopen = () => {
-        this.reconnectAttempts = 0;
-        this.config.onConnect?.();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const message: NotificationMessage = JSON.parse(event.data);
-          this.config.onMessage?.(message);
-        } catch (error) {
-          console.error('Failed to parse WebSocket message:', error);
-          this.config.onError?.(
-            new Error(`Failed to parse message: ${error instanceof Error ? error.message : String(error)}`)
-          );
-        }
-      };
-
-      this.ws.onerror = () => {
-        this.config.onError?.(new Error('WebSocket error'));
-      };
-
-      this.ws.onclose = () => {
-        this.config.onDisconnect?.();
-      
-        // Attempt to reconnect if not intentionally disconnected
-        if (!this.isIntentionallyDisconnected) {
-          this.attemptReconnect();
-        }
-      };
-    } catch (error) {
-      this.config.onError?.(
-        error instanceof Error ? error : new Error(String(error))
-      );
-    }
-  }
-
-  /**
-   * Disconnect from the WebSocket server
-   */
-  disconnect(): void {
-    this.isIntentionallyDisconnected = true;
+    this.presenceSocket = io(`${this.config.url}/presence`, {
+      auth: {
+        ...this.config.auth,
+        viewId,
+        viewType,
+      },
+    });
     
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    // Presence events
+    this.presenceSocket.on('presence:init', (data: PresenceInit) => {
+      this.emit('presence:init', data);
+    });
+    
+    this.presenceSocket.on('user:joined', (user: UserPresence) => {
+      this.emit('user-joined', user);
+    });
+    
+    this.presenceSocket.on('user:left', (data: { userId: string }) => {
+      this.emit('user-left', data);
+    });
+    
+    this.presenceSocket.on('cursor:update', (data: CursorUpdate) => {
+      this.emit('cursor-update', data);
+    });
+    
+    this.presenceSocket.on('typing', (data: { userId: string; isTyping: boolean }) => {
+      this.emit('typing', data);
+    });
   }
-
+  
   /**
-   * Check if currently connected
+   * Connect to Yjs namespace for CRDT synchronization
+   * 
+   * @returns Yjs document that auto-syncs with server
    */
-  isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
-  }
-
-  private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.config.onError?.(
-        new Error(`Max reconnection attempts (${this.maxReconnectAttempts}) reached`)
-      );
-      return;
+  connectYjs(roomName: string): Y.Doc {
+    if (this.yjsSocket) {
+      this.yjsSocket.disconnect();
     }
-
-    this.reconnectAttempts++;
-    const delay = this.reconnectDelay * this.reconnectAttempts;
-
-    this.reconnectTimer = setTimeout(() => {
-      this.connect();
-    }, delay);
+    
+    const ydoc = new Y.Doc();
+    
+    this.yjsSocket = io(`${this.config.url}/yjs`, {
+      query: { room: roomName },
+    });
+    
+    // Yjs sync protocol
+    this.yjsSocket.on('yjs:sync', (message: number[]) => {
+      Y.applyUpdate(ydoc, Uint8Array.from(message));
+    });
+    
+    this.yjsSocket.on('yjs:update', (message: number[]) => {
+      Y.applyUpdate(ydoc, Uint8Array.from(message), this.yjsSocket);
+    });
+    
+    // Send local updates to server
+    ydoc.on('update', (update: Uint8Array, origin: any) => {
+      if (origin !== this.yjsSocket) {
+        this.yjsSocket?.emit('yjs:update', Array.from(update));
+      }
+    });
+    
+    return ydoc;
+  }
+  
+  /**
+   * Subscribe to events
+   */
+  on(event: string, callback: EventCallback) {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(callback);
+  }
+  
+  /**
+   * Unsubscribe from events
+   */
+  off(event: string, callback: EventCallback) {
+    this.listeners.get(event)?.delete(callback);
+  }
+  
+  /**
+   * Emit event to all listeners
+   */
+  private emit(event: string, data: any) {
+    this.listeners.get(event)?.forEach(cb => cb(data));
+  }
+  
+  /**
+   * Move cursor (presence)
+   */
+  moveCursor(x: number, y: number) {
+    this.presenceSocket?.emit('cursor:move', { x, y });
+  }
+  
+  /**
+   * Set typing indicator
+   */
+  setTyping(isTyping: boolean) {
+    this.presenceSocket?.emit('typing', isTyping);
+  }
+  
+  /**
+   * Disconnect all connections
+   */
+  disconnect() {
+    this.presenceSocket?.disconnect();
+    this.yjsSocket?.disconnect();
+    this.presenceSocket = null;
+    this.yjsSocket = null;
+    this.listeners.clear();
   }
 }
 
+/**
+ * Create a real-time client instance
+ */
+export function createRealtimeClient(config: RealtimeConfig): RealtimeClient {
+  return new RealtimeClient(config);
+}

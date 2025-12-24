@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -27,6 +27,22 @@
     "./inbox": {
       "types": "./dist/inbox/index.d.ts",
       "import": "./dist/inbox/index.js"
+    },
+    "./workspaces": {
+      "types": "./dist/workspaces/index.d.ts",
+      "import": "./dist/workspaces/index.js"
+    },
+    "./views": {
+      "types": "./dist/views/index.d.ts",
+      "import": "./dist/views/index.js"
+    },
+    "./preferences": {
+      "types": "./dist/preferences/index.d.ts",
+      "import": "./dist/preferences/index.js"
+    },
+    "./realtime": {
+      "types": "./dist/realtime/index.d.ts",
+      "import": "./dist/realtime/index.js"
     }
   },
   "scripts": {
@@ -35,11 +51,15 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "yjs": "^13.6.11"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0"
+  },
+  "peerDependencies": {
+    "@synap/database": "workspace:*"
   }
 }

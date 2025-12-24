@@ -77,6 +77,20 @@ export function createSynapReact(): ReturnType<typeof createTRPCReact<AppRouter>
  */
 export type SynapReactContext = ReturnType<typeof createSynapReact>;
 
+/**
+ * @synap/client/react - React Integration
+ * 
+ * Re-exports React hooks for use in React applications.
+ */
+
+export { useEntities } from './react/useEntities.js';
+export { useThreads } from './react/useThreads.js';
+export { useEvents } from './react/useEvents.js';
+
+// New hooks (V3.0)
+export { usePresence, type UsePresenceReturn } from './react/usePresence.js';
+export { useYjs, type UseYjsReturn } from './react/useYjs.js';
+
 // Re-export Provider and utilities from @trpc/react-query
 // Re-export Provider from react-query (for setting up context)
 export { QueryClientProvider as SynapQueryClientProvider } from '@tanstack/react-query';

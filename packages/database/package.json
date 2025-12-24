@@ -40,11 +40,10 @@
   },
   "dependencies": {
     "@synap/core": "workspace:*",
-    "@synap/types": "workspace:^",
+    "@synap-core/types": "workspace:^",
     "drizzle-orm": "^0.33.0",
     "pgvector": "^0.2.1",
-    "postgres": "^3.4.7",
-    "types": "link:../packages/types"
+    "postgres": "^3.4.7"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
