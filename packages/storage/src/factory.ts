@@ -7,22 +7,22 @@
  * - "r2" (default): Cloudflare R2 (production)
  * - "minio": MinIO (local development)
  * 
- * Uses centralized config from @synap/core for type-safe configuration.
+ * Uses centralized config from @synap-core/core for type-safe configuration.
  */
 
 import type { IFileStorage } from './interface.js';
 import { R2StorageProvider, type R2Config } from './r2-provider.js';
 import { MinIOStorageProvider, type MinIOConfig } from './minio-provider.js';
-import { ValidationError, InternalServerError } from '@synap/core';
+import { ValidationError, InternalServerError } from '@synap-core/core';
 
 // Import config using dynamic import to avoid circular dependencies
 // This will be resolved when the module loads
-let _config: typeof import('@synap/core')['config'] | null = null;
-let _configPromise: Promise<typeof import('@synap/core')['config']> | null = null;
+let _config: typeof import('@synap-core/core')['config'] | null = null;
+let _configPromise: Promise<typeof import('@synap-core/core')['config']> | null = null;
 
-async function loadConfig(): Promise<typeof import('@synap/core')['config']> {
+async function loadConfig(): Promise<typeof import('@synap-core/core')['config']> {
   if (!_configPromise) {
-    _configPromise = import('@synap/core').then((module) => {
+    _configPromise = import('@synap-core/core').then((module) => {
       _config = module.config;
       return module.config;
     });
@@ -30,14 +30,14 @@ async function loadConfig(): Promise<typeof import('@synap/core')['config']> {
   return _configPromise;
 }
 
-function getConfig(): typeof import('@synap/core')['config'] {
+function getConfig(): typeof import('@synap-core/core')['config'] {
   if (_config) {
     return _config;
   }
   // If config isn't loaded yet, we need to load it synchronously
   // This is a fallback - in practice config should be loaded before this is called
   throw new InternalServerError(
-    'Config not loaded. Please ensure @synap/core is imported before using storage.'
+    'Config not loaded. Please ensure @synap-core/core is imported before using storage.'
   );
 }
 

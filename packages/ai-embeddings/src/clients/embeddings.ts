@@ -5,7 +5,7 @@
  */
 
 import { getEmbeddingsClient, getEmbeddingDimensions } from '../providers/embeddings.js';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'embeddings-client' });
 

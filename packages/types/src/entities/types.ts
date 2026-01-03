@@ -1,16 +1,9 @@
 /**
  * Entity Types
  * 
- * Re-exports base entity types from database and adds discriminated unions.
- * 
- * @see {@link file:///.../packages/database/src/schema/entities.ts}
+ * TypeScript types for entities with discriminated unions.
+ * Types are automatically generated from Zod schemas.
  */
-
-// Direct re-exports from database
-export type { 
-  Entity as DBEntity,  // Alias to avoid conflict with our discriminated union
-  NewEntity as NewEntityDB,
-} from '@synap/database/schema';
 
 import type { EntityType, EntityMetadata } from './schemas.js';
 

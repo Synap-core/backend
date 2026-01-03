@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc.js';
 import { db, intelligenceServices, eq } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'capabilities' });
 

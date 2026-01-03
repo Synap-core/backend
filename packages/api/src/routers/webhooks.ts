@@ -7,7 +7,7 @@
 import { router, protectedProcedure } from '../trpc.js';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { db } from '@synap/database';
 import { webhookSubscriptions } from '@synap/database';
 import { eq, and } from '@synap/database';

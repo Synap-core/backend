@@ -3,7 +3,7 @@
  * 
  * Re-exports document types from database schema (single source of truth).
  * 
- * @see {@link file:///.../packages/database/src/schema/documents.ts}
+ * @see {@link @synap-core/database/schema}
  */
 
 // Direct re-exports from database
@@ -14,9 +14,9 @@ export type {
   NewDocumentVersion,
   DocumentSession,
   NewDocumentSession,
-} from '@synap/database/schema';
+} from '@synap-core/database/schema';
 
 // Derived/helper types for API operations
-import type { Document } from '@synap/database/schema';
+import type { Document } from '@synap-core/database/schema';
 
 export type UpdateDocument = Partial<Omit<Document, 'id' | 'userId' | 'createdAt' | 'updatedAt'>>;

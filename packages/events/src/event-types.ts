@@ -13,7 +13,7 @@
  * 
  * @example
  * ```typescript
- * import { GeneratedEventTypes } from '@synap/core';
+ * import { GeneratedEventTypes } from '@synap-core/core';
  * 
  * // Use generated table events
  * const event = createSynapEvent({
@@ -38,7 +38,7 @@ export {
   type GeneratedEventType,
   type TableAction,
   type CoreTable,
-} from '@synap/core';
+} from '@synap-core/core';
 */
 
 // ============================================================================

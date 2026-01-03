@@ -20,6 +20,8 @@ export * from './webhook_subscriptions.js';
 export * from './chat-threads.js';
 export * from './agents.js';
 export * from './projects.js';
+export * from './roles.js';
+export * from './sharing.js';
 
 // AI Enrichment schemas (event-based)
 export * from './enrichments.js';

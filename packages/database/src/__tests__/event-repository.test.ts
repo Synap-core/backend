@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { sql } from '../client-pg.js';
 import { eventRepository } from '../repositories/event-repository.js';
-import type { SynapEvent } from '@synap/core';
+import type { SynapEvent } from '@synap-core/core';
 import { cleanTestData, generateTestUserId } from './test-utils.js';
 
 describe('EventRepository', () => {

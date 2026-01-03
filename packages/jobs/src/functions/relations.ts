@@ -9,7 +9,7 @@
  */
 
 import { inngest } from '../client.js';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { randomUUID } from 'crypto';
 
 const logger = createLogger({ module: 'relations-worker' });

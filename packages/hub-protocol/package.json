@@ -28,7 +28,7 @@
   },
   "peerDependencies": {
     "@synap/api": "workspace:*",
-    "@synap/core": "*"
+    "@synap-core/core": "*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -9,7 +9,7 @@
 
 import { eventRepository, type EventHook } from '@synap/database';
 import { eventStreamManager } from './event-stream-manager.js';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'event-broadcasting' });
 

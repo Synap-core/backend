@@ -11,7 +11,7 @@
 import { inngest } from '../client.js';
 import { storage } from '@synap/storage';
 import { documents, documentVersions } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { randomUUID } from 'crypto';
 
 const logger = createLogger({ module: 'documents-worker' });

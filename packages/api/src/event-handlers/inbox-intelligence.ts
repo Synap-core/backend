@@ -10,7 +10,7 @@
 
 import { db, intelligenceServices, eq } from '@synap/database';
 import type { InboxItemReceivedEvent } from '@synap/events';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'inbox-intelligence-handler' });
 

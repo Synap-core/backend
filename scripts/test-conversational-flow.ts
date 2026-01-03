@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { AgentStateSchema } from '@synap/core';
+import { AgentStateSchema } from '@synap-core/core';
 import { runSynapAgent } from '../packages/ai/src/index.js';
 import { conversationService, eventService } from '../packages/domain/src/index.js';
 

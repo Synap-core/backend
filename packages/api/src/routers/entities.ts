@@ -20,14 +20,47 @@ export const entitiesRouter = router({
       type: EntityTypeSchema,
       title: z.string(),
       description: z.string().optional(),
+      workspaceId: z.string().uuid().optional(),
       fileUrl: z.string().optional(),
       filePath: z.string().optional(),
       fileSize: z.number().optional(),
       fileType: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // Import dynamically to avoid circular dependency
+      const { EntityEvents } = await import('../lib/event-helpers.js');
+      const { checkPermission } = await import('../lib/permissions.js');
+      
+      // 1. Check permission
+      if (input.workspaceId) {
+        const permission = await checkPermission({
+          userId: ctx.userId,
+          action: 'create',
+          resourceType: 'entity',
+          workspaceId: input.workspaceId,
+          resourceData: input,
+        });
+        
+        if (!permission.allowed) {
+          await EntityEvents.createDenied(ctx.userId, {
+            reason: permission.reason || 'Permission denied',
+            entityData: input,
+          });
+          throw new Error(`Permission denied: ${permission.reason}`);
+        }
+      }
+      
+      // 2. Emit requested event
+      await EntityEvents.createRequested(ctx.userId, {
+        type: input.type,
+        title: input.title,
+        workspaceId: input.workspaceId,
+      });
+      
+      // 3. Persist (no RLS blocks this)
       const [entity] = await db.insert(entities).values({
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
         type: input.type,
         title: input.title,
         preview: input.description,
@@ -36,6 +69,13 @@ export const entitiesRouter = router({
         fileSize: input.fileSize,
         fileType: input.fileType,
       }).returning();
+      
+      // 4. Emit validated event
+      await EntityEvents.createValidated(ctx.userId, {
+        id: entity.id,
+        type: entity.type,
+        title: entity.title,
+      });
       
       return { entity };
     }),
@@ -117,6 +157,43 @@ export const entitiesRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      const { EntityEvents } = await import('../lib/event-helpers.js');
+      const { checkPermission } = await import('../lib/permissions.js');
+      
+      // Get existing entity to check workspace
+      const existing = await db.query.entities.findFirst({
+        where: eq(entities.id, input.id),
+      });
+      
+      if (!existing) {
+        throw new Error('Entity not found');
+      }
+      
+      // Check permission
+      if (existing.workspaceId) {
+        const permission = await checkPermission({
+          userId: ctx.userId,
+          action: 'update',
+          resourceType: 'entity',
+          workspaceId: existing.workspaceId,
+        });
+        
+        if (!permission.allowed) {
+          await EntityEvents.updateDenied(ctx.userId, input.id, permission.reason || 'Permission denied');
+          throw new Error(`Permission denied: ${permission.reason}`);
+        }
+      } else if (existing.userId !== ctx.userId) {
+        // Personal entity - check ownership
+        throw new Error('Not your entity');
+      }
+      
+      // Emit requested event
+      await EntityEvents.updateRequested(ctx.userId, input.id, {
+        title: input.title,
+        preview: input.description,
+      });
+      
+      // Update
       const [updated] = await db.update(entities)
         .set({
           title: input.title,
@@ -124,15 +201,14 @@ export const entitiesRouter = router({
           updatedAt: new Date(),
           version: sql`version + 1`,
         })
-        .where(and(
-          eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId)
-        ))
+        .where(eq(entities.id, input.id))
         .returning();
       
-      if (!updated) {
-        throw new Error('Entity not found');
-      }
+      // Emit validated event
+      await EntityEvents.updateValidated(ctx.userId, input.id, {
+        title: updated.title,
+        preview: updated.preview,
+      });
       
       return { entity: updated };
     }),
@@ -145,12 +221,45 @@ export const entitiesRouter = router({
       id: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      const { EntityEvents } = await import('../lib/event-helpers.js');
+      const { checkPermission } = await import('../lib/permissions.js');
+      
+      // Get existing entity
+      const existing = await db.query.entities.findFirst({
+        where: eq(entities.id, input.id),
+      });
+      
+      if (!existing) {
+        throw new Error('Entity not found');
+      }
+      
+      // Check permission
+      if (existing.workspaceId) {
+        const permission = await checkPermission({
+          userId: ctx.userId,
+          action: 'delete',
+          resourceType: 'entity',
+          workspaceId: existing.workspaceId,
+        });
+        
+        if (!permission.allowed) {
+          await EntityEvents.deleteDenied(ctx.userId, input.id, permission.reason || 'Permission denied');
+          throw new Error(`Permission denied: ${permission.reason}`);
+        }
+      } else if (existing.userId !== ctx.userId) {
+        throw new Error('Not your entity');
+      }
+      
+      // Emit requested event
+      await EntityEvents.deleteRequested(ctx.userId, input.id);
+      
+      // Soft delete
       await db.update(entities)
         .set({ deletedAt: new Date() })
-        .where(and(
-          eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId)
-        ));
+        .where(eq(entities.id, input.id));
+      
+      // Emit validated event
+      await EntityEvents.deleteValidated(ctx.userId, input.id);
       
       return { success: true };
     }),

@@ -9,8 +9,10 @@ export default defineConfig({
     'src/inbox/index.ts',
     'src/workspaces/index.ts',
     'src/views/index.ts',
+    'src/relations/index.ts',   // NEW: Knowledge graph edges
     'src/preferences/index.ts',
     'src/realtime/index.ts',
+    'src/events/index.ts',
   ],
   format: ['esm'],
   dts: true,

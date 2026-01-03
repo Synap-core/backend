@@ -10,7 +10,7 @@
 import { inngest } from '../client.js';
 import { storage } from '@synap/storage';
 import { conversationMessages } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { randomUUID, createHash } from 'crypto';
 
 const logger = createLogger({ module: 'messages-worker' });

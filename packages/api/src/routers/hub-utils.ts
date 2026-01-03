@@ -6,9 +6,9 @@
  */
 
 import jwt from 'jsonwebtoken';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { getEventRepository } from '@synap/database';
-import { createSynapEvent } from '@synap/core';
+import { createSynapEvent } from '@synap-core/core';
 
 const logger = createLogger({ module: 'hub-utils' });
 

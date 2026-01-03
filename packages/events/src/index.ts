@@ -13,7 +13,7 @@
  * 
  * @example
  * ```typescript
- * import { publishEvent, createInboxItemReceivedEvent } from '@synap/core';
+ * import { publishEvent, createInboxItemReceivedEvent } from '@synap-core/core';
  * 
  * // Type-safe event publishing
  * const event = createInboxItemReceivedEvent(itemId, {
@@ -159,5 +159,5 @@ export {
   getAllEventTypes,
 } from './event-types.js';
 
-// Note: SynapEvent schema and event metadata types moved to @synap/core
+// Note: SynapEvent schema and event metadata types moved to @synap-core/core
 // to break circular dependency between database and events packages

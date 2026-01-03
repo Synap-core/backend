@@ -8,7 +8,7 @@
  * - Typing indicators
  */
 
-import type { Server as SocketIOServer } from 'socket.io';
+import type { Namespace } from 'socket.io';
 import { PresenceManager, type UserSession, generateUserColor } from './presence-manager.js';
 
 export interface CollaborationEvent {
@@ -22,7 +22,7 @@ export interface CollaborationEvent {
 export class CollaborationManager {
   private presenceManager: PresenceManager;
   
-  constructor(private io: SocketIOServer) {
+  constructor(private io: Namespace) {
     this.presenceManager = new PresenceManager();
     
     // Cleanup stale sessions every 10 seconds

@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
-import { ValidationError } from '@synap/core';
+import { ValidationError } from '@synap-core/core';
 
 // ============================================================================
 // CORE EVENT SCHEMA

@@ -13,7 +13,7 @@ import 'dotenv/config';
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
-import { initializeTracing } from '@synap/core';
+import { initializeTracing } from '@synap-core/core';
 initializeTracing();
 
 import { Hono } from 'hono';
@@ -21,7 +21,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { trpcServer } from '@hono/trpc-server';
-import { createLogger, config, isSynapError, toSynapError, validateConfig } from '@synap/core';
+import { createLogger, config, isSynapError, toSynapError, validateConfig } from '@synap-core/core';
 import { appRouter /*, createContext */ } from '@synap/api'; // createContext disabled - type mismatch
 import { serve } from '@hono/node-server';
 import { serve as inngestServe } from 'inngest/hono';
@@ -130,7 +130,7 @@ app.get('/health', (c) => {
 
 // Prometheus metrics endpoint (public, no auth)
 app.get('/metrics', async (c) => {
-  const { getMetrics } = await import('@synap/core');
+  const { getMetrics } = await import('@synap-core/core');
   const metrics = await getMetrics();
   return c.text(metrics, 200, {
     'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',

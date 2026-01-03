@@ -13,10 +13,10 @@ import { router } from '../../trpc.js';
 import { scopedProcedure } from '../../middleware/api-key-auth.js';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { db } from '@synap/database';
 import { events } from '@synap/database';
-import { createSynapEvent } from '@synap/core';
+import { createSynapEvent } from '@synap-core/core';
 
 const logger = createLogger({ module: 'n8n-router' });
 

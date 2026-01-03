@@ -8,7 +8,7 @@
  */
 
 import { Inngest } from 'inngest';
-import { config, createLogger } from '@synap/core';
+import { config, createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'api-inngest-client' });
 

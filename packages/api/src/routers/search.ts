@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { db, entities, eq, and, desc, sqlDrizzle as sql } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'search-router' });
 

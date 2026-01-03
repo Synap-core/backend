@@ -58,3 +58,25 @@ export interface CursorUpdate {
   y: number;
   viewId: string;
 }
+
+/**
+ * User joined event (emitted when user joins a workspace/document)
+ */
+export interface UserJoinedEvent {
+  userId: string;
+  userName: string;
+  workspaceId: string;
+  documentId?: string;
+  color?: string;
+  timestamp: number;
+}
+
+/**
+ * User left event (emitted when user leaves a workspace/document)
+ */
+export interface UserLeftEvent {
+  userId: string;
+  workspaceId: string;
+  documentId?: string;
+  timestamp: number;
+}

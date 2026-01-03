@@ -14,7 +14,7 @@
 // import { runIngestionEngine } from '@synap/intelligence-hub';
 // NOTE: These imports are kept for reference but not used
 // import { getEventRepository } from '@synap/database';
-// import { createLogger } from '@synap/core';
+// import { createLogger } from '@synap-core/core';
 // import type { SynapEvent } from '@synap/events';
 
 // const logger = createLogger({ module: 'ingestion-engine-worker' });

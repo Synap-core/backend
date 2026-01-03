@@ -13,7 +13,7 @@
 import { createTRPCProxyClient, httpBatchLink, TRPCClientError } from '@trpc/client';
 import type { AppRouter } from '@synap/api';
 import type { HubInsight } from '@synap/hub-protocol';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import type {
   HubProtocolClientConfig,
   HubScope,

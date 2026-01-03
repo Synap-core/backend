@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono';
 import { publishEvent, createInboxItemReceivedEvent } from '@synap/events';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { z } from 'zod';
 
 const logger = createLogger({ module: 'n8n-webhooks' });

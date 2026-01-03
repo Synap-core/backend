@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import type { AgentToolDefinition } from './types.js';
 
 const logger = createLogger({ module: 'dynamic-tool-registry' });

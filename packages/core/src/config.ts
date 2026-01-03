@@ -6,7 +6,7 @@
  * 
  * @example
  * ```typescript
- * import { config } from '@synap/core';
+ * import { config } from '@synap-core/core';
  * 
  * const dbUrl = config.database.url;
  * const storageProvider = config.storage.provider;
@@ -287,7 +287,7 @@ function loadConfig(): Config {
  * 
  * @example
  * ```typescript
- * import { config } from '@synap/core';
+ * import { config } from '@synap-core/core';
  * 
  * const dbUrl = config.database.url;
  * const storageProvider = config.storage.provider;

@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure, publicProcedure } from '../trpc.js';
 import { db, intelligenceServices, eq, and } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'intelligence-registry' });
 

@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure, publicProcedure, middleware } from '../trpc.js';
 import { TRPCError } from '@trpc/server';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import {
   generateHubAccessToken,
   validateHubToken,

@@ -51,6 +51,8 @@ import { graphRouter } from './routers/graph.js';
 import { workspacesRouter } from './routers/workspaces.js';
 import { viewsRouter } from './routers/views.js';
 import { preferencesRouter } from './routers/preferences.js';
+import { rolesRouter } from './routers/roles.js';
+import { sharingRouter } from './routers/sharing.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
 
@@ -80,6 +82,8 @@ registerRouter('graph', graphRouter, { version: '1.0.0', source: 'core', descrip
 registerRouter('workspaces', workspacesRouter, { version: '1.0.0', source: 'core', description: 'Workspace and team management' });
 registerRouter('views', viewsRouter, { version: '1.0.0', source: 'core', description: 'Views system (whiteboards, timelines, etc.)' });
 registerRouter('preferences', preferencesRouter, { version: '1.0.0', source: 'core', description: 'User preferences management' });
+registerRouter('roles', rolesRouter, { version: '1.0.0', source: 'core', description: 'Custom role management' });
+registerRouter('sharing', sharingRouter, { version: '1.0.0', source: 'core', description: 'Public and invite-based sharing' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code

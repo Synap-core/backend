@@ -12,7 +12,7 @@
 import { inngest } from '../client.js';
 import { storage } from '@synap/storage';
 import { entities, taskDetails } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { randomUUID, createHash } from 'crypto';
 import type { EntityType } from '@synap/events';
 
@@ -58,9 +58,10 @@ export const entitiesWorker = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: 'entities.create.requested' },
-    { event: 'entities.update.requested' },
-    { event: 'entities.delete.requested' },
+    // V2.1: Listen to .approved events (after permission validation)
+    { event: 'entities.create.approved' },
+    { event: 'entities.update.approved' },
+    { event: 'entities.delete.approved' },
   ],
   async ({ event, step }) => {
     const eventName = event.name as string;
@@ -206,7 +207,38 @@ export const entitiesWorker = inngest.createFunction(
         logger.info({ entityId }, 'Published entities.create.validated');
       });
       
-      // Step 5: Broadcast to SSE clients
+      // Step 5: Emit to Socket.IO (real-time frontend update)
+      await step.run('emit-socketio', async () => {
+        const REALTIME_URL = process.env.REALTIME_URL || 'http://localhost:3001';
+        
+        try {
+          const response = await fetch(`${REALTIME_URL}/bridge/emit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event: 'entity:created',
+              workspaceId: data.metadata?.workspaceId,
+              data: {
+                entityId,
+                entityType: data.entityType,
+                title: data.title,
+                userId,
+              },
+            }),
+          });
+          
+          if (!response.ok) {
+            logger.warn({ status: response.status }, 'Socket.IO bridge emit failed');
+          } else {
+            logger.info({ entityId }, 'Real-time event emitted to frontend');
+          }
+        } catch (error) {
+          // Don't fail the worker if socket emit fails
+          logger.warn({ err: error }, 'Failed to emit to Socket.IO bridge');
+        }
+      });
+      
+      // Step 6: Broadcast to SSE clients
       await step.run('broadcast-notification', async () => {
         const { broadcastNotification } = await import('../utils/realtime-broadcast.js');
         await broadcastNotification({

@@ -8,11 +8,11 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { randomUUID } from 'crypto';
-import { createSynapEvent } from '@synap/core';
+import { createSynapEvent } from '@synap-core/core';
 import { getEventRepository } from '@synap/database';
 import { publishEvent } from '../utils/inngest-client.js';
 import { db, entities, eq, desc, and } from '@synap/database';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const notesLogger = createLogger({ module: 'notes-router' });
 

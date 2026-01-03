@@ -26,15 +26,13 @@ export { relationsWorker } from './functions/relations.js';
 // ============================================================================
 export { analyzeCapturedThought } from './functions/ai-analyzer.js';
 export { processAnalyzedThought } from './functions/thought-processor.js';
-// DISABLED - Domain package removed:
-// export { insightPatternDetector } from './functions/insights.js';
-// export { indexEntityEmbedding } from './functions/entity-embedding.js';
 
 // ============================================================================
 // Shared Workers
 // ============================================================================
 export { handleNewEvent } from './functions/projectors.js';
 export { handleWebhookDelivery } from './functions/webhook-broker.js';
+export { permissionValidator } from './functions/permission-validator.js';
 
 // ============================================================================
 // INNGEST FUNCTION REGISTRY
@@ -47,10 +45,8 @@ import { relationsWorker } from './functions/relations.js';
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
-// DISABLED - Domain package removed:
-// import { insightPatternDetector } from './functions/insights.js';
-// import { indexEntityEmbedding } from './functions/entity-embedding.js';
 import { handleWebhookDelivery } from './functions/webhook-broker.js';
+import { permissionValidator } from './functions/permission-validator.js';
 
 /**
  * All Inngest functions to register with the serve handler.
@@ -65,11 +61,10 @@ export const functions = [
   // AI workers
   analyzeCapturedThought,
   processAnalyzedThought,
-  // DISABLED:
-  // insightPatternDetector,
-  // indexEntityEmbedding,
   
   // Shared workers
   handleNewEvent,
   handleWebhookDelivery,
+  permissionValidator, // Phase 2 - 3-phase pattern
 ];
+

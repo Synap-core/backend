@@ -12,6 +12,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { createServer } from 'http';
 import { CollaborationManager } from './collaboration-manager.js';
 import { setupYjsServer } from './yjs-server.js';
+import { setupBridge } from './bridge.js';
 
 const PORT = process.env.REALTIME_PORT || 3001;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -28,14 +29,21 @@ const io = new SocketIOServer(httpServer, {
   transports: ['websocket', 'polling'],
 });
 
+// ============================================================================
+// PHASE 3: Setup HTTP Bridge for Inngest Workers
+// ============================================================================
+// Allows workers to emit real-time events to connected clients via HTTP POST
+setupBridge(io, httpServer);
+
 // Namespace for generic presence/collaboration
 const presenceNamespace = io.of('/presence');
 const collaborationManager = new CollaborationManager(presenceNamespace);
 
-// Namespace for Yjs CRDT sync
-const yjsNamespace = io.of('/yjs');
+// Setup Yjs CRDT sync
+// NOTE: y-socket.io creates /yjs namespace internally!
+// Don't create io.of('/yjs') manually - just pass the full io server
 const yjsServer = setupYjsServer({
-  io: yjsNamespace,
+  io, // Pass full server, y-socket.io creates /yjs namespace
   persistenceInterval: 10000,
 });
 
@@ -142,6 +150,7 @@ httpServer.listen(PORT, () => {
   console.log(`   - Yjs CRDT sync (/yjs): ✅`);
   console.log(`   - Cursor tracking: ✅`);
   console.log(`   - Typing indicators: ✅`);
+  console.log(`   - HTTP Bridge (/bridge/emit): ✅ NEW!`);
 });
 
 /**

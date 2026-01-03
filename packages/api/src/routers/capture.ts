@@ -17,7 +17,7 @@ import { requireUserId } from '../utils/user-scoped.js';
 import { Inngest } from 'inngest';
 import { aiRateLimitMiddleware } from '../middleware/ai-rate-limit.js';
 import { pluginManager } from '../plugins/index.js';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'capture-router' });
 

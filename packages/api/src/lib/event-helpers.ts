@@ -165,3 +165,91 @@ export const UserPreferencesEvents = {
       subjectType: 'user_preferences',
     }),
 };
+
+// ============================================================================
+// ENTITY EVENTS
+// ============================================================================
+
+export const EntityEvents = {
+  createRequested: (userId: string, data: { type: string; title: string; workspaceId?: string }) =>
+    logEvent(userId, 'entities.create.requested', data, {
+      subjectType: 'entity',
+    }),
+    
+  createValidated: (userId: string, entity: { id: string; type: string; title: string }) =>
+    logEvent(userId, 'entities.create.validated', entity, {
+      subjectId: entity.id,
+      subjectType: 'entity',
+    }),
+    
+  createDenied: (userId: string, data: { reason: string; entityData: any }) =>
+    logEvent(userId, 'entities.create.denied', data, {
+      subjectType: 'entity',
+    }),
+    
+  updateRequested: (userId: string, entityId: string, updates: Record<string, any>) =>
+    logEvent(userId, 'entities.update.requested', { updates }, {
+      subjectId: entityId,
+      subjectType: 'entity',
+    }),
+    
+  updateValidated: (userId: string, entityId: string, changes: Record<string, any>) =>
+    logEvent(userId, 'entities.update.validated', { id: entityId, changes }, {
+      subjectId: entityId,
+      subjectType: 'entity',
+    }),
+    
+  updateDenied: (userId: string, entityId: string, reason: string) =>
+    logEvent(userId, 'entities.update.denied', { id: entityId, reason }, {
+      subjectId: entityId,
+      subjectType: 'entity',
+    }),
+    
+  deleteRequested: (userId: string, entityId: string) =>
+    logEvent(userId, 'entities.delete.requested', { id: entityId }, {
+      subjectId: entityId,
+      subjectType: 'entity',
+    }),
+    
+  deleteValidated: (userId: string, entityId: string) =>
+    logEvent(userId, 'entities.delete.validated', { id: entityId }, {
+      subjectId: entityId,
+      subjectType: 'entity',
+    }),
+    
+  deleteDenied: (userId: string, entityId: string, reason: string) =>
+    logEvent(userId, 'entities.delete.denied', { id: entityId, reason }, {
+      subjectId: entityId,
+      subjectType: 'entity',
+    }),
+};
+
+// ============================================================================
+// RELATION EVENTS
+// ============================================================================
+
+export const RelationEvents = {
+  createRequested: (userId: string, data: { fromId: string; toId: string; type: string }) =>
+    logEvent(userId, 'relations.create.requested', data, {
+      subjectType: 'relation',
+    }),
+    
+  createValidated: (userId: string, relation: { id: string; fromId: string; toId: string }) =>
+    logEvent(userId, 'relations.create.validated', relation, {
+      subjectId: relation.id,
+      subjectType: 'relation',
+    }),
+    
+  deleteRequested: (userId: string, relationId: string) =>
+    logEvent(userId, 'relations.delete.requested', { id: relationId }, {
+      subjectId: relationId,
+      subjectType: 'relation',
+    }),
+    
+  deleteValidated: (userId: string, relationId: string) =>
+    logEvent(userId, 'relations.delete.validated', { id: relationId }, {
+      subjectId: relationId,
+      subjectType: 'relation',
+    }),
+};
+

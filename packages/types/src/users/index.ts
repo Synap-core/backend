@@ -1,10 +1,9 @@
 /**
  * User Types
  * 
- * Re-exports user-related types from database and adds custom types.
+ * Re-exports user-related types from database schema.
  * 
- * @see {@link file:///.../packages/database/src/schema/user-entity-state.ts}
- * @see {@link file:///.../packages/database/src/schema/enrichments.ts}
+ * @see {@link @synap-core/database/schema}
  */
 
 // Direct re-exports from database
@@ -17,4 +16,4 @@ export type {
   NewEntityRelationship,
   ReasoningTrace,
   NewReasoningTrace,
-} from '@synap/database/schema';
+} from '@synap-core/database/schema';

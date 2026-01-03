@@ -10,7 +10,7 @@ async function testConfig() {
 
   try {
     // Import config (this will load and validate)
-    const { config, validateConfig } = await import('@synap/core');
+    const { config, validateConfig } = await import('@synap-core/core');
 
     console.log('✅ Config loaded successfully!\n');
 

@@ -7,7 +7,7 @@
  * - Default integrations
  */
 
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { db, webhookSubscriptions, eq } from '@synap/database';
 import { randomUUID } from 'crypto';
 

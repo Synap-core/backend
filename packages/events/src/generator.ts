@@ -24,42 +24,56 @@
 /**
  * Standard CRUD actions with modifiers for table events
  * 
- * V2.0: Removed direct actions, renamed completed→validated
+ * V2.1: Added 'approved' modifier for 3-phase flow
+ * 
+ * Flow:
+ *  1. requested: Intent (user/AI wants to do something)
+ *  2. approved: Validated (permissions checked, user approved if needed)
+ *  3. validated: Completed (DB operation done, entity exists)
  */
 export type TableAction = 
   | 'create.requested'
+  | 'create.approved'
   | 'create.validated'
   | 'update.requested'
+  | 'update.approved'
   | 'update.validated'
   | 'delete.requested'
+  | 'delete.approved'
   | 'delete.validated';
 
 /**
  * Event type structure for a table
  * 
- * V2.0: Only requested/validated pairs
+ * V2.1: Added approved phase between requested and validated
  */
 export interface TableEventTypes<T extends string> {
   'create.requested': `${T}.create.requested`;
+  'create.approved': `${T}.create.approved`;
   'create.validated': `${T}.create.validated`;
   'update.requested': `${T}.update.requested`;
+  'update.approved': `${T}.update.approved`;
   'update.validated': `${T}.update.validated`;
   'delete.requested': `${T}.delete.requested`;
+  'delete.approved': `${T}.delete.approved`;
   'delete.validated': `${T}.delete.validated`;
 }
 
 /**
  * Generate event types for a table
  * 
- * V2.0: Only requested/validated patterns
+ * V2.1: Include approved events for 3-phase flow
  */
 export function generateTableEventTypes<T extends string>(tableName: T): TableEventTypes<T> {
   return {
     'create.requested': `${tableName}.create.requested` as const,
+    'create.approved': `${tableName}.create.approved` as const,
     'create.validated': `${tableName}.create.validated` as const,
     'update.requested': `${tableName}.update.requested` as const,
+    'update.approved': `${tableName}.update.approved` as const,
     'update.validated': `${tableName}.update.validated` as const,
     'delete.requested': `${tableName}.delete.requested` as const,
+    'delete.approved': `${tableName}.delete.approved` as const,
     'delete.validated': `${tableName}.delete.validated` as const,
   };
 }

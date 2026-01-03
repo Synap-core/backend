@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { TRPCError } from '@trpc/server';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { storage } from '@synap/storage';
 import { db, eq, and, desc, documents, documentVersions, documentSessions } from '@synap/database';
 import { requireUserId } from '../utils/user-scoped.js';

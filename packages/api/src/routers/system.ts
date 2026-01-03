@@ -11,13 +11,13 @@
 
 import { z } from 'zod';
 import { publicProcedure, router } from '../trpc.js';
-import { EventTypeSchemas } from '@synap/core';
+import { EventTypeSchemas } from '@synap-core/core';
 import { getAllEventTypes } from '@synap/events';
 import { getAllGeneratedEventTypes, parseEventType } from '@synap/events';
 import { inngest, getAllWorkers } from '@synap/jobs';
 import { dynamicToolRegistry } from '@synap/ai';
 import { dynamicRouterRegistry } from '../router-registry.js';
-import { createSynapEvent } from '@synap/core';
+import { createSynapEvent } from '@synap-core/core';
 import { eventRepository } from '@synap/database';
 import { eventStreamManager } from '../event-stream-manager.js';
 import { sqlDrizzle } from '@synap/database';

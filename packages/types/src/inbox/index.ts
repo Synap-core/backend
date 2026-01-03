@@ -3,16 +3,16 @@
  * 
  * Re-exports inbox types from database and adds provider-specific schemas.
  * 
- * @see {@link file:///.../packages/database/src/schema/inbox-items.ts}
+ * @see {@link @synap-core/database/schema}
  */
 
 import { z } from 'zod';
 
 // Direct re-exports from database
 export type { 
-  InboxItem as DBInboxItem,  // Base DB type
+  InboxItem as DBInboxItem,
   NewInboxItem,
-} from '@synap/database/schema';
+} from '@synap-core/database/schema';
 
 /**
  * Inbox item data schemas - provider-specific
@@ -63,28 +63,18 @@ type InboxItemData = {
 interface BaseInboxItem {
   id: string;
   userId: string;
-  
-  // Source tracking
   provider: 'gmail' | 'google_calendar' | 'slack';
-  account: string; // 'user@gmail.com'
-  externalId: string; // ID in external system
-  deepLink?: string; // 'googlegmail://message?id=...'
-  
-  // Content
+  account: string;
+  externalId: string;
+  deepLink?: string;
   type: InboxItemType;
   title: string;
   preview?: string;
   timestamp: Date;
-  
-  // State
   status: 'unread' | 'read' | 'archived' | 'snoozed';
   snoozedUntil?: Date;
-  
-  // AI enhancements
   priority?: 'urgent' | 'high' | 'normal' | 'low';
   tags: string[];
-  
-  // Lifecycle
   processedAt?: Date;
   createdAt: Date;
   updatedAt: Date;

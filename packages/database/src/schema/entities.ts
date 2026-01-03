@@ -16,6 +16,9 @@ export const entities = pgTable('entities', {
   // Which user owns this entity?
   userId: text('user_id').notNull(),
   
+  // Workspace (for team entities, NULL for personal)
+  workspaceId: uuid('workspace_id'),
+  
   // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event', 'person', 'file'
   type: text('type').notNull(),
   

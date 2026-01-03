@@ -11,7 +11,7 @@ import { db, events, desc } from '@synap/database';
 import { handleInboxItemReceived } from './inbox-storage.js';
 import { handleInboxItemIntelligence } from './inbox-intelligence.js';
 import { handleInboxItemAnalyzed } from './inbox-analysis.js';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'event-handlers' });
 

@@ -9,8 +9,8 @@
 
 import { db } from '../client-pg.js';
 import { entityEnrichments, entityRelationships, reasoningTraces } from '../schema/enrichments.js';
-import type { SynapEvent } from '@synap/core';
-import { createLogger } from '@synap/core';
+import type { SynapEvent } from '@synap-core/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'enrichment-projector' });
 

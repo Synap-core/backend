@@ -7,7 +7,7 @@
 
 import { db, inboxItems, eq } from '@synap/database';
 import type { InboxItemAnalyzedEvent } from '@synap/events';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'inbox-analysis-handler' });
 
