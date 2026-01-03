@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -59,7 +59,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@synap-core/database": "^0.1.0",
+    "@synap-core/database": "^0.1.1",
     "zod": "^3.25.0",
     "yjs": "^13.6.11"
   },

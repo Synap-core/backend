@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/database",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -39,7 +39,7 @@
     "db:drop": "drizzle-kit drop"
   },
   "dependencies": {
-    "@synap-core/core": "workspace:*",
+    "@synap-core/core": "^1.0.0",
     "drizzle-orm": "^0.33.0",
     "pgvector": "^0.2.1",
     "postgres": "^3.4.7"
