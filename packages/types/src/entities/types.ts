@@ -16,8 +16,8 @@ export interface BaseEntity {
   type: EntityType;
   title?: string;
   preview?: string;
-  documentId?: string;  // Reference to documents table
   version: number;
+  content?: any; // Hydrated content (document or other)
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date;

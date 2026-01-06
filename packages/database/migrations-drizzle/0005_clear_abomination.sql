@@ -137,11 +137,28 @@ CREATE TABLE IF NOT EXISTS "user_preferences" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "events" ADD COLUMN "subject_id" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "events" ADD COLUMN "subject_type" text NOT NULL;--> statement-breakpoint
-ALTER TABLE "entities" ADD COLUMN "workspace_id" uuid;--> statement-breakpoint
-ALTER TABLE "entities" ADD COLUMN "document_id" uuid;--> statement-breakpoint
-ALTER TABLE "entities" ADD COLUMN "metadata" jsonb DEFAULT '{}';--> statement-breakpoint
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'subject_id') THEN
+        ALTER TABLE "events" ADD COLUMN "subject_id" text NOT NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'subject_type') THEN
+        ALTER TABLE "events" ADD COLUMN "subject_type" text NOT NULL;
+    END IF;
+END $$;
+--> statement-breakpoint
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'entities' AND column_name = 'workspace_id') THEN
+        ALTER TABLE "entities" ADD COLUMN "workspace_id" uuid;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'entities' AND column_name = 'document_id') THEN
+        ALTER TABLE "entities" ADD COLUMN "document_id" uuid;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'entities' AND column_name = 'metadata') THEN
+        ALTER TABLE "entities" ADD COLUMN "metadata" jsonb DEFAULT '{}';
+    END IF;
+END $$;--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "roles" ADD CONSTRAINT "roles_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION

@@ -32,8 +32,8 @@
   "author": "Synap Team",
   "license": "AGPL-3.0",
   "dependencies": {
-    "@synap-core/client": "^0.1.0",
-    "@synap-core/types": "^0.1.0"
+    "@synap-core/client": "workspace:*",
+    "@synap-core/types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

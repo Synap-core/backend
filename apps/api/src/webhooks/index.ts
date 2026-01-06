@@ -7,11 +7,13 @@
 import { Hono } from 'hono';
 import { n8nWebhookRouter } from './n8n.js';
 import { intelligenceWebhookRouter } from './intelligence.js';
+import { kratosWebhookRouter } from './kratos.js';
 
 export const webhookRouter = new Hono();
 
-// Mount sub-routers
+// Mount webhook routes
 webhookRouter.route('/n8n', n8nWebhookRouter);
+webhookRouter.route('/kratos', kratosWebhookRouter);
 webhookRouter.route('/intelligence', intelligenceWebhookRouter);
 
 // Global webhook health check

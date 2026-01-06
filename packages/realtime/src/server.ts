@@ -14,7 +14,7 @@ import { CollaborationManager } from './collaboration-manager.js';
 import { setupYjsServer } from './yjs-server.js';
 import { setupBridge } from './bridge.js';
 
-const PORT = process.env.REALTIME_PORT || 3001;
+const PORT = process.env.REALTIME_PORT || 4001;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
 // Create HTTP server

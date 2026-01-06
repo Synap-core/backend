@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure, publicProcedure } from '../trpc.js';
 import { db, eq, and, sql as sqlDrizzle } from '@synap/database';
-import { resourceShares, views, entities, workspaceMembers } from '@synap/database/schema';
+import { resourceShares, views, entities } from '@synap/database/schema';
 import { TRPCError } from '@trpc/server';
 import { randomBytes } from 'crypto';
 
@@ -80,13 +80,35 @@ export const sharingRouter = router({
       // Add user to invited list
       await db.update(resourceShares)
         .set({
-          invitedUsers: sqlDrizzle`array_append(invited_users, ${input.userEmail})`,
+          invitedUsers: sqlDrizzle`array_append(invited_users, ${input.userEmail})` as any,
           updatedAt: new Date(),
         })
-        .where(eq(resourceShares.id, share.id));
+        .where(and(
+          eq(resourceShares.resourceId, input.resourceId),
+          eq(resourceShares.resourceType, input.resourceType)
+        ));
       
       // TODO: Send email notification
       
+      return { success: true };
+    }),
+
+  /**
+   * Increment view count (public)
+   */
+  incrementView: publicProcedure
+    .input(z.object({
+      shareId: z.string().uuid(),
+    }))
+    .mutation(async ({ input }) => {
+      await db
+        .update(resourceShares)
+        .set({
+          viewCount: sqlDrizzle`view_count + 1` as any,
+          lastAccessedAt: new Date(),
+        })
+        .where(eq(resourceShares.id, input.shareId));
+
       return { success: true };
     }),
     
@@ -138,7 +160,7 @@ export const sharingRouter = router({
       // Track view
       await db.update(resourceShares)
         .set({
-          viewCount: sqlDrizzle`view_count + 1`,
+          viewCount: sqlDrizzle`view_count + 1` as any,
           lastAccessedAt: new Date(),
         })
         .where(eq(resourceShares.id, share.id));
@@ -157,7 +179,7 @@ export const sharingRouter = router({
       resourceType: z.enum(['view', 'entity']),
       resourceId: z.string().uuid(),
     }))
-    .query(async ({ ctx, input }) => {
+    .query(async ({ input }) => {
       // TODO: Check user owns resource
       
       return await db.query.resourceShares.findMany({
@@ -175,7 +197,7 @@ export const sharingRouter = router({
     .input(z.object({
       shareId: z.string().uuid(),
     }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ input }) => {
       // TODO: Check user owns resource
       
       await db.delete(resourceShares)

@@ -112,8 +112,8 @@ app.use('*', cors({
   origin: getCorsOrigins(),
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'x-test-user-id'],
-  exposeHeaders: ['Content-Length', 'X-Request-Id'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+  exposeHeaders: ['Content-Length', 'X-Request-Id', 'Set-Cookie'],
   maxAge: 86400, // 24 hours
 }));
 
@@ -244,21 +244,17 @@ app.use('/trpc/*', async (c, next) => {
   // Public routes that don't require authentication
   const isHealthRoute = path.includes('health.');
   const isSystemRoute = path.includes('system.');
+  const isSetupRoute = path.includes('setup.');
   const isDev = config.server.nodeEnv === 'development';
 
   // In development, allow public access to system.* and health.* routes
-  // In production, health.* routes are always public for monitoring
-  if (isHealthRoute || (isSystemRoute && isDev)) {
+  // In production, health.* and setup.* routes are always public
+  if (isHealthRoute || isSetupRoute || (isSystemRoute && isDev)) {
     apiLogger.debug({ path }, 'Bypassing auth for public route');
     return next();
   }
 
-  // DEV MODE ONLY: Allow bypassing auth for testing
-  if (isDev && c.req.header('x-test-user-id')) {
-    return next();
-  }
-
-  // Apply auth middleware for all other routes
+  // Apply Kratos auth middleware for all protected routes
   return authMiddleware(c, next);
 });
 
@@ -270,7 +266,44 @@ app.use(
   '/trpc/*',
   trpcServer({
     router: appRouter,
-    // createContext, // DISABLED - type mismatch with @hono/trpc-server
+    // We use 'any' for the second argument to handle version differences in @hono/trpc-server
+    // In newer versions, the Hono Context is passed as the second argument
+    createContext: async (opts, c: any) => {
+      // Get database
+      const { getDb } = await import('@synap/database');
+      const db = await getDb();
+      
+      // Check if Hono middleware set auth data (from orySessionMiddleware)
+      // The context is passed as the second argument in newer @hono/trpc-server versions
+      // We check both opts.c (older) and c (newer)
+      const ctx = (opts as any).c || c;
+      const userId = ctx?.get?.('userId');
+      const user = ctx?.get?.('user');
+      const session = ctx?.get?.('session');
+      const authenticated = ctx?.get?.('authenticated');
+      
+      if (authenticated && userId) {
+        // Auth middleware validated session
+        return {
+          db,
+          authenticated: true,
+          userId,
+          user,
+          session,
+          req: opts.c?.req?.raw || opts.req,
+        };
+      }
+      
+      // No auth - return unauthenticated context
+      return {
+        db,
+        authenticated: false,
+        userId: null,
+        user: null,
+        session: null,
+        req: opts.c?.req?.raw || opts.req,
+      };
+    },
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, 'tRPC error');
     },

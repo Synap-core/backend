@@ -149,6 +149,19 @@ async function applyMigrationsFromDir(
  */
 async function runMigrations() {
   try {
+    // 0. Ensure required extensions (safety fallback)
+    console.log('📦 Ensuring required extensions...\n');
+    try {
+      await sql`CREATE EXTENSION IF NOT EXISTS vector;`;
+      await sql`CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`;
+      await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`;
+      console.log('✅ Extensions ready\n');
+    } catch (err) {
+      console.error('⚠️  Extension check failed (may need superuser):');
+      console.error(err);
+      console.log('');
+    }
+    
     // 1. Initialize tracking table
     await initMigrationsTable();
     

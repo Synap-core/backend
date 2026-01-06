@@ -74,7 +74,7 @@ export const entitiesRouter = router({
       await EntityEvents.createValidated(ctx.userId, {
         id: entity.id,
         type: entity.type,
-        title: entity.title,
+        title: entity.title!,
       });
       
       return { entity };

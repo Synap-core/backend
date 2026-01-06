@@ -8,6 +8,8 @@
  * SINGLE SOURCE OF TRUTH - Frontend imports from here.
  */
 
+import type { Entity } from '../index.js';
+
 // =============================================================================
 // Entity Events
 // =============================================================================
@@ -17,6 +19,7 @@ export interface EntityCreatedEvent {
   workspaceId: string;
   type: string;
   title: string;
+  entity?: Entity; // Added for optimistic updates
   createdBy: string;
   createdAt: string;
 }
@@ -25,6 +28,7 @@ export interface EntityUpdatedEvent {
   entityId: string;
   workspaceId: string;
   changes: Record<string, unknown>;
+  entity?: Entity; // Added for optimistic updates
   updatedBy: string;
   updatedAt: string;
 }

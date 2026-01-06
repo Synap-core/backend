@@ -2,7 +2,6 @@
  * API Package - Main Export
  */
 
-import './event-publisher.js';
 import { initializePlugins } from './plugins/init.js';
 
 // Initialize plugins at module load
@@ -24,6 +23,9 @@ export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from '
 // Export event streaming utilities - DISABLED (file doesn't exist)
 // export { eventStreamManager, setupEventBroadcasting } from './event-stream.js';
 
+// Export utilities for webhook handling
+export { syncUserFromKratos, createDefaultWorkspace } from './utils/kratos-sync.js';
+
 // Export event handlers
 export { startEventProcessor, processEvents } from './event-handlers/index.js';
 
@@ -33,6 +35,7 @@ import { entitiesRouter } from './routers/entities.js';
 import { notesRouter } from './routers/notes.js';
 import { chatRouter } from './routers/chat.js';
 import { suggestionsRouter } from './routers/suggestions.js';
+import { setupRouter } from './routers/setup.js';
 import { systemRouter } from './routers/system.js';
 import { hubRouter } from './routers/hub.js';
 import { apiKeysRouter } from './routers/api-keys.js';
@@ -53,11 +56,13 @@ import { viewsRouter } from './routers/views.js';
 import { preferencesRouter } from './routers/preferences.js';
 import { rolesRouter } from './routers/roles.js';
 import { sharingRouter } from './routers/sharing.js';
+import { templatesRouter } from './routers/templates.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
-
+ 
 // V1.0: Register core routers dynamically
 // These are the built-in routers that come with the kernel
+registerRouter('setup', setupRouter, { version: '1.0.0', source: 'core', description: 'System setup and initialization API' });
 registerRouter('events', eventsRouter, { version: '1.0.0', source: 'core', description: 'Event logging API' });
 registerRouter('capture', captureRouter, { version: '1.0.0', source: 'core', description: 'Thought capture API' });
 registerRouter('entities', entitiesRouter, { version: '1.0.0', source: 'core', description: 'Entity management API' });
@@ -84,6 +89,7 @@ registerRouter('views', viewsRouter, { version: '1.0.0', source: 'core', descrip
 registerRouter('preferences', preferencesRouter, { version: '1.0.0', source: 'core', description: 'User preferences management' });
 registerRouter('roles', rolesRouter, { version: '1.0.0', source: 'core', description: 'Custom role management' });
 registerRouter('sharing', sharingRouter, { version: '1.0.0', source: 'core', description: 'Public and invite-based sharing' });
+registerRouter('templates', templatesRouter, { version: '1.0.0', source: 'core', description: 'Entity template management' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -93,6 +99,7 @@ export const appRouter = buildAppRouter();
 // This ensures clients like admin-ui can see the core router structure
 import { router } from './trpc.js';
 const coreRouter = router({
+  setup: setupRouter,
   events: eventsRouter,
   capture: captureRouter,
   entities: entitiesRouter,
@@ -110,6 +117,14 @@ const coreRouter = router({
   files: filesRouter,
   tags: tagsRouter,
   search: searchRouter,
+  relations: relationsRouter,
+  graph: graphRouter,
+  workspaces: workspacesRouter,
+  views: viewsRouter,
+  preferences: preferencesRouter,
+  roles: rolesRouter,
+  sharing: sharingRouter,
+  templates: templatesRouter,
 });
 
 export type AppRouter = typeof coreRouter;

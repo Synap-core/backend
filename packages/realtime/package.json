@@ -5,8 +5,8 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/server.ts",
+    "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "cf:dev": "wrangler dev",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20240117.0",
-    "@synap-core/database": "workspace:*",
+    "@synap/database": "workspace:*",
     "socket.io": "^4.7.2",
     "y-socket.io": "^1.0.3",
     "yjs": "^13.6.11"

@@ -60,6 +60,22 @@ export const ENTITY_SCHEMAS = {
     thumbnailUrl: z.string().url().optional(),
     downloadUrl: z.string().url().optional(),
   }),
+
+  code: z.object({
+    language: z.string(),
+    snippet: z.string().optional(),
+  }),
+
+  bookmark: z.object({
+    url: z.string().url(),
+    favicon: z.string().optional(),
+  }),
+
+  company: z.object({
+    website: z.string().url().optional(),
+    industry: z.string().optional(),
+    foundedYear: z.number().int().optional(),
+  }),
 } as const;
 
 /**
@@ -94,3 +110,4 @@ export function safeValidateEntityMetadata<T extends EntityType>(
 ) {
   return ENTITY_SCHEMAS[type].safeParse(metadata);
 }
+

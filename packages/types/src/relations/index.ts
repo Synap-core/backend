@@ -3,14 +3,14 @@
  * 
  * Re-exports relation types from database schema (single source of truth).
  * 
- * @see {@link @synap-core/database/schema}
+ * @see {@link @synap/database/schema}
  */
 
 // Direct re-exports from database
 export type { 
   Relation,
   NewRelation,
-} from '@synap-core/database/schema';
+} from '@synap/database/schema';
 
 // Relation type definitions
 export type RelationType = 

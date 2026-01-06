@@ -43,6 +43,13 @@
       "when": 1766593107604,
       "tag": "0005_clear_abomination",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1767656314727,
+      "tag": "0006_breezy_havok",
+      "breakpoints": true
     }
   ]
 }

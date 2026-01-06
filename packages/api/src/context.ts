@@ -30,24 +30,6 @@ export interface Context extends Record<string, unknown> {
 export async function createContext(req: Request): Promise<Context> {
   // Initialize database
   const db = await getDbInstance();
-  // DEV MODE ONLY: Allow bypassing auth for testing
-  // Check for x-test-user-id header
-  const testUserId = req.headers.get('x-test-user-id');
-  if (process.env.NODE_ENV === 'development' && testUserId) {
-    contextLogger.debug({ testUserId }, 'Using dev-mode auth bypass');
-    return {
-      db,
-      authenticated: true,
-      userId: testUserId,
-      user: {
-        id: testUserId,
-        email: 'test@example.com',
-        name: 'Test User',
-      },
-      session: { identity: { id: testUserId } },
-      req,
-    };
-  }
 
   // Use Ory Kratos session for authentication
   try {
@@ -55,6 +37,13 @@ export async function createContext(req: Request): Promise<Context> {
     if (!authModule.getSession) {
       throw new InternalServerError('getSession not available', { module: '@synap/auth' });
     }
+    // Debug logging for cookie presence
+    const cookieHeader = req.headers.get('cookie');
+    contextLogger.info({ 
+      hasCookie: !!cookieHeader, 
+      cookieLength: cookieHeader?.length || 0 
+    }, 'Attempting to get session from request');
+
     const session = await authModule.getSession(req.headers);
     
     // Kratos session structure: { identity: { id, traits: { email, name } } }
@@ -83,7 +72,12 @@ export async function createContext(req: Request): Promise<Context> {
       req,
     };
   } catch (error) {
-    contextLogger.error({ err: error }, 'Error getting session');
+    contextLogger.error({ 
+      err: error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      cookiePresent: !!req.headers.get('cookie'),
+      cookieLength: req.headers.get('cookie')?.length || 0
+    }, 'Error getting session (detailed debug)');
     return {
       db,
       authenticated: false,

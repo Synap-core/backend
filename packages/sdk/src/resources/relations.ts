@@ -5,7 +5,7 @@
  * ALL QUERIES are direct reads (fast)
  */
 
-import type { SynapClient } from '@synap/client';
+import type { SynapClient } from '@synap-core/client';
 import type { RelationType, Relation, RelationFilter } from '../types/relations.js';
 import { randomUUID } from 'node:crypto';
 

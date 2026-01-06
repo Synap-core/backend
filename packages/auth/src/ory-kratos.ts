@@ -38,8 +38,16 @@ export async function getKratosSession(cookie: string): Promise<any | null> {
     const { data: session } = await kratosPublic.toSession({
       cookie,
     });
+    console.log(`[getKratosSession] Successfully validated session with Kratos at ${kratosPublicUrl}`);
     return session;
-  } catch (error) {
+  } catch (error: any) {
+    console.error('[getKratosSession] Error validating session:', {
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+      data: error.response?.data,
+      url: kratosPublicUrl
+    });
     return null;
   }
 }

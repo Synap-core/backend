@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, and, inArray, desc } from '@synap/database';
+import { db, eq, and, desc } from '@synap/database';
 import { workspaces, workspaceMembers, workspaceInvites } from '@synap/database/schema';
 import { TRPCError } from '@trpc/server';
 import { randomBytes } from 'crypto';
@@ -71,11 +71,14 @@ export const workspacesRouter = router({
       },
     });
 
-    return memberships.map(m => ({
-      ...m.workspace,
-      role: m.role,
-      joinedAt: m.joinedAt,
-    }));
+    return memberships.map(m => {
+      const workspace = m.workspace!;
+      return {
+        ...workspace,
+        role: m.role,
+        joinedAt: m.joinedAt,
+      };
+    });
   }),
 
   /**

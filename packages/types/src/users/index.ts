@@ -3,7 +3,7 @@
  * 
  * Re-exports user-related types from database schema.
  * 
- * @see {@link @synap-core/database/schema}
+ * @see {@link @synap/database/schema}
  */
 
 // Direct re-exports from database
@@ -16,4 +16,4 @@ export type {
   NewEntityRelationship,
   ReasoningTrace,
   NewReasoningTrace,
-} from '@synap-core/database/schema';
+} from '@synap/database/schema';

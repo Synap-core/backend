@@ -8,6 +8,7 @@
  */
 
 import { pgTable, uuid, text, timestamp, jsonb } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
 
 export const workspaces = pgTable('workspaces', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -82,6 +83,26 @@ export const workspaceInvites = pgTable('workspace_invites', {
     .defaultNow()
     .notNull(),
 });
+
+// Relations
+export const workspacesRelations = relations(workspaces, ({ many }) => ({
+  members: many(workspaceMembers),
+  invites: many(workspaceInvites),
+}));
+
+export const workspaceMembersRelations = relations(workspaceMembers, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [workspaceMembers.workspaceId],
+    references: [workspaces.id],
+  }),
+}));
+
+export const workspaceInvitesRelations = relations(workspaceInvites, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [workspaceInvites.workspaceId],
+    references: [workspaces.id],
+  }),
+}));
 
 // Type exports
 export type Workspace = typeof workspaces.$inferSelect;

@@ -5,8 +5,8 @@
  * ALL QUERIES are direct reads (fast)
  */
 
-import type { SynapClient } from '@synap/client';
-import type { EntityType } from '@synap/types/entities';
+import type { SynapClient } from '@synap-core/client';
+import type { EntityType } from '@synap-core/types/entities';
 import { randomUUID } from 'node:crypto';
 
 export interface CreateEntityInput<T extends EntityType = EntityType> {

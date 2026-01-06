@@ -141,7 +141,6 @@ export function createSynapClient(config: SynapClientConfig): SynapClient {
 // Re-export types for convenience
 export type { AppRouter } from '@synap/api';
 export type { TRPCClient } from '@trpc/client';
-export type { RealtimeClient } from './realtime.js';
 
 // Default export
 export default createSynapClient;

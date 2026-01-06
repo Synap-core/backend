@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
-    "@synap-core/database": "workspace:*",
+    "@synap/database": "workspace:*",
     "inngest": "^3.15.0",
     "zod": "^3.23.8"
   },

@@ -3,7 +3,7 @@
  * 
  * Re-exports workspace types from database schema (single source of truth).
  * 
- * @see {@link @synap-core/database/schema}
+ * @see {@link @synap/database/schema}
  */
 
 // Direct re-exports from database
@@ -14,10 +14,10 @@ export type {
   NewWorkspaceMember,
   WorkspaceInvite,
   NewWorkspaceInvite,
-} from '@synap-core/database/schema';
+} from '@synap/database/schema';
 
 // Derived types for API convenience
-import type { Workspace, WorkspaceMember } from '@synap-core/database/schema';
+import type { Workspace, WorkspaceMember } from '@synap/database/schema';
 
 export type WorkspaceType = Workspace['type'];
 export type WorkspaceRole = WorkspaceMember['role'];

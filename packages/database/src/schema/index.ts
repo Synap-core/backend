@@ -2,6 +2,9 @@
  * Database Schema - Export all tables
  */
 
+// Core user management (Kratos identity cache)
+export * from './users.js';
+
 export * from './events.js';
 export * from './entities.js';
 export * from './entity-vectors.js';
@@ -41,3 +44,6 @@ export * from './views.js';
 
 // NEW: User preferences
 export * from './user-preferences.js';
+
+// NEW: Entity Templates
+export * from './entity-templates.js';

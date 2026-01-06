@@ -57,15 +57,19 @@ export const oryAuthMiddleware: MiddlewareHandler = async (c, next) => {
  */
 export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header('cookie') || '';
-  
   if (!cookie) {
-    return c.json({ error: 'Unauthorized' }, 401);
+    console.warn('[orySessionMiddleware] No cookie found. content-type:', c.req.header('content-type'), 'authorization:', !!c.req.header('authorization'));
+    return c.json({ error: 'Unauthorized', details: 'No session cookie' }, 401);
   }
 
   // Get session from Kratos
   const session = await getKratosSession(cookie);
   
   if (!session || !session.identity) {
+    console.warn('[orySessionMiddleware] Invalid session returned from Kratos', { 
+      hasSession: !!session, 
+      hasIdentity: !!session?.identity 
+    });
     return c.json({ error: 'Invalid session' }, 401);
   }
 

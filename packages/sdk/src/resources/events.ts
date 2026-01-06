@@ -4,7 +4,7 @@
  * ALL OPERATIONS are direct reads (query event log)
  */
 
-import type { SynapClient } from '@synap/client';
+import type { SynapClient } from '@synap-core/client';
 import type { Event, EventFilter } from '../types/events.js';
 
 /**

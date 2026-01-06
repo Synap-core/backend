@@ -23,7 +23,7 @@
   "dependencies": {
     "inngest": "^3.15.0",
     "@synap-core/core": "workspace:*",
-    "@synap-core/database": "workspace:*",
+    "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/storage": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",

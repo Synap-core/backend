@@ -17,7 +17,8 @@ services:
       - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql
+      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/00-init-databases.sh:ro
+      - ./scripts/init-extensions.sql:/docker-entrypoint-initdb.d/01-init-extensions.sql:ro
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}" ]
       interval: 5s
@@ -57,15 +58,17 @@ services:
     profiles: [ "auth" ]
     environment:
       DSN: postgres://${DB_USER:-postgres}:${DB_PASSWORD:-synap_dev_password}@postgres:5432/kratos_db?sslmode=disable
-      SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE:-changeme-changeme-changeme-changeme}
-      SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER:-32-char-secret-for-cipher-here}
+      SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE:-PLEASE_CHANGE_THIS_32CHAR_SECRET}
+      SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER:-PLEASE_CHANGE_THIS_32CHAR_SECRET}
+      KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET:-dev-webhook-secret-change-in-production}
     ports:
       - "4433:4433" # Public API
       - "4434:4434" # Admin API
     volumes:
       - ./kratos/kratos.yml:/etc/config/kratos/kratos.yml:ro
       - ./kratos/identity.schema.json:/etc/config/kratos/identity.schema.json:ro
-    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+      - ./docker/kratos/migrate.sh:/migrate.sh:ro
+    entrypoint: [ "/bin/sh", "/migrate.sh" ]
     depends_on:
       postgres:
         condition: service_healthy

@@ -15,11 +15,6 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js"
     },
-    "./react": {
-      "types": "./dist/react.d.ts",
-      "import": "./dist/react.js",
-      "require": "./dist/react.js"
-    },
     "./realtime": {
       "types": "./dist/realtime.d.ts",
       "import": "./dist/realtime.js",
@@ -32,7 +27,7 @@
   ],
   "scripts": {
     "build": "pnpm build:js && pnpm build:types",
-    "build:js": "tsup src/index.ts src/react.ts src/react/provider.tsx src/realtime.ts --format cjs,esm",
+    "build:js": "tsup src/index.ts src/realtime.ts --format cjs,esm",
     "build:types": "tsc --project tsconfig.json --emitDeclarationOnly --declaration --outDir dist",
     "dev": "tsup src/index.ts --watch --format esm",
     "typecheck": "tsc --noEmit",

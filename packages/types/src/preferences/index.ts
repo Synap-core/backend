@@ -1,27 +1,12 @@
 /**
  * User Preferences Types
- * 
- * Re-exports user preferences types from database schema (single source of truth).
- * 
- * @see {@link @synap-core/database/schema}
  */
 
-// Direct re-exports from database
-export type { 
-  UserPreference as UserPreferences,
-  NewUserPreference as NewUserPreferences,
-} from '@synap-core/database/schema';
+// Database types
+export type { UserPreference, NewUserPreference } from '@synap/database/schema';
 
-// Derived types
-import type { UserPreference } from '@synap-core/database/schema';
+// Zod schemas and types (includes CustomTheme, DefaultTemplates, etc.)
+export * from './schemas.js';
 
-export type Theme = UserPreference['theme'];
-
-// Input types for API operations
-export interface UpdatePreferencesInput {
-  theme?: Theme;
-  uiPreferences?: Record<string, unknown>;
-  graphPreferences?: Record<string, unknown>;
-  onboardingCompleted?: boolean;
-  onboardingStep?: string;
-}
+// Theme type (for backwards compatibility)
+export type Theme = 'light' | 'dark' | 'system';

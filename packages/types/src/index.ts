@@ -16,3 +16,27 @@ export * from './users/index.js';
 
 // Inbox types
 export * from './inbox/index.js';
+
+// Template types
+export * from './templates/types.js';
+export * from './templates/schemas.js';
+
+// Default Templates
+export { notionLikeTemplate } from './templates/notion-like.template.js';
+export { classicNoteTemplate } from './templates/classic-note.template.js';
+export { wikiReferenceTemplate } from './templates/wiki-reference.template.js';
+
+// Workspaces
+export * from './workspaces/index.js';
+
+// Views
+export * from './views/index.js';
+
+// Relations
+export * from './relations/index.js';
+
+// Preferences
+export * from './preferences/index.js';
+
+// Realtime types (for WebSocket/collaboration)
+export * from './realtime/index.js';

@@ -1,115 +1,156 @@
 /**
  * Preferences Router - User preferences management
- * 
- * Handles:
- * - Get/update user preferences
- * - Default preferences
  */
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { db, eq } from '@synap/database';
 import { userPreferences } from '@synap/database/schema';
-import { UserPreferencesEvents } from '../lib/event-helpers.js';
-
-const DEFAULT_PREFERENCES = {
-  theme: 'system',
-  uiPreferences: {
-    sidebarCollapsed: false,
-    compactMode: false,
-    fontSize: 'medium',
-  },
-  graphPreferences: {
-    forceSettings: {
-      linkDistance: 150,
-      chargeStrength: -300,
-      alphaDecay: 0.08,
-      velocityDecay: 0.6,
-    },
-    defaultFilters: {
-      entityTypes: [],
-      relationTypes: [],
-    },
-    zoom: 1.0,
-    pan: { x: 0, y: 0 },
-    showMinimap: true,
-  },
-  onboardingCompleted: false,
-  onboardingStep: null,
-};
+import { eq } from '@synap/database';
+import { 
+  UpdatePreferencesInputSchema,
+  CustomThemeSchema,
+} from '@synap-core/types';
 
 export const preferencesRouter = router({
   /**
    * Get user preferences
    */
   get: protectedProcedure.query(async ({ ctx }) => {
-    const prefs = await db.query.userPreferences.findFirst({
+    const prefs = await ctx.db.query.userPreferences.findFirst({
       where: eq(userPreferences.userId, ctx.userId),
     });
-
-    // Return defaults if not found
-    return prefs || DEFAULT_PREFERENCES;
+    
+    // Return defaults if not exists
+    if (!prefs) {
+      return {
+        userId: ctx.userId,
+        theme: 'system' as const,
+        uiPreferences: {},
+        graphPreferences: {},
+        onboardingCompleted: false,
+      };
+    }
+    
+    return prefs;
   }),
-
+  
   /**
-   * Update user preferences
+   * Update user preferences (partial update)
    */
   update: protectedProcedure
-    .input(z.object({
-      theme: z.enum(['light', 'dark', 'system']).optional(),
-      uiPreferences: z.record(z.any()).optional(),
-      graphPreferences: z.record(z.any()).optional(),
-      onboardingCompleted: z.boolean().optional(),
-      onboardingStep: z.string().optional(),
-    }))
-    .mutation(async ({ input, ctx }) => {
-      // Log requested event
-      await UserPreferencesEvents.updateRequested(ctx.userId, input);
+    .input(UpdatePreferencesInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          ...input,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            ...input,
+            updatedAt: new Date(),
+          },
+        });
       
-      // Check if preferences exist
-      const existing = await db.query.userPreferences.findFirst({
+      // Return updated preferences
+      const updated = await ctx.db.query.userPreferences.findFirst({
         where: eq(userPreferences.userId, ctx.userId),
       });
-
-      if (existing) {
-        // Update existing
-        const [updated] = await db.update(userPreferences)
-          .set({
-            theme: input.theme,
-            uiPreferences: input.uiPreferences,
-            graphPreferences: input.graphPreferences,
-            onboardingCompleted: input.onboardingCompleted,
-            updatedAt: new Date(),
-          })
-          .where(eq(userPreferences.userId, ctx.userId))
-          .returning();
-          
-        // Log validated event
-        await UserPreferencesEvents.updateValidated(ctx.userId, input);
-        
-        return updated;
-      } else {
-        // Create new
-        const [created] = await db.insert(userPreferences).values({
-          userId: ctx.userId,
-          theme: input.theme || 'system',
-          uiPreferences: input.uiPreferences || {},
-          graphPreferences: input.graphPreferences || {},
-          onboardingCompleted: input.onboardingCompleted || false,
-        }).returning();
-        
-        // Log validated event
-        await UserPreferencesEvents.updateValidated(ctx.userId, input);
-        
-        return created;
-      }
+      
+      return updated;
     }),
-
+  
   /**
-   * Reset preferences to defaults
+   * Update theme settings
    */
-  reset: protectedProcedure.mutation(async ({ ctx }) => {
-    await db.delete(userPreferences).where(eq(userPreferences.userId, ctx.userId));
-    return DEFAULT_PREFERENCES;
-  }),
+  updateTheme: protectedProcedure
+    .input(z.object({
+      theme: z.enum(['light', 'dark', 'system']).optional(),
+      customTheme: CustomThemeSchema,
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          ...input,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            ...input,
+            updatedAt: new Date(),
+          },
+        });
+      
+      return { success: true };
+    }),
+  
+  /**
+   * Update default template for an entity type
+   */
+  updateDefaultTemplates: protectedProcedure
+    .input(z.object({
+      entityType: z.string(),
+      templateId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get current preferences
+      const current = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      });
+      
+      // Merge with new template
+      const defaultTemplates = {
+        ...(current?.defaultTemplates as Record<string, string> || {}),
+        [input.entityType]: input.templateId,
+      };
+      
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          defaultTemplates,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            defaultTemplates,
+            updatedAt: new Date(),
+          },
+        });
+      
+      return { success: true, defaultTemplates };
+    }),
+  
+  /**
+   * Update custom entity types
+   */
+  updateCustomEntityTypes: protectedProcedure
+    .input(z.object({
+      customEntityTypes: z.array(z.any()),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          customEntityTypes: input.customEntityTypes,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            customEntityTypes: input.customEntityTypes,
+            updatedAt: new Date(),
+          },
+        });
+      
+      return { success: true };
+    }),
 });

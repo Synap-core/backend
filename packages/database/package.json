@@ -1,5 +1,5 @@
 {
-  "name": "@synap-core/database",
+  "name": "@synap/database",
   "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.js",
@@ -33,10 +33,11 @@
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio",
-    "db:drop": "drizzle-kit drop"
+    "db:generate": "tsx ./node_modules/drizzle-kit/bin.cjs generate",
+    "db:push": "tsx ./node_modules/drizzle-kit/bin.cjs push",
+    "db:push:force": "tsx ./node_modules/drizzle-kit/bin.cjs push --force --verbose",
+    "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
+    "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop"
   },
   "dependencies": {
     "@synap-core/core": "^1.0.0",
@@ -47,7 +48,7 @@
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.0.15",
-    "drizzle-kit": "^0.24.0",
+    "drizzle-kit": "^0.31.8",
     "postgres": "^3.4.7",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",

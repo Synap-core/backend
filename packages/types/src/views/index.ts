@@ -4,14 +4,14 @@
  * Re-exports view types from database schema (single source of truth).
  * Extended with Table Inversion System configuration types.
  * 
- * @see {@link @synap-core/database/schema}
+ * @see {@link @synap/database/schema}
  */
 
 // Direct re-exports from database
 export type { 
   View,
   NewView,
-} from '@synap-core/database/schema';
+} from '@synap/database/schema';
 
 // =============================================================================
 // View Type Enum
