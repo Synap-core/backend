@@ -10,7 +10,7 @@
  * - Automatic connection cleanup
  */
 
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import type { EventRecord } from '@synap/database';
 
 const logger = createLogger({ module: 'event-stream-manager' });

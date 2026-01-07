@@ -1,38 +1,42 @@
 /**
- * @synap/types - Type Definitions and Event Contracts
+ * @synap/types - Shared Domain Types
  * 
- * This package provides:
- * - SynapEvent v1 schema and validation
- * - Event type registries
- * - Event factory functions
+ * Core type definitions for the Synap ecosystem.
+ * Used by frontend, backend, and Intelligence Hub.
  */
 
-export {
-  SynapEventSchema,
-  type SynapEvent,
-  EventTypeSchemas,
-  type EventTypeWithSchema,
-  validateEventData,
-  createSynapEvent,
-  parseSynapEvent,
-} from './synap-event.js';
+// Entity types
+export * from './entities/index.js';
 
-/**
- * Synap Types - Shared TypeScript types
- */
+// Document types
+export * from './documents/index.js';
 
-export {
-  EventTypes,
-  type EventType,
-  isValidEventType,
-  getAllEventTypes,
-} from './event-types.js';
+// User and context types
+export * from './users/index.js';
 
-// Chat types
-export * from './chat.js';
+// Inbox types
+export * from './inbox/index.js';
 
-// Event metadata types (AI, import, sync, automation)
-export * from './event-metadata.js';
+// Template types
+export * from './templates/types.js';
+export * from './templates/schemas.js';
 
-// Legacy: Keep enrichment-events for backward compatibility (will be deprecated)
-// export * from './enrichment-events.js';
+// Default Templates
+export { notionLikeTemplate } from './templates/notion-like.template.js';
+export { classicNoteTemplate } from './templates/classic-note.template.js';
+export { wikiReferenceTemplate } from './templates/wiki-reference.template.js';
+
+// Workspaces
+export * from './workspaces/index.js';
+
+// Views
+export * from './views/index.js';
+
+// Relations
+export * from './relations/index.js';
+
+// Preferences
+export * from './preferences/index.js';
+
+// Realtime types (for WebSocket/collaboration)
+export * from './realtime/index.js';

@@ -13,6 +13,7 @@ import {
   IconPlayerPause,
   IconPlayerPlay,
   IconRefresh,
+  IconFolder,
 } from '@tabler/icons-react';
 import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
 import { trpc } from '../../lib/trpc';
@@ -266,10 +267,18 @@ export default function DashboardPage() {
             <Button
               variant="light"
               leftSection={<IconMap size={18} />}
-              onClick={() => navigate('/explore')}
+              onClick={() => navigate('/flow')}
               aria-label="View system architecture"
             >
               View Architecture
+            </Button>
+            <Button
+              variant="light"
+              leftSection={<IconFolder size={18} />}
+              onClick={() => navigate('/files')}
+              aria-label="Browse files"
+            >
+              Browse Files
             </Button>
           </div>
         </Card>

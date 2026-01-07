@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Drawer } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
-import TopBar from './TopBar';
+import TopNav from './TopNav';
 import MainNav from './MainNav';
 import CommandPalette from '../CommandPalette';
 import { colors, breakpoints } from '../../theme/tokens';
@@ -10,12 +10,10 @@ import { colors, breakpoints } from '../../theme/tokens';
 export default function MainLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
-  const [navCollapsed, setNavCollapsed] = useState(false);
   const location = useLocation();
   
   // Media queries for responsive behavior
   const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`);
-  const isTablet = useMediaQuery(`(min-width: ${breakpoints.tablet}) and (max-width: ${breakpoints.desktop})`);
   
   // Auto-close drawer on mobile when route changes
   useEffect(() => {
@@ -42,39 +40,25 @@ export default function MainLayout() {
       style={{
         minHeight: '100vh',
         backgroundColor: colors.background.secondary,
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      {/* TopBar */}
-      <TopBar 
-        onCommandPaletteOpen={() => setCommandPaletteOpen(true)}
-        onMenuClick={() => setNavDrawerOpen(true)}
-        showMenuButton={isMobile || isTablet}
-      />
+      {/* Top Navigation */}
+      <TopNav />
 
       {/* Main Content Area */}
-      <div style={{ display: 'flex' }}>
-        {/* Desktop Navigation - Visible on large screens, collapsible on tablet */}
-        {!isMobile && (
-          <MainNav 
-            collapsed={isTablet && navCollapsed}
-            onToggleCollapse={() => setNavCollapsed(!navCollapsed)}
-            showToggle={isTablet}
-          />
-        )}
+      <main
+        style={{
+          flex: 1,
+          width: '100%',
+          overflowY: 'auto',
+        }}
+      >
+        <Outlet />
+      </main>
 
-        {/* Content */}
-        <main
-          style={{
-            flex: 1,
-            width: '100%',
-            minWidth: 0,
-          }}
-        >
-          <Outlet />
-        </main>
-      </div>
-
-      {/* Mobile Navigation Drawer */}
+      {/* Mobile Navigation Drawer (fallback) */}
       <Drawer
         opened={navDrawerOpen}
         onClose={() => setNavDrawerOpen(false)}

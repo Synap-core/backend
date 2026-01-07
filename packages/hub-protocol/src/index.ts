@@ -49,3 +49,13 @@ export {
   isAnalysis,
 } from './schemas.js';
 
+// ============================================================================
+// HUB PROTOCOL CLIENT (tRPC Client for Data Pod Communication)
+// ============================================================================
+
+export { HubProtocolClient } from './client/client.js';
+export type {
+  HubProtocolClientConfig,
+  HubScope,
+  RequestDataFilters,
+} from './client/types.js';

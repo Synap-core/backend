@@ -53,7 +53,7 @@ describe('Storage Factory', () => {
   });
 
   // Note: Full factory testing requires environment variable setup
-  // The factory uses dynamic imports and config from @synap/core
+  // The factory uses dynamic imports and config from @synap-core/core
   // Integration tests should validate provider selection in real environment
 });
 

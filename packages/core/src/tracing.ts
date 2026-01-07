@@ -14,7 +14,7 @@
  * Usage:
  * ```typescript
  * // At the very top of your entry file (e.g., apps/api/src/index.ts)
- * import { initializeTracing } from '@synap/core';
+ * import { initializeTracing } from '@synap-core/core';
  * initializeTracing();
  *
  * // Then import the rest of your application

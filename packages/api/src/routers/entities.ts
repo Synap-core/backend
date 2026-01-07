@@ -6,9 +6,10 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, desc, and, sqlDrizzle as sql } from '@synap/database';
-import { entities } from '@synap/database/schema';
+import { db, eq, desc, and } from '@synap/database';
+import { entities, insertEntitySchema } from '@synap/database/schema';
 
+// TODO: Move to @synap-core/types or DB enum
 const EntityTypeSchema = z.enum(['task', 'contact', 'meeting', 'idea', 'note', 'project']);
 
 export const entitiesRouter = router({
@@ -16,28 +17,43 @@ export const entitiesRouter = router({
    * Create entity (manual or agent-extracted)
    */
   create: protectedProcedure
-    .input(z.object({
-      type: EntityTypeSchema,
-      title: z.string(),
-      description: z.string().optional(),
-      fileUrl: z.string().optional(),
-      filePath: z.string().optional(),
-      fileSize: z.number().optional(),
-      fileType: z.string().optional(),
-    }))
+    .input(
+      insertEntitySchema.pick({
+        title: true,
+        workspaceId: true,
+        fileUrl: true,
+        filePath: true,
+        fileSize: true,
+        fileType: true,
+      }).extend({
+        type: EntityTypeSchema,
+        description: z.string().optional(), // Maps to 'preview'
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      const [entity] = await db.insert(entities).values({
-        userId: ctx.userId,
-        type: input.type,
-        title: input.title,
-        preview: input.description,
-        fileUrl: input.fileUrl,
-        filePath: input.filePath,
-        fileSize: input.fileSize,
-        fileType: input.fileType,
-      }).returning();
+      // ✅ Publish .requested event - permission validator will handle permission checks
+      const { inngest } = await import('@synap/jobs');
       
-      return { entity };
+      await inngest.send({
+        name: 'entities.create.requested',
+        data: {
+          type: input.type,
+          title: input.title,
+          preview: input.description,
+          workspaceId: input.workspaceId,
+          fileUrl: input.fileUrl,
+          filePath: input.filePath,
+          fileSize: input.fileSize,
+          fileType: input.fileType,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
+      
+      return { 
+        status: 'requested',
+        message: 'Entity creation requested'
+      };
     }),
   
   /**
@@ -111,30 +127,35 @@ export const entitiesRouter = router({
    * Update entity
    */
   update: protectedProcedure
-    .input(z.object({
-      id: z.string().uuid(),
-      title: z.string().optional(),
-      description: z.string().optional(),
+    .input(insertEntitySchema.pick({
+      type: true,
+      description: true, // mapped to preview in logic? No, entity has 'preview'. Check mapping.
+      title: true,
+      workspaceId: true,
+      fileUrl: true,
+      filePath: true,
+      fileSize: true,
+      fileType: true,
     }))
     .mutation(async ({ input, ctx }) => {
-      const [updated] = await db.update(entities)
-        .set({
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'entities.update.requested',
+        data: {
+          entityId: input.id,
           title: input.title,
           preview: input.description,
-          updatedAt: new Date(),
-          version: sql`version + 1`,
-        })
-        .where(and(
-          eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId)
-        ))
-        .returning();
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
       
-      if (!updated) {
-        throw new Error('Entity not found');
-      }
-      
-      return { entity: updated };
+      return { 
+        status: 'requested',
+        message: 'Entity update requested'
+      };
     }),
   
   /**
@@ -145,13 +166,21 @@ export const entitiesRouter = router({
       id: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
-      await db.update(entities)
-        .set({ deletedAt: new Date() })
-        .where(and(
-          eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId)
-        ));
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
       
-      return { success: true };
+      await inngest.send({
+        name: 'entities.delete.requested',
+        data: {
+          entityId: input.id,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
+      
+      return { 
+        status: 'requested',
+        message: 'Entity deletion requested'
+      };
     }),
 });

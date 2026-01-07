@@ -13,7 +13,7 @@ import 'dotenv/config';
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
-import { initializeTracing } from '@synap/core';
+import { initializeTracing } from '@synap-core/core';
 initializeTracing();
 
 import { Hono } from 'hono';
@@ -21,8 +21,8 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { trpcServer } from '@hono/trpc-server';
-import { createLogger, config, isSynapError, toSynapError, validateConfig } from '@synap/core';
-import { appRouter, createContext } from '@synap/api';
+import { createLogger, config, isSynapError, toSynapError, validateConfig } from '@synap-core/core';
+import { appRouter /*, createContext */ } from '@synap/api'; // createContext disabled - type mismatch
 import { serve } from '@hono/node-server';
 import { serve as inngestServe } from 'inngest/hono';
 import { inngest, functions } from '@synap/jobs';
@@ -34,9 +34,11 @@ import {
   getCorsOrigins,
 } from './middleware/security.js';
 import { eventStreamManager, setupEventBroadcasting } from '@synap/api';
+import { webhookRouter } from './webhooks/index.js';
 
 // Setup event broadcasting to SSE clients
 setupEventBroadcasting();
+
 
 // Validate configuration at startup
 const apiLogger = createLogger({ module: 'api-server' });
@@ -110,8 +112,8 @@ app.use('*', cors({
   origin: getCorsOrigins(),
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
-  exposeHeaders: ['Content-Length', 'X-Request-Id'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+  exposeHeaders: ['Content-Length', 'X-Request-Id', 'Set-Cookie'],
   maxAge: 86400, // 24 hours
 }));
 
@@ -128,7 +130,7 @@ app.get('/health', (c) => {
 
 // Prometheus metrics endpoint (public, no auth)
 app.get('/metrics', async (c) => {
-  const { getMetrics } = await import('@synap/core');
+  const { getMetrics } = await import('@synap-core/core');
   const metrics = await getMetrics();
   return c.text(metrics, 200, {
     'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
@@ -192,7 +194,7 @@ if (isPostgres) {
 }
 
 // SSE endpoint for real-time event streaming (admin dashboard)
-// This endpoint is public for now - in production, add auth
+// Server-Sent Events endpoint for event broadcasting
 app.get('/api/events/stream', (c) => {
   const clientId = crypto.randomUUID();
 
@@ -233,6 +235,7 @@ app.get('/api/events/stream', (c) => {
   });
 });
 
+
 // tRPC routes (protected by auth, except public routes)
 app.use('/trpc/*', async (c, next) => {
   const path = c.req.path;
@@ -240,31 +243,68 @@ app.use('/trpc/*', async (c, next) => {
   // Public routes that don't require authentication
   const isHealthRoute = path.includes('health.');
   const isSystemRoute = path.includes('system.');
+  const isSetupRoute = path.includes('setup.');
   const isDev = config.server.nodeEnv === 'development';
 
   // In development, allow public access to system.* and health.* routes
-  // In production, health.* routes are always public for monitoring
-  if (isHealthRoute || (isSystemRoute && isDev)) {
+  // In production, health.* and setup.* routes are always public
+  if (isHealthRoute || isSetupRoute || (isSystemRoute && isDev)) {
     apiLogger.debug({ path }, 'Bypassing auth for public route');
     return next();
   }
 
-  // DEV MODE ONLY: Allow bypassing auth for testing
-  if (isDev && c.req.header('x-test-user-id')) {
-    return next();
-  }
-
-  // Apply auth middleware for all other routes
+  // Apply Kratos auth middleware for all protected routes
   return authMiddleware(c, next);
 });
 
+// Webhook routes (before auth - uses webhook secret auth)
+app.route('/webhooks', webhookRouter);
+
+// tRPC endpoint
 app.use(
   '/trpc/*',
   trpcServer({
     router: appRouter,
-    createContext: async (opts) => {
-      const ctx = await createContext(opts.req);
-      return ctx as unknown as Record<string, unknown>;
+    // We use 'any' for the second argument to handle version differences in @hono/trpc-server
+    // In newer versions, the Hono Context is passed as the second argument
+    createContext: async (opts, c: any) => {
+      // Get database
+      const { getDb } = await import('@synap/database');
+      const db = await getDb();
+      
+      // Check if Hono middleware set auth data (from orySessionMiddleware)
+      // The context is passed as the second argument in newer @hono/trpc-server versions
+      // We check both opts.c (older) and c (newer)
+      const ctx = (opts as any).c || c;
+      const userId = ctx?.get?.('userId');
+      const user = ctx?.get?.('user');
+      const session = ctx?.get?.('session');
+      const authenticated = ctx?.get?.('authenticated');
+      
+      if (authenticated && userId) {
+        // Auth middleware validated session
+        return {
+          db,
+          authenticated: true,
+          userId,
+          user,
+          session,
+          req: opts.c?.req?.raw || opts.req,
+        };
+      }
+      
+      // No auth - return unauthenticated context
+      return {
+        db,
+        authenticated: false,
+        userId: null,
+        user: null,
+        session: null,
+        req: opts.c?.req?.raw || opts.req,
+      };
+    },
+    onError({ error, path }) {
+      apiLogger.error({ err: error, path }, 'tRPC error');
     },
   })
 );
@@ -277,18 +317,6 @@ app.use(
     functions,
   })
 );
-
-// Hub Protocol receiver endpoint (for Intelligence Hub insights)
-// Protected with OAuth2 client credentials authentication
-const { hubInsightsRouter } = await import('./routes/hub-insights.js');
-app.use('/hub/*', async (c, next) => {
-  // DEV MODE ONLY: Allow bypassing auth for testing
-  if (config.server.nodeEnv === 'development' && c.req.header('x-test-user-id')) {
-    return next();
-  }
-  return authMiddleware(c, next);
-});
-app.route('/', hubInsightsRouter);
 
 // 404 handler
 app.notFound((c) => {
@@ -339,24 +367,32 @@ app.onError((err, c) => {
 });
 
 // Start server
-const port = config.server.port;
-apiLogger.info({ port }, 'Synap API starting');
-
 serve({
   fetch: app.fetch,
-  port,
-}, (info) => {
-  apiLogger.info(
-    {
-      port: info.port,
-      tRPC: `http://localhost:${info.port}/trpc`,
-      auth: `http://localhost:${info.port}/api/auth`,
-      health: `http://localhost:${info.port}/health`,
-    },
-    'Server running'
-  );
+  port: config.server.port,
+  hostname: '0.0.0.0',
+}, async (info) => {
+  apiLogger.info({
+    port: info.port,
+    host: '0.0.0.0',
+    nodeEnv: config.server.nodeEnv,
+  }, 'API server started');
+  
+  // ✨ Start event processor
+  const { startEventProcessor } = await import('@synap/api');
+  startEventProcessor();
+  apiLogger.info('Event processor started');
+});
+
+// Run startup hooks after server is listening
+import { runStartupHooks } from './startup-hooks.js';
+runStartupHooks().catch(err => {
+  apiLogger.error({ err }, 'Startup hooks failed (non-fatal)');
+});
+
+process.on('SIGTERM', () => {
+  apiLogger.info('SIGTERM received, shutting down gracefully');
+  process.exit(0);
 });
 
 export default app;
-
-

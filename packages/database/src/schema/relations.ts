@@ -36,3 +36,16 @@ export const relations = pgTable('relations', {
 export type Relation = typeof relations.$inferSelect;
 export type NewRelation = typeof relations.$inferInsert;
 
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertRelationSchema = createInsertSchema(relations);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectRelationSchema = createSelectSchema(relations);
+export type InsertRelation = NewRelation;
+export type SelectRelation = Relation;
+

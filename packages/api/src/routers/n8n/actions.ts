@@ -13,10 +13,10 @@ import { router } from '../../trpc.js';
 import { scopedProcedure } from '../../middleware/api-key-auth.js';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { db } from '@synap/database';
 import { events } from '@synap/database';
-import { createSynapEvent, EventTypes } from '@synap/types';
+import { createSynapEvent } from '@synap-core/core';
 
 const logger = createLogger({ module: 'n8n-router' });
 
@@ -72,7 +72,7 @@ export const n8nActionsRouter = router({
       try {
         // Create generic entity event
         const event = createSynapEvent({
-          type: EventTypes.ENTITY_CREATED,
+          type: 'entities.create.validated',
           userId,
           data: {
             entityType: type,
@@ -89,6 +89,8 @@ export const n8nActionsRouter = router({
           id: event.id,
           userId: event.userId,
           type: event.type,
+          subjectId: event.id,  // ✅ Entity ID
+          subjectType: 'entity', // ✅ Subject type
           data: event.data,
           timestamp: event.timestamp,
           correlationId: event.correlationId,

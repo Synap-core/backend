@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent } from '@synap-core/core';
 import { getEventRepository } from '@synap/database';
 import { db, entities } from '@synap/database';
 import { eq } from '@synap/database';
@@ -45,7 +45,7 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
 
       // Create event (simulating what the mutation does)
       const event = createSynapEvent({
-        type: 'note.creation.requested',
+        type: 'entities.create.requested',
         userId: userAId,
         aggregateId: entityId,
         data: {
@@ -134,7 +134,7 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
       // Create a note for user A
       const userANoteId = randomUUID();
       const userAEvent = createSynapEvent({
-        type: 'note.creation.requested',
+        type: 'entities.create.requested',
         userId: userAId,
         aggregateId: userANoteId,
         data: {

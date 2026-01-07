@@ -6,7 +6,7 @@
  * 
  * @example
  * ```typescript
- * import { NotFoundError, ValidationError } from '@synap/core';
+ * import { NotFoundError, ValidationError } from '@synap-core/core';
  * 
  * if (!entity) {
  *   throw new NotFoundError('Entity', entityId);

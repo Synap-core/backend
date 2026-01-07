@@ -5,7 +5,7 @@
  */
 
 import { pluginManager } from './index.js';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'plugin-init' });
 

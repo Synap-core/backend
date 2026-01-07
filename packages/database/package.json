@@ -1,6 +1,6 @@
 {
   "name": "@synap/database",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,42 +14,41 @@
       "types": "./dist/schema/index.d.ts",
       "import": "./dist/schema/index.js",
       "default": "./dist/schema/index.js"
-    },
-    "./dist/schema/index.js": {
-      "types": "./dist/schema/index.d.ts",
-      "import": "./dist/schema/index.js",
-      "default": "./dist/schema/index.js"
     }
   },
   "files": [
     "dist",
-    "src",
     "migrations-custom",
     "migrations-drizzle"
   ],
   "scripts": {
     "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio",
-    "db:drop": "drizzle-kit drop"
+    "db:generate": "tsx ./node_modules/drizzle-kit/bin.cjs generate",
+    "db:push": "tsx ./node_modules/drizzle-kit/bin.cjs push",
+    "db:push:force": "tsx ./node_modules/drizzle-kit/bin.cjs push --force --verbose",
+    "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
+    "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop"
   },
   "dependencies": {
-    "@synap/core": "workspace:*",
-    "@synap/types": "workspace:*",
-    "drizzle-orm": "^0.33.0",
+    "@synap-core/core": "^1.0.0",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
     "pgvector": "^0.2.1",
-    "postgres": "^3.4.7"
+    "postgres": "^3.4.7",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.0.15",
-    "drizzle-kit": "^0.24.0",
+    "drizzle-kit": "^0.24.2",
     "postgres": "^3.4.7",
+    "tsup": "^8.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vite": "^7.2.2",

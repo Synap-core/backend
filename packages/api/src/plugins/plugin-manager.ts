@@ -4,7 +4,7 @@
  * Manages registration and execution of Data Pod plugins.
  */
 
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import type { DataPodPlugin, ThoughtInput, ThoughtResponse } from './types.js';
 import { dynamicRouterRegistry } from '../router-registry.js';
 // NOTE: @synap/ai has been moved to synap-intelligence-hub (proprietary)

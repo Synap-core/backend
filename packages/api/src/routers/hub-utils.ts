@@ -6,9 +6,9 @@
  */
 
 import jwt from 'jsonwebtoken';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { getEventRepository } from '@synap/database';
-import { createSynapEvent, EventTypes } from '@synap/types';
+import { createSynapEvent } from '@synap-core/core';
 
 const logger = createLogger({ module: 'hub-utils' });
 
@@ -145,7 +145,7 @@ export async function logHubAccess(
     
     // Create audit event
     const auditEvent = createSynapEvent({
-      type: EventTypes.HUB_ACCESS_LOGGED,
+      type: 'accessLogs.create' as any, // Audit event
       data: {
         action,
         requestId,

@@ -16,8 +16,8 @@
 
 import { db } from '../client-pg.js';
 import { entityEnrichments, entityRelationships, reasoningTraces } from '../schema/enrichments.js';
-import type { SynapEvent, EventMetadata } from '@synap/types';
-import { createLogger } from '@synap/core';
+import type { SynapEvent, EventMetadata } from '@synap-core/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'metadata-projector' });
 

@@ -17,7 +17,7 @@
  */
 
 import type postgres from 'postgres';
-import { SynapEventSchema, type SynapEvent } from '@synap/types';
+import { SynapEventSchema, type SynapEvent } from '@synap-core/core';
 
 /**
  * Event Hook Callback Type

@@ -17,12 +17,20 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@synap-core/types": "workspace:^",
+    "@trpc/client": "^11.7.1",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
     "zod": "^3.22.0"
+  },
+  "peerDependencies": {
+    "@synap-core/core": "*",
+    "@synap/api": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

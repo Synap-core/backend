@@ -12,7 +12,7 @@
 
 import { sql } from '../client-pg.js';
 import { createHash, randomUUID } from 'crypto';
-import type { ConversationMessageMetadata } from '@synap/core';
+import type { ConversationMessageMetadata } from '@synap-core/core';
 
 // ============================================================================
 // TYPES

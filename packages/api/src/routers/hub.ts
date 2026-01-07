@@ -1,11 +1,14 @@
 /**
- * Hub Protocol Router V1.0
+ * Hub Protocol Router
+ * 
+ * Handles communication with Intelligence Hub services.
+ * This is the tRPC endpoint that Intelligence Hub calls to submit insights.
  */
 
 import { z } from 'zod';
 import { router, protectedProcedure, publicProcedure, middleware } from '../trpc.js';
 import { TRPCError } from '@trpc/server';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import {
   generateHubAccessToken,
   validateHubToken,
@@ -58,11 +61,12 @@ const SubmitInsightInputSchema = z.object({
   insight: z.any(),
 });
 
-const SemanticSearchInputSchema = z.object({
-  token: z.string().min(1, 'Token is required'),
-  query: z.string().min(1, 'Query is required'),
-  limit: z.number().int().min(1).max(100).default(10),
-});
+// DISABLED - endpoint commented out
+// const SemanticSearchInputSchema = z.object({
+//   token: z.string().min(1, 'Token is required'),
+//   query: z.string().min(1, 'Query is required'),
+//   limit: z.number().int().min(1).max(100).default(10),
+// });
 
 const hubTokenMiddleware = middleware(async (opts) => {
   const { input, ctx } = opts;
@@ -382,16 +386,13 @@ export const hubRouter = router({
     }),
 
   /**
-   * Semantic Search
+   * Semantic Search - TEMPORARILY DISABLED
    * 
-   * Performs semantic search using vector embeddings.
-   * This endpoint is used by Intelligence Hub to search user data semantically.
+   * Depends on @synap/domain which was removed.
    * 
-   * Flow:
-   * 1. Generate embedding from query text (using @synap/ai-embeddings)
-   * 2. Search entities by embedding similarity (using vectorService)
-   * 3. Return results with relevance scores
+   * TODO: Refactor to use searchEntityVectorsRaw directly from @synap/database
    */
+  /* DISABLED - Domain package removed
   semanticSearch: hubTokenProcedure
     .input(SemanticSearchInputSchema)
     .query(async ({ ctx, input }) => {
@@ -445,4 +446,5 @@ export const hubRouter = router({
         });
       }
     }),
+  */
 });

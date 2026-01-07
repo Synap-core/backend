@@ -4,7 +4,9 @@
  * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
+
 import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 
 export const tags = pgTable('tags', {
   // Primary key
@@ -24,6 +26,15 @@ export const tags = pgTable('tags', {
     .defaultNow()
     .notNull(),
 });
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertTagSchema = createInsertSchema(tags);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectTagSchema = createSelectSchema(tags);
 
 export type Tag = typeof tags.$inferSelect;
 export type NewTag = typeof tags.$inferInsert;

@@ -42,6 +42,19 @@ const sql = postgres(databaseUrl, {
  * Initialize migrations tracking table
  */
 async function initMigrationsTable() {
+  // Check if old table exists (without 'type' column)
+  const oldTableExists = await sql`
+    SELECT column_name 
+    FROM information_schema.columns 
+    WHERE table_name = '_migrations' AND column_name = 'type'
+  `;
+  
+  if (oldTableExists.length === 0) {
+    // Old schema exists - drop and recreate
+    console.log('⚠️  Old migrations table schema detected. Upgrading...');
+    await sql`DROP TABLE IF EXISTS _migrations CASCADE`;
+  }
+  
   await sql`
     CREATE TABLE IF NOT EXISTS _migrations (
       id SERIAL PRIMARY KEY,

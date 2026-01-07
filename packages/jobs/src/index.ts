@@ -1,57 +1,80 @@
 /**
  * Jobs Package - Main Export
  * 
- * Phase 3: Refactored Handler Architecture
+ * V2.0: Simplified Schema-Driven Event Architecture
  * 
  * This package exports:
- * - Handler functions (Inngest functions with direct event subscriptions)
- * - Legacy functions (for backward compatibility)
+ * - Table workers (entities, documents, messages, relations, workspaces, members)
+ * - AI workers (analyzer, embeddings, insights)
+ * - Shared workers (webhooks, permissions)
+ * - Worker registry for admin UI
  */
 
 export * from './client.js';
-export { handleNewEvent } from './functions/projectors.js';
+export * from './worker-registry.js';
+
+// ============================================================================
+// Table Workers
+// ============================================================================
+export { entitiesWorker } from './functions/entities.js';
+export { documentsWorker } from './functions/documents.js';
+export { messagesWorker } from './functions/messages.js';
+export { relationsWorker } from './functions/relations.js';
+export { workspacesWorker } from './functions/workspaces.js';
+export { workspaceMembersWorker } from './functions/workspace-members.js';
+export { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
+
+// ============================================================================
+// AI Workers
+// ============================================================================
 export { analyzeCapturedThought } from './functions/ai-analyzer.js';
 export { processAnalyzedThought } from './functions/thought-processor.js';
-export { insightPatternDetector } from './functions/insights.js';
-export { indexEntityEmbedding } from './functions/entity-embedding.js';
 
-// Export new handler functions
-export { handleTaskCreation } from './functions/task-creation.js';
-export { handleNoteCreation } from './functions/note-creation.js';
-export { handleConversationMessage } from './functions/conversation-message.js';
-export { handleProjectCreation } from './functions/project-creation.js';
-export { handleTaskCompletion } from './functions/task-completion.js';
-export { handleEmbeddingGeneration } from './functions/embedding-generation.js';
+// ============================================================================
+// Shared Workers
+// ============================================================================
+export { handleNewEvent } from './functions/projectors.js';
 export { handleWebhookDelivery } from './functions/webhook-broker.js';
+export { permissionValidator } from './functions/permission-validator.js';
 
-// Import all functions for Inngest
+// ============================================================================
+// INNGEST FUNCTION REGISTRY
+// ============================================================================
+
+import { entitiesWorker } from './functions/entities.js';
+import { documentsWorker } from './functions/documents.js';
+import { messagesWorker } from './functions/messages.js';
+import { relationsWorker } from './functions/relations.js';
+import { workspacesWorker } from './functions/workspaces.js';
+import { workspaceMembersWorker } from './functions/workspace-members.js';
+import { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
-import { insightPatternDetector } from './functions/insights.js';
-import { indexEntityEmbedding } from './functions/entity-embedding.js';
-import { handleTaskCreation } from './functions/task-creation.js';
-import { handleNoteCreation } from './functions/note-creation.js';
-import { handleConversationMessage } from './functions/conversation-message.js';
-import { handleProjectCreation } from './functions/project-creation.js';
-import { handleTaskCompletion } from './functions/task-completion.js';
-import { handleEmbeddingGeneration } from './functions/embedding-generation.js';
 import { handleWebhookDelivery } from './functions/webhook-broker.js';
+import { permissionValidator } from './functions/permission-validator.js';
 
+/**
+ * All Inngest functions to register with the serve handler.
+ */
 export const functions = [
-  // Legacy functions (kept for backward compatibility)
-  handleNewEvent,
+  // Table workers
+  entitiesWorker,
+  documentsWorker,
+  messagesWorker,
+  relationsWorker,
+  workspacesWorker,
+  workspaceMembersWorker,
+  whiteboardSnapshotWorker,
+  whiteboardRestoreWorker,
+  whiteboardAutoSaveWorker,
+  
+  // AI workers
   analyzeCapturedThought,
   processAnalyzedThought,
-  insightPatternDetector,
-  indexEntityEmbedding,
   
-  // Phase 3: Direct event subscription handlers
-  handleTaskCreation,
-  handleNoteCreation,
-  handleConversationMessage,
-  handleProjectCreation,
-  handleTaskCompletion,
-  handleEmbeddingGeneration,
+  // Shared workers
+  handleNewEvent,
   handleWebhookDelivery,
+  permissionValidator,
 ];

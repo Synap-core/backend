@@ -9,9 +9,9 @@
  */
 
 import { beforeAll, afterAll } from 'vitest';
-import { createLogger } from '@synap/core';
+import { createLogger } from '@synap-core/core';
 import { db } from '@synap/database';
-import { config } from '@synap/core';
+import { config } from '@synap-core/core';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';

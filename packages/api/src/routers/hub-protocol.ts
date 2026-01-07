@@ -155,14 +155,25 @@ export const hubProtocolRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      const [entity] = await db.insert(entities).values({
-        userId: input.userId,
-        type: input.type,
-        title: input.title,
-        preview: input.description,
-      }).returning();
+      // \u2705 Publish .requested event
+      const { inngest } = await import('@synap/jobs');
       
-      return entity;
+      await inngest.send({
+        name: 'entities.create.requested',
+        data: {
+          type: input.type,
+          title: input.title,
+          preview: input.description,
+          userId: input.userId,
+          source: 'intelligence-hub',
+        },
+        user: { id: input.userId },
+      });
+      
+      return {
+        status: 'requested',
+        message: 'Entity creation requested'
+      };
     }),
   
   /**

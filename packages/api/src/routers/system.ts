@@ -11,13 +11,17 @@
 
 import { z } from 'zod';
 import { publicProcedure, router } from '../trpc.js';
-import { getAllEventTypes, EventTypeSchemas } from '@synap/types';
-import { inngest } from '@synap/jobs';
+import { EventTypeSchemas } from '@synap-core/core';
+import { getAllEventTypes } from '@synap/events';
+import { getAllGeneratedEventTypes, parseEventType } from '@synap/events';
+import { inngest, getAllWorkers } from '@synap/jobs';
 import { dynamicToolRegistry } from '@synap/ai';
 import { dynamicRouterRegistry } from '../router-registry.js';
-import { createSynapEvent } from '@synap/types';
+import { createSynapEvent } from '@synap-core/core';
 import { eventRepository } from '@synap/database';
 import { eventStreamManager } from '../event-stream-manager.js';
+import { sqlDrizzle } from '@synap/database';
+import { db } from '@synap/database';
 
 /**
  * System Router
@@ -30,16 +34,28 @@ export const systemRouter = router({
    * This gives a complete overview of the system's architecture.
    */
   getCapabilities: publicProcedure.query(async () => {
-    // Get all event types
-    const eventTypes = getAllEventTypes().map(type => ({
+    // Get all event types - combine custom/legacy + generated
+    const customEventTypes = getAllEventTypes().map(type => ({
       type,
       hasSchema: type in EventTypeSchemas,
+      category: 'custom' as const,
     }));
 
-    // Get all event handlers
-    // Phase 4: Handlers are now independent Inngest functions, not registered in a central registry
-    // TODO: Fetch functions from Inngest API if needed
-    const handlers: any[] = [];
+    const generatedEventTypes = getAllGeneratedEventTypes().map(type => {
+      const parsed = parseEventType(type);
+      return {
+        type,
+        hasSchema: true, // Generated events always have schemas
+        category: 'generated' as const,
+        table: parsed?.table,
+        action: parsed?.action,
+      };
+    });
+
+    const eventTypes = [...generatedEventTypes, ...customEventTypes];
+
+    // Get all workers from registry
+    const workers = getAllWorkers();
 
     // Get all tools
     const toolsStats = dynamicToolRegistry.getStats();
@@ -70,12 +86,12 @@ export const systemRouter = router({
 
     return {
       eventTypes,
-      handlers,
+      workers, // Expose workers
       tools,
       routers,
       stats: {
         totalEventTypes: eventTypes.length,
-        totalHandlers: handlers.reduce((acc: number, h: { handlers: unknown[] }) => acc + h.handlers.length, 0),
+        totalHandlers: workers.length,
         totalTools: toolsStats.totalTools,
         totalRouters: routersStats.totalRouters,
         connectedSSEClients: sseStats.totalClients,
@@ -565,5 +581,55 @@ export const systemRouter = router({
       })),
     };
   }),
+
+  /**
+   * Get database tables
+   *
+   * Returns a list of all tables in the public schema with their row counts.
+   */
+  getDatabaseTables: publicProcedure
+    .query(async () => {
+       const tables = await db.execute(sqlDrizzle`
+        SELECT
+          table_name as name,
+          (SELECT count(*) FROM information_schema.columns WHERE table_name = t.table_name) as column_count,
+          (SELECT n_live_tup FROM pg_stat_user_tables WHERE relname = t.table_name) as estimated_rows
+        FROM information_schema.tables t
+        WHERE table_schema = 'public'
+        ORDER BY table_name;
+      `);
+      console.log(`[SystemRouter] Found ${tables.length} tables`);
+      return [...tables];
+    }),
+
+  /**
+   * Get database table rows
+   *
+   * Returns raw data from a specific table with pagination.
+   */
+  getDatabaseTableRows: publicProcedure
+    .input(z.object({
+      tableName: z.string(),
+      limit: z.number().min(1).max(100).default(50),
+      offset: z.number().min(0).default(0)
+    }))
+    .query(async ({ input }) => {
+      // Validate table name to prevent SQL injection (whitelisting)
+      const validTables = await db.execute(sqlDrizzle`
+        SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
+      `);
+
+      const isValid = validTables.some((t: any) => t.table_name === input.tableName);
+      if (!isValid) {
+        throw new Error(`Invalid table name: ${input.tableName}`);
+      }
+
+      // Safe query using sql.raw is risky if input is not validated, but we validated it against the schema above.
+      // However, parameters cannot be used for identifiers.
+      // Since we validated input.tableName exists in information_schema, it is safe to interpolate.
+      const query = sqlDrizzle.raw(`SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`);
+      const rows = await db.execute(query);
+      return rows;
+    }),
 
 });

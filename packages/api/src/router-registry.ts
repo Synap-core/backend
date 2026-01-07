@@ -9,7 +9,7 @@
 
 import type { AnyRouter } from '@trpc/server';
 import { router } from './trpc.js';
-import { createLogger, ConflictError } from '@synap/core';
+import { createLogger, ConflictError } from '@synap-core/core';
 
 const logger = createLogger({ module: 'router-registry' });
 

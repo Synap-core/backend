@@ -1,50 +1,73 @@
 {
-  "name": "@synap/types",
-  "version": "1.0.0",
+  "name": "@synap-core/types",
+  "version": "0.3.6",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js"
+    },
+    "./entities": {
+      "types": "./dist/entities/index.d.ts",
+      "import": "./dist/entities/index.js"
+    },
+    "./documents": {
+      "types": "./dist/documents/index.d.ts",
+      "import": "./dist/documents/index.js"
+    },
+    "./users": {
+      "types": "./dist/users/index.d.ts",
+      "import": "./dist/users/index.js"
+    },
+    "./inbox": {
+      "types": "./dist/inbox/index.d.ts",
+      "import": "./dist/inbox/index.js"
+    },
+    "./workspaces": {
+      "types": "./dist/workspaces/index.d.ts",
+      "import": "./dist/workspaces/index.js"
+    },
+    "./views": {
+      "types": "./dist/views/index.d.ts",
+      "import": "./dist/views/index.js"
+    },
+    "./relations": {
+      "types": "./dist/relations/index.d.ts",
+      "import": "./dist/relations/index.js"
+    },
+    "./preferences": {
+      "types": "./dist/preferences/index.d.ts",
+      "import": "./dist/preferences/index.js"
+    },
+    "./realtime": {
+      "types": "./dist/realtime/index.d.ts",
+      "import": "./dist/realtime/index.js"
+    },
+    "./events": {
+      "types": "./dist/events/index.d.ts",
+      "import": "./dist/events/index.js"
     }
   },
-  "files": [
-    "dist",
-    "src"
-  ],
   "scripts": {
-    "build": "tsc",
-    "test": "tsx --test src/**/*.test.ts"
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@synap/core": "file:../core",
-    "zod": "^3.22.0"
+    "@synap/database": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
+    "yjs": "^13.6.11",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
-  },
-  "keywords": [
-    "synap",
-    "types",
-    "typescript"
-  ],
-  "license": "MIT",
-  "description": "Shared TypeScript types for Synap ecosystem",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/synaptik-ai/synap.git",
-    "directory": "packages/types"
-  },
-  "bugs": {
-    "url": "https://github.com/synaptik-ai/synap/issues"
-  },
-  "homepage": "https://github.com/synaptik-ai/synap/tree/main/packages/types#readme",
-  "publishConfig": {
-    "access": "public"
+    "tsup": "^8.0.0",
+    "typescript": "^5.6.0"
   }
 }

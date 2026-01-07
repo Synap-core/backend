@@ -16,7 +16,7 @@ function getConfigSync(): { inngest: { eventKey?: string } } {
     return _config;
   }
 
-  // Try to get config from globalThis (set by @synap/core when loaded)
+  // Try to get config from globalThis (set by @synap-core/core when loaded)
   try {
     const coreModule = (globalThis as any).__synap_core_module;
     if (coreModule?.config) {
@@ -28,7 +28,7 @@ function getConfigSync(): { inngest: { eventKey?: string } } {
   }
 
   // Fallback: Try to import synchronously (only works if already loaded)
-  // This is a fallback - in practice, @synap/core should be imported first
+  // This is a fallback - in practice, @synap-core/core should be imported first
   try {
     // In ESM, we can't use require, but we can check if module is in cache
     // For now, return undefined eventKey (works for development)

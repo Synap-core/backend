@@ -6,7 +6,7 @@
  * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
-import type { ConversationMessageMetadata } from '@synap/core';
+import type { ConversationMessageMetadata } from '@synap-core/core';
 import { pgTable, uuid, text, timestamp, jsonb } from 'drizzle-orm/pg-core';
 
 export const conversationMessages = pgTable('conversation_messages', {

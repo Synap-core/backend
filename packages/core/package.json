@@ -1,5 +1,5 @@
 {
-  "name": "@synap/core",
+  "name": "@synap-core/core",
   "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "tsx tests/phase1.test.ts",
     "test:local": "tsx tests/local-mvp.test.ts"
   },
@@ -28,6 +28,8 @@
     "@opentelemetry/sdk-node": "^0.208.0",
     "@opentelemetry/sdk-trace-base": "^2.2.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
     "pino": "^9.2.0",
     "pino-pretty": "^13.1.2",
     "prom-client": "^15.1.3",

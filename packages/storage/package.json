@@ -21,13 +21,15 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --build",
     "test": "vitest"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",
     "@aws-sdk/s3-request-presigner": "^3.926.0",
-    "@synap/core": "workspace:*"
+    "@synap-core/core": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

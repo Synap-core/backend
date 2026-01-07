@@ -34,3 +34,23 @@ export type NewWebhookSubscription = typeof webhookSubscriptions.$inferInsert;
 
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
 export type NewWebhookDelivery = typeof webhookDeliveries.$inferInsert;
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertWebhookSubscriptionSchema = createInsertSchema(webhookSubscriptions);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectWebhookSubscriptionSchema = createSelectSchema(webhookSubscriptions);
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertWebhookDeliverySchema = createInsertSchema(webhookDeliveries);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectWebhookDeliverySchema = createSelectSchema(webhookDeliveries);

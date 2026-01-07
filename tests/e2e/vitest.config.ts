@@ -28,7 +28,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@synap/core': path.resolve(__dirname, '../packages/core/src'),
+      '@synap-core/core': path.resolve(__dirname, '../packages/core/src'),
       '@synap/api': path.resolve(__dirname, '../packages/api/src'),
       '@synap/database': path.resolve(__dirname, '../packages/database/src'),
       '@synap/domain': path.resolve(__dirname, '../packages/domain/src'),

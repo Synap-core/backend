@@ -6,8 +6,8 @@
 
 import { OpenAIEmbeddings } from '@langchain/openai';
 import type { Embeddings as BaseEmbeddings } from '@langchain/core/embeddings';
-import { config } from '@synap/core';
-import { createLogger } from '@synap/core';
+import { config } from '@synap-core/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'embeddings-provider' });
 

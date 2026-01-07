@@ -7,7 +7,7 @@
 
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { createLogger, ValidationError, InternalServerError } from '@synap/core';
+import { createLogger, ValidationError, InternalServerError } from '@synap-core/core';
 import * as schema from './schema/index.js';
 
 const logger = createLogger({ module: 'database' });

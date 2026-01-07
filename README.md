@@ -1,278 +1,255 @@
 # Synap Backend
 
-**Open-Source AI-Powered Personal Knowledge Management System**
+Self-hosted intelligence infrastructure for sovereign data pods.
 
-> Event-sourced backend with semantic search, knowledge graphs, and intelligent assistance
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node](https://img.shields.io/badge/node-%3E=22-brightgreen)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
-
----
-
-## 🎯 Overview
-
-Synap is an **AI-powered personal knowledge management system** that helps you organize, connect, and intelligently interact with your information through:
-
-- **🔍 Semantic Search** - Vector-based similarity search powered by pgvector
-- **🧠 Knowledge Graph** - Entity and relationship tracking
-- **🤖 AI Integration** - LangChain-powered intelligent assistance  
-- **📊 Event Sourcing** - Complete audit trail and time-travel capabilities
-- **🔐 Multi-Tenancy** - Secure pod-per-user architecture (prepared)
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Node.js** >= 22
-- **pnpm** >= 9
-- **Docker** & Docker Compose
-- **OpenAI API Key** (for embeddings)
-
-### Installation
+## Quick Start (30 seconds)
 
 ```bash
-# 1. Clone repository
-git clone https://github.com/yourusername/synap-backend.git
-cd synap-backend
+# 1. Start infrastructure
+./start.sh
 
-# 2. Install dependencies
-pnpm install
+# 2. Start API server
+pnpm exec turbo run dev --filter='@synap/realtime' --filter='api' --filter='@synap/jobs'
 
-# 3. Configure environment
-cp .env.example .env
-# Edit .env - Update DATABASE_URL, OPENAI_API_KEY, etc.
+# 3. Start frontend (in synap-app directory)
+cd ../synap-app
+pnpm exec turbo run dev --filter='web'
 
-# 4. Start infrastructure (PostgreSQL + MinIO)
-docker compose up -d
-
-# 5. Run database migrations
-pnpm db:migrate
-
-# 6. Verify setup - run tests
-pnpm test
-
-# 7. Start development server
-pnpm dev
+# 4. Open browser
+open http://localhost:3000/setup
 ```
 
-**Verify**: Visit http://localhost:3000/health
+That's it! The setup wizard will guide you through creating your admin account.
 
 ---
 
-## 📦 Package Structure
+## What Just Happened?
+
+The `start.sh` script:
+- ✅ Starts Docker services (Postgres, MinIO, Kratos)
+- ✅ Waits for all services to be healthy
+- ✅ Runs database migrations automatically
+- ✅ Verifies everything is ready
+
+---
+
+## Services
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **PostgreSQL** | 5432 | Main database (TimescaleDB + pgvector) |
+| **MinIO** | 9000/9001 | S3-compatible object storage |
+| **Kratos** | 4433/4434 | Authentication & identity management |
+| **Inngest** | 8288 | Background job processing (optional) |
+| **n8n** | 5678 | Workflow automation (optional) |
+
+---
+
+## Architecture
 
 ```
 synap-backend/
 ├── packages/
-│   ├── api/           # Fastify HTTP API
-│   ├── core/          # Configuration, logging, errors
-│   ├── database/      # Drizzle ORM, migrations, repos
-│   ├── domain/        # Business logic services
-│   ├── jobs/          # Background jobs (Inngest)
-│   ├── storage/       # File storage (MinIO/S3)
-│   ├── ai-embeddings/ # Vector embeddings (OpenAI)
-│   └── auth/          # Authentication utilities
-├── docs/              # Documentation
-└── scripts/           # Utility scripts
+│   ├── api/           # tRPC API server
+│   ├── database/      # Drizzle ORM schema & migrations
+│   ├── realtime/      # WebSocket server
+│   ├── jobs/          # Inngest background jobs
+│   └── storage/       # MinIO client
+├── docker/
+│   ├── postgres/      # Database init scripts
+│   └── kratos/        # Kratos migration script
+├── kratos/            # Kratos configuration
+└── start.sh           # Automated startup script
 ```
 
 ---
 
-## 🏗️ Architecture
+## Manual Setup (If You Need Control)
 
-### Event-Driven CQRS Design
+### 1. Environment Variables
 
-```
-┌─────────────────────────────────────────┐
-│         Fastify API Layer                │
-│   (Type-safe routes + Zod validation)   │
-└──────────────┬──────────────────────────┘
-               │
-    ┌──────────┼─────────┐
-    │          │         │
-    ▼          ▼         ▼
-┌────────┐ ┌──────┐ ┌─────────┐
-│ Domain │ │ Jobs │ │ Storage │
-│Services│ │      │ │ (MinIO) │
-└───┬────┘ └──┬───┘ └────┬────┘
-    │         │          │
-    └─────────┼──────────┘
-              ▼
-    ┌──────────────────┐
-    │  Database Layer   │
-    │  PostgreSQL +     │
-    │  Drizzle ORM      │
-    └──────────────────┘
+Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
 ```
 
-**Key Principles**:
-- All state changes → events (immutable log)
-- Separate read/write models (CQRS)
-- Materialized views for performance
-- Complete audit trail
+Customize if needed (defaults work for local development).
 
----
-
-## 🛠️ Technology Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Runtime** | Node.js 22 | JavaScript runtime |
-| **Language** | TypeScript 5 | Type safety |
-| **API** | Fastify 5 | HTTP server |
-| **Database** | PostgreSQL 16 | Primary data store |
-| **ORM** | Drizzle ORM 0.33 | Type-safe queries |
-| **Driver** | postgres.js 3.4 | PostgreSQL client |
-| **Vector Search** | pgvector 0.7 | Semantic search |
-| **Storage** | MinIO | S3-compatible files |
-| **Jobs** | Inngest 3 | Background processing |
-| **AI** | LangChain 0.3 | AI orchestration |
-| **Embeddings** | OpenAI | Vector embeddings |
-| **Testing** | Vitest | Unit/integration tests |
-| **Auth** | Ory Kratos *(optional)* | Identity management |
-
----
-
-## 🔧 Development Commands
+### 2. Start Docker Services
 
 ```bash
-# Development
-pnpm dev                 # Start all services
-pnpm build               # Build all packages
-pnpm test                # Run tests (11/11 passing)
+docker compose --profile auth up -d
+```
 
-# Database
-pnpm db:migrate          # Apply migrations
-pnpm db:studio           # Open Drizzle Studio
+**Profiles**:
+- `auth` - Adds Kratos for authentication
+- `jobs` - Adds Inngest for background jobs
+- `workflows` - Adds n8n for automation
 
-# Docker
-docker compose up -d            # Start required services
-docker compose --profile auth up # Include authentication
-docker compose --profile jobs up # Include background jobs
+### 3. Run Migrations
+
+```bash
+cd packages/database
+pnpm run db:push
+```
+
+This creates all tables in your database.
+
+### 4. Start Development Servers
+
+```bash
+# Backend APIs
+pnpm exec turbo run dev --filter='@synap/realtime' --filter='api' --filter='@synap/jobs'
+
+# Frontend (in synap-app directory)
+cd ../synap-app
+pnpm exec turbo run dev --filter='web'
 ```
 
 ---
 
-## ✅ Current Status
+## First-Time Setup
 
-**Version**: 0.3.0  
-**Tests**: 11/11 passing (4 vector SELECT tests skipped - known vitest integration issue)  
-**Production Ready**: Core services operational
-
-### What Works
-
-- ✅ **Core Services** - Event, conversation, knowledge, suggestion all tested
-- ✅ **Database Layer** - Migrations, pooling, type-safe queries
-- ✅ **Vector Storage** - Embedding generation and storage
-- ✅ **API Layer** - Validation, error handling, CORS
-- ✅ **File Storage** - MinIO integration
-- ✅ **Authentication** - Ory Kratos configured (optional)
-
-### Known Limitations
-
-- ⏸️ Vector semantic search (INSERT works, SELECT tests skipped due to vitest issue)
-- ❌ AI intelligence features not implemented yet
-- ❌ Real-time WebSocket support
-- ❌ Multi-tenant deployment (prepared but not active)
-
-See [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md) for complete details.
+1. **Access Setup Wizard**: http://localhost:3000/setup
+2. **Create Admin Account**: Email, name, and password
+3. **Automatic Workspace**: System creates your first workspace
+4. **You're Live**: Start using Synap!
 
 ---
 
-## 📚 Documentation
+## Troubleshooting
 
-- **[MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md)** - Complete system documentation (start here!)
-- **[CHANGELOG.md](./CHANGELOG.md)** - Version history
-- **[docs/](./docs/)** - Additional guides
+### Docker Services Won't Start
 
-**For Contributors**: Read MASTER_DOCUMENTATION.md first - it contains architecture, testing principles, and development guidelines.
-
----
-
-## 🗺️ Roadmap
-
-### Phase 1: Complete Core (Next Up)
-- [ ] Fix vector search (vitest integration issue)
-- [ ] Implement semantic search endpoints
-- [ ] Add AI intelligence (Q&A, summarization)
-- [ ] Increase test coverage to 80%
-
-### Phase 2: Production
-- [ ] Monitoring & observability
-- [ ] Performance optimization  
-- [ ] Deployment automation
-- [ ] Multi-tenant migration
-
-### Phase 3: Advanced
-- [ ] Advanced AI capabilities
-- [ ] Real-time collaboration
-- [ ] Mobile applications
-
-See MASTER_DOCUMENTATION.md for detailed roadmap.
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! 
-
-**Before contributing**:
-1. Read [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md) - Architecture & principles
-2. Check existing issues or create one
-3. Follow TypeScript strict mode
-4. Write tests for new features
-5. Use Zod for validation
-
-**Development Setup**:
 ```bash
-# Fork and clone
-git clone https://github.com/yourusername/synap-backend.git
+# Check Docker is running
+docker info
 
-# Install dependencies
-pnpm install
+# View logs
+docker logs synap-postgres
+docker logs synap-kratos
 
-# Start services
-docker compose up -d
+# Hard reset (WARNING: Deletes all data)
+docker compose --profile auth down -v
+./start.sh
+```
 
-# Run migrations
-pnpm db:migrate
+### Kratos Not Responding
 
-# Run tests
+```bash
+# Check health
+curl http://localhost:4433/health/ready
+
+# Should return: {"status":"ok"}
+
+# If not, check logs
+docker logs synap-kratos --tail 50
+```
+
+### Database Connection Errors
+
+```bash
+# Verify databases exist
+docker exec synap-postgres psql -U postgres -c "\l"
+
+# Should show: synap, kratos_db
+
+# Test connection
+docker exec synap-postgres psql -U postgres -d synap -c "SELECT 1;"
+```
+
+### Migration Errors
+
+```bash
+# Reset and re-run
+cd packages/database
+pnpm run db:drop    # Drops all tables
+pnpm run db:push    # Recreates schema
+```
+
+---
+
+## Development
+
+### Running Tests
+
+```bash
+# All tests
 pnpm test
 
-# Start coding!
+# Specific package
+pnpm --filter @synap/database test
+
+# With coverage
+pnpm --filter @synap/database test:coverage
+```
+
+### Database Tools
+
+```bash
+cd packages/database
+
+# Generate migration files (when schema changes)
+pnpm run db:generate
+
+# Push schema directly to database (dev only)
+pnpm run db:push
+
+# Launch Drizzle Studio (database UI)
+pnpm run db:studio
+```
+
+### API Development
+
+```bash
+# Watch mode with auto-reload
+pnpm --filter api dev
+
+# Run specific service
+pnpm --filter @synap/realtime dev
 ```
 
 ---
 
-## 📄 License
+## Production Deployment
 
-MIT License - See [LICENSE](./LICENSE) for details
+> **Note**: Production deployment guide coming soon. Current setup optimized for local development.
 
----
-
-## 🙏 Acknowledgments
-
-Built with:
-- [Drizzle ORM](https://orm.drizzle.team) - Type-safe database toolkit
-- [Fastify](https://fastify.dev) - Fast web framework
-- [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search
-- [LangChain](https://js.langchain.com) - AI orchestration
-- [Inngest](https://inngest.com) - Background jobs
+Key differences for production:
+- Disable Kratos `--dev` mode
+- Use proper secrets (not defaults)
+- Enable TLS for Kratos
+- Set up email delivery (replace mailslurper)
+- Configure backups for PostgreSQL
+- Use managed services (RDS, S3) or hardened self-hosted
 
 ---
 
-## 📞 Support
+## Tech Stack
 
-- **Documentation**: [MASTER_DOCUMENTATION.md](./MASTER_DOCUMENTATION.md)
-- **Issues**: [GitHub Issues](https://github.com/yourusername/synap-backend/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/synap-backend/discussions)
+- **Database**: PostgreSQL 16 + TimescaleDB + pgvector
+- **ORM**: Drizzle ORM
+- **API**: tRPC + Fastify
+- **Auth**: Ory Kratos
+- **Storage**: MinIO (S3-compatible)
+- **Jobs**: Inngest
+- **Real-time**: Socket.IO
+- **Monorepo**: Turborepo + pnpm workspaces
 
 ---
 
-**Last Updated**: December 6, 2025  
-**Version**: 0.3.0  
-**Status**: Core Operational, Tests Passing ✅
+## License
+
+See [LICENSE](../LICENSE)
+
+---
+
+## Support
+
+- Documentation: https://docs.synap.sh (coming soon)
+- Issues: https://github.com/yourusername/synap/issues
+- Discord: https://discord.gg/synap (coming soon)
+
+---
+
+**Built with ❤️ for sovereign data ownership**

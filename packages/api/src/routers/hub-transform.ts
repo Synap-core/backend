@@ -5,9 +5,11 @@
  */
 
 import type { HubInsight } from '@synap/hub-protocol';
-import { createSynapEvent, type EventType, isValidEventType } from '@synap/types';
-import { ValidationError } from '@synap/core';
-import { createLogger } from '@synap/core';
+import { createSynapEvent } from '@synap-core/core';
+import type { EventType } from '@synap/events';
+import { isValidEventType } from '@synap/events';
+import { ValidationError } from '@synap-core/core';
+import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'hub-transform' });
 

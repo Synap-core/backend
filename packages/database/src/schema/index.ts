@@ -2,6 +2,9 @@
  * Database Schema - Export all tables
  */
 
+// Core user management (Kratos identity cache)
+export * from './users.js';
+
 export * from './events.js';
 export * from './entities.js';
 export * from './entity-vectors.js';
@@ -20,6 +23,39 @@ export * from './webhook_subscriptions.js';
 export * from './chat-threads.js';
 export * from './agents.js';
 export * from './projects.js';
+export * from './roles.js';
+export * from './sharing.js';
 
 // AI Enrichment schemas (event-based)
 export * from './enrichments.js';
+
+// Life Feed schemas
+export * from './inbox-items.js';
+export * from './user-entity-state.js';
+
+// Intelligence Service Registry
+export * from './intelligence-services.js';
+
+// NEW: Workspace system
+export * from './workspaces.js';
+
+// NEW: Views system (whiteboards, timelines, etc.)
+export * from './views.js';
+
+// NEW: User preferences
+export {
+  userPreferences,
+  type UserPreference,
+  type NewUserPreference,
+  type CustomTheme,
+  type DefaultTemplates,
+  type CustomEntityType,
+  type EntityMetadataSchemas,
+  type UIPreferences,
+  type GraphPreferences,
+  insertUserPreferenceSchema,
+  selectUserPreferenceSchema,
+} from './user-preferences.js';
+
+// NEW: Entity Templates
+export * from './entity-templates.js';

@@ -4,18 +4,11 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "skipLibCheck": true,
-    "composite": true,
     "declaration": true,
-    "declarationMap": true
+    "composite": false,
+    "preserveSymlinks": true,
+    "noEmit": false // Override root tsconfig to allow declaration generation
   },
-  "references": [
-    {
-      "path": "../core"
-    },
-    {
-      "path": "../types"
-    }
-  ],
   "include": [
     "src/**/*"
   ],
