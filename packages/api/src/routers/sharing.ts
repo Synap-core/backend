@@ -1,3 +1,4 @@
+
 /**
  * Sharing Router - Public links and invitations
  * 
@@ -9,23 +10,51 @@
 
 import { z } from 'zod';
 import { router, protectedProcedure, publicProcedure } from '../trpc.js';
-import { db, eq, and, sql as sqlDrizzle } from '@synap/database';
-import { resourceShares, views, entities } from '@synap/database/schema';
+import { db, eq, and, sqlDrizzle } from '@synap/database';
+import { resourceShares, views, entities, insertResourceShareSchema } from '@synap/database/schema';
 import { TRPCError } from '@trpc/server';
 import { randomBytes } from 'crypto';
+import { requireEditor, requireViewer, requireResourceOwner } from '../utils/workspace-permissions.js';
 
 export const sharingRouter = router({
   /**
    * Create public link
    */
   createPublicLink: protectedProcedure
-    .input(z.object({
-      resourceType: z.enum(['view', 'entity']),
-      resourceId: z.string().uuid(),
-      expiresInDays: z.number().min(1).max(365).optional(),
-    }))
+    .input(
+      insertResourceShareSchema.pick({
+        resourceType: true,
+        resourceId: true,
+      }).extend({
+        expiresInDays: z.number().min(1).max(365).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      // TODO: Check user owns resource or has share permission
+      // Check user owns resource or has editor permission
+      let resource;
+      if (input.resourceType === 'view') {
+        resource = await db.query.views.findFirst({
+          where: eq(views.id, input.resourceId),
+        });
+        if (!resource) throw new TRPCError({ code: 'NOT_FOUND', message: 'Resource not found' });
+        
+        if (resource.workspaceId) {
+          await requireEditor(db, resource.workspaceId, ctx.userId);
+        } else {
+          requireResourceOwner(resource, ctx.userId);
+        }
+      } else if (input.resourceType === 'entity') {
+        resource = await db.query.entities.findFirst({
+          where: eq(entities.id, input.resourceId),
+        });
+        if (!resource) throw new TRPCError({ code: 'NOT_FOUND', message: 'Resource not found' });
+        
+        if (resource.workspaceId) {
+          await requireEditor(db, resource.workspaceId, ctx.userId);
+        } else {
+          requireResourceOwner(resource, ctx.userId);
+        }
+      }
       
       // Generate secure token
       const token = randomBytes(16).toString('hex');
@@ -53,11 +82,14 @@ export const sharingRouter = router({
    * Invite user to resource
    */
   invite: protectedProcedure
-    .input(z.object({
-      resourceType: z.enum(['view', 'entity']),
-      resourceId: z.string().uuid(),
-      userEmail: z.string().email(),
-    }))
+    .input(
+      insertResourceShareSchema.pick({
+        resourceType: true,
+        resourceId: true,
+      }).extend({
+        userEmail: z.string().email(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Get or create share
       let share = await db.query.resourceShares.findFirst({
@@ -80,7 +112,7 @@ export const sharingRouter = router({
       // Add user to invited list
       await db.update(resourceShares)
         .set({
-          invitedUsers: sqlDrizzle`array_append(invited_users, ${input.userEmail})` as any,
+          invitedUsers: sqlDrizzle`array_append(${resourceShares.invitedUsers}, ${input.userEmail})`,
           updatedAt: new Date(),
         })
         .where(and(
@@ -104,7 +136,7 @@ export const sharingRouter = router({
       await db
         .update(resourceShares)
         .set({
-          viewCount: sqlDrizzle`view_count + 1` as any,
+          viewCount: sqlDrizzle`${resourceShares.viewCount} + 1`,
           lastAccessedAt: new Date(),
         })
         .where(eq(resourceShares.id, input.shareId));
@@ -160,7 +192,7 @@ export const sharingRouter = router({
       // Track view
       await db.update(resourceShares)
         .set({
-          viewCount: sqlDrizzle`view_count + 1` as any,
+          viewCount: sqlDrizzle`${resourceShares.viewCount} + 1`,
           lastAccessedAt: new Date(),
         })
         .where(eq(resourceShares.id, share.id));
@@ -175,12 +207,32 @@ export const sharingRouter = router({
    * List shares for resource
    */
   list: protectedProcedure
-    .input(z.object({
-      resourceType: z.enum(['view', 'entity']),
-      resourceId: z.string().uuid(),
+    .input(insertResourceShareSchema.pick({
+      resourceType: true,
+      resourceId: true,
+      visibility: true,
+      expiresAt: true,
     }))
-    .query(async ({ input }) => {
-      // TODO: Check user owns resource
+    .query(async ({ input, ctx }) => {
+      // Check user owns resource or has viewer permission
+      let resource;
+      if (input.resourceType === 'view') {
+        resource = await db.query.views.findFirst({
+          where: eq(views.id, input.resourceId),
+        });
+      } else {
+        resource = await db.query.entities.findFirst({
+          where: eq(entities.id, input.resourceId),
+        });
+      }
+      
+      if (!resource) throw new TRPCError({ code: 'NOT_FOUND', message: 'Resource not found' });
+      
+      if (resource.workspaceId) {
+        await requireViewer(db, resource.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(resource, ctx.userId);
+      }
       
       return await db.query.resourceShares.findMany({
         where: and(
@@ -197,8 +249,29 @@ export const sharingRouter = router({
     .input(z.object({
       shareId: z.string().uuid(),
     }))
-    .mutation(async ({ input }) => {
-      // TODO: Check user owns resource
+    .mutation(async ({ input, ctx }) => {
+      // Check user owns the shared resource
+      const share = await db.query.resourceShares.findFirst({
+        where: eq(resourceShares.id, input.shareId),
+      });
+      
+      if (!share) throw new TRPCError({ code: 'NOT_FOUND' });
+      
+      // Load resource to check ownership
+      let resource;
+      if (share.resourceType === 'view') {
+        resource = await db.query.views.findFirst({ where: eq(views.id, share.resourceId) });
+      } else {
+        resource = await db.query.entities.findFirst({ where: eq(entities.id, share.resourceId) });
+      }
+      
+      if (!resource) throw new TRPCError({ code: 'NOT_FOUND', message: 'Resource not found' });
+      
+      if (resource.workspaceId) {
+        await requireEditor(db, resource.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(resource, ctx.userId);
+      }
       
       await db.delete(resourceShares)
         .where(eq(resourceShares.id, input.shareId));
@@ -206,3 +279,4 @@ export const sharingRouter = router({
       return { success: true };
     }),
 });
+

@@ -33,12 +33,12 @@ import {
   securityHeadersMiddleware,
   getCorsOrigins,
 } from './middleware/security.js';
-// DISABLED - event streaming not exported from @synap/api
-// import { eventStreamManager, setupEventBroadcasting } from '@synap/api';
+import { eventStreamManager, setupEventBroadcasting } from '@synap/api';
 import { webhookRouter } from './webhooks/index.js';
 
 // Setup event broadcasting to SSE clients
-// setupEventBroadcasting(); // DISABLED
+setupEventBroadcasting();
+
 
 // Validate configuration at startup
 const apiLogger = createLogger({ module: 'api-server' });
@@ -194,47 +194,46 @@ if (isPostgres) {
 }
 
 // SSE endpoint for real-time event streaming (admin dashboard)
-// This endpoint is public// DISABLED - eventStreamManager not exported from @synap/api
 // Server-Sent Events endpoint for event broadcasting
-// app.get('/api/events/stream', (c) => {
-//   const clientId = crypto.randomUUID();
-//
-//   const stream = new ReadableStream({
-//     start(controller) {
-//       // Register the client
-//       eventStreamManager.registerClient(clientId, controller);
-//
-//       // Send initial connection message
-//       const encoder = new TextEncoder();
-//       const initialMessage = `data: ${JSON.stringify({ type: 'connected', clientId })}\n\n`;
-//       controller.enqueue(encoder.encode(initialMessage));
-//
-//       apiLogger.info({ clientId }, 'SSE client stream started');
-//     },
-//     cancel() {
-//       // Cleanup when client disconnects
-//       eventStreamManager.unregisterClient(clientId);
-//       apiLogger.info({ clientId }, 'SSE client stream cancelled');
-//     },
-//   });
-//
-//   // Get CORS origins
-//   const allowedOrigins = getCorsOrigins();
-//   const origin = c.req.header('origin') || '';
-//   const allowOrigin = Array.isArray(allowedOrigins)
-//     ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0])
-//     : allowedOrigins;
-//
-//   return new Response(stream, {
-//     headers: {
-//       'Content-Type': 'text/event-stream',
-//       'Cache-Control': 'no-cache',
-//       'Connection': 'keep-alive',
-//       'Access-Control-Allow-Origin': allowOrigin,
-//       'Access-Control-Allow-Credentials': 'true',
-//     },
-//   });
-// });
+app.get('/api/events/stream', (c) => {
+  const clientId = crypto.randomUUID();
+
+  const stream = new ReadableStream({
+    start(controller) {
+      // Register the client
+      eventStreamManager.registerClient(clientId, controller);
+
+      // Send initial connection message
+      const encoder = new TextEncoder();
+      const initialMessage = `data: ${JSON.stringify({ type: 'connected', clientId })}\n\n`;
+      controller.enqueue(encoder.encode(initialMessage));
+
+      apiLogger.info({ clientId }, 'SSE client stream started');
+    },
+    cancel() {
+      // Cleanup when client disconnects
+      eventStreamManager.unregisterClient(clientId);
+      apiLogger.info({ clientId }, 'SSE client stream cancelled');
+    },
+  });
+
+  // Get CORS origins
+  const allowedOrigins = getCorsOrigins();
+  const origin = c.req.header('origin') || '';
+  const allowOrigin = Array.isArray(allowedOrigins)
+    ? (allowedOrigins.includes(origin) ? origin : allowedOrigins[0])
+    : allowedOrigins;
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': allowOrigin,
+      'Access-Control-Allow-Credentials': 'true',
+    },
+  });
+});
 
 
 // tRPC routes (protected by auth, except public routes)

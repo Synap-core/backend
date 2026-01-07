@@ -1,6 +1,7 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, integer, index, check, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { workspaces } from './workspaces.js';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 
 export const entityTemplates = pgTable('entity_templates', {
   id: uuid('id').primaryKey().defaultRandom().notNull(),
@@ -54,3 +55,16 @@ export const entityTemplates = pgTable('entity_templates', {
     )
   };
 });
+
+export type EntityTemplate = typeof entityTemplates.$inferSelect;
+export type NewEntityTemplate = typeof entityTemplates.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertEntityTemplateSchema = createInsertSchema(entityTemplates);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectEntityTemplateSchema = createSelectSchema(entityTemplates);
+

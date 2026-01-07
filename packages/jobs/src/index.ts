@@ -4,9 +4,9 @@
  * V2.0: Simplified Schema-Driven Event Architecture
  * 
  * This package exports:
- * - Table workers (entities, documents, messages, relations)
+ * - Table workers (entities, documents, messages, relations, workspaces, members)
  * - AI workers (analyzer, embeddings, insights)
- * - Shared workers (webhooks)
+ * - Shared workers (webhooks, permissions)
  * - Worker registry for admin UI
  */
 
@@ -20,6 +20,9 @@ export { entitiesWorker } from './functions/entities.js';
 export { documentsWorker } from './functions/documents.js';
 export { messagesWorker } from './functions/messages.js';
 export { relationsWorker } from './functions/relations.js';
+export { workspacesWorker } from './functions/workspaces.js';
+export { workspaceMembersWorker } from './functions/workspace-members.js';
+export { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
 
 // ============================================================================
 // AI Workers
@@ -42,6 +45,9 @@ import { entitiesWorker } from './functions/entities.js';
 import { documentsWorker } from './functions/documents.js';
 import { messagesWorker } from './functions/messages.js';
 import { relationsWorker } from './functions/relations.js';
+import { workspacesWorker } from './functions/workspaces.js';
+import { workspaceMembersWorker } from './functions/workspace-members.js';
+import { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
@@ -57,6 +63,11 @@ export const functions = [
   documentsWorker,
   messagesWorker,
   relationsWorker,
+  workspacesWorker,
+  workspaceMembersWorker,
+  whiteboardSnapshotWorker,
+  whiteboardRestoreWorker,
+  whiteboardAutoSaveWorker,
   
   // AI workers
   analyzeCapturedThought,
@@ -65,6 +76,5 @@ export const functions = [
   // Shared workers
   handleNewEvent,
   handleWebhookDelivery,
-  permissionValidator, // Phase 2 - 3-phase pattern
+  permissionValidator,
 ];
-

@@ -10,6 +10,9 @@ import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
 import { entities } from './entities.js';
 import { tags } from './tags.js';
 
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
 export const entityTags = pgTable('entity_tags', {
   // Primary key
   id: uuid('id').defaultRandom().primaryKey(),
@@ -30,6 +33,15 @@ export const entityTags = pgTable('entity_tags', {
     .defaultNow()
     .notNull(),
 });
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertEntityTagSchema = createInsertSchema(entityTags);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectEntityTagSchema = createSelectSchema(entityTags);
 
 export type EntityTag = typeof entityTags.$inferSelect;
 export type NewEntityTag = typeof entityTags.$inferInsert;

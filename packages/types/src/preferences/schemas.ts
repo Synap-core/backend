@@ -1,10 +1,17 @@
 /**
- * User Preferences Schemas - Zod validation
+ * User Preferences Schemas - UI-Specific Validation Only
+ * 
+ * Database schemas come from @synap/database/schema
+ * This file contains ONLY frontend/UI-specific Zod schemas
  */
 
 import { z } from 'zod';
 
-// Custom Theme Schema
+// ============================================================================
+// UI-SPECIFIC SCHEMAS (Not in database)
+// ============================================================================
+
+// Custom Theme Schema (nested JSONB validation for UI)
 export const CustomThemeSchema = z.object({
   colors: z.object({
     primary: z.string().optional(),
@@ -29,28 +36,7 @@ export const CustomThemeSchema = z.object({
   }).optional(),
 }).optional();
 
-// Default Templates Schema
-export const DefaultTemplatesSchema = z.record(
-  z.string(), // entity type
-  z.string()  // template ID
-).optional();
-
-// Custom Entity Type Schema
-export const CustomEntityTypeSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  icon: z.string(),
-  color: z.string(),
-  metadataSchema: z.record(z.any()),
-});
-
-// Entity Metadata Schemas
-export const EntityMetadataSchemasSchema = z.record(
-  z.string(), // entity type
-  z.record(z.any()) // field definitions
-).optional();
-
-// UI Preferences Schema
+// UI Preferences Schema (nested JSONB validation for UI)
 export const UIPreferencesSchema = z.object({
   sidebarCollapsed: z.boolean().optional(),
   panelPositions: z.record(z.object({
@@ -64,7 +50,7 @@ export const UIPreferencesSchema = z.object({
   defaultView: z.enum(['list', 'grid', 'timeline']).optional(),
 }).optional();
 
-// Graph Preferences Schema
+// Graph Preferences Schema (nested JSONB validation for UI)
 export const GraphPreferencesSchema = z.object({
   forceSettings: z.object({
     linkDistance: z.number().optional(),
@@ -84,40 +70,18 @@ export const GraphPreferencesSchema = z.object({
   showMinimap: z.boolean().optional(),
 }).optional();
 
-// Complete User Preferences Schema
-export const UserPreferencesSchema = z.object({
-  userId: z.string(),
-  theme: z.enum(['light', 'dark', 'system']).default('system'),
-  customTheme: CustomThemeSchema,
-  defaultTemplates: DefaultTemplatesSchema,
-  customEntityTypes: z.array(CustomEntityTypeSchema).optional(),
-  entityMetadataSchemas: EntityMetadataSchemasSchema,
-  uiPreferences: UIPreferencesSchema,
-  graphPreferences: GraphPreferencesSchema,
-  onboardingCompleted: z.boolean().default(false),
-  onboardingStep: z.string().optional(),
-  updatedAt: z.date().optional(),
-});
+// ============================================================================
+// API INPUT SCHEMAS (All fields optional for partial updates)
+// ============================================================================
 
-// Input schema for API updates (all fields optional except userId)
 export const UpdatePreferencesInputSchema = z.object({
   theme: z.enum(['light', 'dark', 'system']).optional(),
   customTheme: CustomThemeSchema,
-  defaultTemplates: DefaultTemplatesSchema,
-  customEntityTypes: z.array(CustomEntityTypeSchema).optional(),
-  entityMetadataSchemas: EntityMetadataSchemasSchema,
+  defaultTemplates: z.record(z.string(), z.string()).optional(),
+  customEntityTypes: z.array(z.any()).optional(),
+  entityMetadataSchemas: z.record(z.string(), z.record(z.any())).optional(),
   uiPreferences: UIPreferencesSchema,
   graphPreferences: GraphPreferencesSchema,
   onboardingCompleted: z.boolean().optional(),
   onboardingStep: z.string().optional(),
 });
-
-// Export types
-export type CustomTheme = z.infer<typeof CustomThemeSchema>;
-export type DefaultTemplates = z.infer<typeof DefaultTemplatesSchema>;
-export type CustomEntityType = z.infer<typeof CustomEntityTypeSchema>;
-export type EntityMetadataSchemas = z.infer<typeof EntityMetadataSchemasSchema>;
-export type UIPreferences = z.infer<typeof UIPreferencesSchema>;
-export type GraphPreferences = z.infer<typeof GraphPreferencesSchema>;
-export type UserPreferences = z.infer<typeof UserPreferencesSchema>;
-export type UpdatePreferencesInput = z.infer<typeof UpdatePreferencesInputSchema>;

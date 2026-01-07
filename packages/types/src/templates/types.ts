@@ -152,3 +152,76 @@ export interface EntityTemplate {
   createdAt: Date | string;
   updatedAt: Date | string;
 }
+
+// =============================================================================
+// API Input Types
+// =============================================================================
+
+/**
+ * Input for listing templates
+ */
+export interface ListTemplatesInput {
+  targetType?: TemplateTargetType;
+  entityType?: string;
+  inboxItemType?: string;
+  workspaceId?: string;
+  includePublic?: boolean;
+}
+
+/**
+ * Input for getting default template with smart fallback resolution
+ */
+export interface GetDefaultTemplateInput {
+  targetType: TemplateTargetType;
+  entityType?: string;
+  inboxItemType?: string;
+  workspaceId?: string;
+}
+
+/**
+ * Input for creating a new template
+ */
+export interface CreateTemplateInput {
+  name: string;
+  description?: string;
+  targetType: TemplateTargetType;
+  entityType?: string;
+  inboxItemType?: string;
+  config: TemplateConfig;
+  isDefault?: boolean;
+  isPublic?: boolean;
+  workspaceId?: string;
+}
+
+/**
+ * Input for updating an existing template
+ */
+export interface UpdateTemplateInput {
+  id: string;
+  name?: string;
+  description?: string;
+  config?: TemplateConfig;
+  isDefault?: boolean;
+  isPublic?: boolean;
+}
+
+/**
+ * Input for duplicating a template
+ */
+export interface DuplicateTemplateInput {
+  id: string;
+}
+
+/**
+ * Input for setting a template as default
+ */
+export interface SetDefaultTemplateInput {
+  id: string;
+}
+
+/**
+ * Input for deleting a template
+ */
+export interface DeleteTemplateInput {
+  id: string;
+}

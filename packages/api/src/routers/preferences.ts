@@ -1,3 +1,4 @@
+
 /**
  * Preferences Router - User preferences management
  */
@@ -152,5 +153,70 @@ export const preferencesRouter = router({
         });
       
       return { success: true };
+    }),
+
+  // ============================================================================
+  // VIEW MODE PREFERENCES
+  // ============================================================================
+
+  /**
+   * Get view mode preferences
+   */
+  getViewModes: protectedProcedure
+    .query(async ({ ctx }) => {
+      const prefs = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      });
+      
+      const viewModes = (prefs?.uiPreferences as any)?.viewModes || {
+        entities: 'grid',
+        documents: 'grid',
+        views: 'grid',
+      };
+      
+      return viewModes;
+    }),
+
+  /**
+   * Update view mode for specific context
+   */
+  updateViewMode: protectedProcedure
+    .input(z.object({
+      context: z.enum(['entities', 'documents', 'views']),
+      mode: z.enum(['grid', 'list', 'table']),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get current preferences
+      const current = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      });
+      
+      const currentUiPrefs = (current?.uiPreferences || {}) as any;
+      const currentViewModes = currentUiPrefs.viewModes || {};
+      
+      const newUiPrefs = {
+        ...currentUiPrefs,
+        viewModes: {
+          ...currentViewModes,
+          [input.context]: input.mode,
+        },
+      };
+      
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          uiPreferences: newUiPrefs,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            uiPreferences: newUiPrefs,
+            updatedAt: new Date(),
+          },
+        });
+      
+      return { success: true, viewModes: newUiPrefs.viewModes };
     }),
 });

@@ -2,47 +2,53 @@
  * Entity Types
  * 
  * TypeScript types for entities with discriminated unions.
- * Types are automatically generated from Zod schemas.
+ * Types are automatically generated from Zod schemas and Database definition.
  */
 
-import type { EntityType, EntityMetadata } from './schemas.js';
+import { z } from 'zod';
+import { selectEntitySchema } from '@synap/database/schema';
+import { ENTITY_SCHEMAS } from './schemas.js';
 
 /**
- * Base entity - common fields for all entity types
+ * Base Entity Type (from Database)
+ * Includes id, userId, type, metadata (untyped), createdAt, etc.
  */
-export interface BaseEntity {
-  id: string;
-  userId: string;
-  type: EntityType;
-  title?: string;
-  preview?: string;
-  version: number;
-  content?: any; // Hydrated content (document or other)
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt?: Date;
-}
+export type DbEntity = z.infer<typeof selectEntitySchema>;
 
 /**
- * Entity - Discriminated union of all entity types
+ * Entity Metadata Interface per type
+ */
+export { type EntityMetadata, type EntityType } from './schemas.js';
+import type { EntityType } from './schemas.js';
+
+/**
+ * Entity Schema - Discriminated Union
  * 
- * TypeScript automatically narrows the type based on the `type` field:
- * 
- * ```ts
- * if (entity.type === 'task') {
- *   // entity.metadata.status is accessible and type-safe!
- * }
- * ```
+ * Combines the Database Schema (common fields) with specific Metadata Schemas.
  */
-export type Entity = {
-  [K in EntityType]: BaseEntity & {
-    type: K;
-    metadata: EntityMetadata[K];
-  }
-}[EntityType];
+export const EntitySchema = z.discriminatedUnion('type', [
+  selectEntitySchema.extend({ type: z.literal('task'), metadata: ENTITY_SCHEMAS.task }),
+  selectEntitySchema.extend({ type: z.literal('note'), metadata: ENTITY_SCHEMAS.note }),
+  selectEntitySchema.extend({ type: z.literal('person'), metadata: ENTITY_SCHEMAS.person }),
+  selectEntitySchema.extend({ type: z.literal('event'), metadata: ENTITY_SCHEMAS.event }),
+  selectEntitySchema.extend({ type: z.literal('file'), metadata: ENTITY_SCHEMAS.file }),
+  selectEntitySchema.extend({ type: z.literal('code'), metadata: ENTITY_SCHEMAS.code }),
+  selectEntitySchema.extend({ type: z.literal('bookmark'), metadata: ENTITY_SCHEMAS.bookmark }),
+  selectEntitySchema.extend({ type: z.literal('company'), metadata: ENTITY_SCHEMAS.company }),
+]);
 
 /**
- * Specific entity types (for explicit typing)
+ * Entity - The main type used across the application
+ */
+export type Entity = z.infer<typeof EntitySchema>;
+
+/**
+ * Base Entity Helper (for partial usage)
+ */
+export type BaseEntity = Omit<DbEntity, 'metadata'> & { metadata: unknown };
+
+/**
+ * Specific entity types
  */
 export type Task = Extract<Entity, { type: 'task' }>;
 export type Note = Extract<Entity, { type: 'note' }>;
@@ -55,12 +61,14 @@ export type File = Extract<Entity, { type: 'file' }>;
  */
 export type NewEntity<T extends EntityType = EntityType> = Omit<
   Extract<Entity, { type: T }>,
-  'id' | 'version' | 'createdAt' | 'updatedAt'
->;
+  'id' | 'version' | 'createdAt' | 'updatedAt' | 'deletedAt' | 'documentId'
+> & {
+  documentId?: string | null;
+};
 
 /**
  * Entity update type (for updates)
  */
 export type UpdateEntity<T extends EntityType = EntityType> = Partial<
-  Omit<Extract<Entity, { type: T }>, 'id' | 'userId' | 'type' | 'createdAt' | 'updatedAt'>
+  Omit<NewEntity<T>, 'userId' | 'type'>
 >;

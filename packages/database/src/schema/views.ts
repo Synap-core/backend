@@ -25,6 +25,11 @@ export const views = pgTable('views', {
   type: text('type').notNull(), 
   // 'whiteboard' | 'timeline' | 'kanban' | 'table' | 'mindmap' | 'graph'
   
+  // Category (computed from type)
+  // 'structured' = query-based views (table, kanban, graph, etc.)
+  // 'canvas' = freeform views (whiteboard, mindmap)
+  category: text('category').notNull(),
+  
   // Metadata
   name: text('name').notNull(),
   description: text('description'),
@@ -32,6 +37,10 @@ export const views = pgTable('views', {
   // Content reference (stores actual view data as JSON)
   documentId: uuid('document_id')
     .references(() => documents.id, { onDelete: 'set null' }),
+  
+  // Canvas-specific fields (nullable for structured views)
+  yjsRoomId: text('yjs_room_id'),        // For real-time collaboration
+  thumbnailUrl: text('thumbnail_url'),    // Preview image
   
   // Quick-access metadata (for listings, thumbnails, search)
   metadata: jsonb('metadata').default('{}').notNull(),
@@ -52,5 +61,17 @@ export const views = pgTable('views', {
     .notNull(),
 });
 
+// Generate Zod schemas (Single Source of Truth)
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
 export type View = typeof views.$inferSelect;
 export type NewView = typeof views.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertViewSchema = createInsertSchema(views);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectViewSchema = createSelectSchema(views);

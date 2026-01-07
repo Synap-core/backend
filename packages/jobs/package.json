@@ -21,14 +21,16 @@
     "dev": "npx inngest-cli@latest dev"
   },
   "dependencies": {
-    "inngest": "^3.15.0",
+    "@ai-sdk/anthropic": "^1.0.0",
     "@synap-core/core": "workspace:*",
+    "@synap/ai-embeddings": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/storage": "workspace:*",
-    "@synap/ai-embeddings": "workspace:*",
     "ai": "^4.0.0",
-    "@ai-sdk/anthropic": "^1.0.0",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
+    "inngest": "^3.15.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {

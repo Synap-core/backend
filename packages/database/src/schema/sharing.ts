@@ -37,5 +37,17 @@ export const resourceShares = pgTable('resource_shares', {
   lastAccessedAt: timestamp('last_accessed_at', { mode: 'date', withTimezone: true }),
 });
 
+// Generate Zod schemas (Single Source of Truth)
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
 export type ResourceShare = typeof resourceShares.$inferSelect;
 export type NewResourceShare = typeof resourceShares.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertResourceShareSchema = createInsertSchema(resourceShares);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectResourceShareSchema = createSelectSchema(resourceShares);

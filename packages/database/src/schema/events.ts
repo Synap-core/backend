@@ -62,3 +62,14 @@ export const events = pgTable('events', {
 
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertEventSchema = createInsertSchema(events);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectEventSchema = createSelectSchema(events);

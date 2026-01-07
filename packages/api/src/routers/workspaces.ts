@@ -1,3 +1,4 @@
+
 /**
  * Workspaces Router - Multi-user workspace management
  * 
@@ -10,10 +11,10 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { db, eq, and, desc } from '@synap/database';
-import { workspaces, workspaceMembers, workspaceInvites } from '@synap/database/schema';
+import { workspaces, workspaceMembers, workspaceInvites, insertWorkspaceSchema, insertWorkspaceInviteSchema } from '@synap/database/schema';
 import { TRPCError } from '@trpc/server';
 import { randomBytes } from 'crypto';
-import { WorkspaceEvents, WorkspaceMemberEvents } from '../lib/event-helpers.js';
+import { WorkspaceMemberEvents } from '../lib/event-helpers.js';
 
 /**
  * Workspace CRUD operations
@@ -23,41 +24,35 @@ export const workspacesRouter = router({
    * Create a new workspace
    */
   create: protectedProcedure
-    .input(z.object({
-      name: z.string().min(1).max(100),
-      description: z.string().optional(),
-      type: z.enum(['personal', 'team', 'enterprise']).default('personal'),
-    }))
+    .input(
+      insertWorkspaceSchema.pick({
+        name: true,
+        description: true,
+        settings: true,
+      }).extend({
+        name: z.string().min(1).max(100),
+        type: z.enum(['personal', 'team', 'enterprise']).default('personal'),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      // Log requested event
-      await WorkspaceEvents.createRequested(ctx.userId, input);
+      // ✅ Publish .requested event - worker will create workspace
+      const { inngest } = await import('@synap/jobs');
       
-      // Create workspace
-      const [workspace] = await db.insert(workspaces).values({
-        ownerId: ctx.userId,
-        name: input.name,
-        description: input.description,
-        type: input.type,
-        settings: {},
-      }).returning();
-
-      // Add creator as owner
-      await db.insert(workspaceMembers).values({
-        workspaceId: workspace.id,
-        userId: ctx.userId,
-        role: 'owner',
-        invitedBy: ctx.userId,
-      });
-      
-      // Log validated event
-      await WorkspaceEvents.createValidated(ctx.userId, {
-        id: workspace.id,
-        name: workspace.name,
-        type: workspace.type,
-        ownerId: workspace.ownerId,
+      await inngest.send({
+        name: 'workspaces.create.requested',
+        data: {
+          name: input.name,
+          description: input.description,
+          type: input.type,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
       });
 
-      return workspace;
+      return { 
+        status: 'requested',
+        message: 'Workspace creation requested. It will be created shortly.'
+      };
     }),
 
   /**
@@ -114,43 +109,36 @@ export const workspacesRouter = router({
    * Update workspace
    */
   update: protectedProcedure
-    .input(z.object({
-      id: z.string().uuid(),
-      name: z.string().min(1).max(100).optional(),
-      description: z.string().optional(),
-      settings: z.record(z.any()).optional(),
-    }))
+    .input(
+      insertWorkspaceSchema.pick({
+        name: true,
+        description: true,
+        settings: true,
+      }).partial().extend({
+        id: z.string().uuid(),
+        name: z.string().min(1).max(100).optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      // Check user is owner/admin
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.id),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can update workspace' });
-      }
+      // ✅ Publish .requested event - permission validator will check permissions
+      const { inngest } = await import('@synap/jobs');
       
-      // Log requested event
-      const { id, ...updates } = input;
-      await WorkspaceEvents.updateRequested(ctx.userId, input.id, updates);
-
-      const [updated] = await db.update(workspaces)
-        .set({
+      await inngest.send({
+        name: 'workspaces.update.requested',
+        data: {
+          workspaceId: input.id,
           name: input.name,
           description: input.description,
           settings: input.settings,
-          updatedAt: new Date(),
-        })
-        .where(eq(workspaces.id, input.id))
-        .returning();
-      
-      // Log validated event
-      await WorkspaceEvents.updateValidated(ctx.userId, input.id, updates);
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
 
-      return updated;
+      return { 
+        status: 'requested',
+        message: 'Workspace update requested'
+      };
     }),
 
   /**
@@ -159,22 +147,22 @@ export const workspacesRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      // Check user is owner
-      const workspace = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, input.id),
+      // ✅ Publish .requested event - permission validator enforces owner-only
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'workspaces.delete.requested',
+        data: {
+          workspaceId: input.id,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
       });
 
-      if (!workspace) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found' });
-      }
-
-      if (workspace.ownerId !== ctx.userId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owner can delete workspace' });
-      }
-
-      await db.delete(workspaces).where(eq(workspaces.id, input.id));
-
-      return { success: true };
+      return { 
+        status: 'requested',
+        message: 'Workspace deletion requested. Only the owner can approve this.'
+      };
     }),
 
   /**
@@ -210,37 +198,23 @@ export const workspacesRouter = router({
       userId: z.string(),
     }))
     .mutation(async ({ input, ctx }) => {
-      // Check user is owner/admin
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'workspaceMembers.remove.requested',
+        data: {
+          workspaceId: input.workspaceId,
+          targetUserId: input.userId,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
       });
 
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can remove members' });
-      }
-
-      // Can't remove owner
-      const targetMember = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, input.userId)
-        ),
-      });
-
-      if (targetMember?.role === 'owner') {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Cannot remove owner' });
-      }
-
-      await db.delete(workspaceMembers)
-        .where(and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, input.userId)
-        ));
-
-      return { success: true };
+      return { 
+        status: 'requested',
+        message: 'Member removal requested'
+      };
     }),
 
   /**
@@ -253,37 +227,39 @@ export const workspacesRouter = router({
       role: z.enum(['admin', 'editor', 'viewer']),
     }))
     .mutation(async ({ input, ctx }) => {
-      // Check user is owner/admin
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'workspaceMembers.updateRole.requested',
+        data: {
+          workspaceId: input.workspaceId,
+          targetUserId: input.userId,
+          newRole: input.role,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
       });
 
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can change roles' });
-      }
-
-      await db.update(workspaceMembers)
-        .set({ role: input.role })
-        .where(and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, input.userId)
-        ));
-
-      return { success: true };
+      return { 
+        status: 'requested',
+        message: 'Role update requested'
+      };
     }),
 
   /**
    * Create invitation
    */
   createInvite: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-      email: z.string().email(),
-      role: z.enum(['admin', 'editor', 'viewer']),
-    }))
+    .input(
+      insertWorkspaceInviteSchema.pick({
+        workspaceId: true,
+        email: true,
+        role: true,
+      }).extend({
+        role: z.enum(['admin', 'editor', 'viewer']),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       // Check user is owner/admin
       const membership = await db.query.workspaceMembers.findFirst({
@@ -357,6 +333,7 @@ export const workspacesRouter = router({
   acceptInvite: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      // Verify invite exists and is valid
       const invite = await db.query.workspaceInvites.findFirst({
         where: eq(workspaceInvites.token, input.token),
       });
@@ -369,18 +346,27 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invite expired' });
       }
 
-      // Add user to workspace
-      await db.insert(workspaceMembers).values({
-        workspaceId: invite.workspaceId,
-        userId: ctx.userId,
-        role: invite.role,
-        invitedBy: invite.invitedBy,
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'workspaceMembers.add.requested',
+        data: {
+          workspaceId: invite.workspaceId,
+          targetUserId: ctx.userId,
+          role: invite.role,
+          invitedBy: invite.invitedBy,
+          inviteId: invite.id,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
       });
 
-      // Delete invite
-      await db.delete(workspaceInvites).where(eq(workspaceInvites.id, invite.id));
-
-      return { success: true, workspaceId: invite.workspaceId };
+      return { 
+        status: 'requested',
+        workspaceId: invite.workspaceId,
+        message: 'Invite acceptance requested'
+      };
     }),
 
   /**

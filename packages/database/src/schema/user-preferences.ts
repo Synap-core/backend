@@ -106,3 +106,15 @@ export const userPreferences = pgTable('user_preferences', {
 
 export type UserPreference = typeof userPreferences.$inferSelect;
 export type NewUserPreference = typeof userPreferences.$inferInsert;
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertUserPreferenceSchema = createInsertSchema(userPreferences);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectUserPreferenceSchema = createSelectSchema(userPreferences);
+

@@ -94,9 +94,43 @@ export const documentSessions = pgTable('document_sessions', {
 }));
 
 // Type exports
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+// Documents
 export type Document = typeof documents.$inferSelect;
 export type NewDocument = typeof documents.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertDocumentSchema = createInsertSchema(documents);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectDocumentSchema = createSelectSchema(documents);
+
+// Versions
 export type DocumentVersion = typeof documentVersions.$inferSelect;
 export type NewDocumentVersion = typeof documentVersions.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertDocumentVersionSchema = createInsertSchema(documentVersions);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectDocumentVersionSchema = createSelectSchema(documentVersions);
+
+// Sessions
 export type DocumentSession = typeof documentSessions.$inferSelect;
 export type NewDocumentSession = typeof documentSessions.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertDocumentSessionSchema = createInsertSchema(documentSessions);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectDocumentSessionSchema = createSelectSchema(documentSessions);

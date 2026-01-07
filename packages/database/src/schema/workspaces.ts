@@ -105,9 +105,44 @@ export const workspaceInvitesRelations = relations(workspaceInvites, ({ one }) =
 }));
 
 // Type exports
+// Generate Zod schemas (Single Source of Truth)
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+// Workspaces
 export type Workspace = typeof workspaces.$inferSelect;
 export type NewWorkspace = typeof workspaces.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertWorkspaceSchema = createInsertSchema(workspaces);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectWorkspaceSchema = createSelectSchema(workspaces);
+
+// Members
 export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
 export type NewWorkspaceMember = typeof workspaceMembers.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectWorkspaceMemberSchema = createSelectSchema(workspaceMembers);
+
+// Invites
 export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
 export type NewWorkspaceInvite = typeof workspaceInvites.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertWorkspaceInviteSchema = createInsertSchema(workspaceInvites);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectWorkspaceInviteSchema = createSelectSchema(workspaceInvites);

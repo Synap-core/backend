@@ -59,13 +59,15 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^3.25.0",
-    "yjs": "^13.6.11"
+    "@synap/database": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
+    "yjs": "^13.6.11",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.6.0",
-    "@synap/database": "workspace:*"
+    "typescript": "^5.6.0"
   }
 }

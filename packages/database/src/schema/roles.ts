@@ -24,3 +24,14 @@ export const roles = pgTable('roles', {
 
 export type Role = typeof roles.$inferSelect;
 export type NewRole = typeof roles.$inferInsert;
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertRoleSchema = createInsertSchema(roles);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectRoleSchema = createSelectSchema(roles);

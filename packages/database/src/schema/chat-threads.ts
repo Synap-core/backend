@@ -55,3 +55,14 @@ export const chatThreads = pgTable('chat_threads', {
 
 export type ChatThread = typeof chatThreads.$inferSelect;
 export type NewChatThread = typeof chatThreads.$inferInsert;
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertChatThreadSchema = createInsertSchema(chatThreads);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectChatThreadSchema = createSelectSchema(chatThreads);

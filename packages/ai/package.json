@@ -25,6 +25,8 @@
     "@langchain/langgraph": "^1.0.1",
     "@synap-core/core": "file:../core",
     "ai": "^4.0.0",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
     "zod": "^3.25.76",
     "zod-to-json-schema": "^3.24.6"
   },

@@ -69,6 +69,18 @@ async function handleBridgeRequest(
     return;
   }
   
+  // Yjs state endpoint
+  if (url.startsWith('/yjs/') && url.includes('/state') && req.method === 'GET') {
+    await handleYjsGetState(io, req, res);
+    return;
+  }
+  
+  // Yjs restore endpoint
+  if (url.startsWith('/yjs/') && url.includes('/restore') && req.method === 'POST') {
+    await handleYjsRestore(io, req, res);
+    return;
+  }
+  
   // Not found
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
@@ -169,4 +181,80 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
     
     req.on('error', reject);
   });
+}
+
+/**
+ * Handle Yjs state fetch
+ * GET /yjs/:roomId/state
+ */
+async function handleYjsGetState(
+  io: SocketIOServer,
+  req: IncomingMessage,
+  res: ServerResponse
+) {
+  try {
+    // Extract roomId from URL
+    const match = req.url?.match(/\/yjs\/([^/]+)\/state/);
+    if (!match) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid URL' }));
+      return;
+    }
+    
+    const roomId = match[1];
+    
+    // Note: Y.Doc access would require integration with y-socket.io internals
+    // For now, return placeholder - actual implementation requires y-socket.io access
+    res.writeHead(501, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      error: 'Not implemented - requires y-socket.io document access',
+      roomId,
+    }));
+  } catch (error) {
+    console.error('[Bridge] Error getting Yjs state:', error);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Internal server error' }));
+  }
+}
+
+/**
+ * Handle Yjs state restore
+ * POST /yjs/:roomId/restore
+ */
+async function handleYjsRestore(
+  io: SocketIOServer,
+  req: IncomingMessage,
+  res: ServerResponse
+) {
+  try {
+    // Extract roomId from URL
+    const match = req.url?.match(/\/yjs\/([^/]+)\/restore/);
+    if (!match) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid URL' }));
+      return;
+    }
+    
+    const roomId = match[1];
+    const body = await parseBody(req);
+    const { state } = body as { state: string };
+    
+    if (!state) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing state in request body' }));
+      return;
+    }
+    
+    //Note: Actual restore would require y-socket.io integration
+    // For now, return placeholder
+    res.writeHead(501, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      error: 'Not implemented - requires y-socket.io document access',
+      roomId,
+    }));
+  } catch (error) {
+    console.error('[Bridge] Error restoring Yjs state:', error);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Internal server error' }));
+  }
 }

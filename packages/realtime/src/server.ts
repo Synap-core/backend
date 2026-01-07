@@ -33,6 +33,7 @@ const io = new SocketIOServer(httpServer, {
 // PHASE 3: Setup HTTP Bridge for Inngest Workers
 // ============================================================================
 // Allows workers to emit real-time events to connected clients via HTTP POST
+// Also handles Yjs state management endpoints
 setupBridge(io, httpServer);
 
 // Namespace for generic presence/collaboration
@@ -150,7 +151,7 @@ httpServer.listen(PORT, () => {
   console.log(`   - Yjs CRDT sync (/yjs): ✅`);
   console.log(`   - Cursor tracking: ✅`);
   console.log(`   - Typing indicators: ✅`);
-  console.log(`   - HTTP Bridge (/bridge/emit): ✅ NEW!`);
+  console.log(`   - HTTP Bridge (/bridge/emit): ✅`);
 });
 
 /**
@@ -176,3 +177,4 @@ setInterval(() => {
 }, 60000); // Every minute
 
 export { io, collaborationManager, yjsServer };
+

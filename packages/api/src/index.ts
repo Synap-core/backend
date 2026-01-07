@@ -20,8 +20,11 @@ export { hubRouter } from './routers/hub.js';
 export { apiKeysRouter } from './routers/api-keys.js';
 export { healthRouter } from './routers/health.js';
 export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
-// Export event streaming utilities - DISABLED (file doesn't exist)
-// export { eventStreamManager, setupEventBroadcasting } from './event-stream.js';
+
+// Export event streaming utilities
+export { eventStreamManager } from './event-stream-manager.js';
+export { setupEventBroadcasting } from './setup-event-broadcasting.js';
+
 
 // Export utilities for webhook handling
 export { syncUserFromKratos, createDefaultWorkspace } from './utils/kratos-sync.js';
@@ -32,7 +35,7 @@ export { startEventProcessor, processEvents } from './event-handlers/index.js';
 import { eventsRouter } from './routers/events.js';
 import { captureRouter } from './routers/capture.js';
 import { entitiesRouter } from './routers/entities.js';
-import { notesRouter } from './routers/notes.js';
+
 import { chatRouter } from './routers/chat.js';
 import { suggestionsRouter } from './routers/suggestions.js';
 import { setupRouter } from './routers/setup.js';
@@ -57,6 +60,7 @@ import { preferencesRouter } from './routers/preferences.js';
 import { rolesRouter } from './routers/roles.js';
 import { sharingRouter } from './routers/sharing.js';
 import { templatesRouter } from './routers/templates.js';
+import { whiteboardsRouter } from './routers/whiteboards.js';
 import { createContext } from './context.js';
 import { registerRouter, buildAppRouter } from './router-registry.js';
  
@@ -66,7 +70,7 @@ registerRouter('setup', setupRouter, { version: '1.0.0', source: 'core', descrip
 registerRouter('events', eventsRouter, { version: '1.0.0', source: 'core', description: 'Event logging API' });
 registerRouter('capture', captureRouter, { version: '1.0.0', source: 'core', description: 'Thought capture API' });
 registerRouter('entities', entitiesRouter, { version: '1.0.0', source: 'core', description: 'Entity management API' });
-registerRouter('notes', notesRouter, { version: '1.0.0', source: 'core', description: 'Notes management API' });
+
 registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Conversational interface API' });
 registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
 registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
@@ -90,6 +94,7 @@ registerRouter('preferences', preferencesRouter, { version: '1.0.0', source: 'co
 registerRouter('roles', rolesRouter, { version: '1.0.0', source: 'core', description: 'Custom role management' });
 registerRouter('sharing', sharingRouter, { version: '1.0.0', source: 'core', description: 'Public and invite-based sharing' });
 registerRouter('templates', templatesRouter, { version: '1.0.0', source: 'core', description: 'Entity template management' });
+registerRouter('whiteboards', whiteboardsRouter, { version: '1.0.0', source: 'core', description: 'Whiteboard version control and snapshots' });
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -103,7 +108,7 @@ const coreRouter = router({
   events: eventsRouter,
   capture: captureRouter,
   entities: entitiesRouter,
-  notes: notesRouter,
+
   chat: chatRouter,
   suggestions: suggestionsRouter,
   system: systemRouter,

@@ -9,9 +9,15 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { db, eq, and, or, isNull } from '@synap/database';
-import { roles, workspaceMembers } from '@synap/database/schema';
+import { roles, workspaceMembers, insertRoleSchema } from '@synap/database/schema';
 import { TRPCError } from '@trpc/server';
 
+/**
+ * Permissions structure - Used for runtime validation
+ * 
+ * NOTE: The permissions field is stored as JSONB in the database.
+ * For type safety, insertRoleSchema.pick() is used for DB operations.
+ */
 const PermissionsSchema = z.object({
   entities: z.object({
     create: z.boolean().default(false),

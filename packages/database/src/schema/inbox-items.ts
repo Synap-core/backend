@@ -49,3 +49,16 @@ export const inboxItems = pgTable('inbox_items', {
 
 export type InboxItem = typeof inboxItems.$inferSelect;
 export type NewInboxItem = typeof inboxItems.$inferInsert;
+
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertInboxItemSchema = createInsertSchema(inboxItems);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectInboxItemSchema = createSelectSchema(inboxItems);
+export type InsertInboxItem = NewInboxItem;
+export type SelectInboxItem = InboxItem;

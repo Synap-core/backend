@@ -18,7 +18,8 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",
@@ -35,16 +36,18 @@
     "@synap/storage": "workspace:*",
     "@trpc/server": "^11.0.0",
     "@types/ws": "^8.18.1",
-    "drizzle-orm": "^0.33.0",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "0.8.3",
     "inngest": "^3.15.0",
     "jsonwebtoken": "^9.0.2",
     "ws": "^8.18.3",
-    "zod": "^3.22.0"
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "bcrypt": "^6.0.0",
+    "tsup": "^8.0.0",
     "typescript": "^5.3.3"
   },
   "publishConfig": {

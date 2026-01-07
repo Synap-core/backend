@@ -12,10 +12,14 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { db, eq, and, or, desc } from '@synap/database';
-import { relations, entities } from '@synap/database/schema';
+import { relations, entities, insertRelationSchema } from '@synap/database/schema';
 
 /**
  * Relation type schema
+ * 
+ * NOTE: Relations are created via event sourcing (events.log → relationsWorker)
+ * The insertRelationSchema from database is available if direct creation is needed:
+ * insertRelationSchema.pick({ sourceEntityId, targetEntityId, type, ... })
  */
 const RelationTypeSchema = z.enum([
   'assigned_to',

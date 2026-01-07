@@ -11,24 +11,32 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { db, eq, desc, and } from '@synap/database';
-import { chatThreads, conversationMessages, entities } from '@synap/database/schema';
+import { chatThreads, conversationMessages, insertChatThreadSchema } from '@synap/database/schema';
 import { intelligenceHubClient } from '../clients/intelligence-hub.js';
 import { randomUUID } from 'crypto';
 import { createHash } from 'crypto';
 
 /**
  * Infinite Chat Router (Week 2 implementation)
+ * 
+ * Uses insertChatThreadSchema from database for true SSOT.
  */
 export const infiniteChatRouter = router({
   /**
-   * Create a new chat thread
+   * Create a new chat thread - TRUE SSOT using .omit()
    */
   createThread: protectedProcedure
-    .input(z.object({
-      projectId: z.string().uuid().optional(),
-      parentThreadId: z.string().uuid().optional(),
-      branchPurpose: z.string().optional(),
-      agentId: z.string().default('orchestrator'),
+    .input(insertChatThreadSchema.omit({
+      id: true,           // Auto-generated UUID
+      userId: true,       // From context (ctx.userId)
+      title: true,        // Generated after first message
+      threadType: true,   // Derived from parentThreadId
+      status: true,       // Has default value 'active'
+      contextSummary: true, // Updated as thread progresses
+      metadata: true,     // Optional runtime metadata
+      createdAt: true,    // Auto-generated timestamp
+      updatedAt: true,    // Auto-generated timestamp
+      mergedAt: true,     // Only set when merged
     }))
     .mutation(async ({ input, ctx }) => {
       const threadId = randomUUID();
@@ -111,18 +119,31 @@ export const infiniteChatRouter = router({
         } : undefined,
       });
       
-      // Create entities (without the non-existent columns)
+      
+      // Create entities via event chain for consistency  
       const createdEntities = [];
       if (hubResponse.entities?.length > 0) {
+        const { inngest } = await import('@synap/jobs');
+        
         for (const entity of hubResponse.entities) {
-          const [created] = await db.insert(entities).values({
-            userId: ctx.userId,
+          // \u2705 Publish .requested event
+          await inngest.send({
+            name: 'entities.create.requested',
+            data: {
+              type: entity.type,
+              title: entity.title,
+              preview: entity.description,
+              userId: ctx.userId,
+              source: 'chat-extraction',
+            },
+            user: { id: ctx.userId },
+          });
+          
+          createdEntities.push({
             type: entity.type,
             title: entity.title,
-            preview: entity.description,
-          }).returning();
-          
-          createdEntities.push(created);
+            status: 'requested',
+          });
         }
       }
       

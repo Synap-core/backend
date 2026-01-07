@@ -55,6 +55,18 @@ export const entities = pgTable('entities', {
   deletedAt: timestamp('deleted_at', { mode: 'date', withTimezone: true }),
 });
 
+// Generate Zod schemas (Single Source of Truth)
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+
 export type Entity = typeof entities.$inferSelect;
 export type NewEntity = typeof entities.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertEntitySchema = createInsertSchema(entities);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectEntitySchema = createSelectSchema(entities);
 

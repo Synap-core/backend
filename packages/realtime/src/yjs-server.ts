@@ -128,7 +128,7 @@ class DatabasePersistence {
 /**
  * Setup Yjs WebSocket server
  */
-export function setupYjsServer(config: YjsServerConfig): YSocketIO {
+export function setupYjsServer(config: YjsServerConfig): YSocketIO & { documents: Map<string, Y.Doc> } {
   const { io, persistenceInterval = 10000 } = config;
   const persistence = new DatabasePersistence();
   
@@ -167,5 +167,6 @@ export function setupYjsServer(config: YjsServerConfig): YSocketIO {
   console.log(`  - Auto-save: ✅ (debounced)`);
   console.log(`  - Garbage collection: ✅`);
   
-  return yServer;
+  // Expose documents map for HTTP endpoint access
+  return yServer as YSocketIO & { documents: Map<string, Y.Doc> };
 }

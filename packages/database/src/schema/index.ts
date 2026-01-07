@@ -43,7 +43,19 @@ export * from './workspaces.js';
 export * from './views.js';
 
 // NEW: User preferences
-export * from './user-preferences.js';
+export {
+  userPreferences,
+  type UserPreference,
+  type NewUserPreference,
+  type CustomTheme,
+  type DefaultTemplates,
+  type CustomEntityType,
+  type EntityMetadataSchemas,
+  type UIPreferences,
+  type GraphPreferences,
+  insertUserPreferenceSchema,
+  selectUserPreferenceSchema,
+} from './user-preferences.js';
 
 // NEW: Entity Templates
 export * from './entity-templates.js';

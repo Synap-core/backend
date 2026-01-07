@@ -1,47 +1,72 @@
+
 /**
- * Views Router - Extensible view system
+ * Views Router - Production-Ready
  * 
  * Handles:
  * - View CRUD (whiteboards, timelines, kanban, etc.)
  * - Content loading/saving
  * - Integration with documents table
+ * - Query execution with filters and sorts
+ * - Manual entity ordering
  */
 
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, and, desc } from '@synap/database';
-import { views, documents, documentVersions, workspaceMembers } from '@synap/database/schema';
+import { db, eq, and, desc, sqlTemplate as sql, inArray, or, like, gt, lt, gte, lte, isNull, isNotNull, getTableColumns, asc, type SQL, type Column } from '@synap/database';
+// Use direct import to avoid type mismatches with strict Drizzle types
+import { views, documents, documentVersions, entities, relations, insertViewSchema } from '@synap/database/schema';
 import { TRPCError } from '@trpc/server';
 import { ViewEvents } from '../lib/event-helpers.js';
+import { requireEditor, requireViewer, requireResourceOwner } from '../utils/workspace-permissions.js';
+
+// Proper package imports
+import { ViewContentSchema, getViewCategory, ViewMetadata, StructuredViewConfig, EntityFilter, SortRule } from '@synap-core/types';
 
 export const viewsRouter = router({
   /**
    * Create a new view
    */
   create: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid().optional(),
-      type: z.enum(['whiteboard', 'timeline', 'kanban', 'table', 'mindmap', 'graph']),
-      name: z.string().min(1).max(100),
-      description: z.string().optional(),
-      initialContent: z.any().optional(), // Tldraw state, timeline config, etc.
-    }))
+    .input(
+      insertViewSchema.pick({
+        workspaceId: true,
+        name: true,
+        description: true,
+      }).extend({
+        // Specific validation for view types and custom constraints
+        type: z.enum(['whiteboard', 'timeline', 'kanban', 'table', 'list', 'grid', 'gallery', 'calendar', 'gantt', 'mindmap', 'graph']),
+        name: z.string().min(1).max(100),
+        initialContent: z.any().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      // If workspace provided, check user has access
+      // If workspace provided, check user has editor role
       if (input.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, input.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
-          ),
-        });
-
-        if (!membership || membership.role === 'viewer') {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        await requireEditor(db, input.workspaceId, ctx.userId);
+      }
+      
+      // Compute category from view type
+      const category = getViewCategory(input.type);
+      
+      // Validate initial content if provided
+      if (input.initialContent) {
+        const parseResult = ViewContentSchema.safeParse(input.initialContent);
+        if (!parseResult.success) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid view content structure',
+            cause: parseResult.error,
+          });
+        }
+        
+        if (parseResult.data.category !== category) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `View type '${input.type}' requires '${category}' content, got '${parseResult.data.category}'`,
+          });
         }
       }
       
-      // Log requested event
       await ViewEvents.createRequested(ctx.userId, {
         type: input.type,
         name: input.name,
@@ -53,7 +78,7 @@ export const viewsRouter = router({
         userId: ctx.userId,
         type: input.type,
         title: input.name,
-        storageUrl: '', // Will be populated if needed
+        storageUrl: '',
         storageKey: `views/${input.type}/${Date.now()}`,
         size: 0,
         currentVersion: 1,
@@ -74,6 +99,7 @@ export const viewsRouter = router({
         workspaceId: input.workspaceId,
         userId: ctx.userId,
         type: input.type,
+        category,
         name: input.name,
         description: input.description,
         documentId: doc.id,
@@ -83,7 +109,6 @@ export const viewsRouter = router({
         },
       }).returning();
       
-      // Log validated event
       await ViewEvents.createValidated(ctx.userId, {
         id: view.id,
         type: view.type,
@@ -100,10 +125,10 @@ export const viewsRouter = router({
   list: protectedProcedure
     .input(z.object({
       workspaceId: z.string().uuid().optional(),
-      type: z.enum(['whiteboard', 'timeline', 'kanban', 'table', 'mindmap', 'graph', 'all']).optional(),
+      type: z.enum(['whiteboard', 'timeline', 'kanban', 'table', 'list', 'grid', 'gallery', 'calendar', 'gantt', 'mindmap', 'graph', 'all']).optional(),
     }))
     .query(async ({ input, ctx }) => {
-      let query = db.query.views.findMany({
+      const query = db.query.views.findMany({
         where: and(
           eq(views.userId, ctx.userId),
           input.workspaceId ? eq(views.workspaceId, input.workspaceId) : undefined,
@@ -131,18 +156,9 @@ export const viewsRouter = router({
 
       // Check access
       if (view.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, view.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
-          ),
-        });
-
-        if (!membership) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
-        }
-      } else if (view.userId !== ctx.userId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        await requireViewer(db, view.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(view, ctx.userId);
       }
 
       // Load content from latest document version
@@ -165,15 +181,11 @@ export const viewsRouter = router({
     }),
 
   /**
-   * Save view content
+   * Execute view query and return entities
    */
-  save: protectedProcedure
-    .input(z.object({
-      id: z.string().uuid(),
-      content: z.any(), // New Tldraw state, timeline config, etc.
-      metadata: z.record(z.any()).optional(), // Update metadata
-    }))
-    .mutation(async ({ input, ctx }) => {
+  execute: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
         where: eq(views.id, input.id),
       });
@@ -182,69 +194,123 @@ export const viewsRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
       }
 
-      // Check access (editor+)
+      // Check access
       if (view.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, view.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
-          ),
-        });
+        await requireViewer(db, view.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(view, ctx.userId);
+      }
 
-        if (!membership || membership.role === 'viewer') {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+      const category = getViewCategory(view.type as any);
+
+      // Canvas views: Return document content
+      if (category === 'canvas') {
+        let content = {};
+        if (view.documentId) {
+          const latestVersion = await db.query.documentVersions.findFirst({
+            where: eq(documentVersions.documentId, view.documentId),
+            orderBy: [desc(documentVersions.version)],
+          });
+          if (latestVersion) {
+            try {
+              content = JSON.parse(latestVersion.content);
+            } catch (e) {
+              content = {};
+            }
+          }
         }
-      } else if (view.userId !== ctx.userId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        
+        return { view, content, entities: [], relations: [] };
       }
 
-      // Create new version with updated content
-      if (view.documentId) {
-        // Get current version number
-        const doc = await db.query.documents.findFirst({
-          where: eq(documents.id, view.documentId),
-        });
-
-        const newVersion = (doc?.currentVersion || 0) + 1;
-
-        // Insert new version
-        await db.insert(documentVersions).values({
-          documentId: view.documentId,
-          version: newVersion,
-          content: JSON.stringify(input.content),
-          author: 'user',
-          authorId: ctx.userId,
-          message: 'Auto-save',
-        });
-
-        // Update document current version
-        await db.update(documents)
-          .set({
-            currentVersion: newVersion,
-            updatedAt: new Date(),
-          })
-          .where(eq(documents.id, view.documentId));
+      // Structured views: Execute query from metadata config
+      const metadata = view.metadata as ViewMetadata | undefined;
+      const config = metadata?.config as StructuredViewConfig | undefined;
+      
+      // Ensure config has query property before accessing
+      if (!config || !('query' in config) || !config.query) {
+        return { view, config, entities: [], relations: [] };
       }
 
-      // Update view metadata
-      await db.update(views)
-        .set({
-          metadata: input.metadata,
-          updatedAt: new Date(),
-        })
-        .where(eq(views.id, input.id));
+      const { entityTypes, filters, sorts, limit, offset } = config.query;
+      const conditions: any[] = [];
+      
+      // Filter by workspace
+      if (view.workspaceId) {
+        conditions.push(eq(entities.workspaceId, view.workspaceId));
+      }
 
-      return { success: true };
+      // Filter by entity types
+      if (entityTypes && entityTypes.length > 0) {
+        conditions.push(inArray(entities.type, entityTypes));
+      }
+
+      // Apply custom filters
+      if (filters && filters.length > 0) {
+        for (const filter of filters) {
+          const fieldCondition = buildFilterCondition(filter);
+          if (fieldCondition) {
+            conditions.push(fieldCondition);
+          }
+        }
+      }
+
+      // Build order by clauses
+      const orderByClause: any[] = [];
+      if (sorts && sorts.length > 0) {
+        for (const sort of sorts) {
+          const sortClause = buildSortClause(sort);
+          if (sortClause) {
+            orderByClause.push(sortClause);
+          }
+        }
+      }
+
+      // Execute query
+      let fetchedEntities = await db.select()
+        .from(entities)
+        .where(and(...conditions))
+        .orderBy(...(orderByClause.length > 0 ? orderByClause : [desc(entities.createdAt)]))
+        .limit(limit || 100)
+        .offset(offset || 0);
+
+      // Apply manual ordering if present
+      const entityOrders = metadata?.entityOrders;
+      if (entityOrders && Object.keys(entityOrders).length > 0) {
+        fetchedEntities = fetchedEntities.sort((a, b) => {
+          const aOrder = entityOrders[a.id] ?? Infinity;
+          const bOrder = entityOrders[b.id] ?? Infinity;
+          return aOrder - bOrder;
+        });
+      }
+
+      // Get relations between entities
+      const entityIds = fetchedEntities.map(e => e.id);
+      const fetchedRelations = entityIds.length > 0 
+        ? await db.select()
+            .from(relations)
+            .where(or(
+              inArray(relations.sourceEntityId, entityIds),
+              inArray(relations.targetEntityId, entityIds)
+            ))
+        : [];
+
+      return {
+        view,
+        config,
+        entities: fetchedEntities,
+        relations: fetchedRelations,
+      };
     }),
 
   /**
-   * Update view metadata (name, description)
+   * Save view content
    */
-  update: protectedProcedure
+  save: protectedProcedure
     .input(z.object({
       id: z.string().uuid(),
-      name: z.string().min(1).max(100).optional(),
-      description: z.string().optional(),
+      content: z.any(),
+      metadata: z.record(z.any()).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
@@ -257,18 +323,95 @@ export const viewsRouter = router({
 
       // Check access
       if (view.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, view.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
-          ),
+        await requireEditor(db, view.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(view, ctx.userId);
+      }
+
+      // Validate content structure
+      const parseResult = ViewContentSchema.safeParse(input.content);
+      if (!parseResult.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid view content structure',
+          cause: parseResult.error,
+        });
+      }
+      
+      // Ensure content category matches view type
+      const expectedCategory = getViewCategory(view.type as any);
+      if (parseResult.data.category !== expectedCategory) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${parseResult.data.category}'`,
+        });
+      }
+
+      // Create new version with updated content
+      if (view.documentId) {
+        const doc = await db.query.documents.findFirst({
+          where: eq(documents.id, view.documentId),
         });
 
-        if (!membership || membership.role === 'viewer') {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
-        }
-      } else if (view.userId !== ctx.userId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        const newVersion = (doc?.currentVersion || 0) + 1;
+
+        await db.insert(documentVersions).values({
+          documentId: view.documentId,
+          version: newVersion,
+          content: JSON.stringify(input.content),
+          author: 'user',
+          authorId: ctx.userId,
+          message: 'Auto-save',
+        });
+
+        await db.update(documents)
+          .set({
+            currentVersion: newVersion,
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, view.documentId));
+      }
+
+      // Update view metadata
+      if (input.metadata) {
+        await db.update(views)
+          .set({
+            metadata: input.metadata,
+            updatedAt: new Date(),
+          })
+          .where(eq(views.id, input.id));
+      }
+
+      return { success: true };
+    }),
+  /**
+   * Update view metadata (name, description)
+   */
+  update: protectedProcedure
+    .input(
+      insertViewSchema.pick({
+        id: true,
+        name: true,
+        description: true,
+      }).partial({
+        name: true,
+        description: true,
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const view = await db.query.views.findFirst({
+        where: eq(views.id, input.id),
+      });
+
+      if (!view) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+      }
+
+      // Check access
+      if (view.workspaceId) {
+        await requireEditor(db, view.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(view, ctx.userId);
       }
 
       const [updated] = await db.update(views)
@@ -297,23 +440,14 @@ export const viewsRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
       }
 
-      // Check access (owner or admin+)
+      // Check access
       if (view.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, view.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
-          ),
-        });
-
-        if (!membership || !['owner', 'admin', 'editor'].includes(membership.role)) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
-        }
-      } else if (view.userId !== ctx.userId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        await requireEditor(db, view.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(view, ctx.userId);
       }
 
-      // Delete view (document will be set to null due to onDelete: 'set null')
+      // Delete view
       await db.delete(views).where(eq(views.id, input.id));
 
       // Optionally delete document too
@@ -323,4 +457,185 @@ export const viewsRouter = router({
 
       return { success: true };
     }),
+
+  /**
+   * Reorder entity in view (manual ordering)
+   */
+  reorderEntity: protectedProcedure
+    .input(z.object({
+      viewId: z.string().uuid(),
+      entityId: z.string().uuid(),
+      beforeEntityId: z.string().uuid().optional(),
+      afterEntityId: z.string().uuid().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const view = await db.query.views.findFirst({
+        where: eq(views.id, input.viewId),
+      });
+
+      if (!view) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+      }
+
+      // Check access
+      if (view.workspaceId) {
+        await requireEditor(db, view.workspaceId, ctx.userId);
+      } else {
+        requireResourceOwner(view, ctx.userId);
+      }
+
+      // Get current entity orders
+      const metadata = (view.metadata as ViewMetadata) || {};
+      const entityOrders = metadata.entityOrders || {};
+
+      // Calculate new order using fractional indexing
+      let newOrder: number;
+
+      if (input.beforeEntityId && input.afterEntityId) {
+        const beforeOrder = entityOrders[input.beforeEntityId] ?? 0;
+        const afterOrder = entityOrders[input.afterEntityId] ?? beforeOrder + 2;
+        newOrder = (beforeOrder + afterOrder) / 2;
+      } else if (input.beforeEntityId) {
+        const beforeOrder = entityOrders[input.beforeEntityId] ?? 0;
+        newOrder = beforeOrder + 1;
+      } else if (input.afterEntityId) {
+        const afterOrder = entityOrders[input.afterEntityId] ?? 1;
+        newOrder = afterOrder / 2;
+      } else {
+      const maxOrder = Math.max(...(Object.values(entityOrders) as number[]), 0);
+        newOrder = maxOrder + 1;
+      }
+
+      // Update entity order
+      entityOrders[input.entityId] = newOrder;
+
+      // Update view metadata
+      await db.update(views)
+        .set({
+          metadata: {
+            ...metadata,
+            entityOrders,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(views.id, input.viewId));
+
+      return {
+        success: true,
+        newOrder,
+      };
+    }),
 });
+
+/**
+ * Build a filter condition from an EntityFilter
+ */
+function buildFilterCondition(filter: EntityFilter): SQL | null {
+  const { field, operator, value } = filter;
+  const isMetadataField = field.startsWith('metadata.');
+  
+  if (isMetadataField) {
+    const metadataKey = field.split('.')[1];
+    
+    // Use jsonb_extract_path_text equivalent or the ->> operator
+    // Since we are inside sql template, we can't easily avoid raw sql here,
+    // but we can type the result
+    const metadataCol = entities.metadata;
+    
+    switch (operator) {
+      case 'equals':
+        return sql`${metadataCol}->>${metadataKey} = ${value}`;
+      case 'not_equals':
+        return sql`${metadataCol}->>${metadataKey} != ${value}`;
+      case 'contains':
+        return sql`${metadataCol}->>${metadataKey} ILIKE ${'%' + value + '%'}`;
+      case 'is_empty':
+        return sql`${metadataCol}->>${metadataKey} IS NULL`;
+      case 'is_not_empty':
+        return sql`${metadataCol}->>${metadataKey} IS NOT NULL`;
+      case 'in':
+        if (Array.isArray(value)) {
+          // Properly escape array values or use Drizzle array operator if available for JSON
+          // Using Postgres ANY with string array
+          return sql`${metadataCol}->>${metadataKey} = ANY(${value})`;
+        }
+        return null;
+      default:
+        return null;
+    }
+  } else {
+    // Dynamically get the column
+    // We start with all entity columns
+    const entityColumns = getTableColumns(entities);
+    
+    // We check if the field exists in the columns
+    if (field in entityColumns) {
+      // Safe access because we checked existence
+      const column = entityColumns[field as keyof typeof entityColumns];
+      
+      // Determine column type roughly for stricter operator checks if we wanted, 
+      // but mostly we need to handle the value type matching.
+      
+      // We can't easily exhaustively query column type here to eliminate all casts,
+      // but we can eliminate the 'as any' on the return
+      
+      switch (operator) {
+        case 'equals':
+          return eq(column, value);
+        case 'not_equals':
+          // Drizzle doesn't have a direct 'ne' or 'neq' in some versions, but usually 'ne' exists or we use not(eq())
+          // If 'ne' is missing, sql is fine or notEq
+          // Checking imports... we don't have 'ne' or 'notEq' imported.
+          return sql`${column} != ${value}`;
+        case 'contains':
+          // Like expects string
+          return like(column as Column<any, any, any>, `%${value}%`);
+        case 'greater_than':
+          return gt(column, value);
+        case 'less_than':
+          return lt(column, value);
+        case 'greater_than_or_equal':
+          return gte(column, value);
+        case 'less_than_or_equal':
+          return lte(column, value);
+        case 'is_empty':
+          return isNull(column);
+        case 'is_not_empty':
+          return isNotNull(column);
+        case 'gt': return gt(column, value);
+        case 'lt': return lt(column, value);
+        case 'gte': return gte(column, value);
+        case 'lte': return lte(column, value);
+        default:
+          return null;
+      }
+    }
+    
+    return null;
+  }
+}
+
+/**
+ * Build a sort clause from a SortRule
+ */
+function buildSortClause(sort: SortRule): SQL | null {
+  const { field, direction } = sort;
+  const isMetadataField = field.startsWith('metadata.');
+  
+  if (isMetadataField) {
+    const metadataKey = field.split('.')[1];
+    const metadataCol = entities.metadata;
+    
+    // Sort by JSON field text value
+    return direction === 'asc' 
+      ? sql`${metadataCol}->>${metadataKey} ASC`
+      : sql`${metadataCol}->>${metadataKey} DESC`;
+  } else {
+    const entityColumns = getTableColumns(entities);
+    if (field in entityColumns) {
+        const column = entityColumns[field as keyof typeof entityColumns];
+        return direction === 'asc' ? asc(column) : desc(column);
+    }
+    return null;
+  }
+}

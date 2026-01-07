@@ -27,19 +27,24 @@ export const entitiesDataRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      // Create entity
-      const [entity] = await db.insert(entities).values({
-        userId: ctx.userId,
-        type: input.type,
-        title: input.title,
-        preview: input.description,
-      }).returning();
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
       
-      // Generate and store embedding (async, non-blocking)
-      generateAndStoreEmbedding(entity.id, ctx.userId, entity.type, entity.title ?? '', input.description)
-        .catch(err => console.error('Failed to generate embedding:', err));
+      await inngest.send({
+        name: 'entities.create.requested',
+        data: {
+          type: input.type,
+          title: input.title,
+          preview: input.description,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
       
-      return { entity };
+      return { 
+        status: 'requested',
+        message: 'Entity creation requested'
+      };
     }),
   
   /**
@@ -217,34 +222,24 @@ export const entitiesDataRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      const [updated] = await db.update(entities)
-        .set({
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'entities.update.requested',
+        data: {
+          entityId: input.id,
           title: input.title,
           preview: input.description,
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId)
-        ))
-        .returning();
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
       
-      if (!updated) {
-        throw new Error('Entity not found');
-      }
-      
-      // Re-generate embedding
-      if (input.title || input.description) {
-        generateAndStoreEmbedding(
-          updated.id,
-          ctx.userId,
-          updated.type,
-          updated.title || '',
-          input.description
-        ).catch(err => console.error('Failed to update embedding:', err));
-      }
-      
-      return { entity: updated };
+      return { 
+        status: 'requested',
+        message: 'Entity update requested'
+      };
     }),
   
   /**
@@ -255,21 +250,30 @@ export const entitiesDataRouter = router({
       id: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
-      await db.update(entities)
-        .set({ deletedAt: new Date() })
-        .where(and(
-          eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId)
-        ));
+      // ✅ Publish .requested event
+      const { inngest } = await import('@synap/jobs');
       
-      return { success: true };
+      await inngest.send({
+        name: 'entities.delete.requested',
+        data: {
+          entityId: input.id,
+          userId: ctx.userId,
+        },
+        user: { id: ctx.userId },
+      });
+      
+      return { 
+        status: 'requested',
+        message: 'Entity deletion requested'
+      };
     }),
 });
 
 /**
  * Helper: Generate and store embedding for entity
+ * Exported for use by entities worker
  */
-async function generateAndStoreEmbedding(
+export async function generateAndStoreEmbedding(
   entityId: string,
   userId: string,
   entityType: string,

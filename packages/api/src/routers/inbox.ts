@@ -8,27 +8,31 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc.js';
 import { db, inboxItems, eq, and, desc, or } from '@synap/database';
+import { insertInboxItemSchema } from '@synap/database/schema';
 import { createLogger } from '@synap-core/core';
 
 const logger = createLogger({ module: 'inbox-router' });
 
-// Validation schemas
-const InboxItemSchema = z.object({
-  // Source tracking (direct columns now!)
-  provider: z.string(),
-  account: z.string(),
-  externalId: z.string(),
-  deepLink: z.string().optional(),
-  
-  // Content
-  type: z.string(),
-  title: z.string(),
-  preview: z.string().optional(),
-  timestamp: z.coerce.date(),
-  
-  // Provider-specific data (JSONB)
-  data: z.record(z.unknown())
-});
+/**
+ * Inbox item validation schema - TRUE SSOT using .omit()
+ * 
+ * Derived from: insertInboxItemSchema (database/schema/inbox-items.ts)
+ * Omits server-generated fields, keeps all user-provided fields.
+ * 
+ * Note: Type assertion needed due to Drizzle-Zod v0.8.3 type inference limitations
+ * with .omit() on schemas containing arrays/JSONB fields. Runtime validation is correct.
+ */
+const InboxItemSchema = insertInboxItemSchema.omit({
+  id: true,           // Auto-generated UUID
+  userId: true,       // From context (ctx.userId)
+  createdAt: true,    // Auto-generated timestamp
+  updatedAt: true,    // Auto-generated timestamp
+  processedAt: true,  // Set after processing
+  status: true,       // Has default value 'unread'
+  snoozedUntil: true, // Only for updates
+  priority: true,     // AI-enhanced field
+  tags: true,         // AI-enhanced field
+}) as any; // TODO: Remove when Drizzle-Zod fixes .omit() type inference
 
 export const inboxRouter = router({
   /**

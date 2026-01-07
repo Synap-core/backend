@@ -9,18 +9,25 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createLogger } from '@synap-core/core';
 import { db } from '@synap/database';
-import { webhookSubscriptions } from '@synap/database';
+import { webhookSubscriptions, insertWebhookSubscriptionSchema } from '@synap/database/schema';
 import { eq, and } from '@synap/database';
 import { randomBytes } from 'crypto';
 
 const logger = createLogger({ module: 'webhooks-router' });
 
-// Input Schemas
-const CreateWebhookInputSchema = z.object({
-  name: z.string().min(1).max(100),
-  url: z.string().url(),
-  eventTypes: z.array(z.string()).min(1),
-  secret: z.string().min(16).optional(),
+/**
+ * Webhook input schemas - TRUE SSOT using .omit()
+ * 
+ * Derived from: insertWebhookSubscriptionSchema (database/schema/webhook_subscriptions.ts)
+ * Omits server-generated fields, keeps all user-provided fields.
+ */
+const CreateWebhookInputSchema = insertWebhookSubscriptionSchema.omit({
+  id: true,              // Auto-generated UUID
+  userId: true,          // From context (ctx.userId)
+  active: true,          // Has default value 'true'
+  createdAt: true,       // Auto-generated timestamp
+  lastTriggeredAt: true, // Updated on webhook delivery
+  retryConfig: true,     // Has default value
 });
 
 const UpdateWebhookInputSchema = z.object({
