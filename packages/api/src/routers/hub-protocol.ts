@@ -8,8 +8,9 @@
 import { z } from 'zod';
 import { router, publicProcedure } from '../trpc.js';
 import { scopedProcedure } from '../middleware/api-key-auth.js';
-import { db, eq, desc, and } from '@synap/database';
+import { db, eq, desc, and, sql } from '@synap/database';
 import { chatThreads, conversationMessages, entities } from '@synap/database/schema';
+import { intelligenceHubClient } from '../clients/intelligence-hub.js';
 
 /**
  * Hub Protocol Router
@@ -195,4 +196,268 @@ export const hubProtocolRouter = router({
       
       return { success: true };
     }),
+  
+  // ============================================================================
+  // NEW: Search & Data Access Endpoints (Phase 1)
+  // ============================================================================
+  
+  /**
+   * Search entities (delegates to search router)
+   * Requires: hub-protocol.read scope
+   */
+  searchEntities: scopedProcedure(['hub-protocol.read'])
+    .input(z.object({
+      userId: z.string(),
+      query: z.string(),
+      type: z.enum(['note', 'task', 'document', 'project', 'contact', 'meeting', 'idea']).optional(),
+      limit: z.number().min(1).max(100).default(20),
+    }))
+    .query(async ({ input }) => {
+      // Delegate to existing search router
+      const { searchRouter } = await import('./search.js');
+      
+      // Call search.entities with proper context
+      const results = await db.query.entities.findMany({
+        where: and(
+          eq(entities.userId, input.userId),
+          input.type ? eq(entities.type, input.type) : undefined,
+          input.query ? 
+            // Simple ILIKE search on title and preview
+            db.sql`(${entities.title} ILIKE ${`%${input.query}%`} OR ${entities.preview} ILIKE ${`%${input.query}%`})` 
+            : undefined
+        ),
+        orderBy: [desc(entities.updatedAt)],
+        limit: input.limit,
+      });
+      
+      return { entities: results };
+    }),
+  
+  /**
+   * Search documents (simple text search)
+   * Requires: hub-protocol.read scope
+   */
+  searchDocuments: scopedProcedure(['hub-protocol.read'])
+    .input(z.object({
+      userId: z.string(),
+      query: z.string(),
+      type: z.enum(['text', 'markdown', 'code', 'pdf', 'docx']).optional(),
+      limit: z.number().min(1).max(50).default(10),
+    }))
+    .query(async ({ input }) => {
+      const { documents } = await import('@synap/database/schema');
+      const { sql } = await import('@synap/database');
+      
+      // Simple ILIKE search on document titles
+      const results = await db.query.documents.findMany({
+        where: and(
+          eq(documents.userId, input.userId),
+          input.type ? eq(documents.type, input.type) : undefined,
+          sql`${documents.title} ILIKE ${`%${input.query}%`}`
+        ),
+        orderBy: [desc(documents.updatedAt)],
+        limit: input.limit,
+      });
+      
+      // Return metadata only (no content)
+      return {
+        documents: results.map(d => ({
+          id: d.id,
+          title: d.title,
+          type: d.type,
+          language: d.language,
+          updatedAt: d.updatedAt,
+          createdAt: d.createdAt,
+        })),
+      };
+    }),
+  
+  /**
+   * Vector search (semantic search across entities + documents)
+   * Requires: hub-protocol.read scope
+   */
+  vectorSearch: scopedProcedure(['hub-protocol.read'])
+    .input(z.object({
+      userId: z.string(),
+      query: z.string(),
+      types: z.array(z.string()).optional(),
+      limit: z.number().min(1).max(50).default(10),
+    }))
+    .query(async ({ input }) => {
+      // 1. Generate embedding for query
+      let embedding: number[];
+      try {
+        embedding = await intelligenceHubClient.generateEmbedding(input.query);
+      } catch (error) {
+        console.error('Failed to generate embedding:', error);
+        // Return empty results if embedding fails
+        return {
+          results: [],
+          embeddingGenerated: false,
+        };
+      }
+      
+      const embeddingStr = `[${embedding.join(',')}]`;
+      
+      // 2. Vector similarity search using pgvector
+      const results = await sql`
+        SELECT 
+          e.id,
+          e.type,
+          e.title,
+          e.preview,
+          e.created_at,
+          1 - (ev.embedding <=> ${embeddingStr}::vector) as similarity
+        FROM entity_vectors ev
+        JOIN entities e ON ev.entity_id = e.id
+        WHERE 
+          ev.user_id = ${input.userId}
+          AND e.deleted_at IS NULL
+          ${input.types ? sql`AND e.type = ANY(${input.types})` : sql``}
+        ORDER BY similarity DESC
+        LIMIT ${input.limit}
+      `;
+      
+      return {
+        results: results.rows.map((r: any) => ({
+          id: r.id,
+          type: r.type,
+          title: r.title,
+          preview: r.preview,
+          similarity: r.similarity,
+          createdAt: r.created_at,
+        })),
+        embeddingGenerated: true,
+      };
+    }),
+  
+  /**
+   * Get document content by ID
+   * Requires: hub-protocol.read scope
+   */
+  getDocument: scopedProcedure(['hub-protocol.read'])
+    .input(z.object({
+      documentId: z.string().uuid(),
+      userId: z.string(),
+    }))
+    .query(async ({ input }) => {
+      const { documents } = await import('@synap/database/schema');
+      const { storage } = await import('@synap/storage');
+      
+      // Get document metadata
+      const document = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.id, input.documentId),
+          eq(documents.userId, input.userId)
+        ),
+      });
+      
+      if (!document) {
+        throw new Error('Document not found');
+      }
+      
+      // Fetch content from storage
+      const contentBuffer = await storage.downloadBuffer(document.storageKey);
+      const content = document.type === 'pdf' || document.type === 'docx'
+        ? contentBuffer.toString('base64')
+        : contentBuffer.toString('utf-8');
+      
+      return {
+        document: {
+          id: document.id,
+          title: document.title,
+          type: document.type,
+          language: document.language,
+          content,
+          updatedAt: document.updatedAt,
+          createdAt: document.createdAt,
+        },
+      };
+    }),
+  
+  /**
+   * Update entity (delegates to entities router)
+   * Requires: hub-protocol.write scope
+   */
+  updateEntity: scopedProcedure(['hub-protocol.write'])
+    .input(z.object({
+      entityId: z.string().uuid(),
+      userId: z.string(),
+      title: z.string().optional(),
+      preview: z.string().optional(),
+      metadata: z.record(z.any()).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      // Publish .requested event (handled by existing Inngest worker)
+      const { inngest } = await import('@synap/jobs');
+      
+      await inngest.send({
+        name: 'entities.update.requested',
+        data: {
+          entityId: input.entityId,
+          title: input.title,
+          preview: input.preview,
+          metadata: input.metadata,
+        },
+        user: { id: input.userId },
+      });
+      
+      return {
+        status: 'requested',
+        message: 'Entity update requested',
+      };
+    }),
+  
+  /**
+   * Create document proposal (for AI edits)
+   * Requires: hub-protocol.write scope
+   */
+  createDocumentProposal: scopedProcedure(['hub-protocol.write'])
+    .input(z.object({
+      documentId: z.string().uuid(),
+      userId: z.string(),
+      proposalType: z.enum(['ai_edit', 'user_suggestion', 'review_comment']).default('ai_edit'),
+      changes: z.array(z.object({
+        op: z.enum(['insert', 'delete', 'replace']),
+        position: z.number().optional(),
+        range: z.tuple([z.number(), z.number()]).optional(),
+        text: z.string().optional(),
+      })),
+      proposedContent: z.string(),
+      originalContent: z.string().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const { documentProposals } = await import('@synap/database/schema');
+      
+      // Calculate expiration (7 days)
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      
+      // Create proposal in DB
+      const [proposal] = await db.insert(documentProposals).values({
+        documentId: input.documentId,
+        proposalType: input.proposalType,
+        proposedBy: 'ai',
+        changes: input.changes as any,
+        originalContent: input.originalContent,
+        proposedContent: input.proposedContent,
+        status: 'pending',
+        expiresAt,
+      }).returning();
+      
+      // Broadcast to user (real-time notification)
+      const { broadcastSuccess } = await import('@synap/jobs');
+      await broadcastSuccess(input.userId, 'ai:proposal', {
+        proposalId: proposal.id,
+        documentId: input.documentId,
+        operation: 'create',
+      });
+      
+      return {
+        status: 'proposed',
+        proposalId: proposal.id,
+        message: 'Document edit proposed, awaiting approval',
+      };
+    }),
 });
+

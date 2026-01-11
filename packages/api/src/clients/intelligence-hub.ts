@@ -9,6 +9,8 @@ export interface IntelligenceHubRequest {
   threadId: string;
   userId: string;
   agentId?: string;
+  agentType?: string; // ✅ ADDED: Agent type for multi-agent routing
+  agentConfig?: Record<string, any>; // ✅ ADDED: Custom agent configuration
   projectId?: string;
 }
 
@@ -95,6 +97,92 @@ export class IntelligenceHubClient {
     
     const data = await response.json();
     return data.embedding;
+  }
+  
+  /**
+   * Send message with streaming support
+   */
+  async *sendMessageStream(request: IntelligenceHubRequest): AsyncGenerator<{
+    type: 'chunk' | 'step' | 'entities' | 'branch_decision' | 'complete' | 'error';
+    content?: string;
+    step?: any;
+    entities?: any[];
+    decision?: any;
+    data?: any;
+    error?: string;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/chat/stream`, { // ✅ UPDATED: New endpoint
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify({
+        query: request.query,
+        threadId: request.threadId,
+        userId: request.userId,
+        agentId: request.agentId || 'orchestrator',
+        agentType: request.agentType,
+        agentConfig: request.agentConfig,
+        projectId: request.projectId,
+        stream: true, // Enable streaming
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Intelligence Hub error: ${response.statusText}`);
+    }
+    
+    // Parse SSE stream
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    
+    if (!reader) {
+      throw new Error('No response body');
+    }
+    
+    let buffer = '';
+    
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          yield { type: 'complete' };
+          break;
+        }
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              if (data.type === 'content' && data.content) {
+                yield { type: 'chunk', content: data.content };
+              } else if (data.type === 'step' && data.step) {
+                yield { type: 'step', step: data.step };
+              } else if (data.type === 'entities' && data.entities) {
+                yield { type: 'entities', entities: data.entities }; // ✅ ADDED
+              } else if (data.type === 'branch_decision' && data.decision) {
+                yield { type: 'branch_decision', decision: data.decision }; // ✅ ADDED
+              } else if (data.type === 'error') {
+                yield { type: 'error', error: data.error }; // ✅ ADDED
+              } else if (data.type === 'complete') {
+                yield { type: 'complete', data: data.data }; // ✅ FIXED: Include data
+              }
+            } catch (parseError) {
+              console.error('Failed to parse SSE data:', line, parseError);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
   
   /**

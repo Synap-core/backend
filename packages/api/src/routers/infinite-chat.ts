@@ -48,6 +48,8 @@ export const infiniteChatRouter = router({
         parentThreadId: input.parentThreadId,
         branchPurpose: input.branchPurpose,
         agentId: input.agentId,
+        agentType: input.agentType, // NEW: Agent type for multi-agent routing
+        agentConfig: input.agentConfig, // NEW: Custom agent configuration
         threadType: input.parentThreadId ? 'branch' : 'main',
         status: 'active',
       }).returning();
@@ -56,7 +58,7 @@ export const infiniteChatRouter = router({
     }),
   
   /**
-   * Send message to Intelligence Hub and get AI response
+   * Send message to Intelligence Hub and get AI response (with streaming)
    */
   sendMessage: protectedProcedure
     .input(z.object({
@@ -91,42 +93,113 @@ export const infiniteChatRouter = router({
         hash: userMessageHash,
       });
       
-      // Call Intelligence Hub
-      const hubResponse = await intelligenceHubClient.sendMessage({
-        query: content,
-        threadId,
-        userId: ctx.userId,
-        agentId: thread.agentId ?? 'orchestrator',
-        projectId: thread.projectId ?? undefined,
-      });
+      // Stream from Intelligence Hub
+      let fullContent = '';
+      const aiSteps: any[] = [];
+      let hubResponse: any = null;
+      
+      try {
+        const stream = intelligenceHubClient.sendMessageStream({
+          query: content,
+          threadId,
+          userId: ctx.userId,
+          agentId: thread.agentId ?? 'orchestrator',
+          agentType: thread.agentType ?? 'meta',
+          projectId: thread.projectId ?? undefined,
+        });
+        
+        for await (const chunk of stream) {
+          if (chunk.type === 'chunk' && chunk.content) {
+            fullContent += chunk.content;
+            
+            // Emit via Socket.IO
+            ctx.socketIO?.emit('chat:stream', {
+              threadId,
+              type: 'chunk',
+              content: chunk.content,
+              isComplete: false,
+            });
+          } else if (chunk.type === 'step' && chunk.step) {
+            aiSteps.push(chunk.step);
+            
+            // Emit AI step
+            ctx.socketIO?.emit('ai:step', {
+              threadId,
+              messageId: userMessageId,
+              step: chunk.step,
+            });
+          } else if (chunk.type === 'entities' && chunk.entities) {
+            // ✅ ADDED: Handle entities from stream
+            hubResponse = { ...hubResponse, entities: chunk.entities };
+          } else if (chunk.type === 'branch_decision' && chunk.decision) {
+            // ✅ ADDED: Handle branch decision from stream
+            hubResponse = { ...hubResponse, branchDecision: chunk.decision };
+          } else if (chunk.type === 'complete') {
+            // ✅ FIXED: Extract data from complete event
+            if (chunk.data) {
+              hubResponse = chunk.data;
+            }
+            
+            // Final emission
+            ctx.socketIO?.emit('chat:stream', {
+              threadId,
+              type: 'complete',
+              isComplete: true,
+            });
+          }
+        }
+      } catch (streamError) {
+        console.error('Streaming error, falling back to non-streaming:', streamError);
+        
+        // ✅ ADDED: Notify frontend of streaming failure (Issue #9)
+        ctx.socketIO?.emit('chat:stream:error', {
+          threadId,
+          error: streamError instanceof Error ? streamError.message : 'Streaming failed',
+          fallback: true,
+        });
+        
+        // Fallback to non-streaming
+        hubResponse = await intelligenceHubClient.sendMessage({
+          query: content,
+          threadId,
+          userId: ctx.userId,
+          agentId: thread.agentId ?? 'orchestrator',
+          agentType: thread.agentType ?? 'meta',
+          projectId: thread.projectId ?? undefined,
+        });
+        
+        fullContent = hubResponse.content;
+      }
       
       // Save assistant message
       const assistantMessageId = randomUUID();
       const assistantMessageHash = createHash('sha256')
-        .update(`${assistantMessageId}${hubResponse.content}${userMessageHash}`)
+        .update(`${assistantMessageId}${fullContent}${userMessageHash}`)
         .digest('hex');
       
       await db.insert(conversationMessages).values({
         id: assistantMessageId,
         threadId,
         role: 'assistant',
-        content: hubResponse.content,
+        content: fullContent,
         userId: ctx.userId,
         previousHash: userMessageHash,
         hash: assistantMessageHash,
-        metadata: hubResponse.usage ? {
-          tokens: hubResponse.usage.totalTokens,
-        } : undefined,
+        metadata: {
+          aiSteps: aiSteps.length > 0 ? aiSteps : (hubResponse?.thinkingSteps || []),
+          tokens: hubResponse?.usage?.totalTokens,
+        },
       });
       
       
       // Create entities via event chain for consistency  
       const createdEntities = [];
-      if (hubResponse.entities?.length > 0) {
+      const entities = hubResponse?.entities || [];
+      if (entities.length > 0) {
         const { inngest } = await import('@synap/jobs');
         
-        for (const entity of hubResponse.entities) {
-          // \u2705 Publish .requested event
+        for (const entity of entities) {
+          // ✅ Publish .requested event
           await inngest.send({
             name: 'entities.create.requested',
             data: {
@@ -149,7 +222,8 @@ export const infiniteChatRouter = router({
       
       // Create branch if decided
       let branchThread = undefined;
-      if (hubResponse.branchDecision?.shouldBranch) {
+      const branchDecision = hubResponse?.branchDecision;
+      if (branchDecision?.shouldBranch) {
         const branchId = randomUUID();
         const [branch] = await db.insert(chatThreads).values({
           id: branchId,
@@ -157,8 +231,8 @@ export const infiniteChatRouter = router({
           projectId: thread.projectId,
           parentThreadId: threadId,
           branchedFromMessageId: assistantMessageId,
-          branchPurpose: hubResponse.branchDecision.purpose,
-          agentId: hubResponse.branchDecision.agentId || 'research-agent',
+          branchPurpose: branchDecision.purpose,
+          agentId: branchDecision.agentId || 'research-agent',
           threadType: 'branch',
           status: 'active',
         }).returning();
@@ -172,11 +246,11 @@ export const infiniteChatRouter = router({
       
       return {
         messageId: assistantMessageId,
-        content: hubResponse.content,
+        content: fullContent,
         entities: createdEntities,
-        branchDecision: hubResponse.branchDecision,
+        branchDecision,
         branchThread,
-        thinkingSteps: hubResponse.thinkingSteps,
+        aiSteps,
       };
     }),
   

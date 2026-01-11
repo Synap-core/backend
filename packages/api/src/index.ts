@@ -32,11 +32,15 @@ export { syncUserFromKratos, createDefaultWorkspace } from './utils/kratos-sync.
 // Export event handlers
 export { startEventProcessor, processEvents } from './event-handlers/index.js';
 
+// ✅ ADDED: Export entity embedding helper for jobs package (Issue #5)
+export { generateAndStoreEmbedding } from './routers/entities-data.js';
+
 import { eventsRouter } from './routers/events.js';
 import { captureRouter } from './routers/capture.js';
 import { entitiesRouter } from './routers/entities.js';
 
-import { chatRouter } from './routers/chat.js';
+import { infiniteChatRouter as chatRouter } from './routers/infinite-chat.js';
+import { approvalsRouter } from './routers/approvals.js';
 import { suggestionsRouter } from './routers/suggestions.js';
 import { setupRouter } from './routers/setup.js';
 import { systemRouter } from './routers/system.js';
@@ -71,7 +75,8 @@ registerRouter('events', eventsRouter, { version: '1.0.0', source: 'core', descr
 registerRouter('capture', captureRouter, { version: '1.0.0', source: 'core', description: 'Thought capture API' });
 registerRouter('entities', entitiesRouter, { version: '1.0.0', source: 'core', description: 'Entity management API' });
 
-registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Conversational interface API' });
+registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Infinite chat with branching and AI integration' });
+registerRouter('approvals', approvalsRouter, { version: '1.0.0', source: 'core', description: 'Approval workflow for AI proposals and actions' });
 registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
 registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
 registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
@@ -110,6 +115,7 @@ const coreRouter = router({
   entities: entitiesRouter,
 
   chat: chatRouter,
+  approvals: approvalsRouter,
   suggestions: suggestionsRouter,
   system: systemRouter,
   hub: hubRouter,

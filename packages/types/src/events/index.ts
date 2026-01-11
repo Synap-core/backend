@@ -40,6 +40,17 @@ export interface EntityDeletedEvent {
   deletedAt: string;
 }
 
+export interface EntityApprovalEvent {
+  requestId: string;
+  entityId?: string;
+  workspaceId: string;
+  entityType: string;
+  status: 'pending' | 'approved' | 'rejected' | 'created';
+  reason?: string;
+  createdBy: string;
+  timestamp: string;
+}
+
 // =============================================================================
 // Document Events
 // =============================================================================
@@ -118,6 +129,7 @@ export interface DomainServerToClientEvents {
   'entity:created': (data: EntityCreatedEvent) => void;
   'entity:updated': (data: EntityUpdatedEvent) => void;
   'entity:deleted': (data: EntityDeletedEvent) => void;
+  'entity:approval': (data: EntityApprovalEvent) => void;
   
   // Documents
   'document:updated': (data: DocumentUpdatedEvent) => void;

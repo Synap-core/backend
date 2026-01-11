@@ -32,6 +32,12 @@ export const chatThreads = pgTable('chat_threads', {
     enum: ['active', 'merged', 'archived']
   }).notNull().default('active'),
   
+  // Agent type for multi-agent system
+  agentType: text('agent_type', { 
+    enum: ['default', 'meta', 'prompting', 'knowledge-search', 'code', 'writing', 'action'] 
+  }).notNull().default('default'), // Changed from 'meta' to 'default'
+  agentConfig: jsonb('agent_config'), // Custom agent configuration (system prompt, tools, etc.)
+  
   // Context (compressed summaries from merged branches)
   contextSummary: text('context_summary'),
   

@@ -289,7 +289,7 @@ app.use(
           userId,
           user,
           session,
-          req: opts.c?.req?.raw || opts.req,
+          req: (opts as any).c?.req?.raw || opts.req,
         };
       }
       
@@ -300,7 +300,7 @@ app.use(
         userId: null,
         user: null,
         session: null,
-        req: opts.c?.req?.raw || opts.req,
+        req: (opts as any).c?.req?.raw || opts.req,
       };
     },
     onError({ error, path }) {

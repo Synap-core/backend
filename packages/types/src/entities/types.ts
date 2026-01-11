@@ -6,14 +6,7 @@
  */
 
 import { z } from 'zod';
-import { selectEntitySchema } from '@synap/database/schema';
 import { ENTITY_SCHEMAS } from './schemas.js';
-
-/**
- * Base Entity Type (from Database)
- * Includes id, userId, type, metadata (untyped), createdAt, etc.
- */
-export type DbEntity = z.infer<typeof selectEntitySchema>;
 
 /**
  * Entity Metadata Interface per type
@@ -24,17 +17,40 @@ import type { EntityType } from './schemas.js';
 /**
  * Entity Schema - Discriminated Union
  * 
- * Combines the Database Schema (common fields) with specific Metadata Schemas.
+ * Combines the Database Schema (common fields) with type-specific metadata
  */
+
+// Create a base schema from the select schema
+const baseEntitySchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  workspaceId: z.string().nullable(),
+  type: z.string(),
+  title: z.string().nullable(),
+  preview: z.string().nullable(),
+  documentId: z.string().nullable(),
+  metadata: z.any(),
+  fileUrl: z.string().nullable(),
+  filePath: z.string().nullable(),
+  fileSize: z.number().nullable(),
+  fileType: z.string().nullable(),
+  checksum: z.string().nullable(),
+  version: z.number(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+  deletedAt: z.date().nullable(),
+});
+
+// Create discriminated union with proper typing
 export const EntitySchema = z.discriminatedUnion('type', [
-  selectEntitySchema.extend({ type: z.literal('task'), metadata: ENTITY_SCHEMAS.task }),
-  selectEntitySchema.extend({ type: z.literal('note'), metadata: ENTITY_SCHEMAS.note }),
-  selectEntitySchema.extend({ type: z.literal('person'), metadata: ENTITY_SCHEMAS.person }),
-  selectEntitySchema.extend({ type: z.literal('event'), metadata: ENTITY_SCHEMAS.event }),
-  selectEntitySchema.extend({ type: z.literal('file'), metadata: ENTITY_SCHEMAS.file }),
-  selectEntitySchema.extend({ type: z.literal('code'), metadata: ENTITY_SCHEMAS.code }),
-  selectEntitySchema.extend({ type: z.literal('bookmark'), metadata: ENTITY_SCHEMAS.bookmark }),
-  selectEntitySchema.extend({ type: z.literal('company'), metadata: ENTITY_SCHEMAS.company }),
+  baseEntitySchema.extend({ type: z.literal('task'), metadata: ENTITY_SCHEMAS.task }),
+  baseEntitySchema.extend({ type: z.literal('note'), metadata: ENTITY_SCHEMAS.note }),
+  baseEntitySchema.extend({ type: z.literal('person'), metadata: ENTITY_SCHEMAS.person }),
+  baseEntitySchema.extend({ type: z.literal('event'), metadata: ENTITY_SCHEMAS.event }),
+  baseEntitySchema.extend({ type: z.literal('file'), metadata: ENTITY_SCHEMAS.file }),
+  baseEntitySchema.extend({ type: z.literal('code'), metadata: ENTITY_SCHEMAS.code }),
+  baseEntitySchema.extend({ type: z.literal('bookmark'), metadata: ENTITY_SCHEMAS.bookmark }),
+  baseEntitySchema.extend({ type: z.literal('company'), metadata: ENTITY_SCHEMAS.company }),
 ]);
 
 /**
@@ -45,7 +61,7 @@ export type Entity = z.infer<typeof EntitySchema>;
 /**
  * Base Entity Helper (for partial usage)
  */
-export type BaseEntity = Omit<DbEntity, 'metadata'> & { metadata: unknown };
+export type BaseEntity = Omit<Entity, 'metadata'> & { metadata: unknown };
 
 /**
  * Specific entity types

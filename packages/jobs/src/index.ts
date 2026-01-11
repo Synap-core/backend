@@ -12,6 +12,7 @@
 
 export * from './client.js';
 export * from './worker-registry.js';
+export * from './utils/realtime-broadcast.js';
 
 // ============================================================================
 // Table Workers
@@ -23,12 +24,14 @@ export { relationsWorker } from './functions/relations.js';
 export { workspacesWorker } from './functions/workspaces.js';
 export { workspaceMembersWorker } from './functions/workspace-members.js';
 export { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
+export { documentSnapshotWorker, documentRestoreWorker, documentAutoSaveWorker } from './functions/document-snapshots.js';
 
 // ============================================================================
 // AI Workers
 // ============================================================================
 export { analyzeCapturedThought } from './functions/ai-analyzer.js';
 export { processAnalyzedThought } from './functions/thought-processor.js';
+export { entityEmbeddingWorker } from './functions/entity-embedding.js';
 
 // ============================================================================
 // Shared Workers
@@ -48,9 +51,11 @@ import { relationsWorker } from './functions/relations.js';
 import { workspacesWorker } from './functions/workspaces.js';
 import { workspaceMembersWorker } from './functions/workspace-members.js';
 import { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
+import { documentSnapshotWorker, documentRestoreWorker, documentAutoSaveWorker } from './functions/document-snapshots.js';
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
+import { entityEmbeddingWorker } from './functions/entity-embedding.js';
 import { handleWebhookDelivery } from './functions/webhook-broker.js';
 import { permissionValidator } from './functions/permission-validator.js';
 
@@ -68,10 +73,14 @@ export const functions = [
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
   whiteboardAutoSaveWorker,
+  documentSnapshotWorker,
+  documentRestoreWorker,
+  documentAutoSaveWorker,
   
   // AI workers
   analyzeCapturedThought,
   processAnalyzedThought,
+  entityEmbeddingWorker,
   
   // Shared workers
   handleNewEvent,

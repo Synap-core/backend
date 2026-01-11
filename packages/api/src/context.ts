@@ -25,6 +25,7 @@ export interface Context extends Record<string, unknown> {
   user?: any;
   session?: any;
   req?: Request;
+  socketIO?: any; // ✅ ADDED: Socket.IO server instance for real-time events
 }
 
 export async function createContext(req: Request): Promise<Context> {

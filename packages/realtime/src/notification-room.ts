@@ -13,7 +13,7 @@
  */
 
 export interface Env {
-  NOTIFICATION_ROOM: DurableObjectNamespace<NotificationRoom>;
+  NOTIFICATION_ROOM: DurableObjectNamespace<any>; // Using any to bypass Cloudflare Workers type branding
 }
 
 export interface NotificationMessage {

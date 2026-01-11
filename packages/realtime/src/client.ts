@@ -44,7 +44,7 @@ export async function broadcastNotification(
       throw new Error(`Broadcast failed: ${response.status} ${errorText}`);
     }
 
-    const result = await response.json();
+    const result = (await response.json()) as { broadcastCount?: number };
     return {
       success: true,
       broadcastCount: result.broadcastCount,

@@ -40,3 +40,12 @@ export * from './preferences/index.js';
 
 // Realtime types (for WebSocket/collaboration)
 export * from './realtime/index.js';
+
+// Hub Protocol (Intelligence Service contract)
+export * from './hub-protocol/index.js';
+
+// Approvals
+export * from './approvals/index.js';
+
+// Chat domain types
+export * from './chat/index.js';

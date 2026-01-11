@@ -33,8 +33,8 @@ describe('Real-Time Notification Integration', () => {
   });
 
   afterAll(() => {
-    if (ws) {
-      ws.close();
+    if (ws && 'close' in ws) {
+      (ws as any).close();
     }
   });
 
@@ -65,7 +65,7 @@ describe('Real-Time Notification Integration', () => {
     });
 
     expect(response.ok).toBe(true);
-    const result = await response.json();
+    const result = await response.json() as { success?: boolean; broadcastCount?: number };
     expect(result.success).toBe(true);
     expect(result.broadcastCount).toBeGreaterThanOrEqual(0);
   });
@@ -88,7 +88,7 @@ describe('Real-Time Notification Integration', () => {
     });
 
     expect(response.ok).toBe(true);
-    const result = await response.json();
+    const result = await response.json() as { success?: boolean };
     expect(result.success).toBe(true);
   });
 
@@ -98,7 +98,7 @@ describe('Real-Time Notification Integration', () => {
     const response = await fetch(`${realtimeUrl}/rooms/${roomId}/health`);
     
     expect(response.ok).toBe(true);
-    const result = await response.json();
+    const result = await response.json() as { status?: string; roomId?: string };
     expect(result.status).toBe('ok');
     expect(result.roomId).toBeDefined();
   });

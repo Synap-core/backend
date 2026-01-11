@@ -1,0 +1,100 @@
+/**
+ * Meta-Agent Coordinator - Inngest Worker
+ * 
+ * Listens for document updates and notifies affected branches
+ */
+
+import { inngest } from '../client.js';
+import { createLogger } from '@synap-core/core';
+import { db, eq, and, sql } from '@synap/database';
+import { chatThreads } from '@synap/database/schema';
+
+const logger = createLogger({ module: 'meta-agent-coordinator' });
+
+/**
+ * When a document is updated, notify all branches that might be using it
+ */
+export const metaAgentCoordinator = inngest.createFunction(
+  {
+    id: 'meta-agent-coordinator',
+    name: 'Meta-Agent Document Update Coordinator',
+    retries: 2,
+  },
+  { event: 'documents.update.validated' },
+  async ({ event, step }) => {
+    const { documentId, updatedBy } = event.data as {
+      documentId: string;
+      updatedBy?: string; // Thread ID that triggered the update
+    };
+    
+    logger.info({ documentId, updatedBy }, 'Coordinating document update notification');
+    
+    // Step 1: Get document details
+    const document = await step.run('get-document', async () => {
+      const { getDb, documents } = await import('@synap/database');
+      const db = await getDb();
+      
+      return await db.query.documents.findFirst({
+        where: eq(documents.id, documentId),
+      });
+    });
+    
+    if (!document) {
+      logger.warn({ documentId }, 'Document not found');
+      return { success: false, reason: 'document_not_found' };
+    }
+    
+    // Step 2: Find all active branches in the same project
+    const affectedBranches = await step.run('find-affected-branches', async () => {
+      if (!document.projectId) {
+        return []; // No project context, can't determine affected branches
+      }
+      
+      return await db.query.chatThreads.findMany({
+        where: and(
+          eq(chatThreads.projectId, document.projectId),
+          eq(chatThreads.status, 'active'),
+          updatedBy ? sql`${chatThreads.id} != ${updatedBy}` : undefined, // Exclude updater
+        ),
+      });
+    });
+    
+    if (affectedBranches.length === 0) {
+      logger.info('No affected branches found');
+      return { success: true, notified: 0 };
+    }
+    
+    // Step 3: Send system messages to each branch
+    await step.run('notify-branches', async () => {
+      const { intelligenceService } = await import('../clients/intelligence-service.js');
+      
+      const notifications = affectedBranches.map(async (branch) => {
+        try {
+          // Send system message to branch
+          await intelligenceService.sendSystemMessage({
+            threadId: branch.id,
+            content: `📄 Document "${document.title || documentId}" was updated. Please review the changes if relevant to your current task.`,
+            metadata: {
+              documentId,
+              eventType: 'document_updated',
+              updatedBy,
+            },
+          });
+          
+          logger.debug({ branchId: branch.id, documentId }, 'Notified branch of document update');
+        } catch (error) {
+          logger.error({ branchId: branch.id, error }, 'Failed to notify branch');
+        }
+      });
+      
+      await Promise.allSettled(notifications);
+    });
+    
+    return {
+      success: true,
+      documentId,
+      notified: affectedBranches.length,
+      branches: affectedBranches.map(b => b.id),
+    };
+  }
+);

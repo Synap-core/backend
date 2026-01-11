@@ -121,7 +121,26 @@ export const entitiesWorker = inngest.createFunction(
         });
       }
       
-      // Step 2: Insert entity into database
+      // Step 2: Broadcast approval (BEFORE creating entity)
+      await step.run('broadcast-approval', async () => {
+        const { broadcastSuccess } = await import('../utils/realtime-broadcast.js');
+        await broadcastSuccess(
+          userId,
+          'entity:approval',
+          {
+            requestId: data.requestId || entityId,
+            entityType: data.entityType || 'note',
+            status: 'approved',
+            createdBy: userId,
+            timestamp: new Date().toISOString(),
+          },
+          { requestId: data.requestId }
+        );
+        
+        logger.info({ requestId: data.requestId, entityId }, 'Broadcasted entity approval');
+      });
+      
+      // Step 3: Insert entity into database
       await step.run('insert-entity', async () => {
         logger.info({ entityId, userId }, 'Starting entity insert');
         

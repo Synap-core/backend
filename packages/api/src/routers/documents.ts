@@ -322,6 +322,222 @@ export const documentsRouter = router({
       return version;
     }),
 
+  // ============================================================================
+  // PROPOSALS (AI Edits & Review Workflow)
+  // ============================================================================
+
+  /**
+   * Get proposals for a document
+   */
+  getProposals: protectedProcedure
+    .input(z.object({
+      documentId: z.string().uuid(),
+      status: z.enum(['pending', 'accepted', 'rejected', 'all']).default('pending'),
+    }))
+    .query(async ({ input, ctx }) => {
+      const { documentProposals } = await import('@synap/database/schema');
+      
+      // Verify document access
+      const document = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.id, input.documentId),
+          eq(documents.userId, ctx.userId)
+        ),
+      });
+      
+      if (!document) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Document not found' });
+      }
+      
+      // Fetch proposals
+      const proposals = await db.query.documentProposals.findMany({
+        where: and(
+          eq(documentProposals.documentId, input.documentId),
+          input.status !== 'all'
+            ? eq(documentProposals.status, input.status)
+            : undefined
+        ),
+        orderBy: desc(documentProposals.createdAt),
+        limit: 50,
+      });
+      
+      return { proposals };
+    }),
+
+  /**
+   * Create a proposal (typically from AI)
+   */
+  createProposal: protectedProcedure
+    .input(z.object({
+      documentId: z.string().uuid(),
+      proposalType: z.enum(['ai_edit', 'user_suggestion', 'review_comment', 'offline_sync_conflict']),
+      changes: z.array(z.object({
+        op: z.enum(['insert', 'delete', 'replace']),
+        position: z.number().optional(),
+        range: z.tuple([z.number(), z.number()]).optional(),
+        text: z.string().optional(),
+      })),
+      originalContent: z.string().optional(),
+      proposedContent: z.string().optional(),
+      expiresInDays: z.number().default(7),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const { documentProposals } = await import('@synap/database/schema');
+      
+      // Verify document access
+      const document = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.id, input.documentId),
+          eq(documents.userId, ctx.userId)
+        ),
+      });
+      
+      if (!document) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Document not found' });
+      }
+      
+      // Calculate expiration
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + input.expiresInDays);
+      
+      // Create proposal
+      const [proposal] = await db.insert(documentProposals).values({
+        documentId: input.documentId,
+        proposalType: input.proposalType,
+        proposedBy: input.proposalType === 'ai_edit' ? 'ai' : ctx.userId,
+        changes: input.changes as any,
+        originalContent: input.originalContent,
+        proposedContent: input.proposedContent,
+        status: 'pending',
+        expiresAt,
+      }).returning();
+      
+      // Broadcast to user
+      const { broadcastSuccess } = await import('@synap/jobs');
+      await broadcastSuccess(ctx.userId, 'ai:proposal', {
+        proposalId: proposal.id,
+        documentId: input.documentId,
+        operation: 'create',
+      });
+      
+      return { 
+        success: true,
+        proposalId: proposal.id,
+      };
+    }),
+
+  /**
+   * Review a proposal (accept or reject)
+   */
+  reviewProposal: protectedProcedure
+    .input(z.object({
+      proposalId: z.string().uuid(),
+      action: z.enum(['accept', 'reject']),
+      comment: z.string().optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const { documentProposals } = await import('@synap/database/schema');
+      const userId = requireUserId(ctx.userId);
+      
+      // Get proposal
+      const proposal = await db.query.documentProposals.findFirst({
+        where: eq(documentProposals.id, input.proposalId),
+      });
+      
+      if (!proposal) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Proposal not found' });
+      }
+      
+      // Verify document access
+      const document = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.id, proposal.documentId),
+          eq(documents.userId, ctx.userId)
+        ),
+      });
+      
+      if (!document) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Not authorized' });
+      }
+      
+      // If accepting, apply changes (simplified - would integrate with Yjs in real implementation)
+      if (input.action === 'accept' && proposal.proposedContent) {
+        // Create version snapshot with accepted changes
+        await db.insert(documentVersions).values({
+          documentId: proposal.documentId,
+          version: (document.currentVersion || 0) + 1,
+          content: proposal.proposedContent,
+          message: `AI changes accepted: ${input.comment || 'No comment'}`,
+          author: 'ai',
+          authorId: proposal.proposedBy,
+        });
+        
+        // Update document version
+        await db.update(documents)
+          .set({ currentVersion: (document.currentVersion || 0) + 1 })
+          .where(eq(documents.id, proposal.documentId));
+      }
+      
+      // Update proposal status
+      await db.update(documentProposals)
+        .set({
+          status: input.action === 'accept' ? 'accepted' : 'rejected',
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          reviewComment: input.comment,
+          updatedAt: new Date(),
+        })
+        .where(eq(documentProposals.id, input.proposalId));
+      
+      // Broadcast update
+      const { broadcastSuccess } = await import('@synap/jobs');
+      await broadcastSuccess(ctx.userId, 'ai:proposal:status', {
+        proposalId: input.proposalId,
+        documentId: proposal.documentId,
+        status: input.action === 'accept' ? 'approved' : 'rejected',
+      });
+
+      return { success: true, action: input.action };
+    }),
+
+  /**
+   * Delete a proposal
+   */
+  deleteProposal: protectedProcedure
+    .input(z.object({
+      proposalId: z.string().uuid(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const { documentProposals } = await import('@synap/database/schema');
+      
+      // Get proposal to verify ownership
+      const proposal = await db.query.documentProposals.findFirst({
+        where: eq(documentProposals.id, input.proposalId),
+      });
+      
+      if (!proposal) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+      
+      // Verify document access
+      const document = await db.query.documents.findFirst({
+        where: and(
+          eq(documents.id, proposal.documentId),
+          eq(documents.userId, ctx.userId)
+        ),
+      });
+      
+      if (!document) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      
+      // Delete proposal
+      await db.delete(documentProposals)
+        .where(eq(documentProposals.id, input.proposalId));
+      
+      return { success: true };
+    }),
+
   /**
    * Start editing session
    */
