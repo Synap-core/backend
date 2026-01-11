@@ -13,7 +13,7 @@
 import type { IFileStorage } from './interface.js';
 import { R2StorageProvider, type R2Config } from './r2-provider.js';
 import { MinIOStorageProvider, type MinIOConfig } from './minio-provider.js';
-import { ValidationError, InternalServerError } from '@synap-core/core';
+import { ValidationError, InternalServerError } from '@synap-core/types';
 
 // Import config using dynamic import to avoid circular dependencies
 // This will be resolved when the module loads

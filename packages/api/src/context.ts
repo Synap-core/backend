@@ -5,7 +5,8 @@
  */
 
 import { getDb } from '@synap/database';
-import { createLogger, InternalServerError } from '@synap-core/core';
+import { createLogger } from '@synap-core/core';
+import { InternalServerError } from '@synap-core/types';
 
 const contextLogger = createLogger({ module: 'api-context' });
 

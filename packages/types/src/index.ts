@@ -21,6 +21,9 @@ export * from './inbox/index.js';
 export * from './templates/types.js';
 export * from './templates/schemas.js';
 
+// Error types (browser-compatible)
+export * from './errors/index.js';
+
 // Default Templates
 export { notionLikeTemplate } from './templates/notion-like.template.js';
 export { classicNoteTemplate } from './templates/classic-note.template.js';

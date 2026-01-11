@@ -7,7 +7,7 @@
 
 import { eq, and } from '@synap/database';
 import type { SQL } from '@synap/database';
-import { UnauthorizedError, ValidationError } from '@synap-core/core';
+import { UnauthorizedError, ValidationError } from '@synap-core/types';
 
 /**
  * Validates and returns userId, throwing if not present

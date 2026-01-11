@@ -1,6 +1,7 @@
 {
   "name": "@synap/api",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "description": "Synap API Router - tRPC types and router for Data Pod",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +26,7 @@
     "@aws-sdk/client-s3": "^3.926.0",
     "@hono/trpc-server": "^0.3.2",
     "@synap-core/core": "workspace:*",
-    "@synap-core/types": "workspace:^",
+    "@synap-core/types": "workspace:*",
     "@synap/ai": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/auth": "workspace:*",
@@ -52,5 +53,17 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synap/synap.git",
+    "directory": "packages/api"
+  },
+  "keywords": [
+    "synap",
+    "api",
+    "trpc",
+    "router"
+  ],
+  "license": "MIT"
 }

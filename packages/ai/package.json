@@ -1,6 +1,7 @@
 {
   "name": "@synap/ai",
   "version": "1.0.0",
+  "deprecated": "⚠️ DEPRECATED: Use Intelligence Service instead. See DEPRECATED.md",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
