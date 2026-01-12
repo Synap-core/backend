@@ -58,10 +58,10 @@ export const entitiesWorker = inngest.createFunction(
     retries: 3,
   },
   [
-    // V2.1: Listen to .approved events (after permission validation)
-    { event: 'entities.create.approved' },
-    { event: 'entities.update.approved' },
-    { event: 'entities.delete.approved' },
+    // V2.1: Listen to .validated events (Universal Architecture)
+    { event: 'entities.create.validated' },
+    { event: 'entities.update.validated' },
+    { event: 'entities.delete.validated' },
   ],
   async ({ event, step }) => {
     const eventName = event.name as string;

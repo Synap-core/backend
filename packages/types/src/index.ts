@@ -52,3 +52,6 @@ export * from './approvals/index.js';
 
 // Chat domain types
 export * from './chat/index.js';
+
+// Universal Proposals
+export * from './proposals/index.js';

@@ -41,6 +41,7 @@ import { entitiesRouter } from './routers/entities.js';
 
 import { infiniteChatRouter as chatRouter } from './routers/infinite-chat.js';
 import { approvalsRouter } from './routers/approvals.js';
+import { proposalsRouter } from './routers/proposals.js'; // NEW
 import { suggestionsRouter } from './routers/suggestions.js';
 import { setupRouter } from './routers/setup.js';
 import { systemRouter } from './routers/system.js';
@@ -77,6 +78,7 @@ registerRouter('entities', entitiesRouter, { version: '1.0.0', source: 'core', d
 
 registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Infinite chat with branching and AI integration' });
 registerRouter('approvals', approvalsRouter, { version: '1.0.0', source: 'core', description: 'Approval workflow for AI proposals and actions' });
+registerRouter('proposals', proposalsRouter, { version: '1.0.0', source: 'core', description: 'Universal Proposal System' }); // NEW
 registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
 registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
 registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
@@ -116,6 +118,7 @@ const coreRouter = router({
 
   chat: chatRouter,
   approvals: approvalsRouter,
+  proposals: proposalsRouter, // NEW
   suggestions: suggestionsRouter,
   system: systemRouter,
   hub: hubRouter,

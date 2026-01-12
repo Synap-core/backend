@@ -39,7 +39,7 @@ export { entityEmbeddingWorker } from './functions/entity-embedding.js';
 // ============================================================================
 export { handleNewEvent } from './functions/projectors.js';
 export { handleWebhookDelivery } from './functions/webhook-broker.js';
-export { permissionValidator } from './functions/permission-validator.js';
+export { globalValidator } from './functions/global-validator.js';
 
 // ============================================================================
 // INNGEST FUNCTION REGISTRY
@@ -59,7 +59,7 @@ import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
 import { entityEmbeddingWorker } from './functions/entity-embedding.js';
 import { handleWebhookDelivery } from './functions/webhook-broker.js';
-import { permissionValidator } from './functions/permission-validator.js';
+import { globalValidator } from './functions/global-validator.js';
 
 /**
  * All Inngest functions to register with the serve handler.
@@ -88,5 +88,5 @@ export const functions = [
   // Shared workers
   handleNewEvent,
   handleWebhookDelivery,
-  permissionValidator,
+  globalValidator,
 ];

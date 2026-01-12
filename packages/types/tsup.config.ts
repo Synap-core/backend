@@ -13,6 +13,7 @@ export default defineConfig({
     'src/preferences/index.ts',
     'src/realtime/index.ts',
     'src/events/index.ts',
+    'src/proposals/index.ts', // NEW: Universal Proposals
   ],
   format: ['esm'],
   dts: true,

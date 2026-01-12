@@ -2,8 +2,8 @@
  * Documents Worker - Generic Document Handler
  * 
  * Handles document lifecycle events:
- * - documents.create.requested
- * - documents.update.requested
+ * - documents.create.validated (Executor)
+ * - documents.update.validated (Executor)
  * 
  * Documents have versioning and are stored as files.
  */
@@ -47,11 +47,12 @@ export const documentsWorker = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: 'documents.create.requested' },
-    { event: 'documents.update.requested' },
+    { event: 'documents.create.validated' },
+    { event: 'documents.update.validated' },
   ],
   async ({ event, step }) => {
     const eventName = event.name as string;
+    // Extract action from "documents.{action}.validated"
     const action = eventName.split('.')[1] as 'create' | 'update';
     const userId = event.user?.id as string;
     
@@ -59,16 +60,19 @@ export const documentsWorker = inngest.createFunction(
       throw new Error('userId is required for documents operations');
     }
     
-    logger.info({ eventName, action, userId }, 'Processing documents event');
+    logger.info({ eventName, action, userId }, 'Processing documents event (Executor)');
     
     // ========================================================================
-    // CREATE
+    // CREATE (Executed after Validation)
     // ========================================================================
     if (action === 'create') {
       const data = event.data as DocumentsCreateRequestedData;
-      const documentId = randomUUID();
+      // Use the requestId from the validator/proposal if available, else new ID
+      const documentId = data.requestId || randomUUID();
       
       // Step 1: Upload content to storage
+      // Note: In the future, content might already be in S3 (contentRef), 
+      // but we handle legacy "Raw Content" here for now.
       const fileInfo = await step.run('upload-document', async () => {
         const content = data.file?.content || data.content || '';
         const isBase64 = data.file?.source === 'file-upload';
@@ -94,7 +98,7 @@ export const documentsWorker = inngest.createFunction(
         };
       });
       
-      // Step 2: Insert document record
+      // Step 2: Insert document record (Live Data)
       await step.run('insert-document', async () => {
         const { getDb } = await import('@synap/database');
         const db = await getDb();
@@ -119,7 +123,7 @@ export const documentsWorker = inngest.createFunction(
         logger.debug({ documentId }, 'Inserted document');
       });
       
-      // Step 3: Create initial version
+      // Step 3: Create initial version (Snapshot)
       await step.run('create-initial-version', async () => {
         const { getDb } = await import('@synap/database');
         const db = await getDb();
@@ -143,10 +147,10 @@ export const documentsWorker = inngest.createFunction(
         logger.debug({ documentId }, 'Created initial document version');
       });
       
-      // Step 4: Emit completion
+      // Step 4: Emit completion (Signal to UI)
       await step.run('emit-completion', async () => {
         await inngest.send({
-          name: 'documents.create.validated',
+          name: 'documents.create.completed',
           data: {
             documentId,
             title: data.title,
@@ -158,7 +162,7 @@ export const documentsWorker = inngest.createFunction(
           user: { id: userId },
         });
         
-        logger.info({ documentId }, 'Published documents.create.validated');
+        logger.info({ documentId }, 'Published documents.create.completed');
       });
       
       return {
@@ -247,7 +251,7 @@ export const documentsWorker = inngest.createFunction(
       // Step 5: Emit completion
       await step.run('emit-update-completion', async () => {
         await inngest.send({
-          name: 'documents.update.validated',
+          name: 'documents.update.completed',
           data: {
             documentId,
             version: newVersion,

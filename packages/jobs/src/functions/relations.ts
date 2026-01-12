@@ -43,8 +43,8 @@ export const relationsWorker = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: 'relations.create.requested' },
-    { event: 'relations.delete.requested' },
+    { event: 'relations.create.validated' },
+    { event: 'relations.delete.validated' },
   ],
   async ({ event, step }) => {
     const eventName = event.name as string;

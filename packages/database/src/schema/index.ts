@@ -58,5 +58,8 @@ export {
   selectUserPreferenceSchema,
 } from './user-preferences.js';
 
+// NEW: Universal Proposals
+export * from './proposals.js';
+
 // NEW: Entity Templates
 export * from './entity-templates.js';
