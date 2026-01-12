@@ -9,7 +9,6 @@ export * from './events.js';
 export * from './entities.js';
 export * from './entity-vectors.js';
 export * from './documents.js';
-export * from './document-proposals.js';
 export * from './relations.js';
 export * from './task_details.js';
 export * from './tags.js';

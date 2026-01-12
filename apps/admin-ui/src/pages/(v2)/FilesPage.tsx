@@ -57,17 +57,17 @@ export default function FilesPage() {
   const [currentPath, setCurrentPath] = useState<string[]>([]);
 
   // Fetch buckets
-  const { data: bucketsData, isLoading: isLoadingBuckets } = trpc.files.listBuckets.useQuery();
+  const { data: bucketsData, isLoading: isLoadingBuckets } = trpc.storage.listBuckets.useQuery();
 
   // Fetch files
   const prefix = currentPath.length > 0 ? currentPath.join('/') + '/' : '';
-  const { data: filesData, isLoading: isLoadingFiles, refetch } = trpc.files.listFiles.useQuery({
+  const { data: filesData, isLoading: isLoadingFiles, refetch } = trpc.storage.listFiles.useQuery({
     bucket: currentBucket,
     prefix,
   });
 
   // Delete mutation
-  const deleteMutation = trpc.files.deleteFile.useMutation({
+  const deleteMutation = trpc.storage.deleteFile.useMutation({
     onSuccess: () => {
       showSuccessNotification({ message: 'File deleted successfully' });
       refetch();

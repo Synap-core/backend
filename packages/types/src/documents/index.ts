@@ -11,8 +11,6 @@ export type {
   NewDocumentVersion,
   DocumentSession,
   NewDocumentSession,
-  DocumentProposal,
-  NewDocumentProposal,
 } from '@synap/database/schema';
 
 // Re-export Zod schemas for runtime validation
@@ -22,7 +20,5 @@ export {
   insertDocumentVersionSchema,
   selectDocumentVersionSchema,
   insertDocumentSessionSchema,
-  selectDocumentSessionSchema,
-  insertDocumentProposalSchema,
-  selectDocumentProposalSchema,
+
 } from '@synap/database/schema';

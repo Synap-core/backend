@@ -90,7 +90,7 @@ export default function FlowPageV3() {
   const { data: system, isLoading: systemLoading, refetch } = 
     trpc.system.getCapabilities.useQuery();
   
-  const { data: webhooks } = trpc.webhooks.list.useQuery(undefined, { retry: false });
+  const { data: webhooks } = trpc.integrations.list.useQuery(undefined, { retry: false });
   const { data: tables } = trpc.system.getDatabaseTables.useQuery(undefined, { retry: false });
 
   // Stats for module cards

@@ -54,7 +54,7 @@ export default function EventTypeExplorer({ eventType, onClose }: EventTypeExplo
   ) || [];
 
   // Find webhooks subscribed to this event
-  const { data: webhooks } = trpc.webhooks.list.useQuery(undefined, { retry: false });
+  const { data: webhooks } = trpc.integrations.list.useQuery(undefined, { retry: false });
   const subscribedWebhooks = (webhooks as any[])?.filter(wh => 
     wh.eventTypes?.includes(eventType)
   ) || [];

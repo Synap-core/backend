@@ -122,12 +122,9 @@ export const globalValidator = inngest.createFunction(
     }
 
     // 4. Path B: Create Proposal (Pending)
-    const proposalId = await step.run('create-proposal', async () => {
-      // Map event to Proposal/UpdateRequest
-      // targetType is plural "documents", DB expects singular usually or we clean it
-      const singularType = targetType.endsWith('s') ? targetType.slice(0, -1) : targetType;
-      
+    const proposalResult = await step.run('create-proposal', async () => {
       const targetId = (data.documentId || data.entityId || data.id || randomUUID()) as string;
+      const singularType = targetType.endsWith('s') ? targetType.slice(0, -1) : targetType;
 
       const [proposal] = await db.insert(proposals).values({
         workspaceId: workspaceId || 'personal',
@@ -146,11 +143,11 @@ export const globalValidator = inngest.createFunction(
         status: 'pending',
       }).returning();
 
-      return proposal.id;
+      return { proposalId: proposal.id, singularType };
     });
 
     // 5. Notify Frontend (Real-time)
-    if (proposalId) {
+    if (proposalResult?.proposalId) {
         await step.run('broadcast-proposal', async () => {
             const { broadcastNotification } = await import('../utils/realtime-broadcast.js');
             // Notify the user who requested it (if different?) or just the workspace "inbox"?
@@ -164,8 +161,8 @@ export const globalValidator = inngest.createFunction(
                 message: {
                     type: 'proposal:created', // Frontend listens to this
                     data: {
-                        proposalId,
-                        targetType: singularType,
+                        proposalId: proposalResult.proposalId,
+                        targetType: proposalResult.singularType,
                         targetId: (data.documentId || data.entityId || data.id || randomUUID()) as string,
                         changeType: action,
                         status: 'pending'
@@ -178,6 +175,6 @@ export const globalValidator = inngest.createFunction(
         });
     }
 
-    return { status: 'proposal_created', proposalId };
+    return { status: 'proposal_created', proposalId: proposalResult.proposalId };
   }
 );
