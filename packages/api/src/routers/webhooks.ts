@@ -21,14 +21,6 @@ const logger = createLogger({ module: 'webhooks-router' });
  * Derived from: insertWebhookSubscriptionSchema (database/schema/webhook_subscriptions.ts)
  * Omits server-generated fields, keeps all user-provided fields.
  */
-const CreateWebhookInputSchema = insertWebhookSubscriptionSchema.omit({
-  id: true,              // Auto-generated UUID
-  userId: true,          // From context (ctx.userId)
-  active: true,          // Has default value 'true'
-  createdAt: true,       // Auto-generated timestamp
-  lastTriggeredAt: true, // Updated on webhook delivery
-  retryConfig: true,     // Has default value
-});
 
 const UpdateWebhookInputSchema = z.object({
   id: z.string().uuid(),
@@ -43,7 +35,12 @@ export const webhooksRouter = router({
    * Create a new webhook subscription
    */
   create: protectedProcedure
-    .input(CreateWebhookInputSchema)
+    .input(z.object({
+      name: z.string().min(1).max(100),
+      url: z.string().url(),
+      eventTypes: z.array(z.string()).min(1),
+      secret: z.string().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
       const secret = input.secret || randomBytes(32).toString('hex');

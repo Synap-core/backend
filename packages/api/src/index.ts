@@ -82,10 +82,10 @@ registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', descr
 registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
 registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', description: 'API key management for Hub authentication' });
 registerRouter('health', healthRouter, { version: '1.0.0', source: 'core', description: 'Health checks and system monitoring' });
-registerRouter('webhooks', webhooksRouter, { version: '1.0.0', source: 'core', description: 'Webhook subscription management' });
-registerRouter('documents', documentsRouter, { version: '1.0.0', source: 'core', description: 'Document management and collaboration' });
-registerRouter('content', contentRouter, { version: '1.0.0', source: 'core', description: 'Unified content creation (notes and files)' });
-registerRouter('files', filesRouter, { version: '1.0.0', source: 'core', description: 'File storage browsing and management' });
+registerRouter('integrations', webhooksRouter, { version: '1.0.0', source: 'core', description: 'Webhook subscription management' });
+registerRouter('documentsApi', documentsRouter, { version: '1.0.0', source: 'core', description: 'Document management and collaboration' });
+registerRouter('contentApi', contentRouter, { version: '1.0.0', source: 'core', description: 'Unified content creation (notes and files)' });
+registerRouter('storage', filesRouter, { version: '1.0.0', source: 'core', description: 'File storage browsing and management' });
 registerRouter('inbox', inboxRouter, { version: '1.0.0', source: 'core', description: 'Life Feed inbox' });
 registerRouter('intelligenceRegistry', intelligenceRegistryRouter, { version: '1.0.0', source: 'core', description: 'Intelligence Service Registry' });
 registerRouter('capabilities', capabilitiesRouter, { version: '1.0.0', source: 'core', description: 'Feature and service discovery' });
@@ -122,10 +122,10 @@ const coreRouter = router({
   apiKeys: apiKeysRouter,
   health: healthRouter,
   // n8n: n8nActionsRouter, // DISABLED - router not imported
-  webhooks: webhooksRouter,
-  documents: documentsRouter,
-  content: contentRouter,
-  files: filesRouter,
+  integrations: webhooksRouter, // Renamed from webhooks to avoid collision
+  documentsApi: documentsRouter, // Renamed from documents to avoid collision
+  contentApi: contentRouter, // Renamed from content to avoid collision
+  storage: filesRouter, // Renamed from files to avoid collision
   tags: tagsRouter,
   search: searchRouter,
   relations: relationsRouter,

@@ -26,7 +26,13 @@ export const documents = pgTable('documents', {
   
   // Versioning
   currentVersion: integer('current_version').notNull().default(1),
+  lastSavedVersion: integer('last_saved_version').notNull().default(0), // Last immutable snapshot
   
+  // Working State (Yjs Persistence)
+  // Stores the periodic binary dump of the Yjs doc for the *current working version*
+  workingState: text('working_state'), 
+  workingStateUpdatedAt: timestamp('working_state_updated_at', { withTimezone: true }),
+
   // Relationships
   projectId: text('project_id'), // Optional project association
   
@@ -53,6 +59,7 @@ export const documentVersions = pgTable('document_versions', {
   
   // Version info
   version: integer('version').notNull(),
+  type: text('type').notNull().default('manual'), // 'manual' | 'checkpoint' | 'restore'
   content: text('content').notNull(), // Full content at this version
   
   // Change tracking

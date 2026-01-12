@@ -255,6 +255,14 @@ export const documentsRouter = router({
         limit: input.limit,
       });
       
+      const [document] = await db.select({
+        currentVersion: documents.currentVersion,
+        lastSavedVersion: documents.lastSavedVersion,
+      })
+      .from(documents)
+      .where(eq(documents.id, input.documentId))
+      .limit(1);
+
       return {
         versions: versions.map(v => ({
           id: v.id,
@@ -263,6 +271,10 @@ export const documentsRouter = router({
           createdBy: v.authorId,
           createdAt: v.createdAt,
         })),
+        latest: {
+          currentVersion: document?.currentVersion || 1,
+          lastSavedVersion: document?.lastSavedVersion || 0,
+        }
       };
     }),
 

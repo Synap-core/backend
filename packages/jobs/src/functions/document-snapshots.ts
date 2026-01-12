@@ -58,11 +58,14 @@ export const documentSnapshotWorker = inngest.createFunction(
       return v;
     });
 
-    // 4. Update document current version
+    // 4. Update document version metadata (The +1 Logic)
+    // - lastSavedVersion = newVersion (marking this snapshot as the latest save)
+    // - currentVersion = newVersion + 1 (starting the new "working" version)
     await step.run('update-document-version', async () => {
       await db.update(documents)
         .set({
-          currentVersion: newVersion,
+          lastSavedVersion: newVersion,
+          currentVersion: newVersion + 1,
           updatedAt: new Date(),
         })
         .where(eq(documents.id, documentId));
@@ -140,21 +143,25 @@ export const documentRestoreWorker = inngest.createFunction(
     });
 
     // 4. Create new version marking the restoration
+    // We treat the restore itself as a new state.
+    // Basically: Content is reverted to vOld.
+    // The "Working Version" resumes from there.
+    // So currentVersion is purely incremental (doesn't jump back).
     const newVersion = (document.currentVersion || 0) + 1;
 
-    await step.run('create-restore-version', async () => {
-      await db.insert(documentVersions).values({
-        documentId,
-        version: newVersion,
-        content: version.content,
-        message: `Restored to version ${version.version}: ${version.message || ''}`,
-        author: 'user',
-        authorId: userId,
-      });
-
+    await step.run('create-restore-record', async () => {
+      // Optional: Log the restore event in versions history if desired, 
+      // but purely we just need to reset the state.
+      // Ideally we might want a snapshot of "just before restore" if proper safety is needed.
+      
       await db.update(documents)
         .set({
+          // Reset working state to the restored content (done via storage upload above)
+          // We mark the document as "dirty" starting from this restored point
           currentVersion: newVersion,
+          // lastSavedVersion remains at whatever it was (or we could say this restore is unsaved changes)
+          // Ideally, a restore is an "unsaved change" on top of the old version.
+          // BUT - simplest model: Restore puts you in a fresh "Working" state.
           updatedAt: new Date(),
         })
         .where(eq(documents.id, documentId));

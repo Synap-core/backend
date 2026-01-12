@@ -322,7 +322,7 @@ importers:
         specifier: workspace:*
         version: link:../storage
       '@trpc/server':
-        specifier: ^11.0.0
+        specifier: ^11.8.1
         version: 11.8.1(typescript@5.9.3)
       '@types/ws':
         specifier: ^8.18.1

@@ -25,6 +25,7 @@ export { workspacesWorker } from './functions/workspaces.js';
 export { workspaceMembersWorker } from './functions/workspace-members.js';
 export { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
 export { documentSnapshotWorker, documentRestoreWorker, documentAutoSaveWorker } from './functions/document-snapshots.js';
+export { documentPersistenceWorker } from './functions/document-persistence.js';
 
 // ============================================================================
 // AI Workers
@@ -52,6 +53,7 @@ import { workspacesWorker } from './functions/workspaces.js';
 import { workspaceMembersWorker } from './functions/workspace-members.js';
 import { whiteboardSnapshotWorker, whiteboardRestoreWorker, whiteboardAutoSaveWorker } from './functions/whiteboard-snapshots.js';
 import { documentSnapshotWorker, documentRestoreWorker, documentAutoSaveWorker } from './functions/document-snapshots.js';
+import { documentPersistenceWorker } from './functions/document-persistence.js';
 import { handleNewEvent } from './functions/projectors.js';
 import { analyzeCapturedThought } from './functions/ai-analyzer.js';
 import { processAnalyzedThought } from './functions/thought-processor.js';
@@ -76,6 +78,7 @@ export const functions = [
   documentSnapshotWorker,
   documentRestoreWorker,
   documentAutoSaveWorker,
+  documentPersistenceWorker,
   
   // AI workers
   analyzeCapturedThought,

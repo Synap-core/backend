@@ -11,7 +11,7 @@ import type { Config } from 'drizzle-kit';
 
 const config: Config = {
   // PostgreSQL with pgvector
-  schema: './dist/schema/index.js', // ✅ FIXED: Use compiled dist instead of src
+  schema: './src/schema/index.ts', // Use source directly with tsx
   out: './migrations-drizzle', // Auto-generated migrations
   dialect: 'postgresql',
   dbCredentials: {

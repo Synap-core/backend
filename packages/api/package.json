@@ -35,7 +35,7 @@
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/storage": "workspace:*",
-    "@trpc/server": "^11.0.0",
+    "@trpc/server": "^11.8.1",
     "@types/ws": "^8.18.1",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",

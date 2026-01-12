@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/api-types",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "Type definitions for Synap API Router - tRPC types for frontend",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,7 +25,8 @@
   },
   "devDependencies": {
     "tsup": "^8.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "@synap/api": "workspace:*"
   },
   "publishConfig": {
     "access": "public"
