@@ -9,17 +9,33 @@ Self-hosted intelligence infrastructure for sovereign data pods.
 ./start.sh
 
 # 2. Start API server
-pnpm exec turbo run dev --filter='@synap/realtime' --filter='api' --filter='@synap/jobs'
+pnpm dev
 
 # 3. Start frontend (in synap-app directory)
 cd ../synap-app
-pnpm exec turbo run dev --filter='web'
+pnpm dev
 
 # 4. Open browser
 open http://localhost:3000/setup
 ```
 
 That's it! The setup wizard will guide you through creating your admin account.
+
+---
+
+## Service Health & Quality
+
+We enforce strict quality gates. Before pushing code, ensure you pass the CI suite:
+
+```bash
+# Run full CI suite (Lint, Typecheck, Test, Build)
+pnpm run-ci
+
+# Run specific checks
+pnpm lint       # Check for code style & errors
+pnpm typecheck  # Strict TypeScript validation
+pnpm test       # Run unit & integration tests
+```
 
 ---
 
@@ -52,12 +68,12 @@ synap-backend/
 ├── packages/
 │   ├── api/           # tRPC API server
 │   ├── database/      # Drizzle ORM schema & migrations
+│   ├── core/          # Shared utilities & logging
+│   ├── auth/          # Kratos integration
 │   ├── realtime/      # WebSocket server
 │   ├── jobs/          # Inngest background jobs
 │   └── storage/       # MinIO client
-├── docker/
-│   ├── postgres/      # Database init scripts
-│   └── kratos/        # Kratos migration script
+├── docker/            # Docker configuration & scripts
 ├── kratos/            # Kratos configuration
 └── start.sh           # Automated startup script
 ```
@@ -72,7 +88,6 @@ Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```
-
 Customize if needed (defaults work for local development).
 
 ### 2. Start Docker Services
@@ -92,18 +107,18 @@ docker compose --profile auth up -d
 cd packages/database
 pnpm run db:push
 ```
-
 This creates all tables in your database.
 
 ### 4. Start Development Servers
 
 ```bash
-# Backend APIs
-pnpm exec turbo run dev --filter='@synap/realtime' --filter='api' --filter='@synap/jobs'
+# Backend APIs (Concurrent start via Turbo)
+pnpm dev
+# Starts: api, realtime, jobs
 
 # Frontend (in synap-app directory)
 cd ../synap-app
-pnpm exec turbo run dev --filter='web'
+pnpm dev
 ```
 
 ---
@@ -170,6 +185,15 @@ pnpm run db:push    # Recreates schema
 ---
 
 ## Development
+
+### Quality Gates (CI)
+
+We assume strict type safety and cleaner code.
+
+```bash
+# Run everything (recommended before push)
+pnpm run-ci
+```
 
 ### Running Tests
 

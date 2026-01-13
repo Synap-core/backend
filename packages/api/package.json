@@ -45,9 +45,13 @@
     "zod": "3.24.1"
   },
   "devDependencies": {
+    "@trpc/react-query": "^11.8.1",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/react": "^19.2.8",
     "bcrypt": "^6.0.0",
+    "postgres": "^3.4.8",
+    "react": "^19.2.3",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },
