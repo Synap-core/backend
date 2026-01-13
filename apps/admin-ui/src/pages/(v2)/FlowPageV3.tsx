@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ReactFlow, {
   MiniMap,
   Controls,
@@ -9,19 +9,38 @@ import ReactFlow, {
   type Node,
   type Edge,
   BackgroundVariant,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import { 
-  Stack, Title, Text, Group, Badge, Loader, Card, 
-  Drawer, Button, SimpleGrid, ThemeIcon
-} from '@mantine/core';
-import { 
-  IconRefresh, IconBolt, IconDatabase, IconCloud, 
-  IconWebhook, IconArrowRight
-} from '@tabler/icons-react';
-import { trpc } from '../../lib/trpc';
-import { EventNode, WorkerNode, N8nNode, ResourceNode, LangFlowNode } from '../../components/flow/CustomNodes';
-import { colors, spacing, borderRadius } from '../../theme/tokens';
+} from "reactflow";
+import "reactflow/dist/style.css";
+import {
+  Stack,
+  Title,
+  Text,
+  Group,
+  Badge,
+  Loader,
+  Card,
+  Drawer,
+  Button,
+  SimpleGrid,
+  ThemeIcon,
+} from "@mantine/core";
+import {
+  IconRefresh,
+  IconBolt,
+  IconDatabase,
+  IconCloud,
+  IconWebhook,
+  IconArrowRight,
+} from "@tabler/icons-react";
+import { trpc } from "../../lib/trpc";
+import {
+  EventNode,
+  WorkerNode,
+  N8nNode,
+  ResourceNode,
+  LangFlowNode,
+} from "../../components/flow/CustomNodes";
+import { colors, spacing, borderRadius } from "../../theme/tokens";
 
 // Custom node types
 const nodeTypes = {
@@ -42,25 +61,32 @@ interface ModuleCardProps {
   onClick: () => void;
 }
 
-function ModuleCard({ title, description, icon, stats, color, onClick }: ModuleCardProps) {
+function ModuleCard({
+  title,
+  description,
+  icon,
+  stats,
+  color,
+  onClick,
+}: ModuleCardProps) {
   return (
     <Card
       padding="lg"
       radius={borderRadius.lg}
       style={{
         border: `2px solid ${color}`,
-        cursor: 'pointer',
-        transition: 'all 0.2s ease',
+        cursor: "pointer",
+        transition: "all 0.2s ease",
         background: colors.background.primary,
       }}
       onClick={onClick}
       onMouseEnter={(e) => {
-        e.currentTarget.style.transform = 'translateY(-4px)';
+        e.currentTarget.style.transform = "translateY(-4px)";
         e.currentTarget.style.boxShadow = `0 8px 24px ${color}40`;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.transform = 'translateY(0)';
-        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "none";
       }}
     >
       <Group justify="space-between" mb="xs">
@@ -71,10 +97,16 @@ function ModuleCard({ title, description, icon, stats, color, onClick }: ModuleC
           {stats}
         </Badge>
       </Group>
-      <Text fw={700} size="lg" mt="md">{title}</Text>
-      <Text size="sm" c="dimmed" mt={4}>{description}</Text>
+      <Text fw={700} size="lg" mt="md">
+        {title}
+      </Text>
+      <Text size="sm" c="dimmed" mt={4}>
+        {description}
+      </Text>
       <Group mt="md" gap={4}>
-        <Text size="xs" c={color}>Explore</Text>
+        <Text size="xs" c={color}>
+          Explore
+        </Text>
         <IconArrowRight size={14} color={color} />
       </Group>
     </Card>
@@ -87,15 +119,22 @@ export default function FlowPageV3() {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
 
   // Fetch data
-  const { data: system, isLoading: systemLoading, refetch } = 
-    trpc.system.getCapabilities.useQuery();
-  
-  const { data: webhooks } = trpc.integrations.list.useQuery(undefined, { retry: false });
-  const { data: tables } = trpc.system.getDatabaseTables.useQuery(undefined, { retry: false });
+  const {
+    data: system,
+    isLoading: systemLoading,
+    refetch,
+  } = trpc.system.getCapabilities.useQuery();
+
+  const { data: webhooks } = trpc.integrations.list.useQuery(undefined, {
+    retry: false,
+  });
+  const { data: tables } = trpc.system.getDatabaseTables.useQuery(undefined, {
+    retry: false,
+  });
 
   // Stats for module cards
   const eventCount = system?.eventTypes?.length || 0;
-  const workerCount = ((system as any)?.workers?.length) || 0;
+  const workerCount = (system as any)?.workers?.length || 0;
   const tableCount = tables?.length || 0;
   const webhookCount = (webhooks as any[])?.length || 0;
 
@@ -105,18 +144,18 @@ export default function FlowPageV3() {
 
     const nodes: Node[] = [];
     const edges: Edge[] = [];
-    let yPosition = 50;
+    const yPosition = 50;
 
     // Event nodes (column 1)
     system.eventTypes.slice(0, 6).forEach((et, i) => {
       nodes.push({
         id: `event-${et.type}`,
-        type: 'event',
+        type: "event",
         position: { x: 50, y: yPosition + i * 70 },
-        data: { 
-          label: et.type.split('.').slice(-2).join('.'),
+        data: {
+          label: et.type.split(".").slice(-2).join("."),
           fullType: et.type,
-          category: 'event',
+          category: "event",
         },
       });
     });
@@ -127,18 +166,18 @@ export default function FlowPageV3() {
       const nodeId = `worker-${w.name}`;
       nodes.push({
         id: nodeId,
-        type: 'worker',
+        type: "worker",
         position: { x: 280, y: yPosition + i * 90 },
-        data: { 
+        data: {
           label: w.name,
           triggers: w.triggers,
-          category: 'worker',
+          category: "worker",
         },
       });
 
       // Connect events to workers
       (w.triggers || []).forEach((t: string) => {
-        if (nodes.find(n => n.id === `event-${t}`)) {
+        if (nodes.find((n) => n.id === `event-${t}`)) {
           edges.push({
             id: `e-${t}-${w.name}`,
             source: `event-${t}`,
@@ -152,33 +191,34 @@ export default function FlowPageV3() {
 
     // Resource nodes (column 3)
     const resources = [
-      { id: 'database', label: 'PostgreSQL', type: 'resource' },
-      { id: 'storage', label: 'MinIO (S3)', type: 'resource' },
-      { id: 'vector', label: 'Vector DB', type: 'resource' },
+      { id: "database", label: "PostgreSQL", type: "resource" },
+      { id: "storage", label: "MinIO (S3)", type: "resource" },
+      { id: "vector", label: "Vector DB", type: "resource" },
     ];
     resources.forEach((r, i) => {
       nodes.push({
         id: `resource-${r.id}`,
-        type: 'resource',
+        type: "resource",
         position: { x: 520, y: yPosition + 50 + i * 100 },
-        data: { label: r.label, category: 'resource' },
+        data: { label: r.label, category: "resource" },
       });
     });
 
-    // n8n nodes (column 4) 
-    const n8nHooks = (webhooks || []).filter((w: any) => 
-      w.url?.includes('n8n') || w.name?.toLowerCase().includes('n8n')
+    // n8n nodes (column 4)
+    const n8nHooks = (webhooks || []).filter(
+      (w: any) =>
+        w.url?.includes("n8n") || w.name?.toLowerCase().includes("n8n"),
     );
     n8nHooks.slice(0, 3).forEach((wh: any, i: number) => {
       nodes.push({
         id: `n8n-${wh.id}`,
-        type: 'n8n',
+        type: "n8n",
         position: { x: 750, y: yPosition + 80 + i * 100 },
-        data: { 
-          label: wh.name.replace(/n8n\s*[-:]/i, '').trim() || 'Workflow',
-          workflowUrl: 'http://localhost:5678',
+        data: {
+          label: wh.name.replace(/n8n\s*[-:]/i, "").trim() || "Workflow",
+          workflowUrl: "http://localhost:5678",
           webhookId: wh.id,
-          category: 'n8n',
+          category: "n8n",
         },
       });
     });
@@ -190,7 +230,7 @@ export default function FlowPageV3() {
           id: `e-w${i}-r${i}`,
           source: `worker-${workers[i].name}`,
           target: `resource-${resources[i].id}`,
-          style: { stroke: '#6c757d', strokeDasharray: '5,5' },
+          style: { stroke: "#6c757d", strokeDasharray: "5,5" },
         });
       }
     });
@@ -215,17 +255,17 @@ export default function FlowPageV3() {
     if (!selectedNode) return;
     const category = selectedNode.data.category;
     switch (category) {
-      case 'event':
-        navigate('/events');
+      case "event":
+        navigate("/events");
         break;
-      case 'worker':
-        navigate('/automation');
+      case "worker":
+        navigate("/automation");
         break;
-      case 'resource':
-        navigate('/data');
+      case "resource":
+        navigate("/data");
         break;
-      case 'n8n':
-        window.open(selectedNode.data.workflowUrl, '_blank');
+      case "n8n":
+        window.open(selectedNode.data.workflowUrl, "_blank");
         break;
     }
     setDrawerOpen(false);
@@ -233,14 +273,21 @@ export default function FlowPageV3() {
 
   if (systemLoading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          height: "80vh",
+        }}
+      >
         <Loader size="lg" />
       </div>
     );
   }
 
   return (
-    <div style={{ width: '100%', padding: spacing[8] }}>
+    <div style={{ width: "100%", padding: spacing[8] }}>
       <Stack gap={spacing[6]}>
         {/* Header */}
         <Group justify="space-between">
@@ -250,8 +297,8 @@ export default function FlowPageV3() {
               Visual overview of your event-driven system
             </Text>
           </div>
-          <Button 
-            variant="light" 
+          <Button
+            variant="light"
             leftSection={<IconRefresh size={16} />}
             onClick={() => refetch()}
           >
@@ -267,7 +314,7 @@ export default function FlowPageV3() {
             icon={<IconBolt size={24} color="white" />}
             stats={`${eventCount} types`}
             color={colors.eventTypes.created}
-            onClick={() => navigate('/events')}
+            onClick={() => navigate("/events")}
           />
           <ModuleCard
             title="Database"
@@ -275,7 +322,7 @@ export default function FlowPageV3() {
             icon={<IconDatabase size={24} color="white" />}
             stats={`${tableCount} tables`}
             color="#3b82f6"
-            onClick={() => navigate('/data')}
+            onClick={() => navigate("/data")}
           />
           <ModuleCard
             title="File Storage"
@@ -283,7 +330,7 @@ export default function FlowPageV3() {
             icon={<IconCloud size={24} color="white" />}
             stats="Connected"
             color="#06b6d4"
-            onClick={() => navigate('/files')}
+            onClick={() => navigate("/files")}
           />
           <ModuleCard
             title="Subscribers"
@@ -291,7 +338,7 @@ export default function FlowPageV3() {
             icon={<IconWebhook size={24} color="white" />}
             stats={`${workerCount + webhookCount} active`}
             color={colors.semantic.success}
-            onClick={() => navigate('/automation')}
+            onClick={() => navigate("/automation")}
           />
         </SimpleGrid>
 
@@ -299,9 +346,9 @@ export default function FlowPageV3() {
         <Card
           padding={0}
           radius={borderRadius.lg}
-          style={{ 
+          style={{
             border: `1px solid ${colors.border.default}`,
-            height: '500px',
+            height: "500px",
           }}
         >
           <ReactFlow
@@ -316,7 +363,7 @@ export default function FlowPageV3() {
             maxZoom={1.5}
           >
             <Controls position="bottom-left" />
-            <MiniMap 
+            <MiniMap
               position="bottom-right"
               style={{ background: colors.background.secondary }}
               nodeBorderRadius={4}
@@ -327,10 +374,50 @@ export default function FlowPageV3() {
 
         {/* Legend */}
         <Group gap="lg" justify="center">
-          <Group gap={6}><div style={{ width: 12, height: 12, borderRadius: '50%', background: colors.eventTypes.created }} /><Text size="xs">Events</Text></Group>
-          <Group gap={6}><div style={{ width: 12, height: 12, borderRadius: 4, background: colors.eventTypes.ai }} /><Text size="xs">Workers</Text></Group>
-          <Group gap={6}><div style={{ width: 12, height: 12, borderRadius: 4, background: colors.semantic.success }} /><Text size="xs">n8n</Text></Group>
-          <Group gap={6}><div style={{ width: 12, height: 12, borderRadius: 4, background: '#6c757d' }} /><Text size="xs">Resources</Text></Group>
+          <Group gap={6}>
+            <div
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: "50%",
+                background: colors.eventTypes.created,
+              }}
+            />
+            <Text size="xs">Events</Text>
+          </Group>
+          <Group gap={6}>
+            <div
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: 4,
+                background: colors.eventTypes.ai,
+              }}
+            />
+            <Text size="xs">Workers</Text>
+          </Group>
+          <Group gap={6}>
+            <div
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: 4,
+                background: colors.semantic.success,
+              }}
+            />
+            <Text size="xs">n8n</Text>
+          </Group>
+          <Group gap={6}>
+            <div
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: 4,
+                background: "#6c757d",
+              }}
+            />
+            <Text size="xs">Resources</Text>
+          </Group>
         </Group>
       </Stack>
 
@@ -338,41 +425,65 @@ export default function FlowPageV3() {
       <Drawer
         opened={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        title={selectedNode?.data?.label || 'Node Details'}
+        title={selectedNode?.data?.label || "Node Details"}
         position="right"
         size="md"
       >
         {selectedNode && (
           <Stack gap="md">
-            <Card padding="md" radius="md" style={{ background: colors.background.secondary }}>
-              <Text size="sm" fw={600} mb={4}>Type</Text>
+            <Card
+              padding="md"
+              radius="md"
+              style={{ background: colors.background.secondary }}
+            >
+              <Text size="sm" fw={600} mb={4}>
+                Type
+              </Text>
               <Badge>{selectedNode.data.category}</Badge>
             </Card>
 
             {selectedNode.data.fullType && (
-              <Card padding="md" radius="md" style={{ background: colors.background.secondary }}>
-                <Text size="sm" fw={600} mb={4}>Full Event Type</Text>
-                <Text size="sm" c="dimmed">{selectedNode.data.fullType}</Text>
+              <Card
+                padding="md"
+                radius="md"
+                style={{ background: colors.background.secondary }}
+              >
+                <Text size="sm" fw={600} mb={4}>
+                  Full Event Type
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {selectedNode.data.fullType}
+                </Text>
               </Card>
             )}
 
             {selectedNode.data.triggers && (
-              <Card padding="md" radius="md" style={{ background: colors.background.secondary }}>
-                <Text size="sm" fw={600} mb={4}>Triggers</Text>
+              <Card
+                padding="md"
+                radius="md"
+                style={{ background: colors.background.secondary }}
+              >
+                <Text size="sm" fw={600} mb={4}>
+                  Triggers
+                </Text>
                 <Stack gap={4}>
                   {selectedNode.data.triggers.map((t: string) => (
-                    <Badge key={t} variant="outline" size="sm">{t}</Badge>
+                    <Badge key={t} variant="outline" size="sm">
+                      {t}
+                    </Badge>
                   ))}
                 </Stack>
               </Card>
             )}
 
-            <Button 
-              fullWidth 
+            <Button
+              fullWidth
               rightSection={<IconArrowRight size={16} />}
               onClick={navigateToDetail}
             >
-              {selectedNode.data.category === 'n8n' ? 'Open in n8n' : 'Go to Details'}
+              {selectedNode.data.category === "n8n"
+                ? "Open in n8n"
+                : "Go to Details"}
             </Button>
           </Stack>
         )}

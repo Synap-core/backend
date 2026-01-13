@@ -1,6 +1,6 @@
 /**
  * Client utility for broadcasting notifications to Durable Objects
- * 
+ *
  * This utility is used by Inngest workers to send notifications
  * to connected WebSocket clients.
  */
@@ -10,7 +10,7 @@ export interface NotificationMessage {
   data: Record<string, unknown>;
   requestId?: string;
   timestamp?: string;
-  status?: 'success' | 'error' | 'pending';
+  status?: "success" | "error" | "pending";
 }
 
 export interface BroadcastOptions {
@@ -21,20 +21,24 @@ export interface BroadcastOptions {
 
 /**
  * Broadcast a notification to a Durable Object room
- * 
+ *
  * @param options - Broadcast options
  * @returns Promise resolving to broadcast result
  */
 export async function broadcastNotification(
-  options: BroadcastOptions
+  options: BroadcastOptions,
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
-  const { roomId, message, realtimeUrl = process.env.REALTIME_URL || 'https://realtime.synap.app' } = options;
+  const {
+    roomId,
+    message,
+    realtimeUrl = process.env.REALTIME_URL || "https://realtime.synap.app",
+  } = options;
 
   try {
     const response = await fetch(`${realtimeUrl}/rooms/${roomId}/broadcast`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(message),
     });
@@ -50,7 +54,7 @@ export async function broadcastNotification(
       broadcastCount: result.broadcastCount,
     };
   } catch (error) {
-    console.error('Failed to broadcast notification:', error);
+    console.error("Failed to broadcast notification:", error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -60,13 +64,13 @@ export async function broadcastNotification(
 
 /**
  * Broadcast notification by userId
- * 
+ *
  * Convenience function for broadcasting to a user's notification room.
  */
 export async function broadcastToUser(
   userId: string,
   message: NotificationMessage,
-  realtimeUrl?: string
+  realtimeUrl?: string,
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     roomId: `user_${userId}`,
@@ -77,13 +81,13 @@ export async function broadcastToUser(
 
 /**
  * Broadcast notification by requestId
- * 
+ *
  * Convenience function for broadcasting to a request's notification room.
  */
 export async function broadcastToRequest(
   requestId: string,
   message: NotificationMessage,
-  realtimeUrl?: string
+  realtimeUrl?: string,
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     roomId: `request_${requestId}`,
@@ -91,4 +95,3 @@ export async function broadcastToRequest(
     realtimeUrl,
   });
 }
-

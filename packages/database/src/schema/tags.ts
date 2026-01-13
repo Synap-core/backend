@@ -1,28 +1,27 @@
 /**
  * Tags Schema - For organizing entities
- * 
+ *
  * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
+import { pgTable, uuid, text, timestamp } from "drizzle-orm/pg-core";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
-import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
-
-export const tags = pgTable('tags', {
+export const tags = pgTable("tags", {
   // Primary key
-  id: uuid('id').defaultRandom().primaryKey(),
-  
+  id: uuid("id").defaultRandom().primaryKey(),
+
   // Which user owns this tag?
-  userId: text('user_id').notNull(),
-  
+  userId: text("user_id").notNull(),
+
   // Tag name (unique per user)
-  name: text('name').notNull(),
-  
+  name: text("name").notNull(),
+
   // Display color
-  color: text('color'),
-  
+  color: text("color"),
+
   // Timestamps
-  createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+  createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),
 });

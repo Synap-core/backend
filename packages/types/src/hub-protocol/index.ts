@@ -1,9 +1,9 @@
 /**
  * Hub Protocol V1.0 - Contract Types
- * 
+ *
  * This defines the CONTRACT between Synap Backend and ANY Intelligence Service.
  * Any AI engine implementing this protocol can work with Synap.
- * 
+ *
  * Backend owns this specification.
  * Intelligence Services implement this specification.
  */
@@ -14,18 +14,18 @@
 
 /**
  * Available agent types
- * 
+ *
  * Intelligence Services must support these identifiers.
  * Add new types here as needed (extensible enum pattern).
  */
 export enum AgentType {
-  DEFAULT = 'default',
-  META = 'meta',
-  PROMPTING = 'prompting',
-  KNOWLEDGE_SEARCH = 'knowledge-search',
-  CODE = 'code',
-  WRITING = 'writing',
-  ACTION = 'action',
+  DEFAULT = "default",
+  META = "meta",
+  PROMPTING = "prompting",
+  KNOWLEDGE_SEARCH = "knowledge-search",
+  CODE = "code",
+  WRITING = "writing",
+  ACTION = "action",
 }
 
 /**
@@ -65,22 +65,22 @@ export interface HubContext {
 export interface HubRequest {
   /** User's query/message */
   query: string;
-  
+
   /** Thread ID for conversation context */
   threadId: string;
-  
+
   /** User ID for personalization */
   userId: string;
-  
+
   /** Requested agent type (optional, Intelligence Service can auto-select) */
   agentType?: AgentTypeString;
-  
+
   /** Opaque configuration for agent (Intelligence Service interprets) */
   agentConfig?: Record<string, unknown>;
-  
+
   /** Context for agent (documents, entities, etc.) */
   context?: HubContext;
-  
+
   /** Whether to stream response */
   stream?: boolean;
 }
@@ -91,16 +91,16 @@ export interface HubRequest {
 export interface HubResponse {
   /** Generated content */
   content: string;
-  
+
   /** AI thinking steps (optional) */
   aiSteps?: AIStep[];
-  
+
   /** Extracted entities (optional) */
   entities?: ExtractedEntity[];
-  
+
   /** Branch decision from meta-agent (optional) */
   branchDecision?: BranchDecision;
-  
+
   /** Token usage statistics (optional) */
   usage?: TokenUsage;
 }
@@ -113,12 +113,12 @@ export interface HubResponse {
  * SSE event types
  */
 export enum StreamEventType {
-  CONTENT = 'content',
-  STEP = 'step',
-  ENTITIES = 'entities',
-  BRANCH_DECISION = 'branch_decision',
-  COMPLETE = 'complete',
-  ERROR = 'error',
+  CONTENT = "content",
+  STEP = "step",
+  ENTITIES = "entities",
+  BRANCH_DECISION = "branch_decision",
+  COMPLETE = "complete",
+  ERROR = "error",
 }
 
 /**
@@ -142,11 +142,11 @@ export interface HubStreamEvent {
  * AI step types
  */
 export enum AIStepType {
-  THINKING = 'thinking',
-  TOOL_CALL = 'tool_call',
-  TOOL_RESULT = 'tool_result',
-  DECISION = 'decision',
-  ERROR = 'error',
+  THINKING = "thinking",
+  TOOL_CALL = "tool_call",
+  TOOL_RESULT = "tool_result",
+  DECISION = "decision",
+  ERROR = "error",
 }
 
 /**
@@ -213,7 +213,7 @@ export interface TokenUsage {
 
 /**
  * Metadata stored in conversation_messages.metadata
- * 
+ *
  * Intelligence Service can add custom fields beyond these.
  */
 export interface MessageMetadata {
@@ -230,17 +230,17 @@ export interface MessageMetadata {
 
 /**
  * Intelligence Service capabilities
- * 
+ *
  * Returned by /api/capabilities endpoint
  * Allows frontend to discover what the Intelligence Service supports
  */
 export interface IntelligenceCapabilities {
   /** Available agent types */
   agents: AgentCapability[];
-  
+
   /** Available tools */
   tools?: ToolCapability[];
-  
+
   /** Supported features */
   features: {
     streaming: boolean;
@@ -248,14 +248,14 @@ export interface IntelligenceCapabilities {
     entityExtraction: boolean;
     customAgents: boolean;
   };
-  
+
   /** Protocol version */
   version: string;
 }
 
 /**
  * Agent capability metadata
- * 
+ *
  * Describes an available agent type for UI display
  */
 export interface AgentCapability {
@@ -270,7 +270,7 @@ export interface AgentCapability {
 
 /**
  * Tool capability metadata
- * 
+ *
  * Describes an available tool for UI display
  */
 export interface ToolCapability {

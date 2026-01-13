@@ -1,8 +1,8 @@
-import { defineConfig } from 'tsup';
+import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ['src/index.ts'],
-  format: ['esm'],
+  entry: ["src/index.ts"],
+  format: ["esm"],
   dts: {
     compilerOptions: {
       incremental: false,
@@ -11,12 +11,12 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   external: [
-    '@synap/database',
-    '@synap/storage',
-    '@synap/jobs',
-    '@synap/auth',
-    '@synap/events',
-    '@trpc/server',
-    'drizzle-orm',
+    "@synap/database",
+    "@synap/storage",
+    "@synap/jobs",
+    "@synap/auth",
+    "@synap/events",
+    "@trpc/server",
+    "drizzle-orm",
   ],
 });

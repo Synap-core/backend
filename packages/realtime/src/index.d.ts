@@ -1,16 +1,25 @@
 /**
- * Type definitions for Cloudflare Workers and Durable Objects
+ * Real-Time Package - WebSocket-based real-time collaboration
+ *
+ * Provides:
+ * - Generic presence tracking (all view types)
+ * - Cursor synchronization (non-Yjs views)
+ * - Typing indicators
+ * - Collaboration events
+ * - Yjs CRDT sync (whiteboards + documents)
+ *
+ * Note: Whiteboard/document cursors handled by Yjs (Phase 5)
  */
-
-export interface Env {
-  NOTIFICATION_ROOM: DurableObjectNamespace;
-}
-
-export interface NotificationMessage {
-  type: string;
-  data: Record<string, unknown>;
-  requestId?: string;
-  timestamp?: string;
-  status?: 'success' | 'error' | 'pending';
-}
-
+export {
+  PresenceManager,
+  generateUserColor,
+  type UserSession,
+  type PresenceUpdate,
+} from "./presence-manager.js";
+export {
+  CollaborationManager,
+  type CollaborationEvent,
+} from "./collaboration-manager.js";
+export { setupYjsServer, type YjsServerConfig } from "./yjs-server.js";
+export { NotificationRoom } from "./notification-room.js";
+//# sourceMappingURL=index.d.ts.map

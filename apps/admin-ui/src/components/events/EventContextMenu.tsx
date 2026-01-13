@@ -1,12 +1,12 @@
-import { Menu, ActionIcon } from '@mantine/core';
+import { Menu, ActionIcon } from "@mantine/core";
 import {
   IconDots,
   IconSearch,
   IconTimeline,
   IconCopy,
   IconExternalLink,
-} from '@tabler/icons-react';
-import { useNavigate } from 'react-router-dom';
+} from "@tabler/icons-react";
+import { useNavigate } from "react-router-dom";
 
 interface Event {
   eventId: string;
@@ -22,7 +22,10 @@ interface EventContextMenuProps {
   onPublishSimilar?: (event: Event) => void;
 }
 
-export default function EventContextMenu({ event, onPublishSimilar }: EventContextMenuProps) {
+export default function EventContextMenu({
+  event,
+  onPublishSimilar,
+}: EventContextMenuProps) {
   const navigate = useNavigate();
 
   const handleInspect = () => {
@@ -31,7 +34,9 @@ export default function EventContextMenu({ event, onPublishSimilar }: EventConte
 
   const handleViewTrace = () => {
     if (event.correlationId) {
-      navigate(`/investigate?correlationId=${encodeURIComponent(event.correlationId)}`);
+      navigate(
+        `/investigate?correlationId=${encodeURIComponent(event.correlationId)}`,
+      );
     } else {
       navigate(`/investigate?eventId=${encodeURIComponent(event.eventId)}`);
     }
@@ -43,7 +48,9 @@ export default function EventContextMenu({ event, onPublishSimilar }: EventConte
     } else {
       // Navigate to event publisher with pre-filled data
       const eventData = JSON.stringify(event.data || {}, null, 2);
-      navigate(`/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || '')}`);
+      navigate(
+        `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`,
+      );
     }
   };
 
@@ -111,4 +118,3 @@ export default function EventContextMenu({ event, onPublishSimilar }: EventConte
     </Menu>
   );
 }
-

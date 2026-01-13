@@ -1,26 +1,26 @@
 /**
  * Workspace Types
- * 
+ *
  * Re-exports workspace types from database schema (single source of truth).
- * 
+ *
  * @see {@link @synap/database/schema}
  */
 
 // Direct re-exports from database
-export type { 
+export type {
   Workspace,
   NewWorkspace,
   WorkspaceMember,
   NewWorkspaceMember,
   WorkspaceInvite,
   NewWorkspaceInvite,
-} from '@synap/database/schema';
+} from "@synap/database/schema";
 
 // Derived types for API convenience
-import type { Workspace, WorkspaceMember } from '@synap/database/schema';
+import type { Workspace, WorkspaceMember } from "@synap/database/schema";
 
-export type WorkspaceType = Workspace['type'];
-export type WorkspaceRole = WorkspaceMember['role'];
+export type WorkspaceType = Workspace["type"];
+export type WorkspaceRole = WorkspaceMember["role"];
 
 // Input types for API operations
 export interface CreateWorkspaceInput {

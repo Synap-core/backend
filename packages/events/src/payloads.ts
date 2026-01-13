@@ -1,11 +1,11 @@
 /**
  * @synap/events - Generated Payload Schemas
- * 
+ *
  * Zod schemas for each table's event payloads.
  * These are derived from the Drizzle table column definitions.
  */
 
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // BASE SCHEMAS
@@ -23,7 +23,9 @@ export const RequestContextSchema = z.object({
   requestId: z.string().uuid().optional(),
   correlationId: z.string().uuid().optional(),
   causationId: z.string().uuid().optional(),
-  source: z.enum(['api', 'automation', 'sync', 'migration', 'system', 'intelligence']).optional(),
+  source: z
+    .enum(["api", "automation", "sync", "migration", "system", "intelligence"])
+    .optional(),
 });
 
 // ============================================================================
@@ -34,15 +36,15 @@ export const RequestContextSchema = z.object({
  * Entity types supported
  */
 export const EntityTypeSchema = z.enum([
-  'note',
-  'task', 
-  'project',
-  'contact',
-  'meeting',
-  'idea',
-  'event',
-  'habit',
-  'page',
+  "note",
+  "task",
+  "project",
+  "contact",
+  "meeting",
+  "idea",
+  "event",
+  "habit",
+  "page",
 ]);
 
 export type EntityType = z.infer<typeof EntityTypeSchema>;
@@ -50,12 +52,14 @@ export type EntityType = z.infer<typeof EntityTypeSchema>;
 /**
  * File attachment for entity creation
  */
-export const FileAttachmentSchema = z.object({
-  content: z.string(), // Base64 or text content
-  filename: z.string(),
-  contentType: z.string(),
-  source: z.enum(['text-input', 'file-upload', 'ai-generated']),
-}).optional();
+export const FileAttachmentSchema = z
+  .object({
+    content: z.string(), // Base64 or text content
+    filename: z.string(),
+    contentType: z.string(),
+    source: z.enum(["text-input", "file-upload", "ai-generated"]),
+  })
+  .optional();
 
 /**
  * entities.create.requested payload
@@ -63,19 +67,19 @@ export const FileAttachmentSchema = z.object({
 export const EntitiesCreateRequestedPayload = z.object({
   // Required
   entityType: EntityTypeSchema,
-  
+
   // Optional - core fields from entities table
   id: z.string().uuid().optional(), // Auto-generated if not provided
   title: z.string().optional(),
   preview: z.string().optional(),
   content: z.string().optional(), // For notes - becomes file
-  
+
   // File handling
   file: FileAttachmentSchema,
-  
+
   // Type-specific metadata (task: dueDate, priority; contact: email, phone)
   metadata: MetadataSchema,
-  
+
   // Request context
   ...RequestContextSchema.shape,
 });
@@ -87,7 +91,7 @@ export const EntitiesCreateCompletedPayload = z.object({
   entityId: z.string().uuid(),
   entityType: EntityTypeSchema,
   title: z.string().optional(),
-  
+
   // File info (if created)
   fileUrl: z.string().url().optional(),
   filePath: z.string().optional(),
@@ -101,15 +105,15 @@ export const EntitiesCreateCompletedPayload = z.object({
  */
 export const EntitiesUpdateRequestedPayload = z.object({
   entityId: z.string().uuid(),
-  
+
   // Fields to update
   title: z.string().optional(),
   preview: z.string().optional(),
   content: z.string().optional(),
-  
+
   // Metadata updates
   metadata: MetadataSchema,
-  
+
   ...RequestContextSchema.shape,
 });
 
@@ -123,16 +127,16 @@ export const EntitiesUpdateRequestedPayload = z.object({
 export const DocumentsCreateRequestedPayload = z.object({
   // Required
   title: z.string(),
-  type: z.enum(['text', 'markdown', 'code', 'pdf', 'docx']),
-  
+  type: z.enum(["text", "markdown", "code", "pdf", "docx"]),
+
   // Content
   content: z.string().optional(),
   file: FileAttachmentSchema,
-  
+
   // Optional
   language: z.string().optional(), // For code files
   projectId: z.string().uuid().optional(),
-  
+
   metadata: MetadataSchema,
   ...RequestContextSchema.shape,
 });
@@ -158,7 +162,7 @@ export const DocumentsCreateCompletedPayload = z.object({
  */
 export const MessageAttachmentSchema = z.object({
   id: z.string().uuid(),
-  type: z.enum(['image', 'file', 'document']),
+  type: z.enum(["image", "file", "document"]),
   filename: z.string(),
   storageKey: z.string().optional(),
   storageUrl: z.string().url().optional(),
@@ -173,12 +177,12 @@ export const MessageAttachmentSchema = z.object({
 export const ConversationMessagesCreateRequestedPayload = z.object({
   threadId: z.string().uuid(),
   content: z.string(),
-  role: z.enum(['user', 'assistant', 'system']),
+  role: z.enum(["user", "assistant", "system"]),
   parentId: z.string().uuid().optional(),
-  
+
   // Attachments (will be uploaded to storage)
   attachments: z.array(MessageAttachmentSchema).optional(),
-  
+
   metadata: MetadataSchema,
   ...RequestContextSchema.shape,
 });
@@ -192,11 +196,11 @@ export const ConversationMessagesCreateRequestedPayload = z.object({
  */
 export const ChatThreadsCreateRequestedPayload = z.object({
   title: z.string().optional(),
-  threadType: z.enum(['main', 'branch']).optional(),
+  threadType: z.enum(["main", "branch"]).optional(),
   parentThreadId: z.string().uuid().optional(),
   projectId: z.string().uuid().optional(),
   agentId: z.string().optional(),
-  
+
   metadata: MetadataSchema,
   ...RequestContextSchema.shape,
 });
@@ -212,9 +216,9 @@ export const TaskDetailsCreateRequestedPayload = z.object({
   taskId: z.string().uuid(),
   priority: z.number().min(0).max(3).optional(),
   dueDate: z.string().datetime().optional(),
-  status: z.enum(['todo', 'in_progress', 'done', 'cancelled']).optional(),
+  status: z.enum(["todo", "in_progress", "done", "cancelled"]).optional(),
   tagNames: z.array(z.string()).optional(),
-  
+
   metadata: MetadataSchema,
 });
 
@@ -226,14 +230,15 @@ export const TaskDetailsCreateRequestedPayload = z.object({
  * All generated payload schemas mapped by event type
  */
 export const GeneratedPayloadSchemas = {
-  'entities.create.requested': EntitiesCreateRequestedPayload,
-  'entities.create.validated': EntitiesCreateCompletedPayload,
-  'entities.update.requested': EntitiesUpdateRequestedPayload,
-  'documents.create.requested': DocumentsCreateRequestedPayload,
-  'documents.create.validated': DocumentsCreateCompletedPayload,
-  'conversationMessages.create.requested': ConversationMessagesCreateRequestedPayload,
-  'chatThreads.create.requested': ChatThreadsCreateRequestedPayload,
-  'taskDetails.create.requested': TaskDetailsCreateRequestedPayload,
+  "entities.create.requested": EntitiesCreateRequestedPayload,
+  "entities.create.validated": EntitiesCreateCompletedPayload,
+  "entities.update.requested": EntitiesUpdateRequestedPayload,
+  "documents.create.requested": DocumentsCreateRequestedPayload,
+  "documents.create.validated": DocumentsCreateCompletedPayload,
+  "conversationMessages.create.requested":
+    ConversationMessagesCreateRequestedPayload,
+  "chatThreads.create.requested": ChatThreadsCreateRequestedPayload,
+  "taskDetails.create.requested": TaskDetailsCreateRequestedPayload,
 } as const;
 
 export type GeneratedPayloadSchemaType = keyof typeof GeneratedPayloadSchemas;
@@ -242,7 +247,9 @@ export type GeneratedPayloadSchemaType = keyof typeof GeneratedPayloadSchemas;
  * Get payload schema for an event type
  */
 export function getPayloadSchema(eventType: string): z.ZodSchema | null {
-  return (GeneratedPayloadSchemas as Record<string, z.ZodSchema>)[eventType] ?? null;
+  return (
+    (GeneratedPayloadSchemas as Record<string, z.ZodSchema>)[eventType] ?? null
+  );
 }
 
 /**
@@ -250,8 +257,8 @@ export function getPayloadSchema(eventType: string): z.ZodSchema | null {
  */
 export function validatePayload<T extends GeneratedPayloadSchemaType>(
   eventType: T,
-  payload: unknown
-): z.infer<typeof GeneratedPayloadSchemas[T]> {
+  payload: unknown,
+): z.infer<(typeof GeneratedPayloadSchemas)[T]> {
   const schema = GeneratedPayloadSchemas[eventType];
   return schema.parse(payload);
 }

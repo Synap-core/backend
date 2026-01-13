@@ -16,43 +16,43 @@
  * - LOG_TRANSPORT_URL: URL for HTTP transport (e.g., Datadog intake)
  */
 
-import pino, { type Bindings, type Logger, type LoggerOptions } from 'pino';
+import pino, { type Bindings, type Logger, type LoggerOptions } from "pino";
 
-const nodeEnv = process.env.NODE_ENV || 'development';
-const isDevelopment = nodeEnv === 'development';
-const isProduction = nodeEnv === 'production';
+const nodeEnv = process.env.NODE_ENV || "development";
+const isDevelopment = nodeEnv === "development";
+const isProduction = nodeEnv === "production";
 
 // Determine if pretty printing should be enabled
 const shouldPrettyPrint = process.env.PINO_PRETTY
-  ? process.env.PINO_PRETTY === 'true'
+  ? process.env.PINO_PRETTY === "true"
   : isDevelopment;
 
 /**
  * Pino logger configuration
  */
 const options: LoggerOptions = {
-  level: process.env.LOG_LEVEL ?? (isProduction ? 'info' : 'debug'),
+  level: process.env.LOG_LEVEL ?? (isProduction ? "info" : "debug"),
   timestamp: pino.stdTimeFunctions.isoTime,
 
   // Remove default fields (pid, hostname) for cleaner logs
   // Add them back if needed via environment variable
-  base: process.env.PINO_INCLUDE_BASE === 'true' ? undefined : null,
+  base: process.env.PINO_INCLUDE_BASE === "true" ? undefined : null,
 
   // Redact sensitive fields from logs
   redact: {
     paths: [
-      'password',
-      'token',
-      'apiKey',
-      'secret',
-      'authorization',
-      'cookie',
-      '*.password',
-      '*.token',
-      '*.apiKey',
-      '*.secret',
+      "password",
+      "token",
+      "apiKey",
+      "secret",
+      "authorization",
+      "cookie",
+      "*.password",
+      "*.token",
+      "*.apiKey",
+      "*.secret",
     ],
-    censor: '[REDACTED]',
+    censor: "[REDACTED]",
   },
 
   // Serialize errors properly
@@ -94,16 +94,16 @@ const options: LoggerOptions = {
  * Create transport configuration based on environment
  */
 function createTransport(): any {
-  const transportType = process.env.LOG_TRANSPORT || 'stdout';
+  const transportType = process.env.LOG_TRANSPORT || "stdout";
 
   // Development: Pretty print to console
   if (shouldPrettyPrint) {
     return {
-      target: 'pino-pretty',
+      target: "pino-pretty",
       options: {
         colorize: true,
-        translateTime: 'HH:MM:ss.l',
-        ignore: 'pid,hostname',
+        translateTime: "HH:MM:ss.l",
+        ignore: "pid,hostname",
         singleLine: false,
       },
     };
@@ -111,29 +111,29 @@ function createTransport(): any {
 
   // Production: Different transports based on configuration
   switch (transportType) {
-    case 'datadog':
+    case "datadog":
       // Datadog HTTP transport (requires pino-datadog)
       // Install: pnpm add pino-datadog
       return {
-        target: 'pino-datadog',
+        target: "pino-datadog",
         options: {
           apiKey: process.env.DATADOG_API_KEY,
-          service: process.env.OTEL_SERVICE_NAME || 'synap-api',
-          ddsource: 'nodejs',
+          service: process.env.OTEL_SERVICE_NAME || "synap-api",
+          ddsource: "nodejs",
           ddtags: `env:${nodeEnv}`,
         },
       };
 
-    case 'http':
+    case "http":
       // Generic HTTP transport for custom log aggregation
       // Install: pnpm add pino-http-send
       return {
-        target: 'pino-http-send',
+        target: "pino-http-send",
         options: {
           url: process.env.LOG_TRANSPORT_URL,
-          method: 'POST',
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
             ...(process.env.LOG_TRANSPORT_AUTH_HEADER && {
               Authorization: process.env.LOG_TRANSPORT_AUTH_HEADER,
             }),
@@ -141,7 +141,7 @@ function createTransport(): any {
         },
       };
 
-    case 'stdout':
+    case "stdout":
     default:
       // Standard JSON output (default for production)
       return undefined;
@@ -152,7 +152,9 @@ function createTransport(): any {
  * Main logger instance
  */
 const transport = createTransport();
-export const logger: Logger = transport ? pino(options, pino.transport(transport)) : pino(options);
+export const logger: Logger = transport
+  ? pino(options, pino.transport(transport))
+  : pino(options);
 
 /**
  * Create a child logger with additional bindings (context)
@@ -167,7 +169,8 @@ export const logger: Logger = transport ? pino(options, pino.transport(transport
  * // Output: {"level":"info","time":"...","module":"api-server","userId":"123","msg":"User logged in"}
  * ```
  */
-export const createLogger = (bindings: Bindings): Logger => logger.child(bindings);
+export const createLogger = (bindings: Bindings): Logger =>
+  logger.child(bindings);
 
 /**
  * Create a logger with correlation ID
@@ -185,13 +188,10 @@ export const createLogger = (bindings: Bindings): Logger => logger.child(binding
  */
 export function createLoggerWithCorrelation(
   correlationId: string,
-  additionalBindings?: Bindings
+  additionalBindings?: Bindings,
 ): Logger {
   return logger.child({
     correlationId,
     ...additionalBindings,
   });
 }
-
-
-

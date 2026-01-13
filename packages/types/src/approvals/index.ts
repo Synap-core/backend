@@ -1,11 +1,11 @@
 /**
  * Approval Types
- * 
+ *
  * Types for AI proposal approval workflow.
  * Used across backend and frontend for approval requests.
  */
 
-import type { AgentTypeString } from '../hub-protocol/index.js';
+import type { AgentTypeString } from "../hub-protocol/index.js";
 
 // =============================================================================
 // Approval Status & Type
@@ -14,12 +14,12 @@ import type { AgentTypeString } from '../hub-protocol/index.js';
 /**
  * Approval request status
  */
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 /**
  * Approval request type
  */
-export type ApprovalType = 'entity' | 'document' | 'action' | 'branch';
+export type ApprovalType = "entity" | "document" | "action" | "branch";
 
 // =============================================================================
 // Base Approval Request
@@ -48,7 +48,7 @@ export interface BaseApprovalRequest {
  * Entity approval request
  */
 export interface EntityApprovalRequest extends BaseApprovalRequest {
-  type: 'entity';
+  type: "entity";
   entityType: string;
   title: string;
   description?: string;
@@ -59,8 +59,8 @@ export interface EntityApprovalRequest extends BaseApprovalRequest {
  * Document approval request
  */
 export interface DocumentApprovalRequest extends BaseApprovalRequest {
-  type: 'document';
-  operation: 'create' | 'update' | 'delete';
+  type: "document";
+  operation: "create" | "update" | "delete";
   documentId?: string;
   title?: string;
   content?: string;
@@ -71,7 +71,7 @@ export interface DocumentApprovalRequest extends BaseApprovalRequest {
  * Action approval request
  */
 export interface ActionApprovalRequest extends BaseApprovalRequest {
-  type: 'action';
+  type: "action";
   action: string;
   description: string;
   args: Record<string, unknown>;
@@ -81,7 +81,7 @@ export interface ActionApprovalRequest extends BaseApprovalRequest {
  * Branch approval request
  */
 export interface BranchApprovalRequest extends BaseApprovalRequest {
-  type: 'branch';
+  type: "branch";
   agentType: AgentTypeString;
   title: string;
   purpose: string;
@@ -94,7 +94,7 @@ export interface BranchApprovalRequest extends BaseApprovalRequest {
 /**
  * Union type for all approval requests
  */
-export type ApprovalRequest = 
+export type ApprovalRequest =
   | EntityApprovalRequest
   | DocumentApprovalRequest
   | ActionApprovalRequest
@@ -142,6 +142,6 @@ export interface ApprovalQuery {
   filter?: ApprovalFilter;
   limit?: number;
   offset?: number;
-  sortBy?: 'createdAt' | 'status' | 'type';
-  sortOrder?: 'asc' | 'desc';
+  sortBy?: "createdAt" | "status" | "type";
+  sortOrder?: "asc" | "desc";
 }

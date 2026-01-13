@@ -1,6 +1,6 @@
 /**
  * Real-time notification broadcasting utility
- * 
+ *
  * This utility is used by Inngest handlers to broadcast notifications
  * to connected WebSocket clients via Cloudflare Durable Objects.
  */
@@ -10,7 +10,7 @@ export interface NotificationMessage {
   data: Record<string, unknown>;
   requestId?: string;
   timestamp?: string;
-  status?: 'success' | 'error' | 'pending';
+  status?: "success" | "error" | "pending";
 }
 
 export interface BroadcastOptions {
@@ -22,33 +22,36 @@ export interface BroadcastOptions {
 
 /**
  * Broadcast notification to connected clients
- * 
+ *
  * Sends a notification to both the user's room and the request's room (if requestId provided).
  * This allows clients to subscribe either by userId or by requestId.
- * 
+ *
  * @param options - Broadcast options
  * @returns Promise resolving to broadcast results
  */
 export async function broadcastNotification(
-  options: BroadcastOptions
+  options: BroadcastOptions,
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   const {
     userId,
     requestId,
     message,
-    realtimeUrl = process.env.REALTIME_URL || 'https://realtime.synap.app',
+    realtimeUrl = process.env.REALTIME_URL || "https://realtime.synap.app",
   } = options;
 
   try {
     // Broadcast to user room
     const userRoomId = `user_${userId}`;
-    const userResponse = await fetch(`${realtimeUrl}/rooms/${userRoomId}/broadcast`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const userResponse = await fetch(
+      `${realtimeUrl}/rooms/${userRoomId}/broadcast`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(message),
       },
-      body: JSON.stringify(message),
-    });
+    );
 
     let userBroadcastCount = 0;
     if (userResponse.ok) {
@@ -60,13 +63,16 @@ export async function broadcastNotification(
     let requestBroadcastCount = 0;
     if (requestId) {
       const requestRoomId = `request_${requestId}`;
-      const requestResponse = await fetch(`${realtimeUrl}/rooms/${requestRoomId}/broadcast`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const requestResponse = await fetch(
+        `${realtimeUrl}/rooms/${requestRoomId}/broadcast`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(message),
         },
-        body: JSON.stringify(message),
-      });
+      );
 
       if (requestResponse.ok) {
         const requestResult = await requestResponse.json();
@@ -81,7 +87,7 @@ export async function broadcastNotification(
       broadcastCount: totalBroadcastCount,
     };
   } catch (error) {
-    console.error('Failed to broadcast notification:', error);
+    console.error("Failed to broadcast notification:", error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -91,14 +97,14 @@ export async function broadcastNotification(
 
 /**
  * Broadcast success notification
- * 
+ *
  * Convenience function for broadcasting success notifications.
  */
 export async function broadcastSuccess(
   userId: string,
   type: string,
   data: Record<string, unknown>,
-  options?: { requestId?: string; realtimeUrl?: string }
+  options?: { requestId?: string; realtimeUrl?: string },
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     userId,
@@ -107,7 +113,7 @@ export async function broadcastSuccess(
       type,
       data,
       requestId: options?.requestId,
-      status: 'success',
+      status: "success",
       timestamp: new Date().toISOString(),
     },
     realtimeUrl: options?.realtimeUrl,
@@ -116,14 +122,14 @@ export async function broadcastSuccess(
 
 /**
  * Broadcast error notification
- * 
+ *
  * Convenience function for broadcasting error notifications.
  */
 export async function broadcastError(
   userId: string,
   type: string,
   error: string,
-  options?: { requestId?: string; realtimeUrl?: string }
+  options?: { requestId?: string; realtimeUrl?: string },
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     userId,
@@ -132,10 +138,9 @@ export async function broadcastError(
       type,
       data: { error },
       requestId: options?.requestId,
-      status: 'error',
+      status: "error",
       timestamp: new Date().toISOString(),
     },
     realtimeUrl: options?.realtimeUrl,
   });
 }
-

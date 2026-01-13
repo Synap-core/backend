@@ -1,4 +1,5 @@
 {
+  "files": [],
   "compilerOptions": {
     "target": "ES2022",
     "module": "Node16",
@@ -7,9 +8,9 @@
     ],
     "moduleResolution": "node16",
     // Composite project defaults (inherited by all packages)
-    "composite": false,
+    "composite": true,
     "declaration": true,
-    // declarationMap REMOVED - causes .d.ts generation failure with Node16+composite
+    "declarationMap": true,
     "incremental": true,
     // DO NOT set outDir/rootDir here - each package has different structure
     // Packages define: outDir: "./dist", rootDir: "./src"
@@ -29,8 +30,60 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true
   },
+  "references": [
+    {
+      "path": "./apps/admin-ui"
+    },
+    {
+      "path": "./apps/api"
+    },
+    {
+      "path": "./packages/ai"
+    },
+    {
+      "path": "./packages/ai-embeddings"
+    },
+    {
+      "path": "./packages/api"
+    },
+    {
+      "path": "./packages/api-types"
+    },
+    {
+      "path": "./packages/auth"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/database"
+    },
+    {
+      "path": "./packages/events"
+    },
+    {
+      "path": "./packages/hub-protocol"
+    },
+    {
+      "path": "./packages/jobs"
+    },
+    {
+      "path": "./packages/realtime"
+    },
+    {
+      "path": "./packages/scripts"
+    },
+    {
+      "path": "./packages/storage"
+    },
+    {
+      "path": "./packages/types"
+    }
+  ],
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    "scripts",
+    "tests"
   ]
 }

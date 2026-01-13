@@ -1,13 +1,13 @@
 /**
  * Event Projectors
- * 
+ *
  * These functions listen to the event stream and update the SQL database
  * (the "materialized view" of the system state).
  */
 
-import { inngest } from '../client.js';
-import { db, entities, taskDetails, tags, entityTags } from '@synap/database';
-import { eq, and } from '@synap/database';
+import { inngest } from "../client.js";
+import { db, entities, taskDetails, tags, entityTags } from "@synap/database";
+import { eq, and } from "@synap/database";
 
 /**
  * Type for event data that includes userId
@@ -20,46 +20,46 @@ interface EventDataWithUser {
 
 /**
  * Main event handler
- * 
+ *
  * Listens to all logged events and updates projections accordingly
  */
 export const handleNewEvent = inngest.createFunction(
-  { id: 'event-projector', name: 'Handle New Event' },
-  { event: 'api/event.logged' },
+  { id: "event-projector", name: "Handle New Event" },
+  { event: "api/event.logged" },
   async ({ event, step }) => {
     const { type, data } = event.data;
 
     console.log(`📨 Processing event: ${type}`);
 
     // Step 1: Log the event processing
-    await step.run('log-event-processing', async () => {
+    await step.run("log-event-processing", async () => {
       console.log(`Event data:`, JSON.stringify(data, null, 2));
-      return { status: 'logged', eventType: type };
+      return { status: "logged", eventType: type };
     });
 
     // Step 2: Update projections based on event type
-    await step.run('update-projections', async () => {
+    await step.run("update-projections", async () => {
       switch (type) {
-        case 'entity.created':
+        case "entity.created":
           return await handleEntityCreated(data);
-        
-        case 'entity.updated':
+
+        case "entity.updated":
           return await handleEntityUpdated(data);
-        
-        case 'entity.deleted':
+
+        case "entity.deleted":
           return await handleEntityDeleted(data);
-        
-        case 'task.completed':
+
+        case "task.completed":
           return await handleTaskCompleted(data);
-        
+
         default:
           console.log(`⚠️  No projection handler for event type: ${type}`);
-          return { status: 'no-handler' };
+          return { status: "no-handler" };
       }
     });
 
-    return { event: event.name, status: 'processed' };
-  }
+    return { event: event.name, status: "processed" };
+  },
 );
 
 /**
@@ -79,10 +79,10 @@ async function handleEntityCreated(data: EventDataWithUser) {
 
   // 2. If there's content, store it (inherits userId from entity via FK)
   // 3. If it's a task, create task details (inherits userId from entity via FK)
-  if (type === 'task' && data.dueDate) {
+  if (type === "task" && data.dueDate) {
     await db.insert(taskDetails).values({
       entityId,
-      status: 'todo',
+      status: "todo",
       dueDate: new Date(data.dueDate),
       priority: data.priority || 0,
     });
@@ -94,19 +94,24 @@ async function handleEntityCreated(data: EventDataWithUser) {
       // Find existing tag FOR THIS USER
       // Type assertions for Drizzle ORM compatibility
       const existingTagsQuery = db.select().from(tags) as any;
-      const existingTags: any[] = await existingTagsQuery.where(eq((tags as any).userId, userId)).all();
-        
+      const existingTags: any[] = await existingTagsQuery
+        .where(eq((tags as any).userId, userId))
+        .all();
+
       let tag = existingTags.find((t: any) => t.name === tagName);
-      
+
       if (!tag) {
         // Create new tag for this user
-        const newTagsResult = await db.insert(tags).values({
-          name: tagName,
-          userId, // ✅ User isolation
-        } as any).returning();
+        const newTagsResult = await db
+          .insert(tags)
+          .values({
+            name: tagName,
+            userId, // ✅ User isolation
+          } as any)
+          .returning();
         tag = Array.isArray(newTagsResult) ? newTagsResult[0] : newTagsResult;
       }
-      
+
       // Link entity to tag
       if (tag && tag.id) {
         await db.insert(entityTags).values({
@@ -117,8 +122,10 @@ async function handleEntityCreated(data: EventDataWithUser) {
     }
   }
 
-  console.log(`✅ Created entity ${entityId} for user ${userId} of type ${type} with ${tagNames?.length || 0} tags`);
-  return { status: 'created', entityId };
+  console.log(
+    `✅ Created entity ${entityId} for user ${userId} of type ${type} with ${tagNames?.length || 0} tags`,
+  );
+  return { status: "created", entityId };
 }
 
 /**
@@ -129,17 +136,18 @@ async function handleEntityUpdated(data: EventDataWithUser) {
 
   // Update entity with user-scoped filter
   // Type assertion needed for multi-dialect compatibility
-  await db.update(entities)
+  await db
+    .update(entities)
     .set({ updatedAt: new Date() } as any)
     .where(
       and(
         eq((entities as any).id, entityId),
-        eq((entities as any).userId, userId) // ✅ User isolation
-      ) as any
+        eq((entities as any).userId, userId), // ✅ User isolation
+      ) as any,
     );
 
   console.log(`✅ Updated entity ${entityId} for user ${userId}`);
-  return { status: 'updated', entityId };
+  return { status: "updated", entityId };
 }
 
 /**
@@ -150,17 +158,18 @@ async function handleEntityDeleted(data: EventDataWithUser) {
 
   // Soft delete with user-scoped filter
   // Type assertion needed for multi-dialect compatibility
-  await db.update(entities)
+  await db
+    .update(entities)
     .set({ deletedAt: new Date() } as any)
     .where(
       and(
         eq((entities as any).id, entityId),
-        eq((entities as any).userId, userId) // ✅ User isolation
-      ) as any
+        eq((entities as any).userId, userId), // ✅ User isolation
+      ) as any,
     );
 
   console.log(`✅ Soft-deleted entity ${entityId} for user ${userId}`);
-  return { status: 'deleted', entityId };
+  return { status: "deleted", entityId };
 }
 
 /**
@@ -171,13 +180,14 @@ async function handleTaskCompleted(data: EventDataWithUser) {
 
   // Update task details (user verification implicit via entity FK)
   // Type assertion needed for multi-dialect compatibility
-  await db.update(taskDetails)
+  await db
+    .update(taskDetails)
     .set({
-      status: 'done',
+      status: "done",
       completedAt: new Date(),
     } as any)
     .where(eq((taskDetails as any).entityId, entityId) as any);
 
   console.log(`✅ Marked task ${entityId} as completed for user ${userId}`);
-  return { status: 'completed', entityId };
+  return { status: "completed", entityId };
 }

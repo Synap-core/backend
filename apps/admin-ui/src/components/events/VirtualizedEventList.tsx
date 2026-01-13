@@ -1,15 +1,15 @@
 /**
  * VirtualizedEventList Component
- * 
+ *
  * A virtualized list component for rendering large event lists efficiently.
  * Uses @tanstack/react-virtual to only render visible items.
  */
 
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { useRef } from 'react';
-import { Badge, Text, Group } from '@mantine/core';
-import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
-import EventContextMenu from './EventContextMenu';
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useRef } from "react";
+import { Badge, Text, Group } from "@mantine/core";
+import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
+import EventContextMenu from "./EventContextMenu";
 
 interface Event {
   eventId: string;
@@ -27,7 +27,11 @@ interface VirtualizedEventListProps {
   onPublishSimilar?: (event: Event) => void;
 }
 
-export default function VirtualizedEventList({ events, onEventClick, onPublishSimilar }: VirtualizedEventListProps) {
+export default function VirtualizedEventList({
+  events,
+  onEventClick,
+  onPublishSimilar,
+}: VirtualizedEventListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
@@ -41,15 +45,15 @@ export default function VirtualizedEventList({ events, onEventClick, onPublishSi
     <div
       ref={parentRef}
       style={{
-        height: '400px',
-        overflow: 'auto',
+        height: "400px",
+        overflow: "auto",
       }}
     >
       <div
         style={{
           height: `${virtualizer.getTotalSize()}px`,
-          width: '100%',
-          position: 'relative',
+          width: "100%",
+          position: "relative",
         }}
       >
         {virtualizer.getVirtualItems().map((virtualItem) => {
@@ -59,40 +63,44 @@ export default function VirtualizedEventList({ events, onEventClick, onPublishSi
               key={event.eventId}
               onClick={() => onEventClick?.(event.eventId)}
               style={{
-                position: 'absolute',
+                position: "absolute",
                 top: 0,
                 left: 0,
-                width: '100%',
+                width: "100%",
                 height: `${virtualItem.size}px`,
                 transform: `translateY(${virtualItem.start}px)`,
                 padding: spacing[3],
                 borderRadius: borderRadius.base,
                 border: `1px solid ${colors.border.light}`,
                 backgroundColor: event.isError
-                  ? '#FEF2F2'
+                  ? "#FEF2F2"
                   : colors.background.secondary,
-                display: 'flex',
-                alignItems: 'center',
+                display: "flex",
+                alignItems: "center",
                 gap: spacing[3],
-                cursor: onEventClick ? 'pointer' : 'default',
-                transition: 'background-color 0.1s ease',
+                cursor: onEventClick ? "pointer" : "default",
+                transition: "background-color 0.1s ease",
               }}
               onMouseEnter={(e) => {
                 if (onEventClick) {
-                  e.currentTarget.style.backgroundColor = colors.background.hover;
+                  e.currentTarget.style.backgroundColor =
+                    colors.background.hover;
                 }
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = event.isError
-                  ? '#FEF2F2'
+                  ? "#FEF2F2"
                   : colors.background.secondary;
               }}
             >
               <Badge
                 variant="light"
-                color={event.isError ? 'red' : 'blue'}
+                color={event.isError ? "red" : "blue"}
                 size="sm"
-                style={{ minWidth: '120px', fontFamily: typography.fontFamily.mono }}
+                style={{
+                  minWidth: "120px",
+                  fontFamily: typography.fontFamily.mono,
+                }}
               >
                 {event.eventType}
               </Badge>
@@ -130,4 +138,3 @@ export default function VirtualizedEventList({ events, onEventClick, onPublishSi
     </div>
   );
 }
-

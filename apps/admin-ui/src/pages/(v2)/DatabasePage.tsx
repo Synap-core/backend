@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 import {
   Title,
   Text,
@@ -18,17 +18,23 @@ import {
   SimpleGrid,
   ThemeIcon,
   Divider,
-} from '@mantine/core';
-import { useQuery } from '@tanstack/react-query';
-import { 
-  IconDatabase, IconRefresh, IconEye, IconAlertCircle,
-  IconTable, IconSchema, IconLink, IconKey
-} from '@tabler/icons-react';
-import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
-import { AdminSDK } from '../../lib/sdk';
+} from "@mantine/core";
+import { useQuery } from "@tanstack/react-query";
+import {
+  IconDatabase,
+  IconRefresh,
+  IconEye,
+  IconAlertCircle,
+  IconTable,
+  IconSchema,
+  IconLink,
+  IconKey,
+} from "@tabler/icons-react";
+import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
+import { AdminSDK } from "../../lib/sdk";
 
 export default function DatabasePage() {
-  const [activeTab, setActiveTab] = useState<string | null>('browse');
+  const [activeTab, setActiveTab] = useState<string | null>("browse");
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [selectedRow, setSelectedRow] = useState<any | null>(null);
@@ -36,7 +42,7 @@ export default function DatabasePage() {
 
   // 1. Fetch list of tables
   const { data: tables, isLoading: isLoadingTables } = useQuery({
-    queryKey: ['database', 'tables'],
+    queryKey: ["database", "tables"],
     queryFn: () => AdminSDK.database.listTables(),
   });
 
@@ -48,38 +54,45 @@ export default function DatabasePage() {
   }, [tables, selectedTable]);
 
   // 2. Fetch table data
-  const { 
-    data: tableRows, 
-    isLoading: isLoadingRows, 
+  const {
+    data: tableRows,
+    isLoading: isLoadingRows,
     isError: isErrorRows,
     error: rowsError,
-    refetch 
+    refetch,
   } = useQuery({
-    queryKey: ['database', 'rows', selectedTable, page],
-    queryFn: () => AdminSDK.database.getTableData(selectedTable!, (page - 1) * pageSize),
+    queryKey: ["database", "rows", selectedTable, page],
+    queryFn: () =>
+      AdminSDK.database.getTableData(selectedTable!, (page - 1) * pageSize),
     enabled: !!selectedTable,
   });
 
   // Get current table info
   const currentTable = tables?.find((t: any) => t.name === selectedTable);
-  
+
   // Extract columns from first row
-  const columns = tableRows && tableRows.length > 0 
-    ? Object.keys(tableRows[0]).slice(0, 5)
-    : [];
+  const columns =
+    tableRows && tableRows.length > 0
+      ? Object.keys(tableRows[0]).slice(0, 5)
+      : [];
 
   // Get all columns for schema view
-  const allColumns = tableRows && tableRows.length > 0 
-    ? Object.keys(tableRows[0])
-    : [];
+  const allColumns =
+    tableRows && tableRows.length > 0 ? Object.keys(tableRows[0]) : [];
 
   return (
-    <div style={{ width: '100%', padding: spacing[8] }}>
+    <div style={{ width: "100%", padding: spacing[8] }}>
       <Stack gap={spacing[6]}>
         {/* Header */}
         <Group justify="space-between">
           <div>
-            <Title order={1} style={{ fontFamily: typography.fontFamily.sans, color: colors.text.primary }}>
+            <Title
+              order={1}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                color: colors.text.primary,
+              }}
+            >
               Data
             </Title>
             <Text size="sm" style={{ color: colors.text.secondary }}>
@@ -96,18 +109,20 @@ export default function DatabasePage() {
                   setSelectedTable(val);
                   setPage(1);
                 }}
-                data={tables?.map((t: any) => ({ 
-                  value: t.name, 
-                  label: `${t.name} (${t.estimated_rows ?? '0'} rows)` 
-                })) || []}
+                data={
+                  tables?.map((t: any) => ({
+                    value: t.name,
+                    label: `${t.name} (${t.estimated_rows ?? "0"} rows)`,
+                  })) || []
+                }
                 leftSection={<IconDatabase size={16} />}
                 searchable
                 placeholder="Select table"
                 style={{ minWidth: 280 }}
               />
             )}
-            <Button 
-              variant="light" 
+            <Button
+              variant="light"
               leftSection={<IconRefresh size={16} />}
               onClick={() => refetch()}
               loading={isLoadingRows}
@@ -118,8 +133,8 @@ export default function DatabasePage() {
         </Group>
 
         {isErrorRows && (
-          <Alert icon={<IconAlertCircle size={16}/>} color="red" title="Error">
-            {(rowsError as Error)?.message || 'Failed to fetch table data'}
+          <Alert icon={<IconAlertCircle size={16} />} color="red" title="Error">
+            {(rowsError as Error)?.message || "Failed to fetch table data"}
           </Alert>
         )}
 
@@ -139,18 +154,28 @@ export default function DatabasePage() {
             <Card
               padding="md"
               radius={borderRadius.lg}
-              style={{ border: `1px solid ${colors.border.default}`, minHeight: '400px' }}
+              style={{
+                border: `1px solid ${colors.border.default}`,
+                minHeight: "400px",
+              }}
             >
               {isLoadingRows ? (
-                <Group justify="center" p="xl"><Loader /></Group>
+                <Group justify="center" p="xl">
+                  <Loader />
+                </Group>
               ) : (
                 <Stack>
                   <ScrollArea>
                     <Table striped highlightOnHover>
                       <Table.Thead>
                         <Table.Tr>
-                          {columns.map(col => (
-                            <Table.Th key={col} style={{ whiteSpace: 'nowrap' }}>{col}</Table.Th>
+                          {columns.map((col) => (
+                            <Table.Th
+                              key={col}
+                              style={{ whiteSpace: "nowrap" }}
+                            >
+                              {col}
+                            </Table.Th>
                           ))}
                           <Table.Th>Actions</Table.Th>
                         </Table.Tr>
@@ -159,17 +184,23 @@ export default function DatabasePage() {
                         {tableRows && tableRows.length > 0 ? (
                           tableRows.map((row: any, idx: number) => (
                             <Table.Tr key={idx}>
-                              {columns.map(col => (
+                              {columns.map((col) => (
                                 <Table.Td key={col}>
-                                  <Text size="xs" truncate="end" style={{ maxWidth: '200px' }}>
-                                    {typeof row[col] === 'object' ? JSON.stringify(row[col]) : String(row[col] ?? '')}
+                                  <Text
+                                    size="xs"
+                                    truncate="end"
+                                    style={{ maxWidth: "200px" }}
+                                  >
+                                    {typeof row[col] === "object"
+                                      ? JSON.stringify(row[col])
+                                      : String(row[col] ?? "")}
                                   </Text>
                                 </Table.Td>
                               ))}
                               <Table.Td>
-                                <Button 
-                                  variant="subtle" 
-                                  size="xs" 
+                                <Button
+                                  variant="subtle"
+                                  size="xs"
                                   leftSection={<IconEye size={14} />}
                                   onClick={() => setSelectedRow(row)}
                                 >
@@ -181,21 +212,33 @@ export default function DatabasePage() {
                         ) : (
                           <Table.Tr>
                             <Table.Td colSpan={columns.length + 1}>
-                              <Text ta="center" c="dimmed" p="md">No data found</Text>
+                              <Text ta="center" c="dimmed" p="md">
+                                No data found
+                              </Text>
                             </Table.Td>
                           </Table.Tr>
                         )}
                       </Table.Tbody>
                     </Table>
                   </ScrollArea>
-                  
+
                   {/* Pagination */}
                   <Group justify="flex-end">
-                    <Button variant="subtle" size="xs" disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+                    <Button
+                      variant="subtle"
+                      size="xs"
+                      disabled={page === 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    >
                       Previous
                     </Button>
                     <Badge variant="light">Page {page}</Badge>
-                    <Button variant="subtle" size="xs" disabled={!tableRows || tableRows.length < pageSize} onClick={() => setPage(p => p + 1)}>
+                    <Button
+                      variant="subtle"
+                      size="xs"
+                      disabled={!tableRows || tableRows.length < pageSize}
+                      onClick={() => setPage((p) => p + 1)}
+                    >
                       Next
                     </Button>
                   </Group>
@@ -208,64 +251,116 @@ export default function DatabasePage() {
           <Tabs.Panel value="schema" pt="md">
             <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
               {/* Table Info */}
-              <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
+              <Card
+                padding="md"
+                radius={borderRadius.lg}
+                style={{ border: `1px solid ${colors.border.default}` }}
+              >
                 <Group gap="sm" mb="md">
                   <ThemeIcon size={32} radius="md" color="blue" variant="light">
                     <IconDatabase size={18} />
                   </ThemeIcon>
                   <div>
-                    <Text size="lg" fw={600}>{selectedTable}</Text>
-                    <Text size="xs" c="dimmed">{String(currentTable?.estimated_rows ?? 0)} estimated rows</Text>
+                    <Text size="lg" fw={600}>
+                      {selectedTable}
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      {String(currentTable?.estimated_rows ?? 0)} estimated rows
+                    </Text>
                   </div>
                 </Group>
 
                 <Divider mb="md" />
 
-                <Text size="sm" fw={600} mb="sm">Columns ({allColumns.length})</Text>
+                <Text size="sm" fw={600} mb="sm">
+                  Columns ({allColumns.length})
+                </Text>
                 <Stack gap={4}>
                   {allColumns.map((col, idx) => (
-                    <Group key={col} gap="xs" style={{
-                      padding: `${spacing[2]} ${spacing[3]}`,
-                      background: idx % 2 === 0 ? colors.background.secondary : 'transparent',
-                      borderRadius: borderRadius.base,
-                    }}>
-                      {col === 'id' && <IconKey size={12} color={colors.eventTypes.created} />}
-                      <Code style={{ fontSize: typography.fontSize.xs }}>{col}</Code>
-                      {(col.endsWith('_id') || col.endsWith('Id')) && col !== 'id' && (
-                        <Badge size="xs" variant="light" color="orange" leftSection={<IconLink size={8} />}>
-                          FK
-                        </Badge>
+                    <Group
+                      key={col}
+                      gap="xs"
+                      style={{
+                        padding: `${spacing[2]} ${spacing[3]}`,
+                        background:
+                          idx % 2 === 0
+                            ? colors.background.secondary
+                            : "transparent",
+                        borderRadius: borderRadius.base,
+                      }}
+                    >
+                      {col === "id" && (
+                        <IconKey size={12} color={colors.eventTypes.created} />
                       )}
+                      <Code style={{ fontSize: typography.fontSize.xs }}>
+                        {col}
+                      </Code>
+                      {(col.endsWith("_id") || col.endsWith("Id")) &&
+                        col !== "id" && (
+                          <Badge
+                            size="xs"
+                            variant="light"
+                            color="orange"
+                            leftSection={<IconLink size={8} />}
+                          >
+                            FK
+                          </Badge>
+                        )}
                     </Group>
                   ))}
                   {allColumns.length === 0 && (
-                    <Text size="sm" c="dimmed">Select a table to view schema</Text>
+                    <Text size="sm" c="dimmed">
+                      Select a table to view schema
+                    </Text>
                   )}
                 </Stack>
               </Card>
 
               {/* Tables Overview */}
-              <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
-                <Text size="sm" fw={600} mb="sm">All Tables ({tables?.length || 0})</Text>
+              <Card
+                padding="md"
+                radius={borderRadius.lg}
+                style={{ border: `1px solid ${colors.border.default}` }}
+              >
+                <Text size="sm" fw={600} mb="sm">
+                  All Tables ({tables?.length || 0})
+                </Text>
                 <ScrollArea style={{ maxHeight: 400 }}>
                   <Stack gap={4}>
                     {tables?.map((table: any) => (
-                      <Group 
-                        key={table.name} 
+                      <Group
+                        key={table.name}
                         justify="space-between"
                         style={{
                           padding: `${spacing[2]} ${spacing[3]}`,
-                          background: table.name === selectedTable ? `${colors.eventTypes.created}15` : colors.background.secondary,
+                          background:
+                            table.name === selectedTable
+                              ? `${colors.eventTypes.created}15`
+                              : colors.background.secondary,
                           borderRadius: borderRadius.base,
-                          cursor: 'pointer',
+                          cursor: "pointer",
                         }}
                         onClick={() => setSelectedTable(table.name)}
                       >
                         <Group gap="xs">
-                          <IconTable size={14} color={table.name === selectedTable ? colors.eventTypes.created : colors.text.tertiary} />
-                          <Text size="sm" fw={table.name === selectedTable ? 600 : 400}>{table.name}</Text>
+                          <IconTable
+                            size={14}
+                            color={
+                              table.name === selectedTable
+                                ? colors.eventTypes.created
+                                : colors.text.tertiary
+                            }
+                          />
+                          <Text
+                            size="sm"
+                            fw={table.name === selectedTable ? 600 : 400}
+                          >
+                            {table.name}
+                          </Text>
                         </Group>
-                        <Badge size="xs" variant="light" color="gray">{table.estimated_rows || 0}</Badge>
+                        <Badge size="xs" variant="light" color="gray">
+                          {table.estimated_rows || 0}
+                        </Badge>
                       </Group>
                     ))}
                   </Stack>
@@ -285,13 +380,15 @@ export default function DatabasePage() {
         title={
           <Group>
             <IconDatabase size={20} />
-            <Text size="lg" fw={600}>Row Details</Text>
+            <Text size="lg" fw={600}>
+              Row Details
+            </Text>
             <Badge>{selectedTable}</Badge>
           </Group>
         }
       >
         {selectedRow && (
-          <ScrollArea style={{ height: 'calc(100vh - 100px)' }}>
+          <ScrollArea style={{ height: "calc(100vh - 100px)" }}>
             <Code block>{JSON.stringify(selectedRow, null, 2)}</Code>
           </ScrollArea>
         )}

@@ -2,106 +2,233 @@
  * API Package - Main Export
  */
 
-import { initializePlugins } from './plugins/init.js';
+import { initializePlugins } from "./plugins/init.js";
 
 // Initialize plugins at module load
 // This ensures plugins are registered before the app router is built
 initializePlugins().catch((error) => {
-  console.error('Failed to initialize plugins:', error);
+  console.error("Failed to initialize plugins:", error);
 });
-export * from './trpc.js';
-export * from './context.js';
-export { eventsRouter } from './routers/events.js';
-export { captureRouter } from './routers/capture.js';
-export { chatRouter } from './routers/chat.js';
-export { suggestionsRouter } from './routers/suggestions.js';
-export { systemRouter } from './routers/system.js';
-export { hubRouter } from './routers/hub.js';
-export { apiKeysRouter } from './routers/api-keys.js';
-export { healthRouter } from './routers/health.js';
-export { requireUserId, userScope, userScopeAnd, type EventDataWithUser } from './utils/user-scoped.js';
+export * from "./trpc.js";
+export * from "./context.js";
+export { eventsRouter } from "./routers/events.js";
+export { captureRouter } from "./routers/capture.js";
+export { chatRouter } from "./routers/chat.js";
+export { suggestionsRouter } from "./routers/suggestions.js";
+export { systemRouter } from "./routers/system.js";
+export { hubRouter } from "./routers/hub.js";
+export { apiKeysRouter } from "./routers/api-keys.js";
+export { healthRouter } from "./routers/health.js";
+export {
+  requireUserId,
+  userScope,
+  userScopeAnd,
+  type EventDataWithUser,
+} from "./utils/user-scoped.js";
 
 // Export event streaming utilities
-export { eventStreamManager } from './event-stream-manager.js';
-export { setupEventBroadcasting } from './setup-event-broadcasting.js';
-
+export { eventStreamManager } from "./event-stream-manager.js";
+export { setupEventBroadcasting } from "./setup-event-broadcasting.js";
 
 // Export utilities for webhook handling
-export { syncUserFromKratos, createDefaultWorkspace } from './utils/kratos-sync.js';
+export {
+  syncUserFromKratos,
+  createDefaultWorkspace,
+} from "./utils/kratos-sync.js";
 
 // Export event handlers
-export { startEventProcessor, processEvents } from './event-handlers/index.js';
+export { startEventProcessor, processEvents } from "./event-handlers/index.js";
 
 // ✅ ADDED: Export entity embedding helper for jobs package (Issue #5)
-export { generateAndStoreEmbedding } from './routers/entities-data.js';
+export { generateAndStoreEmbedding } from "./routers/entities-data.js";
 
-import { eventsRouter } from './routers/events.js';
-import { captureRouter } from './routers/capture.js';
-import { entitiesRouter } from './routers/entities.js';
+import { eventsRouter } from "./routers/events.js";
+import { captureRouter } from "./routers/capture.js";
+import { entitiesRouter } from "./routers/entities.js";
 
-import { infiniteChatRouter as chatRouter } from './routers/infinite-chat.js';
-import { approvalsRouter } from './routers/approvals.js';
-import { proposalsRouter } from './routers/proposals.js'; // NEW
-import { suggestionsRouter } from './routers/suggestions.js';
-import { setupRouter } from './routers/setup.js';
-import { systemRouter } from './routers/system.js';
-import { hubRouter } from './routers/hub.js';
-import { apiKeysRouter } from './routers/api-keys.js';
-import { healthRouter } from './routers/health.js';
-import { webhooksRouter } from './routers/webhooks.js';
-import { documentsRouter } from './routers/documents.js';
-import { contentRouter } from './routers/content.js';
-import { filesRouter } from './routers/files.js';
-import { inboxRouter } from './routers/inbox.js';
-import { intelligenceRegistryRouter } from './routers/intelligence-registry.js';
-import { capabilitiesRouter } from './routers/capabilities.js';
-import { tagsRouter } from './routers/tags.js';
-import { searchRouter } from './routers/search.js';
-import { relationsRouter } from './routers/relations.js';
-import { graphRouter } from './routers/graph.js';
-import { workspacesRouter } from './routers/workspaces.js';
-import { viewsRouter } from './routers/views.js';
-import { preferencesRouter } from './routers/preferences.js';
-import { rolesRouter } from './routers/roles.js';
-import { sharingRouter } from './routers/sharing.js';
-import { templatesRouter } from './routers/templates.js';
-import { whiteboardsRouter } from './routers/whiteboards.js';
-import { createContext } from './context.js';
-import { registerRouter, buildAppRouter } from './router-registry.js';
- 
+import { infiniteChatRouter as chatRouter } from "./routers/infinite-chat.js";
+import { approvalsRouter } from "./routers/approvals.js";
+import { proposalsRouter } from "./routers/proposals.js"; // NEW
+import { suggestionsRouter } from "./routers/suggestions.js";
+import { setupRouter } from "./routers/setup.js";
+import { systemRouter } from "./routers/system.js";
+import { hubRouter } from "./routers/hub.js";
+import { apiKeysRouter } from "./routers/api-keys.js";
+import { healthRouter } from "./routers/health.js";
+import { webhooksRouter } from "./routers/webhooks.js";
+import { documentsRouter } from "./routers/documents.js";
+import { contentRouter } from "./routers/content.js";
+import { filesRouter } from "./routers/files.js";
+import { inboxRouter } from "./routers/inbox.js";
+import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
+import { capabilitiesRouter } from "./routers/capabilities.js";
+import { tagsRouter } from "./routers/tags.js";
+import { searchRouter } from "./routers/search.js";
+import { relationsRouter } from "./routers/relations.js";
+import { graphRouter } from "./routers/graph.js";
+import { workspacesRouter } from "./routers/workspaces.js";
+import { viewsRouter } from "./routers/views.js";
+import { preferencesRouter } from "./routers/preferences.js";
+import { rolesRouter } from "./routers/roles.js";
+import { sharingRouter } from "./routers/sharing.js";
+import { templatesRouter } from "./routers/templates.js";
+import { whiteboardsRouter } from "./routers/whiteboards.js";
+import { createContext } from "./context.js";
+import { registerRouter, buildAppRouter } from "./router-registry.js";
+
 // V1.0: Register core routers dynamically
 // These are the built-in routers that come with the kernel
-registerRouter('setup', setupRouter, { version: '1.0.0', source: 'core', description: 'System setup and initialization API' });
-registerRouter('events', eventsRouter, { version: '1.0.0', source: 'core', description: 'Event logging API' });
-registerRouter('capture', captureRouter, { version: '1.0.0', source: 'core', description: 'Thought capture API' });
-registerRouter('entities', entitiesRouter, { version: '1.0.0', source: 'core', description: 'Entity management API' });
+registerRouter("setup", setupRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "System setup and initialization API",
+});
+registerRouter("events", eventsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Event logging API",
+});
+registerRouter("capture", captureRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Thought capture API",
+});
+registerRouter("entities", entitiesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Entity management API",
+});
 
-registerRouter('chat', chatRouter, { version: '1.0.0', source: 'core', description: 'Infinite chat with branching and AI integration' });
-registerRouter('approvals', approvalsRouter, { version: '1.0.0', source: 'core', description: 'Approval workflow for AI proposals and actions' });
-registerRouter('proposals', proposalsRouter, { version: '1.0.0', source: 'core', description: 'Universal Proposal System' }); // NEW
-registerRouter('suggestions', suggestionsRouter, { version: '1.0.0', source: 'core', description: 'AI suggestions API' });
-registerRouter('system', systemRouter, { version: '1.0.0', source: 'core', description: 'System meta-information and control' });
-registerRouter('hub', hubRouter, { version: '1.0.0', source: 'core', description: 'Hub Protocol V1.0 - Intelligence Hub communication' });
-registerRouter('apiKeys', apiKeysRouter, { version: '1.0.0', source: 'core', description: 'API key management for Hub authentication' });
-registerRouter('health', healthRouter, { version: '1.0.0', source: 'core', description: 'Health checks and system monitoring' });
-registerRouter('integrations', webhooksRouter, { version: '1.0.0', source: 'core', description: 'Webhook subscription management' });
-registerRouter('documentsApi', documentsRouter, { version: '1.0.0', source: 'core', description: 'Document management and collaboration' });
-registerRouter('contentApi', contentRouter, { version: '1.0.0', source: 'core', description: 'Unified content creation (notes and files)' });
-registerRouter('storage', filesRouter, { version: '1.0.0', source: 'core', description: 'File storage browsing and management' });
-registerRouter('inbox', inboxRouter, { version: '1.0.0', source: 'core', description: 'Life Feed inbox' });
-registerRouter('intelligenceRegistry', intelligenceRegistryRouter, { version: '1.0.0', source: 'core', description: 'Intelligence Service Registry' });
-registerRouter('capabilities', capabilitiesRouter, { version: '1.0.0', source: 'core', description: 'Feature and service discovery' });
-registerRouter('tags', tagsRouter, { version: '1.0.0', source: 'core', description: 'Tag management and entity tagging' });
-registerRouter('search', searchRouter, { version: '1.0.0', source: 'core', description: 'Full-text and semantic search' });
-registerRouter('relations', relationsRouter, { version: '1.0.0', source: 'core', description: 'Entity relationship management' });
-registerRouter('graph', graphRouter, { version: '1.0.0', source: 'core', description: 'Graph-optimized bulk queries' });
-registerRouter('workspaces', workspacesRouter, { version: '1.0.0', source: 'core', description: 'Workspace and team management' });
-registerRouter('views', viewsRouter, { version: '1.0.0', source: 'core', description: 'Views system (whiteboards, timelines, etc.)' });
-registerRouter('preferences', preferencesRouter, { version: '1.0.0', source: 'core', description: 'User preferences management' });
-registerRouter('roles', rolesRouter, { version: '1.0.0', source: 'core', description: 'Custom role management' });
-registerRouter('sharing', sharingRouter, { version: '1.0.0', source: 'core', description: 'Public and invite-based sharing' });
-registerRouter('templates', templatesRouter, { version: '1.0.0', source: 'core', description: 'Entity template management' });
-registerRouter('whiteboards', whiteboardsRouter, { version: '1.0.0', source: 'core', description: 'Whiteboard version control and snapshots' });
+registerRouter("chat", chatRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Infinite chat with branching and AI integration",
+});
+registerRouter("approvals", approvalsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Approval workflow for AI proposals and actions",
+});
+registerRouter("proposals", proposalsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Universal Proposal System",
+}); // NEW
+registerRouter("suggestions", suggestionsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "AI suggestions API",
+});
+registerRouter("system", systemRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "System meta-information and control",
+});
+registerRouter("hub", hubRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Hub Protocol V1.0 - Intelligence Hub communication",
+});
+registerRouter("apiKeys", apiKeysRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "API key management for Hub authentication",
+});
+registerRouter("health", healthRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Health checks and system monitoring",
+});
+registerRouter("integrations", webhooksRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Webhook subscription management",
+});
+registerRouter("documentsApi", documentsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Document management and collaboration",
+});
+registerRouter("contentApi", contentRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Unified content creation (notes and files)",
+});
+registerRouter("storage", filesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "File storage browsing and management",
+});
+registerRouter("inbox", inboxRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Life Feed inbox",
+});
+registerRouter("intelligenceRegistry", intelligenceRegistryRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Intelligence Service Registry",
+});
+registerRouter("capabilities", capabilitiesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Feature and service discovery",
+});
+registerRouter("tags", tagsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Tag management and entity tagging",
+});
+registerRouter("search", searchRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Full-text and semantic search",
+});
+registerRouter("relations", relationsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Entity relationship management",
+});
+registerRouter("graph", graphRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Graph-optimized bulk queries",
+});
+registerRouter("workspaces", workspacesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Workspace and team management",
+});
+registerRouter("views", viewsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Views system (whiteboards, timelines, etc.)",
+});
+registerRouter("preferences", preferencesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "User preferences management",
+});
+registerRouter("roles", rolesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Custom role management",
+});
+registerRouter("sharing", sharingRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Public and invite-based sharing",
+});
+registerRouter("templates", templatesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Entity template management",
+});
+registerRouter("whiteboards", whiteboardsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Whiteboard version control and snapshots",
+});
 
 // Build the main app router from all registered routers
 // This enables plugins to add routers without modifying core code
@@ -109,7 +236,7 @@ export const appRouter = buildAppRouter();
 
 // Explicitly define AppRouter type with core routers for client type safety
 // This ensures clients like admin-ui can see the core router structure
-import { router } from './trpc.js';
+import { router } from "./trpc.js";
 const coreRouter = router({
   setup: setupRouter,
   events: eventsRouter,
@@ -126,8 +253,8 @@ const coreRouter = router({
   health: healthRouter,
   // n8n: n8nActionsRouter, // DISABLED - router not imported
   integrations: webhooksRouter, // Renamed from webhooks to avoid collision
-  documentsApi: documentsRouter, // Renamed from documents to avoid collision
-  contentApi: contentRouter, // Renamed from content to avoid collision
+  documents: documentsRouter,
+  content: contentRouter,
   storage: filesRouter, // Renamed from files to avoid collision
   tags: tagsRouter,
   search: searchRouter,
@@ -150,7 +277,7 @@ export {
   dynamicRouterRegistry,
   getRouter,
   buildAppRouter,
-} from './router-registry.js';
+} from "./router-registry.js";
 
 // Re-export plugin system
 export {
@@ -159,8 +286,7 @@ export {
   type DataPodPlugin,
   type ThoughtInput,
   type ThoughtResponse,
-} from './plugins/index.js';
+} from "./plugins/index.js";
 
 // Explicit re-export for server
 export { createContext };
-

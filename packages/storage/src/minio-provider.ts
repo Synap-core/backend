@@ -1,8 +1,8 @@
 /**
  * MinIO Storage Provider
- * 
+ *
  * Implements IFileStorage using MinIO (local S3-compatible server).
- * 
+ *
  * MinIO is perfect for local-first development:
  * - Runs in Docker container
  * - Uses local folder as storage backend
@@ -18,15 +18,15 @@ import {
   HeadObjectCommand,
   CreateBucketCommand,
   HeadBucketCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type {
   IFileStorage,
   FileMetadata,
   UploadOptions,
   FileInfo,
-} from './interface.js';
-import { calculateFileChecksum, buildEntityPath } from './utils.js';
+} from "./interface.js";
+import { calculateFileChecksum, buildEntityPath } from "./utils.js";
 
 export interface MinIOConfig {
   /** MinIO endpoint URL (e.g., "http://localhost:9000") */
@@ -49,7 +49,7 @@ export interface MinIOConfig {
 
 /**
  * MinIO Storage Provider
- * 
+ *
  * Uses AWS SDK to communicate with local MinIO server.
  * Automatically creates bucket on first use if configured.
  */
@@ -62,7 +62,7 @@ export class MinIOStorageProvider implements IFileStorage {
 
   constructor(config: MinIOConfig) {
     this.client = new S3Client({
-      region: config.region || 'us-east-1',
+      region: config.region || "us-east-1",
       endpoint: config.endpoint,
       credentials: {
         accessKeyId: config.accessKeyId,
@@ -89,7 +89,7 @@ export class MinIOStorageProvider implements IFileStorage {
       await this.client.send(
         new HeadBucketCommand({
           Bucket: this.bucketName,
-        })
+        }),
       );
       this.bucketInitialized = true;
       return;
@@ -101,17 +101,17 @@ export class MinIOStorageProvider implements IFileStorage {
           await this.client.send(
             new CreateBucketCommand({
               Bucket: this.bucketName,
-            })
+            }),
           );
           this.bucketInitialized = true;
         } catch (createError) {
           throw new Error(
-            `Failed to create MinIO bucket "${this.bucketName}": ${createError instanceof Error ? createError.message : 'Unknown error'}`
+            `Failed to create MinIO bucket "${this.bucketName}": ${createError instanceof Error ? createError.message : "Unknown error"}`,
           );
         }
       } else {
         throw new Error(
-          `MinIO bucket "${this.bucketName}" does not exist. Set createBucketIfNotExists=true or create it manually.`
+          `MinIO bucket "${this.bucketName}" does not exist. Set createBucketIfNotExists=true or create it manually.`,
         );
       }
     }
@@ -120,11 +120,12 @@ export class MinIOStorageProvider implements IFileStorage {
   async upload(
     path: string,
     content: string | Buffer,
-    options?: UploadOptions
+    options?: UploadOptions,
   ): Promise<FileMetadata> {
     await this.ensureBucket();
 
-    const body = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
+    const body =
+      typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     const checksum = calculateFileChecksum(body);
 
     await this.client.send(
@@ -132,9 +133,9 @@ export class MinIOStorageProvider implements IFileStorage {
         Bucket: this.bucketName,
         Key: path,
         Body: body,
-        ContentType: options?.contentType || 'application/octet-stream',
+        ContentType: options?.contentType || "application/octet-stream",
         Metadata: options?.metadata,
-      })
+      }),
     );
 
     // For MinIO, public URL is endpoint + bucket + path
@@ -157,7 +158,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
 
     if (!response.Body) {
@@ -174,7 +175,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
 
     if (!response.Body) {
@@ -196,7 +197,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
   }
 
@@ -208,7 +209,7 @@ export class MinIOStorageProvider implements IFileStorage {
         new HeadObjectCommand({
           Bucket: this.bucketName,
           Key: path,
-        })
+        }),
       );
       return true;
     } catch (error) {
@@ -223,13 +224,13 @@ export class MinIOStorageProvider implements IFileStorage {
       new HeadObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
 
     return {
       size: response.ContentLength || 0,
       lastModified: response.LastModified || new Date(),
-      contentType: response.ContentType || 'application/octet-stream',
+      contentType: response.ContentType || "application/octet-stream",
     };
   }
 
@@ -248,9 +249,8 @@ export class MinIOStorageProvider implements IFileStorage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension: string = 'md'
+    extension: string = "md",
   ): string {
     return buildEntityPath(userId, entityType, entityId, extension);
   }
 }
-

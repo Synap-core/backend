@@ -1,14 +1,14 @@
 /**
  * Socket.IO Bridge - HTTP Endpoint for Inngest Workers
- * 
+ *
  * Allows Inngest workers (running in separate process) to emit events
  * to Socket.IO clients via HTTP POST requests.
- * 
+ *
  * Workers POST to /bridge/emit → Socket.IO emits to connected clients
  */
 
-import type { Server as SocketIOServer } from 'socket.io';
-import type { IncomingMessage, ServerResponse } from 'http';
+import type { Server as SocketIOServer } from "socket.io";
+import type { IncomingMessage, ServerResponse } from "http";
 
 interface BridgeEmitRequest {
   event: string;
@@ -22,28 +22,31 @@ interface BridgeEmitRequest {
  * Setup Socket.IO bridge HTTP endpoint
  */
 export function setupBridge(io: SocketIOServer, httpServer: any) {
-  console.log('[Bridge] Setting up HTTP endpoint...');
-  
+  console.log("[Bridge] Setting up HTTP endpoint...");
+
   // Intercept HTTP requests for bridge endpoints
-  const originalListeners = httpServer.listeners('request').slice();
-  httpServer.removeAllListeners('request');
-  
-  httpServer.on('request', async (req: IncomingMessage, res: ServerResponse) => {
-    const url = req.url || '';
-    
-    // Handle bridge endpoints
-    if (url.startsWith('/bridge/')) {
-      await handleBridgeRequest(io, req, res);
-      return;
-    }
-    
-    // Pass through to original handlers (Socket.IO)
-    for (const listener of originalListeners) {
-      listener(req, res);
-    }
-  });
-  
-  console.log('[Bridge] ✅ HTTP endpoint ready at /bridge/emit');
+  const originalListeners = httpServer.listeners("request").slice();
+  httpServer.removeAllListeners("request");
+
+  httpServer.on(
+    "request",
+    async (req: IncomingMessage, res: ServerResponse) => {
+      const url = req.url || "";
+
+      // Handle bridge endpoints
+      if (url.startsWith("/bridge/")) {
+        await handleBridgeRequest(io, req, res);
+        return;
+      }
+
+      // Pass through to original handlers (Socket.IO)
+      for (const listener of originalListeners) {
+        listener(req, res);
+      }
+    },
+  );
+
+  console.log("[Bridge] ✅ HTTP endpoint ready at /bridge/emit");
 }
 
 /**
@@ -52,38 +55,46 @@ export function setupBridge(io: SocketIOServer, httpServer: any) {
 async function handleBridgeRequest(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
 ) {
-  const url = req.url || '';
-  
+  const url = req.url || "";
+
   // Health check
-  if (url === '/bridge/health' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', timestamp: Date.now() }));
+  if (url === "/bridge/health" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", timestamp: Date.now() }));
     return;
   }
-  
+
   // Emit endpoint
-  if (url === '/bridge/emit' && req.method === 'POST') {
+  if (url === "/bridge/emit" && req.method === "POST") {
     await handleEmit(io, req, res);
     return;
   }
-  
+
   // Yjs state endpoint
-  if (url.startsWith('/yjs/') && url.includes('/state') && req.method === 'GET') {
+  if (
+    url.startsWith("/yjs/") &&
+    url.includes("/state") &&
+    req.method === "GET"
+  ) {
     await handleYjsGetState(io, req, res);
     return;
   }
-  
+
   // Yjs restore endpoint
-  if (url.startsWith('/yjs/') && url.includes('/restore') && req.method === 'POST') {
+  if (
+    url.startsWith("/yjs/") &&
+    url.includes("/restore") &&
+    req.method === "POST"
+  ) {
     await handleYjsRestore(io, req, res);
     return;
   }
-  
+
   // Not found
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'Not found' }));
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Not found" }));
 }
 
 /**
@@ -92,70 +103,76 @@ async function handleBridgeRequest(
 async function handleEmit(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
 ) {
   try {
     // Parse request body
     const body = await parseBody(req);
-    const { event, workspaceId, viewId, userId, data } = body as BridgeEmitRequest;
-    
+    const { event, workspaceId, viewId, userId, data } =
+      body as BridgeEmitRequest;
+
     // Validate required fields
     if (!event) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Missing required field: event' }));
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing required field: event" }));
       return;
     }
-    
+
     if (!workspaceId && !viewId && !userId) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ 
-        error: 'Must provide at least one of: workspaceId, viewId, userId' 
-      }));
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "Must provide at least one of: workspaceId, viewId, userId",
+        }),
+      );
       return;
     }
-    
+
     // Get presence namespace
-    const presenceNamespace = io.of('/presence');
-    
+    const presenceNamespace = io.of("/presence");
+
     // Emit to appropriate room(s)
     let emitCount = 0;
-    
+
     if (workspaceId) {
       presenceNamespace.to(`workspace:${workspaceId}`).emit(event, data);
       emitCount++;
     }
-    
+
     if (viewId) {
       presenceNamespace.to(`view:${viewId}`).emit(event, data);
       emitCount++;
     }
-    
+
     if (userId) {
       presenceNamespace.to(`user:${userId}`).emit(event, data);
       emitCount++;
     }
-    
+
     console.log(`[Bridge] Emitted '${event}' to ${emitCount} room(s)`, {
       workspaceId,
       viewId,
       userId,
     });
-    
+
     // Success response
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      success: true, 
-      emitCount,
-      event,
-    }));
-    
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        success: true,
+        emitCount,
+        event,
+      }),
+    );
   } catch (error) {
-    console.error('[Bridge] Error handling emit:', error);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      error: 'Internal server error',
-      message: error instanceof Error ? error.message : String(error),
-    }));
+    console.error("[Bridge] Error handling emit:", error);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Internal server error",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
   }
 }
 
@@ -164,22 +181,22 @@ async function handleEmit(
  */
 function parseBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let body = '';
-    
-    req.on('data', (chunk) => {
+    let body = "";
+
+    req.on("data", (chunk) => {
       body += chunk.toString();
     });
-    
-    req.on('end', () => {
+
+    req.on("end", () => {
       try {
         const parsed = JSON.parse(body);
         resolve(parsed);
       } catch (error) {
-        reject(new Error('Invalid JSON'));
+        reject(new Error("Invalid JSON"));
       }
     });
-    
-    req.on('error', reject);
+
+    req.on("error", reject);
   });
 }
 
@@ -190,30 +207,32 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
 async function handleYjsGetState(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
 ) {
   try {
     // Extract roomId from URL
     const match = req.url?.match(/\/yjs\/([^/]+)\/state/);
     if (!match) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid URL' }));
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid URL" }));
       return;
     }
-    
+
     const roomId = match[1];
-    
+
     // Note: Y.Doc access would require integration with y-socket.io internals
     // For now, return placeholder - actual implementation requires y-socket.io access
-    res.writeHead(501, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      error: 'Not implemented - requires y-socket.io document access',
-      roomId,
-    }));
+    res.writeHead(501, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Not implemented - requires y-socket.io document access",
+        roomId,
+      }),
+    );
   } catch (error) {
-    console.error('[Bridge] Error getting Yjs state:', error);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Internal server error' }));
+    console.error("[Bridge] Error getting Yjs state:", error);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Internal server error" }));
   }
 }
 
@@ -224,37 +243,39 @@ async function handleYjsGetState(
 async function handleYjsRestore(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse
+  res: ServerResponse,
 ) {
   try {
     // Extract roomId from URL
     const match = req.url?.match(/\/yjs\/([^/]+)\/restore/);
     if (!match) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid URL' }));
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid URL" }));
       return;
     }
-    
+
     const roomId = match[1];
     const body = await parseBody(req);
     const { state } = body as { state: string };
-    
+
     if (!state) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Missing state in request body' }));
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing state in request body" }));
       return;
     }
-    
+
     //Note: Actual restore would require y-socket.io integration
     // For now, return placeholder
-    res.writeHead(501, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      error: 'Not implemented - requires y-socket.io document access',
-      roomId,
-    }));
+    res.writeHead(501, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Not implemented - requires y-socket.io document access",
+        roomId,
+      }),
+    );
   } catch (error) {
-    console.error('[Bridge] Error restoring Yjs state:', error);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Internal server error' }));
+    console.error("[Bridge] Error restoring Yjs state:", error);
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Internal server error" }));
   }
 }

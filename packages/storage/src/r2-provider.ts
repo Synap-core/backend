@@ -1,8 +1,8 @@
 /**
  * Cloudflare R2 Storage Provider
- * 
+ *
  * Implements IFileStorage using Cloudflare R2 (S3-compatible).
- * 
+ *
  * R2 is production-ready with:
  * - Zero egress fees
  * - S3-compatible API
@@ -15,15 +15,15 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type {
   IFileStorage,
   FileMetadata,
   UploadOptions,
   FileInfo,
-} from './interface.js';
-import { calculateFileChecksum, buildEntityPath } from './utils.js';
+} from "./interface.js";
+import { calculateFileChecksum, buildEntityPath } from "./utils.js";
 
 export interface R2Config {
   /** Cloudflare account ID */
@@ -40,7 +40,7 @@ export interface R2Config {
 
 /**
  * Cloudflare R2 Storage Provider
- * 
+ *
  * Uses AWS SDK with custom endpoint to communicate with R2.
  */
 export class R2StorageProvider implements IFileStorage {
@@ -50,7 +50,7 @@ export class R2StorageProvider implements IFileStorage {
 
   constructor(config: R2Config) {
     this.client = new S3Client({
-      region: 'auto', // R2 uses 'auto' region
+      region: "auto", // R2 uses 'auto' region
       endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
       credentials: {
         accessKeyId: config.accessKeyId,
@@ -65,9 +65,10 @@ export class R2StorageProvider implements IFileStorage {
   async upload(
     path: string,
     content: string | Buffer,
-    options?: UploadOptions
+    options?: UploadOptions,
   ): Promise<FileMetadata> {
-    const body = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
+    const body =
+      typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     const checksum = calculateFileChecksum(body);
 
     await this.client.send(
@@ -75,9 +76,9 @@ export class R2StorageProvider implements IFileStorage {
         Bucket: this.bucketName,
         Key: path,
         Body: body,
-        ContentType: options?.contentType || 'application/octet-stream',
+        ContentType: options?.contentType || "application/octet-stream",
         Metadata: options?.metadata,
-      })
+      }),
     );
 
     return {
@@ -94,7 +95,7 @@ export class R2StorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
 
     if (!response.Body) {
@@ -109,7 +110,7 @@ export class R2StorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
 
     if (!response.Body) {
@@ -129,7 +130,7 @@ export class R2StorageProvider implements IFileStorage {
       new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
   }
 
@@ -139,7 +140,7 @@ export class R2StorageProvider implements IFileStorage {
         new HeadObjectCommand({
           Bucket: this.bucketName,
           Key: path,
-        })
+        }),
       );
       return true;
     } catch (error) {
@@ -152,13 +153,13 @@ export class R2StorageProvider implements IFileStorage {
       new HeadObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      })
+      }),
     );
 
     return {
       size: response.ContentLength || 0,
       lastModified: response.LastModified || new Date(),
-      contentType: response.ContentType || 'application/octet-stream',
+      contentType: response.ContentType || "application/octet-stream",
     };
   }
 
@@ -175,9 +176,8 @@ export class R2StorageProvider implements IFileStorage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension: string = 'md'
+    extension: string = "md",
   ): string {
     return buildEntityPath(userId, entityType, entityId, extension);
   }
 }
-

@@ -1,8 +1,8 @@
 /**
  * Conversation Repository - Chat History Management
- * 
+ *
  * V0.4: Hash-chained conversation storage using postgres.js
- * 
+ *
  * Features:
  * - Append messages with hash chain integrity
  * - Thread management
@@ -10,18 +10,18 @@
  * - Hash verification
  */
 
-import { sql } from '../client-pg.js';
-import { createHash, randomUUID } from 'crypto';
-import type { ConversationMessageMetadata } from '@synap-core/core';
+import { sql } from "../client-pg.js";
+import { createHash, randomUUID } from "crypto";
+import type { ConversationMessageMetadata } from "@synap-core/core";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 export enum MessageRole {
-  USER = 'user',
-  ASSISTANT = 'assistant',
-  SYSTEM = 'system',
+  USER = "user",
+  ASSISTANT = "assistant",
+  SYSTEM = "system",
 }
 
 export interface ConversationMessage {
@@ -64,21 +64,21 @@ export class ConversationRepository {
    */
   async appendMessage(data: AppendMessageData): Promise<ConversationMessage> {
     const messageId = randomUUID();
-    
+
     // Get parent's hash if this is a reply
     let previousHash: string | null = null;
     if (data.parentId) {
       const parentResult = await sql`
         SELECT hash FROM conversation_messages WHERE id = ${data.parentId}
       `;
-      
+
       if (parentResult.length === 0) {
         throw new Error(`Parent message ${data.parentId} not found`);
       }
-      
+
       previousHash = parentResult[0].hash;
     }
-    
+
     // Calculate hash for this message
     const hash = this.calculateHash({
       id: messageId,
@@ -87,7 +87,7 @@ export class ConversationRepository {
       timestamp: new Date(),
       previousHash,
     });
-    
+
     // Insert message
     const result = await sql`
       INSERT INTO conversation_messages (
@@ -115,7 +115,7 @@ export class ConversationRepository {
       )
       RETURNING *
     `;
-    
+
     return this.mapRow(result[0]);
   }
 
@@ -124,7 +124,7 @@ export class ConversationRepository {
    */
   async getThreadHistory(
     threadId: string,
-    limit: number = 100
+    limit: number = 100,
   ): Promise<ConversationMessage[]> {
     const result = await sql`
       SELECT * FROM conversation_messages
@@ -133,14 +133,16 @@ export class ConversationRepository {
       ORDER BY timestamp ASC
       LIMIT ${limit}
     `;
-    
-    return result.map(row => this.mapRow(row));
+
+    return result.map((row) => this.mapRow(row));
   }
 
   /**
    * Get latest message in thread
    */
-  async getLatestMessage(threadId: string): Promise<ConversationMessage | null> {
+  async getLatestMessage(
+    threadId: string,
+  ): Promise<ConversationMessage | null> {
     const result = await sql`
       SELECT * FROM conversation_messages
       WHERE thread_id = ${threadId}
@@ -148,36 +150,35 @@ export class ConversationRepository {
       ORDER BY timestamp DESC
       LIMIT 1
     `;
-    
+
     return result.length > 0 ? this.mapRow(result[0]) : null;
   }
 
   /**
    * Create new branch from a message
    */
-  async createBranch(
-    parentMessageId: string,
-    userId: string
-  ): Promise<string> {
+  async createBranch(parentMessageId: string, userId: string): Promise<string> {
     // Verify parent exists
     const parentResult = await sql`
       SELECT * FROM conversation_messages WHERE id = ${parentMessageId}
     `;
-    
+
     if (parentResult.length === 0) {
       throw new Error(`Parent message ${parentMessageId} not found`);
     }
-    
+
     const parent = this.mapRow(parentResult[0]);
-    
+
     // Verify user owns the conversation
     if (parent.userId !== userId) {
-      throw new Error('Unauthorized: Cannot branch another user\'s conversation');
+      throw new Error(
+        "Unauthorized: Cannot branch another user's conversation",
+      );
     }
-    
+
     // Create new thread ID
     const newThreadId = randomUUID();
-    
+
     // Copy all messages up to (and including) the parent into new thread
     await sql`
       INSERT INTO conversation_messages (
@@ -209,7 +210,7 @@ export class ConversationRepository {
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
     `;
-    
+
     return newThreadId;
   }
 
@@ -223,8 +224,8 @@ export class ConversationRepository {
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
     `;
-    
-    return result.map(row => this.mapRow(row));
+
+    return result.map((row) => this.mapRow(row));
   }
 
   /**
@@ -238,7 +239,7 @@ export class ConversationRepository {
     const result = await sql`
       SELECT * FROM verify_hash_chain(${threadId})
     `;
-    
+
     const row = result[0];
     return {
       isValid: row.is_valid,
@@ -254,9 +255,9 @@ export class ConversationRepository {
     const countResult = await sql`
       SELECT count_thread_messages(${threadId}) as count
     `;
-    
+
     const latestMessage = await this.getLatestMessage(threadId);
-    
+
     // Count branches (messages with multiple children)
     const branchResult = await sql`
       SELECT COUNT(DISTINCT parent_id) as branches
@@ -270,7 +271,7 @@ export class ConversationRepository {
         HAVING COUNT(*) > 1
       ) branching_points
     `;
-    
+
     return {
       threadId,
       messageCount: countResult[0].count,
@@ -284,12 +285,14 @@ export class ConversationRepository {
    */
   async getUserThreads(
     userId: string,
-    limit: number = 20
-  ): Promise<Array<{
-    threadId: string;
-    latestMessage: ConversationMessage;
-    messageCount: number;
-  }>> {
+    limit: number = 20,
+  ): Promise<
+    Array<{
+      threadId: string;
+      latestMessage: ConversationMessage;
+      messageCount: number;
+    }>
+  > {
     const result = await sql`
       WITH thread_latest AS (
         SELECT DISTINCT ON (thread_id)
@@ -321,8 +324,8 @@ export class ConversationRepository {
       ORDER BY tl.timestamp DESC
       LIMIT ${limit}
     `;
-    
-    return result.map(row => ({
+
+    return result.map((row) => ({
       threadId: row.thread_id,
       messageCount: parseInt(row.message_count, 10),
       latestMessage: this.mapRow(row),
@@ -341,9 +344,9 @@ export class ConversationRepository {
         AND deleted_at IS NULL
       RETURNING id
     `;
-    
+
     if (result.length === 0) {
-      throw new Error('Message not found or already deleted');
+      throw new Error("Message not found or already deleted");
     }
   }
 
@@ -364,8 +367,8 @@ export class ConversationRepository {
       timestamp: data.timestamp.toISOString(),
       previousHash: data.previousHash,
     });
-    
-    return createHash('sha256').update(payload).digest('hex');
+
+    return createHash("sha256").update(payload).digest("hex");
   }
 
   /**
@@ -373,7 +376,9 @@ export class ConversationRepository {
    */
   private mapRow(row: Record<string, any>): ConversationMessage {
     const metadataValue = row.metadata
-      ? (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata)
+      ? typeof row.metadata === "string"
+        ? JSON.parse(row.metadata)
+        : row.metadata
       : null;
 
     return {

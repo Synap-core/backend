@@ -1,20 +1,20 @@
-import { useState, useEffect } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
-import { Drawer } from '@mantine/core';
-import { useMediaQuery } from '@mantine/hooks';
-import TopNav from './TopNav';
-import MainNav from './MainNav';
-import CommandPalette from '../CommandPalette';
-import { colors, breakpoints } from '../../theme/tokens';
+import { useState, useEffect } from "react";
+import { Outlet, useLocation } from "react-router-dom";
+import { Drawer } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
+import TopNav from "./TopNav";
+import MainNav from "./MainNav";
+import CommandPalette from "../CommandPalette";
+import { colors, breakpoints } from "../../theme/tokens";
 
 export default function MainLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const location = useLocation();
-  
+
   // Media queries for responsive behavior
   const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`);
-  
+
   // Auto-close drawer on mobile when route changes
   useEffect(() => {
     if (isMobile && navDrawerOpen) {
@@ -25,23 +25,23 @@ export default function MainLayout() {
   // Keyboard shortcut for Command Palette (Cmd+K / Ctrl+K)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setCommandPaletteOpen(true);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   return (
     <div
       style={{
-        minHeight: '100vh',
+        minHeight: "100vh",
         backgroundColor: colors.background.secondary,
-        display: 'flex',
-        flexDirection: 'column',
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       {/* Top Navigation */}
@@ -51,8 +51,8 @@ export default function MainLayout() {
       <main
         style={{
           flex: 1,
-          width: '100%',
-          overflowY: 'auto',
+          width: "100%",
+          overflowY: "auto",
         }}
       >
         <Outlet />

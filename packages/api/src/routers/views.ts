@@ -1,7 +1,6 @@
-
 /**
  * Views Router - Production-Ready
- * 
+ *
  * Handles:
  * - View CRUD (whiteboards, timelines, kanban, etc.)
  * - Content loading/saving
@@ -10,17 +9,51 @@
  * - Manual entity ordering
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, and, desc, sqlTemplate as sql, inArray, or, like, gt, lt, gte, lte, isNull, isNotNull, getTableColumns, asc, type SQL, type Column } from '@synap/database';
-// Use direct import to avoid type mismatches with strict Drizzle types
-import { views, documents, documentVersions, entities, relations, insertViewSchema } from '@synap/database/schema';
-import { TRPCError } from '@trpc/server';
-import { ViewEvents } from '../lib/event-helpers.js';
-import { requireEditor, requireViewer, requireResourceOwner } from '../utils/workspace-permissions.js';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  sqlTemplate as sql,
+  inArray,
+  or,
+  like,
+  gt,
+  lt,
+  gte,
+  lte,
+  isNull,
+  isNotNull,
+  getTableColumns,
+  asc,
+  type SQL,
+  type Column,
+  views,
+  documents,
+  documentVersions,
+  entities,
+  relations,
+  insertViewSchema,
+} from "@synap/database";
+import { TRPCError } from "@trpc/server";
+import { ViewEvents } from "../lib/event-helpers.js";
+import {
+  requireEditor,
+  requireViewer,
+  requireResourceOwner,
+} from "../utils/workspace-permissions.js";
 
 // Proper package imports
-import { ViewContentSchema, getViewCategory, ViewMetadata, StructuredViewConfig, EntityFilter, SortRule } from '@synap-core/types';
+import {
+  ViewContentSchema,
+  getViewCategory,
+  type ViewMetadata,
+  type StructuredViewConfig,
+  type EntityFilter,
+  type SortRule,
+} from "@synap-core/types";
 
 export const viewsRouter = router({
   /**
@@ -28,87 +61,107 @@ export const viewsRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertViewSchema.pick({
-        workspaceId: true,
-        name: true,
-        description: true,
-      }).extend({
-        // Specific validation for view types and custom constraints
-        type: z.enum(['whiteboard', 'timeline', 'kanban', 'table', 'list', 'grid', 'gallery', 'calendar', 'gantt', 'mindmap', 'graph']),
-        name: z.string().min(1).max(100),
-        initialContent: z.any().optional(),
-      })
+      insertViewSchema
+        .pick({
+          workspaceId: true,
+          name: true,
+          description: true,
+        })
+        .extend({
+          // Specific validation for view types and custom constraints
+          type: z.enum([
+            "whiteboard",
+            "timeline",
+            "kanban",
+            "table",
+            "list",
+            "grid",
+            "gallery",
+            "calendar",
+            "gantt",
+            "mindmap",
+            "graph",
+          ]),
+          name: z.string().min(1).max(100),
+          initialContent: z.any().optional(),
+        }),
     )
     .mutation(async ({ input, ctx }) => {
       // If workspace provided, check user has editor role
       if (input.workspaceId) {
         await requireEditor(db, input.workspaceId, ctx.userId);
       }
-      
+
       // Compute category from view type
-      const category = getViewCategory(input.type);
-      
+      const category = getViewCategory(input.type as any);
+
       // Validate initial content if provided
       if (input.initialContent) {
         const parseResult = ViewContentSchema.safeParse(input.initialContent);
         if (!parseResult.success) {
           throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Invalid view content structure',
+            code: "BAD_REQUEST",
+            message: "Invalid view content structure",
             cause: parseResult.error,
           });
         }
-        
+
         if (parseResult.data.category !== category) {
           throw new TRPCError({
-            code: 'BAD_REQUEST',
+            code: "BAD_REQUEST",
             message: `View type '${input.type}' requires '${category}' content, got '${parseResult.data.category}'`,
           });
         }
       }
-      
+
       await ViewEvents.createRequested(ctx.userId, {
-        type: input.type,
-        name: input.name,
-        workspaceId: input.workspaceId || '',
+        type: input.type as any,
+        name: input.name as string,
+        workspaceId: input.workspaceId || "",
       });
 
       // Create document for content storage
-      const [doc] = await db.insert(documents).values({
-        userId: ctx.userId,
-        type: input.type,
-        title: input.name,
-        storageUrl: '',
-        storageKey: `views/${input.type}/${Date.now()}`,
-        size: 0,
-        currentVersion: 1,
-      }).returning();
+      const [doc] = await db
+        .insert(documents)
+        .values({
+          userId: ctx.userId,
+          type: input.type,
+          title: input.name,
+          storageUrl: "",
+          storageKey: `views/${input.type}/${Date.now()}`,
+          size: 0,
+          currentVersion: 1,
+        } as any)
+        .returning();
 
       // Create initial version with content
       await db.insert(documentVersions).values({
         documentId: doc.id,
         version: 1,
         content: JSON.stringify(input.initialContent || {}),
-        author: 'user',
+        author: "user",
         authorId: ctx.userId,
-        message: 'Initial version',
+        message: "Initial version",
       });
 
       // Create view
-      const [view] = await db.insert(views).values({
-        workspaceId: input.workspaceId,
-        userId: ctx.userId,
-        type: input.type,
-        category,
-        name: input.name,
-        description: input.description,
-        documentId: doc.id,
-        metadata: {
-          entityCount: 0,
-          createdBy: ctx.userId,
-        },
-      }).returning();
-      
+      const [view] = await db
+        .insert(views)
+        .values({
+          workspaceId: input.workspaceId,
+          userId: ctx.userId,
+          type: input.type,
+          category,
+          name: input.name,
+          description: input.description,
+          documentId: doc.id,
+          metadata: {
+            entityCount: 0,
+            createdBy: ctx.userId,
+          },
+        } as any)
+        .returning();
+
       await ViewEvents.createValidated(ctx.userId, {
         id: view.id,
         type: view.type,
@@ -123,16 +176,37 @@ export const viewsRouter = router({
    * List views
    */
   list: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid().optional(),
-      type: z.enum(['whiteboard', 'timeline', 'kanban', 'table', 'list', 'grid', 'gallery', 'calendar', 'gantt', 'mindmap', 'graph', 'all']).optional(),
-    }))
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        type: z
+          .enum([
+            "whiteboard",
+            "timeline",
+            "kanban",
+            "table",
+            "list",
+            "grid",
+            "gallery",
+            "calendar",
+            "gantt",
+            "mindmap",
+            "graph",
+            "all",
+          ])
+          .optional(),
+      }),
+    )
     .query(async ({ input, ctx }) => {
       const query = db.query.views.findMany({
         where: and(
           eq(views.userId, ctx.userId),
-          input.workspaceId ? eq(views.workspaceId, input.workspaceId) : undefined,
-          input.type && input.type !== 'all' ? eq(views.type, input.type) : undefined
+          input.workspaceId
+            ? eq(views.workspaceId, input.workspaceId)
+            : undefined,
+          input.type && input.type !== "all"
+            ? eq(views.type, input.type)
+            : undefined,
         ),
         orderBy: [desc(views.updatedAt)],
       });
@@ -151,7 +225,7 @@ export const viewsRouter = router({
       });
 
       if (!view) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
       // Check access
@@ -191,7 +265,7 @@ export const viewsRouter = router({
       });
 
       if (!view) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
       // Check access
@@ -204,7 +278,7 @@ export const viewsRouter = router({
       const category = getViewCategory(view.type as any);
 
       // Canvas views: Return document content
-      if (category === 'canvas') {
+      if (category === "canvas") {
         let content = {};
         if (view.documentId) {
           const latestVersion = await db.query.documentVersions.findFirst({
@@ -219,22 +293,22 @@ export const viewsRouter = router({
             }
           }
         }
-        
+
         return { view, content, entities: [], relations: [] };
       }
 
       // Structured views: Execute query from metadata config
       const metadata = view.metadata as ViewMetadata | undefined;
       const config = metadata?.config as StructuredViewConfig | undefined;
-      
+
       // Ensure config has query property before accessing
-      if (!config || !('query' in config) || !config.query) {
+      if (!config || !("query" in config) || !config.query) {
         return { view, config, entities: [], relations: [] };
       }
 
       const { entityTypes, filters, sorts, limit, offset } = config.query;
       const conditions: any[] = [];
-      
+
       // Filter by workspace
       if (view.workspaceId) {
         conditions.push(eq(entities.workspaceId, view.workspaceId));
@@ -267,10 +341,15 @@ export const viewsRouter = router({
       }
 
       // Execute query
-      let fetchedEntities = await db.select()
+      let fetchedEntities = await db
+        .select()
         .from(entities)
         .where(and(...conditions))
-        .orderBy(...(orderByClause.length > 0 ? orderByClause : [desc(entities.createdAt)]))
+        .orderBy(
+          ...(orderByClause.length > 0
+            ? orderByClause
+            : [desc(entities.createdAt)]),
+        )
         .limit(limit || 100)
         .offset(offset || 0);
 
@@ -285,15 +364,19 @@ export const viewsRouter = router({
       }
 
       // Get relations between entities
-      const entityIds = fetchedEntities.map(e => e.id);
-      const fetchedRelations = entityIds.length > 0 
-        ? await db.select()
-            .from(relations)
-            .where(or(
-              inArray(relations.sourceEntityId, entityIds),
-              inArray(relations.targetEntityId, entityIds)
-            ))
-        : [];
+      const entityIds = fetchedEntities.map((e) => e.id);
+      const fetchedRelations =
+        entityIds.length > 0
+          ? await db
+              .select()
+              .from(relations)
+              .where(
+                or(
+                  inArray(relations.sourceEntityId, entityIds),
+                  inArray(relations.targetEntityId, entityIds),
+                ),
+              )
+          : [];
 
       return {
         view,
@@ -307,18 +390,20 @@ export const viewsRouter = router({
    * Save view content
    */
   save: protectedProcedure
-    .input(z.object({
-      id: z.string().uuid(),
-      content: z.any(),
-      metadata: z.record(z.any()).optional(),
-    }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        content: z.any(),
+        metadata: z.record(z.any()).optional(),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
         where: eq(views.id, input.id),
       });
 
       if (!view) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
       // Check access
@@ -332,17 +417,17 @@ export const viewsRouter = router({
       const parseResult = ViewContentSchema.safeParse(input.content);
       if (!parseResult.success) {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Invalid view content structure',
+          code: "BAD_REQUEST",
+          message: "Invalid view content structure",
           cause: parseResult.error,
         });
       }
-      
+
       // Ensure content category matches view type
       const expectedCategory = getViewCategory(view.type as any);
       if (parseResult.data.category !== expectedCategory) {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
+          code: "BAD_REQUEST",
           message: `View type '${view.type}' requires '${expectedCategory}' content, got '${parseResult.data.category}'`,
         });
       }
@@ -359,12 +444,13 @@ export const viewsRouter = router({
           documentId: view.documentId,
           version: newVersion,
           content: JSON.stringify(input.content),
-          author: 'user',
+          author: "user",
           authorId: ctx.userId,
-          message: 'Auto-save',
+          message: "Auto-save",
         });
 
-        await db.update(documents)
+        await db
+          .update(documents)
           .set({
             currentVersion: newVersion,
             updatedAt: new Date(),
@@ -374,7 +460,8 @@ export const viewsRouter = router({
 
       // Update view metadata
       if (input.metadata) {
-        await db.update(views)
+        await db
+          .update(views)
           .set({
             metadata: input.metadata,
             updatedAt: new Date(),
@@ -389,14 +476,19 @@ export const viewsRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertViewSchema.pick({
-        id: true,
-        name: true,
-        description: true,
-      }).partial({
-        name: true,
-        description: true,
-      })
+      insertViewSchema
+        .pick({
+          id: true,
+          name: true,
+          description: true,
+        })
+        .partial({
+          name: true,
+          description: true,
+        })
+        .required({
+          id: true,
+        }),
     )
     .mutation(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
@@ -404,7 +496,7 @@ export const viewsRouter = router({
       });
 
       if (!view) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
       // Check access
@@ -414,7 +506,8 @@ export const viewsRouter = router({
         requireResourceOwner(view, ctx.userId);
       }
 
-      const [updated] = await db.update(views)
+      const [updated] = await db
+        .update(views)
         .set({
           name: input.name,
           description: input.description,
@@ -437,7 +530,7 @@ export const viewsRouter = router({
       });
 
       if (!view) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
       // Check access
@@ -462,19 +555,21 @@ export const viewsRouter = router({
    * Reorder entity in view (manual ordering)
    */
   reorderEntity: protectedProcedure
-    .input(z.object({
-      viewId: z.string().uuid(),
-      entityId: z.string().uuid(),
-      beforeEntityId: z.string().uuid().optional(),
-      afterEntityId: z.string().uuid().optional(),
-    }))
+    .input(
+      z.object({
+        viewId: z.string().uuid(),
+        entityId: z.string().uuid(),
+        beforeEntityId: z.string().uuid().optional(),
+        afterEntityId: z.string().uuid().optional(),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
         where: eq(views.id, input.viewId),
       });
 
       if (!view) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'View not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
       // Check access
@@ -502,7 +597,10 @@ export const viewsRouter = router({
         const afterOrder = entityOrders[input.afterEntityId] ?? 1;
         newOrder = afterOrder / 2;
       } else {
-      const maxOrder = Math.max(...(Object.values(entityOrders) as number[]), 0);
+        const maxOrder = Math.max(
+          ...(Object.values(entityOrders) as number[]),
+          0,
+        );
         newOrder = maxOrder + 1;
       }
 
@@ -510,7 +608,8 @@ export const viewsRouter = router({
       entityOrders[input.entityId] = newOrder;
 
       // Update view metadata
-      await db.update(views)
+      await db
+        .update(views)
         .set({
           metadata: {
             ...metadata,
@@ -532,28 +631,28 @@ export const viewsRouter = router({
  */
 function buildFilterCondition(filter: EntityFilter): SQL | null {
   const { field, operator, value } = filter;
-  const isMetadataField = field.startsWith('metadata.');
-  
+  const isMetadataField = field.startsWith("metadata.");
+
   if (isMetadataField) {
-    const metadataKey = field.split('.')[1];
-    
+    const metadataKey = field.split(".")[1];
+
     // Use jsonb_extract_path_text equivalent or the ->> operator
     // Since we are inside sql template, we can't easily avoid raw sql here,
     // but we can type the result
     const metadataCol = entities.metadata;
-    
+
     switch (operator) {
-      case 'equals':
+      case "equals":
         return sql`${metadataCol}->>${metadataKey} = ${value}`;
-      case 'not_equals':
+      case "not_equals":
         return sql`${metadataCol}->>${metadataKey} != ${value}`;
-      case 'contains':
-        return sql`${metadataCol}->>${metadataKey} ILIKE ${'%' + value + '%'}`;
-      case 'is_empty':
+      case "contains":
+        return sql`${metadataCol}->>${metadataKey} ILIKE ${"%" + value + "%"}`;
+      case "is_empty":
         return sql`${metadataCol}->>${metadataKey} IS NULL`;
-      case 'is_not_empty':
+      case "is_not_empty":
         return sql`${metadataCol}->>${metadataKey} IS NOT NULL`;
-      case 'in':
+      case "in":
         if (Array.isArray(value)) {
           // Properly escape array values or use Drizzle array operator if available for JSON
           // Using Postgres ANY with string array
@@ -567,50 +666,47 @@ function buildFilterCondition(filter: EntityFilter): SQL | null {
     // Dynamically get the column
     // We start with all entity columns
     const entityColumns = getTableColumns(entities);
-    
+
     // We check if the field exists in the columns
     if (field in entityColumns) {
       // Safe access because we checked existence
       const column = entityColumns[field as keyof typeof entityColumns];
-      
-      // Determine column type roughly for stricter operator checks if we wanted, 
+
+      // Determine column type roughly for stricter operator checks if we wanted,
       // but mostly we need to handle the value type matching.
-      
+
       // We can't easily exhaustively query column type here to eliminate all casts,
       // but we can eliminate the 'as any' on the return
-      
+
       switch (operator) {
-        case 'equals':
+        case "equals":
           return eq(column, value);
-        case 'not_equals':
+        case "not_equals":
           // Drizzle doesn't have a direct 'ne' or 'neq' in some versions, but usually 'ne' exists or we use not(eq())
           // If 'ne' is missing, sql is fine or notEq
           // Checking imports... we don't have 'ne' or 'notEq' imported.
           return sql`${column} != ${value}`;
-        case 'contains':
+        case "contains":
           // Like expects string
           return like(column as Column<any, any, any>, `%${value}%`);
-        case 'greater_than':
+        case "greater_than":
           return gt(column, value);
-        case 'less_than':
+        case "less_than":
           return lt(column, value);
-        case 'greater_than_or_equal':
+        case "greater_than_or_equal":
           return gte(column, value);
-        case 'less_than_or_equal':
+        case "less_than_or_equal":
           return lte(column, value);
-        case 'is_empty':
+        case "is_empty":
           return isNull(column);
-        case 'is_not_empty':
+        case "is_not_empty":
           return isNotNull(column);
-        case 'gt': return gt(column, value);
-        case 'lt': return lt(column, value);
-        case 'gte': return gte(column, value);
-        case 'lte': return lte(column, value);
+
         default:
           return null;
       }
     }
-    
+
     return null;
   }
 }
@@ -620,21 +716,21 @@ function buildFilterCondition(filter: EntityFilter): SQL | null {
  */
 function buildSortClause(sort: SortRule): SQL | null {
   const { field, direction } = sort;
-  const isMetadataField = field.startsWith('metadata.');
-  
+  const isMetadataField = field.startsWith("metadata.");
+
   if (isMetadataField) {
-    const metadataKey = field.split('.')[1];
+    const metadataKey = field.split(".")[1];
     const metadataCol = entities.metadata;
-    
+
     // Sort by JSON field text value
-    return direction === 'asc' 
+    return direction === "asc"
       ? sql`${metadataCol}->>${metadataKey} ASC`
       : sql`${metadataCol}->>${metadataKey} DESC`;
   } else {
     const entityColumns = getTableColumns(entities);
     if (field in entityColumns) {
-        const column = entityColumns[field as keyof typeof entityColumns];
-        return direction === 'asc' ? asc(column) : desc(column);
+      const column = entityColumns[field as keyof typeof entityColumns];
+      return direction === "asc" ? asc(column) : desc(column);
     }
     return null;
   }

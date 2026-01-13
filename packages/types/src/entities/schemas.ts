@@ -1,37 +1,37 @@
 /**
  * Entity Metadata Schemas
- * 
+ *
  * Defines Zod schemas for all entity types.
  * TypeScript types are auto-generated from these schemas.
- * 
+ *
  * Adding a new entity type: Just add to ENTITY_SCHEMAS!
  */
 
-import { z } from 'zod';
+import { z } from "zod";
 
 /**
  * Entity metadata schemas - one per entity type
- * 
+ *
  * The type key MUST match the entity.type field in the database
  */
 export const ENTITY_SCHEMAS = {
   task: z.object({
-    status: z.enum(['todo', 'in_progress', 'done', 'archived']).default('todo'),
-    priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+    status: z.enum(["todo", "in_progress", "done", "archived"]).default("todo"),
+    priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
     dueDate: z.string().datetime().optional(),
     completedAt: z.string().datetime().optional(),
     assignee: z.string().uuid().optional(),
     estimatedMinutes: z.number().int().positive().optional(),
     actualMinutes: z.number().int().positive().optional(),
   }),
-  
+
   note: z.object({
     tags: z.array(z.string()).default([]),
-    format: z.enum(['markdown', 'plain', 'rich']).default('markdown'),
+    format: z.enum(["markdown", "plain", "rich"]).default("markdown"),
     linkedEntities: z.array(z.string().uuid()).optional(),
     isFavorite: z.boolean().default(false),
   }),
-  
+
   person: z.object({
     email: z.string().email().optional(),
     phone: z.string().optional(),
@@ -41,7 +41,7 @@ export const ENTITY_SCHEMAS = {
     twitterHandle: z.string().optional(),
     notes: z.string().optional(),
   }),
-  
+
   event: z.object({
     startTime: z.string().datetime(),
     endTime: z.string().datetime(),
@@ -52,7 +52,7 @@ export const ENTITY_SCHEMAS = {
     isAllDay: z.boolean().default(false),
     reminderMinutes: z.number().int().optional(),
   }),
-  
+
   file: z.object({
     mimeType: z.string(),
     sizeBytes: z.number().int().positive(),
@@ -87,7 +87,7 @@ export type EntityType = keyof typeof ENTITY_SCHEMAS;
  * Entity metadata types - auto-generated from schemas
  */
 export type EntityMetadata = {
-  [K in EntityType]: z.infer<typeof ENTITY_SCHEMAS[K]>
+  [K in EntityType]: z.infer<(typeof ENTITY_SCHEMAS)[K]>;
 };
 
 /**
@@ -96,9 +96,11 @@ export type EntityMetadata = {
  */
 export function validateEntityMetadata<T extends EntityType>(
   type: T,
-  metadata: unknown
-): z.infer<typeof ENTITY_SCHEMAS[T]> {
-  return ENTITY_SCHEMAS[type].parse(metadata) as z.infer<typeof ENTITY_SCHEMAS[T]>;
+  metadata: unknown,
+): z.infer<(typeof ENTITY_SCHEMAS)[T]> {
+  return ENTITY_SCHEMAS[type].parse(metadata) as z.infer<
+    (typeof ENTITY_SCHEMAS)[T]
+  >;
 }
 
 /**
@@ -106,8 +108,7 @@ export function validateEntityMetadata<T extends EntityType>(
  */
 export function safeValidateEntityMetadata<T extends EntityType>(
   type: T,
-  metadata: unknown
+  metadata: unknown,
 ) {
   return ENTITY_SCHEMAS[type].safeParse(metadata);
 }
-

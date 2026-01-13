@@ -1,15 +1,15 @@
 /**
  * Inbox Analysis Handler
- * 
+ *
  * Listens to: inbox.item.analyzed
  * Action: Update inbox item with analysis results
  */
 
-import { db, inboxItems, eq } from '@synap/database';
-import type { InboxItemAnalyzedEvent } from '@synap/events';
-import { createLogger } from '@synap-core/core';
+import { db, inboxItems, eq } from "@synap/database";
+import type { InboxItemAnalyzedEvent } from "@synap/events";
+import { createLogger } from "@synap-core/core";
 
-const logger = createLogger({ module: 'inbox-analysis-handler' });
+const logger = createLogger({ module: "inbox-analysis-handler" });
 
 /**
  * Handle inbox item analyzed event
@@ -20,13 +20,16 @@ export async function handleInboxItemAnalyzed(
     id: string;
     userId: string;
     timestamp: Date;
-  }
+  },
 ) {
-  logger.info({ 
-    itemId: event.subjectId,
-    requestId: event.data.requestId 
-  }, 'Updating inbox item with analysis');
-  
+  logger.info(
+    {
+      itemId: event.subjectId,
+      requestId: event.data.requestId,
+    },
+    "Updating inbox item with analysis",
+  );
+
   try {
     // Get current item data
     const [item] = await db
@@ -34,36 +37,47 @@ export async function handleInboxItemAnalyzed(
       .from(inboxItems)
       .where(eq(inboxItems.id, event.subjectId))
       .limit(1);
-    
+
     if (!item) {
-      logger.warn({ itemId: event.subjectId }, 'Inbox item not found for analysis');
+      logger.warn(
+        { itemId: event.subjectId },
+        "Inbox item not found for analysis",
+      );
       return;
     }
-    
+
     // Merge analysis into data field
     const updatedData = {
       ...(item.data as object), // ✅ Cast jsonb to object
       analysis: event.data.analysis,
     };
-    
+
     await db
       .update(inboxItems)
       .set({
         data: updatedData,
         // Optionally update status based on priority
-        ...(event.data.analysis.priority === 'urgent' && { status: 'unread' as const }),
+        ...(event.data.analysis.priority === "urgent" && {
+          status: "unread" as const,
+        }),
       })
       .where(eq(inboxItems.id, event.subjectId));
-    
-    logger.info({ 
-      itemId: event.subjectId,
-      priority: event.data.analysis.priority 
-    }, 'Inbox item updated with analysis');
+
+    logger.info(
+      {
+        itemId: event.subjectId,
+        priority: event.data.analysis.priority,
+      },
+      "Inbox item updated with analysis",
+    );
   } catch (error) {
-    logger.error({ 
-      err: error, 
-      itemId: event.subjectId 
-    }, 'Failed to update inbox item with analysis');
+    logger.error(
+      {
+        err: error,
+        itemId: event.subjectId,
+      },
+      "Failed to update inbox item with analysis",
+    );
     throw error;
   }
 }

@@ -3,11 +3,11 @@
  * Handles document version snapshots and restoration
  */
 
-import { inngest } from '../client.js';
-import { db, eq } from '@synap/database';
-import { documents, documentVersions } from '@synap/database/schema';
-import { storage } from '@synap/storage';
-import { broadcastSuccess } from '../utils/realtime-broadcast.js';
+import { inngest } from "../client.js";
+import { db, eq } from "@synap/database";
+import { documents, documentVersions } from "@synap/database/schema";
+import { storage } from "@synap/storage";
+import { broadcastSuccess } from "../utils/realtime-broadcast.js";
 
 /**
  * Document Snapshot Worker
@@ -16,15 +16,15 @@ import { broadcastSuccess } from '../utils/realtime-broadcast.js';
  */
 export const documentSnapshotWorker = inngest.createFunction(
   {
-    id: 'document-snapshots',
-    name: 'Save Document Version Snapshot',
+    id: "document-snapshots",
+    name: "Save Document Version Snapshot",
   },
-  { event: 'documents.snapshot.requested' },
+  { event: "documents.snapshot.requested" },
   async ({ event, step }) => {
     const { documentId, message, userId } = event.data;
 
     // 1. Fetch document metadata
-    const document = await step.run('get-document', async () => {
+    const document = await step.run("get-document", async () => {
       const doc = await db.query.documents.findFirst({
         where: eq(documents.id, documentId),
       });
@@ -37,23 +37,26 @@ export const documentSnapshotWorker = inngest.createFunction(
     });
 
     // 2. Fetch current content from storage
-    const content = await step.run('fetch-content', async () => {
+    const content = await step.run("fetch-content", async () => {
       const buffer = await storage.downloadBuffer(document.storageKey);
-      return buffer.toString('utf-8');
+      return buffer.toString("utf-8");
     });
 
     // 3. Create version snapshot
     const newVersion = (document.currentVersion || 0) + 1;
 
-    const version = await step.run('save-version', async () => {
-      const [v] = await db.insert(documentVersions).values({
-        documentId,
-        version: newVersion,
-        content,
-        message: message || `Version ${newVersion}`,
-        author: 'user',
-        authorId: userId,
-      }).returning();
+    const version = await step.run("save-version", async () => {
+      const [v] = await db
+        .insert(documentVersions)
+        .values({
+          documentId,
+          version: newVersion,
+          content,
+          message: message || `Version ${newVersion}`,
+          author: "user",
+          authorId: userId,
+        })
+        .returning();
 
       return v;
     });
@@ -61,8 +64,9 @@ export const documentSnapshotWorker = inngest.createFunction(
     // 4. Update document version metadata (The +1 Logic)
     // - lastSavedVersion = newVersion (marking this snapshot as the latest save)
     // - currentVersion = newVersion + 1 (starting the new "working" version)
-    await step.run('update-document-version', async () => {
-      await db.update(documents)
+    await step.run("update-document-version", async () => {
+      await db
+        .update(documents)
         .set({
           lastSavedVersion: newVersion,
           currentVersion: newVersion + 1,
@@ -72,8 +76,8 @@ export const documentSnapshotWorker = inngest.createFunction(
     });
 
     // 5. Broadcast success
-    await step.run('broadcast', async () => {
-      await broadcastSuccess(userId, 'document.snapshot.saved', {
+    await step.run("broadcast", async () => {
+      await broadcastSuccess(userId, "document.snapshot.saved", {
         documentId,
         versionId: version.id,
         version: newVersion,
@@ -86,7 +90,7 @@ export const documentSnapshotWorker = inngest.createFunction(
       versionId: version.id,
       version: newVersion,
     };
-  }
+  },
 );
 
 /**
@@ -96,15 +100,15 @@ export const documentSnapshotWorker = inngest.createFunction(
  */
 export const documentRestoreWorker = inngest.createFunction(
   {
-    id: 'document-restore',
-    name: 'Restore Document to Previous Version',
+    id: "document-restore",
+    name: "Restore Document to Previous Version",
   },
-  { event: 'documents.restore.requested' },
+  { event: "documents.restore.requested" },
   async ({ event, step }) => {
     const { documentId, versionId, userId } = event.data;
 
     // 1. Get target version
-    const version = await step.run('get-version', async () => {
+    const version = await step.run("get-version", async () => {
       const v = await db.query.documentVersions.findFirst({
         where: eq(documentVersions.id, versionId),
       });
@@ -114,14 +118,14 @@ export const documentRestoreWorker = inngest.createFunction(
       }
 
       if (v.documentId !== documentId) {
-        throw new Error('Version does not belong to this document');
+        throw new Error("Version does not belong to this document");
       }
 
       return v;
     });
 
     // 2. Get document metadata
-    const document = await step.run('get-document', async () => {
+    const document = await step.run("get-document", async () => {
       const doc = await db.query.documents.findFirst({
         where: eq(documents.id, documentId),
       });
@@ -134,11 +138,11 @@ export const documentRestoreWorker = inngest.createFunction(
     });
 
     // 3. Upload restored content to storage
-    await step.run('restore-storage', async () => {
+    await step.run("restore-storage", async () => {
       await storage.upload(
         document.storageKey,
-        Buffer.from(version.content, 'utf-8'),
-        { contentType: document.mimeType || 'text/plain' }
+        Buffer.from(version.content, "utf-8"),
+        { contentType: document.mimeType || "text/plain" },
       );
     });
 
@@ -149,12 +153,13 @@ export const documentRestoreWorker = inngest.createFunction(
     // So currentVersion is purely incremental (doesn't jump back).
     const newVersion = (document.currentVersion || 0) + 1;
 
-    await step.run('create-restore-record', async () => {
-      // Optional: Log the restore event in versions history if desired, 
+    await step.run("create-restore-record", async () => {
+      // Optional: Log the restore event in versions history if desired,
       // but purely we just need to reset the state.
       // Ideally we might want a snapshot of "just before restore" if proper safety is needed.
-      
-      await db.update(documents)
+
+      await db
+        .update(documents)
         .set({
           // Reset working state to the restored content (done via storage upload above)
           // We mark the document as "dirty" starting from this restored point
@@ -168,8 +173,8 @@ export const documentRestoreWorker = inngest.createFunction(
     });
 
     // 5. Broadcast success
-    await step.run('broadcast', async () => {
-      await broadcastSuccess(userId, 'document.restored', {
+    await step.run("broadcast", async () => {
+      await broadcastSuccess(userId, "document.restored", {
         documentId,
         restoredFromVersion: version.version,
         currentVersion: newVersion,
@@ -181,7 +186,7 @@ export const documentRestoreWorker = inngest.createFunction(
       restoredFromVersion: version.version,
       currentVersion: newVersion,
     };
-  }
+  },
 );
 
 /**
@@ -191,15 +196,15 @@ export const documentRestoreWorker = inngest.createFunction(
  */
 export const documentAutoSaveWorker = inngest.createFunction(
   {
-    id: 'document-auto-save',
-    name: 'Auto-save Document Snapshots',
+    id: "document-auto-save",
+    name: "Auto-save Document Snapshots",
   },
-  { cron: '*/30 * * * *' }, // Every 30 minutes
+  { cron: "*/30 * * * *" }, // Every 30 minutes
   async ({ step }) => {
     // Get active document sessions (documents being actively edited)
-    const activeSessions = await step.run('get-active-sessions', async () => {
-      const { documentSessions } = await import('@synap/database/schema');
-      
+    const activeSessions = await step.run("get-active-sessions", async () => {
+      const { documentSessions } = await import("@synap/database/schema");
+
       return db.query.documentSessions.findMany({
         where: eq(documentSessions.isActive, true),
         limit: 100,
@@ -207,7 +212,7 @@ export const documentAutoSaveWorker = inngest.createFunction(
     });
 
     if (activeSessions.length === 0) {
-      return { message: 'No active sessions to auto-save' };
+      return { message: "No active sessions to auto-save" };
     }
 
     // For each active session, create a snapshot
@@ -218,7 +223,11 @@ export const documentAutoSaveWorker = inngest.createFunction(
             where: eq(documents.id, session.documentId),
           });
 
-          if (!document) return { documentId: session.documentId, error: 'Document not found' };
+          if (!document)
+            return {
+              documentId: session.documentId,
+              error: "Document not found",
+            };
 
           const content = await storage.downloadBuffer(document.storageKey);
           const newVersion = (document.currentVersion || 0) + 1;
@@ -226,29 +235,34 @@ export const documentAutoSaveWorker = inngest.createFunction(
           await db.insert(documentVersions).values({
             documentId: session.documentId,
             version: newVersion,
-            content: content.toString('utf-8'),
-            message: 'Auto-save checkpoint',
-            author: 'system',
-            authorId: 'auto-save',
+            content: content.toString("utf-8"),
+            message: "Auto-save checkpoint",
+            author: "system",
+            authorId: "auto-save",
           });
 
-          await db.update(documents)
+          await db
+            .update(documents)
             .set({ currentVersion: newVersion })
             .where(eq(documents.id, session.documentId));
 
-          return { documentId: session.documentId, version: newVersion, success: true };
+          return {
+            documentId: session.documentId,
+            version: newVersion,
+            success: true,
+          };
         } catch (error) {
-          return { 
-            documentId: session.documentId, 
-            error: error instanceof Error ? error.message : 'Unknown error' 
+          return {
+            documentId: session.documentId,
+            error: error instanceof Error ? error.message : "Unknown error",
           };
         }
-      })
+      }),
     );
 
     return {
       totalSessions: activeSessions.length,
       results,
     };
-  }
+  },
 );

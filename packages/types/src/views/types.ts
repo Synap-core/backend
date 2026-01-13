@@ -1,6 +1,6 @@
 /**
  * View Content Types
- * 
+ *
  * Defines the discriminated union for view content based on category.
  * Categories determine the structure and purpose of view content.
  */
@@ -14,36 +14,36 @@
  * - structured: Query-based views with interchangeable layouts (table, kanban, graph, etc.)
  * - canvas: Freeform drawing views (whiteboard, mindmap)
  */
-export type ViewCategory = 'structured' | 'canvas';
+export type ViewCategory = "structured" | "canvas";
 
 /**
  * View type enum (imported from index.ts)
  */
-import type { ViewType } from './index.js';
+import type { ViewType } from "./index.js";
 
 /**
  * Map view types to their categories
  */
 export const VIEW_TYPE_CATEGORIES: Record<ViewType, ViewCategory> = {
   // Structured (query-based, interchangeable layouts)
-  table: 'structured',
-  kanban: 'structured',
-  list: 'structured',
-  grid: 'structured',
-  gallery: 'structured',
-  calendar: 'structured',
-  gantt: 'structured',
-  timeline: 'structured',
-  graph: 'structured',        // Graph is also query-based!
-  
+  table: "structured",
+  kanban: "structured",
+  list: "structured",
+  grid: "structured",
+  gallery: "structured",
+  calendar: "structured",
+  gantt: "structured",
+  timeline: "structured",
+  graph: "structured", // Graph is also query-based!
+
   // Canvas (freeform drawing)
-  whiteboard: 'canvas',
-  mindmap: 'canvas',
+  whiteboard: "canvas",
+  mindmap: "canvas",
 };
 
 /**
  * Get category for a view type
- * 
+ *
  * @param type - The view type
  * @returns The category of the view type
  */
@@ -52,7 +52,7 @@ export function getViewCategory(type: ViewType): ViewCategory {
 }
 
 // ... imports
-import { EntityQuery } from './query.js';
+import { type EntityQuery } from "./query.js";
 
 // ... (keep View Categories)
 
@@ -66,16 +66,16 @@ import { EntityQuery } from './query.js';
  * Layout modes for structured views
  * All are query-based but render differently
  */
-export type StructuredLayout = 
-  | 'table' 
-  | 'kanban' 
-  | 'list' 
-  | 'grid' 
-  | 'gallery' 
-  | 'calendar'
-  | 'gantt'
-  | 'timeline'
-  | 'graph';
+export type StructuredLayout =
+  | "table"
+  | "kanban"
+  | "list"
+  | "grid"
+  | "gallery"
+  | "calendar"
+  | "gantt"
+  | "timeline"
+  | "graph";
 
 /**
  * Kanban column configuration
@@ -86,7 +86,7 @@ export interface KanbanColumn {
   label: string;
   order: number;
   color?: string;
-  limit?: number;  // WIP limit
+  limit?: number; // WIP limit
 }
 
 /**
@@ -96,33 +96,33 @@ export interface KanbanColumn {
 export interface ViewRenderConfig {
   /** Layout mode (determines how entities are rendered) */
   layout: StructuredLayout;
-  
+
   // Common to all layouts (except graph)
   /** Column definitions (re-uses existing types) */
-  columns?: any[];  // Type imported from index.ts
-  
+  columns?: any[]; // Type imported from index.ts
+
   /** Filter rules */
   filters?: any[];
-  
+
   /** Sort rules */
   sorts?: any[];
-  
+
   /** Field to group by (for kanban, list views) */
   groupByColumnId?: string;
-  
+
   // Layout-specific configurations
   /** Kanban column definitions */
   kanbanColumns?: KanbanColumn[];
-  
+
   /** Date field for calendar view */
   calendarDateField?: string;
-  
+
   /** Time field for timeline view */
   timelineTimeField?: string;
-  
+
   /** Graph layout algorithm */
-  graphLayout?: 'force' | 'hierarchical' | 'circular';
-  
+  graphLayout?: "force" | "hierarchical" | "circular";
+
   /** Relationship types to show in graph */
   graphRelationshipTypes?: string[];
 }
@@ -138,13 +138,13 @@ export interface ViewRenderConfig {
 export interface StructuredViewContent {
   /** Schema version for migrations */
   version: 1;
-  
+
   /** Category discriminator */
-  category: 'structured';
-  
+  category: "structured";
+
   /** Entity query (what to show) */
   query: EntityQuery;
-  
+
   /** Display configuration (how to show it) */
   config: ViewRenderConfig;
 }
@@ -156,13 +156,13 @@ export interface StructuredViewContent {
 export interface CanvasViewContent {
   /** Schema version for migrations */
   version: 1;
-  
+
   /** Category discriminator */
-  category: 'canvas';
-  
+  category: "canvas";
+
   /** Canvas elements (Tldraw shapes, etc.) */
   elements: unknown[];
-  
+
   /** Entity IDs embedded in the canvas */
   embeddedEntities?: string[];
 }
@@ -171,9 +171,7 @@ export interface CanvasViewContent {
  * Discriminated union of all view content types
  * Use the category field to determine the content structure
  */
-export type ViewContent = 
-  | StructuredViewContent
-  | CanvasViewContent;
+export type ViewContent = StructuredViewContent | CanvasViewContent;
 
 // =============================================================================
 // Type Guards
@@ -182,15 +180,19 @@ export type ViewContent =
 /**
  * Type guard: Check if content is structured
  */
-export function isStructuredContent(content: ViewContent): content is StructuredViewContent {
-  return content.category === 'structured';
+export function isStructuredContent(
+  content: ViewContent,
+): content is StructuredViewContent {
+  return content.category === "structured";
 }
 
 /**
  * Type guard: Check if content is canvas
  */
-export function isCanvasContent(content: ViewContent): content is CanvasViewContent {
-  return content.category === 'canvas';
+export function isCanvasContent(
+  content: ViewContent,
+): content is CanvasViewContent {
+  return content.category === "canvas";
 }
 
 /**

@@ -1,9 +1,9 @@
 /**
  * Intelligence Hub Plugin - DISABLED
- * 
+ *
  * This plugin would connect Data Pod to Intelligence Hub via Hub Protocol.
  * Currently disabled due to circular dependency with hub-protocol-client.
- * 
+ *
  * To enable: resolve circular dependency and uncomment the code below.
  */
 

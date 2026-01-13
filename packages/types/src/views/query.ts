@@ -1,6 +1,6 @@
 /**
  * View Query Types
- * 
+ *
  * Single source of truth for all view query and filter types.
  */
 
@@ -11,19 +11,19 @@
 /**
  * Filter operator types
  */
-export type FilterOperator = 
-  | 'equals'
-  | 'not_equals'
-  | 'contains'
-  | 'not_contains'
-  | 'in'
-  | 'not_in'
-  | 'is_empty'
-  | 'is_not_empty'
-  | 'greater_than'
-  | 'less_than'
-  | 'greater_than_or_equal'
-  | 'less_than_or_equal';
+export type FilterOperator =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "not_contains"
+  | "in"
+  | "not_in"
+  | "is_empty"
+  | "is_not_empty"
+  | "greater_than"
+  | "less_than"
+  | "greater_than_or_equal"
+  | "less_than_or_equal";
 
 /**
  * Filter definition for entity queries
@@ -39,7 +39,7 @@ export interface EntityFilter {
  */
 export interface SortRule {
   field: string;
-  direction: 'asc' | 'desc';
+  direction: "asc" | "desc";
 }
 
 // =============================================================================
@@ -53,23 +53,22 @@ export interface SortRule {
 export interface EntityQuery {
   /** Entity types to include */
   entityTypes?: string[];
-  
+
   /** Specific entity IDs (for fixed sets) */
-  entityIds?: string[]  ;
-  
+  entityIds?: string[];
+
   /** Filter conditions */
   filters?: EntityFilter[];
-  
+
   /** Sort rules (multiple sorts supported) */
   sorts?: SortRule[];
-  
+
   /** Full-text search query */
   search?: string;
-  
+
   /** Maximum number of entities to return */
   limit?: number;
-  
-  
+
   /** Offset for pagination */
   offset?: number;
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
 
 interface MetricsSnapshot {
   timestamp: number;
@@ -21,21 +21,25 @@ interface ParsedMetric {
 }
 
 export function useMetrics(intervalMs: number = 5000) {
-  const [currentMetrics, setCurrentMetrics] = useState<MetricsSnapshot | null>(null);
+  const [currentMetrics, setCurrentMetrics] = useState<MetricsSnapshot | null>(
+    null,
+  );
   const [metricsHistory, setMetricsHistory] = useState<MetricsSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const parsePrometheusMetrics = useCallback((text: string): ParsedMetric[] => {
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     const metrics: ParsedMetric[] = [];
 
     for (const line of lines) {
       // Skip comments and empty lines
-      if (line.startsWith('#') || line.trim() === '') continue;
+      if (line.startsWith("#") || line.trim() === "") continue;
 
       // Parse metric line: metric_name{label="value"} value
-      const match = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)((?:\{[^}]*\})?) (.+)$/);
+      const match = line.match(
+        /^([a-zA-Z_][a-zA-Z0-9_]*)((?:\{[^}]*\})?) (.+)$/,
+      );
       if (!match) continue;
 
       const [, name, labelsStr, valueStr] = match;
@@ -44,7 +48,9 @@ export function useMetrics(intervalMs: number = 5000) {
       // Parse labels
       const labels: Record<string, string> = {};
       if (labelsStr) {
-        const labelMatches = labelsStr.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g);
+        const labelMatches = labelsStr.matchAll(
+          /([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g,
+        );
         for (const labelMatch of labelMatches) {
           labels[labelMatch[1]] = labelMatch[2];
         }
@@ -58,11 +64,11 @@ export function useMetrics(intervalMs: number = 5000) {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
       const response = await fetch(`${API_URL}/metrics`);
 
       if (!response.ok) {
-        throw new Error('Failed to fetch metrics');
+        throw new Error("Failed to fetch metrics");
       }
 
       const text = await response.text();
@@ -71,25 +77,36 @@ export function useMetrics(intervalMs: number = 5000) {
       // Extract key metrics
       const snapshot: MetricsSnapshot = {
         timestamp: Date.now(),
-        httpRequestsTotal: parsedMetrics.find((m) => m.name === 'http_requests_total')?.value || 0,
+        httpRequestsTotal:
+          parsedMetrics.find((m) => m.name === "http_requests_total")?.value ||
+          0,
         httpRequestDurationMs:
-          parsedMetrics.find((m) => m.name === 'http_request_duration_ms')?.value || 0,
+          parsedMetrics.find((m) => m.name === "http_request_duration_ms")
+            ?.value || 0,
         eventsPublishedTotal:
-          parsedMetrics.find((m) => m.name === 'events_published_total')?.value || 0,
+          parsedMetrics.find((m) => m.name === "events_published_total")
+            ?.value || 0,
         eventsProcessedTotal:
-          parsedMetrics.find((m) => m.name === 'events_processed_total')?.value || 0,
+          parsedMetrics.find((m) => m.name === "events_processed_total")
+            ?.value || 0,
         eventProcessingDurationMs:
-          parsedMetrics.find((m) => m.name === 'event_processing_duration_ms')?.value || 0,
+          parsedMetrics.find((m) => m.name === "event_processing_duration_ms")
+            ?.value || 0,
         websocketConnectionsActive:
-          parsedMetrics.find((m) => m.name === 'websocket_connections_active')?.value || 0,
+          parsedMetrics.find((m) => m.name === "websocket_connections_active")
+            ?.value || 0,
         databaseQueriesTotal:
-          parsedMetrics.find((m) => m.name === 'database_queries_total')?.value || 0,
+          parsedMetrics.find((m) => m.name === "database_queries_total")
+            ?.value || 0,
         databaseQueryDurationMs:
-          parsedMetrics.find((m) => m.name === 'database_query_duration_ms')?.value || 0,
+          parsedMetrics.find((m) => m.name === "database_query_duration_ms")
+            ?.value || 0,
         aiToolExecutionsTotal:
-          parsedMetrics.find((m) => m.name === 'ai_tool_executions_total')?.value || 0,
+          parsedMetrics.find((m) => m.name === "ai_tool_executions_total")
+            ?.value || 0,
         aiTokensUsedTotal:
-          parsedMetrics.find((m) => m.name === 'ai_tokens_used_total')?.value || 0,
+          parsedMetrics.find((m) => m.name === "ai_tokens_used_total")?.value ||
+          0,
       };
 
       setCurrentMetrics(snapshot);
@@ -101,7 +118,7 @@ export function useMetrics(intervalMs: number = 5000) {
       setError(null);
       setIsLoading(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(err instanceof Error ? err.message : "Unknown error");
       setIsLoading(false);
     }
   }, [parsePrometheusMetrics]);

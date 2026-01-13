@@ -1,20 +1,28 @@
-
 /**
  * Workspaces Router - Multi-user workspace management
- * 
+ *
  * Handles:
  * - Workspace CRUD
  * - Member management
  * - Invitation system
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, and, desc } from '@synap/database';
-import { workspaces, workspaceMembers, workspaceInvites, insertWorkspaceSchema, insertWorkspaceInviteSchema } from '@synap/database/schema';
-import { TRPCError } from '@trpc/server';
-import { randomBytes } from 'crypto';
-import { WorkspaceMemberEvents } from '../lib/event-helpers.js';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  workspaces,
+  workspaceMembers,
+  workspaceInvites,
+  insertWorkspaceSchema,
+  insertWorkspaceInviteSchema,
+} from "@synap/database";
+import { TRPCError } from "@trpc/server";
+import { randomBytes } from "crypto";
+import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
 
 /**
  * Workspace CRUD operations
@@ -25,21 +33,23 @@ export const workspacesRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertWorkspaceSchema.pick({
-        name: true,
-        description: true,
-        settings: true,
-      }).extend({
-        name: z.string().min(1).max(100),
-        type: z.enum(['personal', 'team', 'enterprise']).default('personal'),
-      })
+      insertWorkspaceSchema
+        .pick({
+          name: true,
+          description: true,
+          settings: true,
+        })
+        .extend({
+          name: z.string().min(1).max(100),
+          type: z.enum(["personal", "team", "enterprise"]).default("personal"),
+        }),
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event - worker will create workspace
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       await inngest.send({
-        name: 'workspaces.create.requested',
+        name: "workspaces.create.requested",
         data: {
           name: input.name,
           description: input.description,
@@ -49,9 +59,9 @@ export const workspacesRouter = router({
         user: { id: ctx.userId },
       });
 
-      return { 
-        status: 'requested',
-        message: 'Workspace creation requested. It will be created shortly.'
+      return {
+        status: "requested",
+        message: "Workspace creation requested. It will be created shortly.",
       };
     }),
 
@@ -66,7 +76,7 @@ export const workspacesRouter = router({
       },
     });
 
-    return memberships.map(m => {
+    return memberships.map((m) => {
       const workspace = m.workspace!;
       return {
         ...workspace,
@@ -87,19 +97,22 @@ export const workspacesRouter = router({
       });
 
       if (!workspace) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found' });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
       }
 
       // Check user has access
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.id),
-          eq(workspaceMembers.userId, ctx.userId)
+          eq(workspaceMembers.userId, ctx.userId),
         ),
       });
 
       if (!membership) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       return { ...workspace, role: membership.role };
@@ -110,21 +123,24 @@ export const workspacesRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertWorkspaceSchema.pick({
-        name: true,
-        description: true,
-        settings: true,
-      }).partial().extend({
-        id: z.string().uuid(),
-        name: z.string().min(1).max(100).optional(),
-      })
+      insertWorkspaceSchema
+        .pick({
+          name: true,
+          description: true,
+          settings: true,
+        })
+        .partial()
+        .extend({
+          id: z.string().uuid(),
+          name: z.string().min(1).max(100).optional(),
+        }),
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event - permission validator will check permissions
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       await inngest.send({
-        name: 'workspaces.update.requested',
+        name: "workspaces.update.requested",
         data: {
           workspaceId: input.id,
           name: input.name,
@@ -135,9 +151,9 @@ export const workspacesRouter = router({
         user: { id: ctx.userId },
       });
 
-      return { 
-        status: 'requested',
-        message: 'Workspace update requested'
+      return {
+        status: "requested",
+        message: "Workspace update requested",
       };
     }),
 
@@ -148,10 +164,10 @@ export const workspacesRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event - permission validator enforces owner-only
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       await inngest.send({
-        name: 'workspaces.delete.requested',
+        name: "workspaces.delete.requested",
         data: {
           workspaceId: input.id,
           userId: ctx.userId,
@@ -159,9 +175,10 @@ export const workspacesRouter = router({
         user: { id: ctx.userId },
       });
 
-      return { 
-        status: 'requested',
-        message: 'Workspace deletion requested. Only the owner can approve this.'
+      return {
+        status: "requested",
+        message:
+          "Workspace deletion requested. Only the owner can approve this.",
       };
     }),
 
@@ -175,12 +192,12 @@ export const workspacesRouter = router({
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
+          eq(workspaceMembers.userId, ctx.userId),
         ),
       });
 
       if (!membership) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       return await db.query.workspaceMembers.findMany({
@@ -193,16 +210,18 @@ export const workspacesRouter = router({
    * Remove member from workspace
    */
   removeMember: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-      userId: z.string(),
-    }))
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string(),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       await inngest.send({
-        name: 'workspaceMembers.remove.requested',
+        name: "workspaceMembers.remove.requested",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
@@ -211,9 +230,9 @@ export const workspacesRouter = router({
         user: { id: ctx.userId },
       });
 
-      return { 
-        status: 'requested',
-        message: 'Member removal requested'
+      return {
+        status: "requested",
+        message: "Member removal requested",
       };
     }),
 
@@ -221,17 +240,19 @@ export const workspacesRouter = router({
    * Update member role
    */
   updateMemberRole: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-      userId: z.string(),
-      role: z.enum(['admin', 'editor', 'viewer']),
-    }))
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string(),
+        role: z.enum(["admin", "editor", "viewer"]),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       await inngest.send({
-        name: 'workspaceMembers.updateRole.requested',
+        name: "workspaceMembers.updateRole.requested",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
@@ -241,9 +262,9 @@ export const workspacesRouter = router({
         user: { id: ctx.userId },
       });
 
-      return { 
-        status: 'requested',
-        message: 'Role update requested'
+      return {
+        status: "requested",
+        message: "Role update requested",
       };
     }),
 
@@ -252,43 +273,54 @@ export const workspacesRouter = router({
    */
   createInvite: protectedProcedure
     .input(
-      insertWorkspaceInviteSchema.pick({
-        workspaceId: true,
-        email: true,
-        role: true,
-      }).extend({
-        role: z.enum(['admin', 'editor', 'viewer']),
-      })
+      insertWorkspaceInviteSchema
+        .pick({
+          workspaceId: true,
+          email: true,
+          role: true,
+        })
+        .extend({
+          role: z.enum(["admin", "editor", "viewer"]),
+        }),
     )
     .mutation(async ({ input, ctx }) => {
       // Check user is owner/admin
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
+          eq(workspaceMembers.userId, ctx.userId),
         ),
       });
 
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can invite' });
+      if (!membership || !["owner", "admin"].includes(membership.role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners/admins can invite",
+        });
       }
-      
+
       // Log requested event
-      await WorkspaceMemberEvents.inviteRequested(ctx.userId, input);
+      await WorkspaceMemberEvents.inviteRequested(ctx.userId, {
+        ...input,
+        role: input.role as any,
+      });
 
       // Generate token
-      const token = randomBytes(32).toString('hex');
+      const token = randomBytes(32).toString("hex");
 
       // Create invite
-      const [invite] = await db.insert(workspaceInvites).values({
-        workspaceId: input.workspaceId,
-        email: input.email,
-        role: input.role,
-        token,
-        invitedBy: ctx.userId,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-      }).returning();
-      
+      const [invite] = await db
+        .insert(workspaceInvites)
+        .values({
+          workspaceId: input.workspaceId,
+          email: input.email,
+          role: input.role,
+          token,
+          invitedBy: ctx.userId,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        } as any)
+        .returning();
+
       // Log validated event (invite created)
       await WorkspaceMemberEvents.inviteValidated(ctx.userId, {
         id: invite.id,
@@ -313,12 +345,12 @@ export const workspacesRouter = router({
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
+          eq(workspaceMembers.userId, ctx.userId),
         ),
       });
 
       if (!membership) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       return await db.query.workspaceInvites.findMany({
@@ -339,18 +371,18 @@ export const workspacesRouter = router({
       });
 
       if (!invite) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       }
 
       if (invite.expiresAt < new Date()) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invite expired' });
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
       }
 
       // ✅ Publish .requested event
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       await inngest.send({
-        name: 'workspaceMembers.add.requested',
+        name: "workspaceMembers.add.requested",
         data: {
           workspaceId: invite.workspaceId,
           targetUserId: ctx.userId,
@@ -362,10 +394,10 @@ export const workspacesRouter = router({
         user: { id: ctx.userId },
       });
 
-      return { 
-        status: 'requested',
+      return {
+        status: "requested",
         workspaceId: invite.workspaceId,
-        message: 'Invite acceptance requested'
+        message: "Invite acceptance requested",
       };
     }),
 
@@ -380,22 +412,27 @@ export const workspacesRouter = router({
       });
 
       if (!invite) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       }
 
       // Check user is owner/admin
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, invite.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
+          eq(workspaceMembers.userId, ctx.userId),
         ),
       });
 
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can revoke invites' });
+      if (!membership || !["owner", "admin"].includes(membership.role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners/admins can revoke invites",
+        });
       }
 
-      await db.delete(workspaceInvites).where(eq(workspaceInvites.id, input.id));
+      await db
+        .delete(workspaceInvites)
+        .where(eq(workspaceInvites.id, input.id));
 
       return { success: true };
     }),

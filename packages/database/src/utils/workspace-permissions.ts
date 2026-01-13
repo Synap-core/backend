@@ -1,14 +1,14 @@
 /**
  * Workspace Permission Utilities
- * 
+ *
  * Helper functions for enforcing role-based access control in workspaces.
  * Shared across API and Jobs packages.
- * 
+ *
  * @module workspace-permissions
  */
 
-import { eq, and } from 'drizzle-orm';
-import { workspaceMembers, type WorkspaceMember } from '../schema/index.js';
+import { eq, and } from "drizzle-orm";
+import { workspaceMembers, type WorkspaceMember } from "../schema/index.js";
 
 /**
  * Role hierarchy for built-in workspace roles
@@ -24,24 +24,24 @@ const ROLE_HIERARCHY: Record<string, number> = {
 /**
  * Type for workspace roles
  */
-export type WorkspaceRole = 'viewer' | 'editor' | 'admin' | 'owner';
+export type WorkspaceRole = "viewer" | "editor" | "admin" | "owner";
 
 /**
  * Custom error for permission failures
  */
 export class PermissionError extends Error {
   code: string;
-  
-  constructor(code: 'NOT_FOUND' | 'FORBIDDEN', message: string) {
+
+  constructor(code: "NOT_FOUND" | "FORBIDDEN", message: string) {
     super(message);
     this.code = code;
-    this.name = 'PermissionError';
+    this.name = "PermissionError";
   }
 }
 
 /**
  * Require user to have minimum role in workspace
- * 
+ *
  * @param db - Database instance
  * @param workspaceId - Workspace UUID
  * @param userId - User ID (Kratos identity)
@@ -54,32 +54,32 @@ export async function requireWorkspaceRole(
   db: any,
   workspaceId: string,
   userId: string,
-  minimumRole: WorkspaceRole
+  minimumRole: WorkspaceRole,
 ): Promise<WorkspaceMember> {
   // Find user's membership in workspace
   const membership = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
+      eq(workspaceMembers.userId, userId),
     ),
   });
-  
+
   // Not a member → workspace doesn't exist (or no access)
   if (!membership) {
-    throw new PermissionError('NOT_FOUND', 'Workspace not found');
+    throw new PermissionError("NOT_FOUND", "Workspace not found");
   }
-  
+
   // Check role hierarchy
   const userLevel = ROLE_HIERARCHY[membership.role] || 0;
   const requiredLevel = ROLE_HIERARCHY[minimumRole];
-  
+
   if (userLevel < requiredLevel) {
     throw new PermissionError(
-      'FORBIDDEN',
-      `Requires ${minimumRole} role or higher (you have: ${membership.role})`
+      "FORBIDDEN",
+      `Requires ${minimumRole} role or higher (you have: ${membership.role})`,
     );
   }
-  
+
   return membership;
 }
 
@@ -89,9 +89,9 @@ export async function requireWorkspaceRole(
 export async function requireViewer(
   db: any,
   workspaceId: string,
-  userId: string
+  userId: string,
 ): Promise<WorkspaceMember> {
-  return requireWorkspaceRole(db, workspaceId, userId, 'viewer');
+  return requireWorkspaceRole(db, workspaceId, userId, "viewer");
 }
 
 /**
@@ -100,9 +100,9 @@ export async function requireViewer(
 export async function requireEditor(
   db: any,
   workspaceId: string,
-  userId: string
+  userId: string,
 ): Promise<WorkspaceMember> {
-  return requireWorkspaceRole(db, workspaceId, userId, 'editor');
+  return requireWorkspaceRole(db, workspaceId, userId, "editor");
 }
 
 /**
@@ -111,9 +111,9 @@ export async function requireEditor(
 export async function requireAdmin(
   db: any,
   workspaceId: string,
-  userId: string
+  userId: string,
 ): Promise<WorkspaceMember> {
-  return requireWorkspaceRole(db, workspaceId, userId, 'admin');
+  return requireWorkspaceRole(db, workspaceId, userId, "admin");
 }
 
 /**
@@ -122,9 +122,9 @@ export async function requireAdmin(
 export async function requireOwner(
   db: any,
   workspaceId: string,
-  userId: string
+  userId: string,
 ): Promise<WorkspaceMember> {
-  return requireWorkspaceRole(db, workspaceId, userId, 'owner');
+  return requireWorkspaceRole(db, workspaceId, userId, "owner");
 }
 
 /**
@@ -132,12 +132,12 @@ export async function requireOwner(
  */
 export function requireResourceOwner(
   resource: { userId: string },
-  userId: string
+  userId: string,
 ): void {
   if (resource.userId !== userId) {
     throw new PermissionError(
-      'FORBIDDEN',
-      'Only the resource owner can perform this action'
+      "FORBIDDEN",
+      "Only the resource owner can perform this action",
     );
   }
 }
@@ -150,7 +150,7 @@ export async function hasWorkspaceRole(
   db: any,
   workspaceId: string,
   userId: string,
-  minimumRole: WorkspaceRole
+  minimumRole: WorkspaceRole,
 ): Promise<boolean> {
   try {
     await requireWorkspaceRole(db, workspaceId, userId, minimumRole);

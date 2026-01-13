@@ -23,11 +23,11 @@
  * ```
  */
 
-import { NodeSDK } from '@opentelemetry/sdk-node';
-import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 
 let sdk: NodeSDK | null = null;
 
@@ -50,42 +50,47 @@ let sdk: NodeSDK | null = null;
  * - Local development: Use Jaeger All-in-One for visualization
  */
 export function initializeTracing(): void {
-  const nodeEnv = process.env.NODE_ENV || 'development';
-  const isProduction = nodeEnv === 'production';
+  const nodeEnv = process.env.NODE_ENV || "development";
+  const isProduction = nodeEnv === "production";
 
   // Tracing enabled by default in production, opt-in for development
   const tracesEnabled = process.env.OTEL_TRACES_ENABLED
-    ? process.env.OTEL_TRACES_ENABLED === 'true'
+    ? process.env.OTEL_TRACES_ENABLED === "true"
     : isProduction;
 
   if (!tracesEnabled) {
-    console.log('⚠️  OpenTelemetry tracing is disabled');
+    console.log("⚠️  OpenTelemetry tracing is disabled");
     return;
   }
 
   // Enable diagnostic logging for troubleshooting
-  const diagLogLevel = process.env.OTEL_LOG_LEVEL || 'error';
+  const diagLogLevel = process.env.OTEL_LOG_LEVEL || "error";
   const diagLevelMap: Record<string, DiagLogLevel> = {
-    'none': DiagLogLevel.NONE,
-    'error': DiagLogLevel.ERROR,
-    'warn': DiagLogLevel.WARN,
-    'info': DiagLogLevel.INFO,
-    'debug': DiagLogLevel.DEBUG,
-    'verbose': DiagLogLevel.VERBOSE,
-    'all': DiagLogLevel.ALL,
+    none: DiagLogLevel.NONE,
+    error: DiagLogLevel.ERROR,
+    warn: DiagLogLevel.WARN,
+    info: DiagLogLevel.INFO,
+    debug: DiagLogLevel.DEBUG,
+    verbose: DiagLogLevel.VERBOSE,
+    all: DiagLogLevel.ALL,
   };
-  diag.setLogger(new DiagConsoleLogger(), diagLevelMap[diagLogLevel] || DiagLogLevel.ERROR);
+  diag.setLogger(
+    new DiagConsoleLogger(),
+    diagLevelMap[diagLogLevel] || DiagLogLevel.ERROR,
+  );
 
   // Service identification via environment variables
   // These will be picked up by the SDK's auto-detection
-  process.env.OTEL_SERVICE_NAME = process.env.OTEL_SERVICE_NAME || 'synap-api';
-  process.env.OTEL_SERVICE_VERSION = process.env.OTEL_SERVICE_VERSION || '1.0.0';
+  process.env.OTEL_SERVICE_NAME = process.env.OTEL_SERVICE_NAME || "synap-api";
+  process.env.OTEL_SERVICE_VERSION =
+    process.env.OTEL_SERVICE_VERSION || "1.0.0";
 
   const serviceName = process.env.OTEL_SERVICE_NAME;
   const serviceVersion = process.env.OTEL_SERVICE_VERSION;
 
   // OTLP Exporter configuration
-  const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318';
+  const otlpEndpoint =
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318";
   const otlpHeaders = process.env.OTEL_EXPORTER_OTLP_HEADERS
     ? JSON.parse(process.env.OTEL_EXPORTER_OTLP_HEADERS)
     : {};
@@ -109,23 +114,23 @@ export function initializeTracing(): void {
     spanProcessor,
     instrumentations: [
       getNodeAutoInstrumentations({
-        '@opentelemetry/instrumentation-http': {
+        "@opentelemetry/instrumentation-http": {
           enabled: true,
           ignoreIncomingRequestHook: (req) => {
-            const url = req.url || '';
-            return url.includes('/health') || url.includes('/metrics');
+            const url = req.url || "";
+            return url.includes("/health") || url.includes("/metrics");
           },
         },
-        '@opentelemetry/instrumentation-pg': {
+        "@opentelemetry/instrumentation-pg": {
           enabled: true,
         },
-        '@opentelemetry/instrumentation-dns': { enabled: true },
-        '@opentelemetry/instrumentation-net': { enabled: true },
-        '@opentelemetry/instrumentation-fs': { enabled: false },
-        '@opentelemetry/instrumentation-express': { enabled: false },
-        '@opentelemetry/instrumentation-mongodb': { enabled: false },
-        '@opentelemetry/instrumentation-redis': { enabled: false },
-        '@opentelemetry/instrumentation-mysql': { enabled: false },
+        "@opentelemetry/instrumentation-dns": { enabled: true },
+        "@opentelemetry/instrumentation-net": { enabled: true },
+        "@opentelemetry/instrumentation-fs": { enabled: false },
+        "@opentelemetry/instrumentation-express": { enabled: false },
+        "@opentelemetry/instrumentation-mongodb": { enabled: false },
+        "@opentelemetry/instrumentation-redis": { enabled: false },
+        "@opentelemetry/instrumentation-mysql": { enabled: false },
       }),
     ],
   });
@@ -137,12 +142,12 @@ export function initializeTracing(): void {
   console.log(`   Environment: ${nodeEnv}`);
   console.log(`   OTLP Endpoint: ${otlpEndpoint}`);
 
-  process.on('SIGTERM', async () => {
+  process.on("SIGTERM", async () => {
     try {
       await sdk?.shutdown();
-      console.log('✅ OpenTelemetry SDK shut down successfully');
+      console.log("✅ OpenTelemetry SDK shut down successfully");
     } catch (error) {
-      console.error('❌ Error shutting down OpenTelemetry SDK:', error);
+      console.error("❌ Error shutting down OpenTelemetry SDK:", error);
     }
   });
 }

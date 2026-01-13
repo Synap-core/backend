@@ -1,29 +1,33 @@
 /**
  * Entity Embedding Worker
- * 
+ *
  * Generates and stores embeddings for entities when they are created or updated.
  */
 
-import { inngest } from '../client.js';
-import { sql } from '@synap/database';
+import { inngest } from "../client.js";
+import { sql } from "@synap/database";
 
 // Intelligence Hub client configuration
-const INTELLIGENCE_HUB_URL = process.env.INTELLIGENCE_HUB_URL || 'http://localhost:3001';
+const INTELLIGENCE_HUB_URL =
+  process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
 
 /**
  * Generate embedding using Intelligence Hub
  */
 async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(`${INTELLIGENCE_HUB_URL}/api/embeddings/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  });
-  
+  const response = await fetch(
+    `${INTELLIGENCE_HUB_URL}/api/embeddings/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    },
+  );
+
   if (!response.ok) {
     throw new Error(`Failed to generate embedding: ${response.statusText}`);
   }
-  
+
   const data = await response.json();
   return data.embedding;
 }
@@ -36,13 +40,13 @@ async function generateAndStoreEmbedding(
   userId: string,
   entityType: string,
   title: string,
-  description?: string
+  description?: string,
 ): Promise<void> {
-  const textToEmbed = `${title} ${description || ''}`.trim();
-  
+  const textToEmbed = `${title} ${description || ""}`.trim();
+
   const embedding = await generateEmbedding(textToEmbed);
-  const embeddingStr = `[${embedding.join(',')}]`;
-  
+  const embeddingStr = `[${embedding.join(",")}]`;
+
   // Upsert into entity_vectors
   await sql`
     INSERT INTO entity_vectors (entity_id, user_id, embedding, entity_type, title, preview)
@@ -60,34 +64,37 @@ async function generateAndStoreEmbedding(
  */
 export const entityEmbeddingWorker = inngest.createFunction(
   {
-    id: 'entity-embedding-worker',
-    name: 'Generate Entity Embeddings',
+    id: "entity-embedding-worker",
+    name: "Generate Entity Embeddings",
     retries: 3,
   },
   [
-    { event: 'entities.create.approved' },
-    { event: 'entities.update.approved' },
+    { event: "entities.create.approved" },
+    { event: "entities.update.approved" },
   ],
   async ({ event, step }) => {
     const { entityId, userId, entityType, title, preview } = event.data;
-    
-    await step.run('generate-embedding', async () => {
+
+    await step.run("generate-embedding", async () => {
       try {
         await generateAndStoreEmbedding(
           entityId,
           userId,
           entityType,
           title,
-          preview
+          preview,
         );
-        
+
         console.log(`✅ Generated embedding for entity ${entityId}`);
-        
+
         return { success: true, entityId };
       } catch (error) {
-        console.error(`❌ Failed to generate embedding for ${entityId}:`, error);
+        console.error(
+          `❌ Failed to generate embedding for ${entityId}:`,
+          error,
+        );
         throw error; // Inngest will retry
       }
     });
-  }
+  },
 );

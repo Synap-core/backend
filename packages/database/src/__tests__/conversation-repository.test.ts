@@ -1,15 +1,15 @@
 /**
  * ConversationRepository Tests
- * 
+ *
  * Tests for conversation and message storage.
  * Validates conversation creation, message appending, and user isolation.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sql } from '../index.js';
-import { generateTestUserId } from './test-utils.js';
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { sql } from "../index.js";
+import { generateTestUserId } from "./test-utils.js";
 
-describe('ConversationRepository', () => {
+describe("ConversationRepository", () => {
   beforeAll(async () => {
     await sql`DELETE FROM conversation_messages WHERE user_id LIKE 'test-%'`;
   });
@@ -18,8 +18,8 @@ describe('ConversationRepository', () => {
     await sql`DELETE FROM conversation_messages WHERE user_id LIKE 'test-%'`;
   });
 
-  describe('message storage', () => {
-    it('should store conversation message', async () => {
+  describe("message storage", () => {
+    it("should store conversation message", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
       const messageId = crypto.randomUUID();
@@ -36,19 +36,19 @@ describe('ConversationRepository', () => {
         SELECT * FROM conversation_messages WHERE id = ${messageId}
       `;
 
-      expect(stored.role).toBe('user');
-      expect(stored.content).toBe('Hello, how are you?');
+      expect(stored.role).toBe("user");
+      expect(stored.content).toBe("Hello, how are you?");
       expect(stored.thread_id).toBe(conversationId);
     });
 
-    it('should handle different message roles', async () => {
+    it("should handle different message roles", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
 
       const messages = [
-        { role: 'user', content: 'What is the capital of France?' },
-        { role: 'assistant', content: 'The capital of France is Paris.' },
-        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: "user", content: "What is the capital of France?" },
+        { role: "assistant", content: "The capital of France is Paris." },
+        { role: "system", content: "You are a helpful assistant." },
       ];
 
       for (const msg of messages) {
@@ -68,12 +68,12 @@ describe('ConversationRepository', () => {
       `;
 
       expect(stored.length).toBe(3);
-      expect(stored[0].role).toBe('user');
-      expect(stored[1].role).toBe('assistant');
-      expect(stored[2].role).toBe('system');
+      expect(stored[0].role).toBe("user");
+      expect(stored[1].role).toBe("assistant");
+      expect(stored[2].role).toBe("system");
     });
 
-    it('should maintain message order within conversation', async () => {
+    it("should maintain message order within conversation", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
 
@@ -84,10 +84,10 @@ describe('ConversationRepository', () => {
             id, user_id, thread_id, role, content, created_at
           ) VALUES (
             ${crypto.randomUUID()}, ${userId}, ${conversationId}, 'user', 
-            ${'Message ' + i}, NOW()
+            ${"Message " + i}, NOW()
           )
         `;
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
 
       const messages = await sql`
@@ -96,18 +96,18 @@ describe('ConversationRepository', () => {
         ORDER BY created_at ASC
       `;
 
-      expect(messages.map(m => m.content)).toEqual([
-        'Message 1',
-        'Message 2',
-        'Message 3',
-        'Message 4',
-        'Message 5',
+      expect(messages.map((m) => m.content)).toEqual([
+        "Message 1",
+        "Message 2",
+        "Message 3",
+        "Message 4",
+        "Message 5",
       ]);
     });
   });
 
-  describe('conversation management', () => {
-    it('should group messages by conversation', async () => {
+  describe("conversation management", () => {
+    it("should group messages by conversation", async () => {
       const userId = generateTestUserId();
       const conv1 = crypto.randomUUID();
       const conv2 = crypto.randomUUID();
@@ -132,7 +132,7 @@ describe('ConversationRepository', () => {
       expect(conv2Messages.length).toBe(1);
     });
 
-    it('should enforce user isolation', async () => {
+    it("should enforce user isolation", async () => {
       const user1 = generateTestUserId();
       const user2 = generateTestUserId();
       const conversationId = crypto.randomUUID();
@@ -149,15 +149,15 @@ describe('ConversationRepository', () => {
       `;
 
       expect(user1Messages.length).toBe(1);
-      expect(user1Messages[0].content).toBe('User 1 message');
+      expect(user1Messages[0].content).toBe("User 1 message");
     });
   });
 
-  describe('message content', () => {
-    it('should handle long messages', async () => {
+  describe("message content", () => {
+    it("should handle long messages", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
-      const longContent = 'A'.repeat(10000); // 10KB message
+      const longContent = "A".repeat(10000); // 10KB message
 
       await sql`
         INSERT INTO conversation_messages (
@@ -174,10 +174,11 @@ describe('ConversationRepository', () => {
       expect(stored.content.length).toBe(10000);
     });
 
-    it('should handle special characters in messages', async () => {
+    it("should handle special characters in messages", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
-      const specialContent = "It's a test with \"quotes\" and \n newlines & symbols: @#$%";
+      const specialContent =
+        'It\'s a test with "quotes" and \n newlines & symbols: @#$%';
 
       await sql`
         INSERT INTO conversation_messages (
@@ -194,10 +195,10 @@ describe('ConversationRepository', () => {
       expect(stored.content).toBe(specialContent);
     });
 
-    it('should handle unicode content', async () => {
+    it("should handle unicode content", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
-      const unicodeContent = '你好 👋 مرحبا Привет';
+      const unicodeContent = "你好 👋 مرحبا Привет";
 
       await sql`
         INSERT INTO conversation_messages (
@@ -215,16 +216,16 @@ describe('ConversationRepository', () => {
     });
   });
 
-  describe('queries', () => {
-    it('should retrieve conversation history in order', async () => {
+  describe("queries", () => {
+    it("should retrieve conversation history in order", async () => {
       const userId = generateTestUserId();
       const conversationId = crypto.randomUUID();
 
       const messages = [
-        { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi there!' },
-        { role: 'user', content: 'How are you?' },
-        { role: 'assistant', content: 'I am doing well, thanks!' },
+        { role: "user", content: "Hello" },
+        { role: "assistant", content: "Hi there!" },
+        { role: "user", content: "How are you?" },
+        { role: "assistant", content: "I am doing well, thanks!" },
       ];
 
       for (const msg of messages) {
@@ -235,7 +236,7 @@ describe('ConversationRepository', () => {
             ${crypto.randomUUID()}, ${userId}, ${conversationId}, ${msg.role}, ${msg.content}, NOW()
           )
         `;
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
 
       const history = await sql`
@@ -244,10 +245,12 @@ describe('ConversationRepository', () => {
         ORDER BY created_at ASC
       `;
 
-      expect(history.map(h => ({ role: h.role, content: h.content }))).toEqual(messages);
+      expect(
+        history.map((h) => ({ role: h.role, content: h.content })),
+      ).toEqual(messages);
     });
 
-    it('should handle empty conversation', async () => {
+    it("should handle empty conversation", async () => {
       const conversationId = crypto.randomUUID();
 
       const messages = await sql`

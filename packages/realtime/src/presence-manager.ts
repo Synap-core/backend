@@ -1,6 +1,6 @@
 /**
  * Presence Manager - Track active users across views
- * 
+ *
  * Generic presence system that works for ALL view types:
  * - Documents (markdown editing)
  * - Whiteboards (Yjs handles canvas, we track who's there)
@@ -12,7 +12,7 @@ export interface UserSession {
   userId: string;
   userName: string;
   viewId: string;
-  viewType: 'whiteboard' | 'document' | 'timeline' | 'kanban' | 'ai-chat';
+  viewType: "whiteboard" | "document" | "timeline" | "kanban" | "ai-chat";
   socketId: string;
   color: string;
   cursor?: { x: number; y: number }; // For non-Yjs views
@@ -21,14 +21,14 @@ export interface UserSession {
 }
 
 export interface PresenceUpdate {
-  type: 'join' | 'leave' | 'update';
+  type: "join" | "leave" | "update";
   session: UserSession;
   timestamp: Date;
 }
 
 /**
  * Manages user presence across all views
- * 
+ *
  * Note: For whiteboards/documents, Yjs handles canvas-specific presence.
  * This manager handles:
  * 1. Room-level presence (who's in which view)
@@ -38,36 +38,36 @@ export interface PresenceUpdate {
 export class PresenceManager {
   private sessions = new Map<string, UserSession>();
   private viewToSockets = new Map<string, Set<string>>();
-  
+
   /**
    * User joins a view
    */
-  addUser(session: Omit<UserSession, 'lastSeen'>): UserSession {
+  addUser(session: Omit<UserSession, "lastSeen">): UserSession {
     const fullSession: UserSession = {
       ...session,
       lastSeen: new Date(),
     };
-    
+
     this.sessions.set(session.socketId, fullSession);
-    
+
     // Track socket → view mapping
     if (!this.viewToSockets.has(session.viewId)) {
       this.viewToSockets.set(session.viewId, new Set());
     }
     this.viewToSockets.get(session.viewId)!.add(session.socketId);
-    
+
     return fullSession;
   }
-  
+
   /**
    * User leaves a view
    */
   removeUser(socketId: string): UserSession | undefined {
     const session = this.sessions.get(socketId);
     if (!session) return undefined;
-    
+
     this.sessions.delete(socketId);
-    
+
     // Remove from view mapping
     const viewSockets = this.viewToSockets.get(session.viewId);
     if (viewSockets) {
@@ -76,10 +76,10 @@ export class PresenceManager {
         this.viewToSockets.delete(session.viewId);
       }
     }
-    
+
     return session;
   }
-  
+
   /**
    * Update user's cursor position (for non-Yjs views)
    */
@@ -90,7 +90,7 @@ export class PresenceManager {
       session.lastSeen = new Date();
     }
   }
-  
+
   /**
    * Update user's metadata
    */
@@ -101,7 +101,7 @@ export class PresenceManager {
       session.lastSeen = new Date();
     }
   }
-  
+
   /**
    * Heartbeat to keep session alive
    */
@@ -111,41 +111,42 @@ export class PresenceManager {
       session.lastSeen = new Date();
     }
   }
-  
+
   /**
    * Get all users in a specific view
    */
   getUsersInView(viewId: string): UserSession[] {
     const socketIds = this.viewToSockets.get(viewId);
     if (!socketIds) return [];
-    
+
     return Array.from(socketIds)
-      .map(socketId => this.sessions.get(socketId))
+      .map((socketId) => this.sessions.get(socketId))
       .filter((session): session is UserSession => session !== undefined);
   }
-  
+
   /**
    * Get session by socket ID
    */
   getSession(socketId: string): UserSession | undefined {
     return this.sessions.get(socketId);
   }
-  
+
   /**
    * Get all active sessions (for global presence)
    */
   getAllSessions(): UserSession[] {
     return Array.from(this.sessions.values());
   }
-  
+
   /**
    * Get sessions by user ID (user may have multiple tabs open)
    */
   getSessionsByUserId(userId: string): UserSession[] {
-    return Array.from(this.sessions.values())
-      .filter(session => session.userId === userId);
+    return Array.from(this.sessions.values()).filter(
+      (session) => session.userId === userId,
+    );
   }
-  
+
   /**
    * Clean up stale sessions (no heartbeat for > 30 seconds)
    */
@@ -153,7 +154,7 @@ export class PresenceManager {
     const now = new Date();
     const staleThreshold = 30 * 1000; // 30 seconds
     const removedSessions: UserSession[] = [];
-    
+
     for (const [socketId, session] of this.sessions.entries()) {
       const timeSinceLastSeen = now.getTime() - session.lastSeen.getTime();
       if (timeSinceLastSeen > staleThreshold) {
@@ -163,17 +164,17 @@ export class PresenceManager {
         }
       }
     }
-    
+
     return removedSessions;
   }
-  
+
   /**
    * Get count of users in view
    */
   getUserCount(viewId: string): number {
     return this.viewToSockets.get(viewId)?.size || 0;
   }
-  
+
   /**
    * Get total session count
    */
@@ -187,24 +188,24 @@ export class PresenceManager {
  */
 export function generateUserColor(userId: string): string {
   const colors = [
-    '#FF6B6B', // Red
-    '#4ECDC4', // Teal
-    '#45B7D1', // Blue
-    '#FFA07A', // Salmon
-    '#98D8C8', // Mint
-    '#F7DC6F', // Yellow
-    '#BB8FCE', // Purple
-    '#85C1E2', // Sky Blue
-    '#F8B88B', // Peach
-    '#A8E6CF', // Light Green
+    "#FF6B6B", // Red
+    "#4ECDC4", // Teal
+    "#45B7D1", // Blue
+    "#FFA07A", // Salmon
+    "#98D8C8", // Mint
+    "#F7DC6F", // Yellow
+    "#BB8FCE", // Purple
+    "#85C1E2", // Sky Blue
+    "#F8B88B", // Peach
+    "#A8E6CF", // Light Green
   ];
-  
+
   // Simple hash function
   let hash = 0;
   for (let i = 0; i < userId.length; i++) {
     hash = userId.charCodeAt(i) + ((hash << 5) - hash);
   }
-  
+
   const index = Math.abs(hash) % colors.length;
   return colors[index];
 }

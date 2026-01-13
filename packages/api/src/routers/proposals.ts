@@ -1,15 +1,15 @@
 /**
  * Universal Proposals Router
- * 
+ *
  * Handles listing, approving, and rejecting proposals for ALL entity types.
  * Replaces legacy document_proposals logic.
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { TRPCError } from '@trpc/server';
-import { db, proposals, eq, and, desc } from '@synap/database';
-import { requireUserId } from '../utils/user-scoped.js';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+import { db, proposals, eq, and, desc } from "@synap/database";
+import { requireUserId } from "../utils/user-scoped.js";
 
 export const proposalsRouter = router({
   /**
@@ -17,32 +17,36 @@ export const proposalsRouter = router({
    * Can be filtered by workspace, targetType, or specific targetId
    */
   list: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().optional(),
-      targetType: z.enum(['document', 'entity', 'whiteboard', 'view']).optional(),
-      targetId: z.string().optional(),
-      status: z.enum(['pending', 'validated', 'rejected', 'all']).default('pending'),
-      limit: z.number().default(50),
-    }))
-    .query(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      
+    .input(
+      z.object({
+        workspaceId: z.string().optional(),
+        targetType: z
+          .enum(["document", "entity", "whiteboard", "view"])
+          .optional(),
+        targetId: z.string().optional(),
+        status: z
+          .enum(["pending", "validated", "rejected", "all"])
+          .default("pending"),
+        limit: z.number().default(50),
+      }),
+    )
+    .query(async ({ input }) => {
       const conditions = [];
-      
+
       // Filter by Workspace (Security Boundary)
       if (input.workspaceId) {
         conditions.push(eq(proposals.workspaceId, input.workspaceId));
       }
-      
+
       if (input.targetType) {
         conditions.push(eq(proposals.targetType, input.targetType));
       }
-      
+
       if (input.targetId) {
         conditions.push(eq(proposals.targetId, input.targetId));
       }
-      
-      if (input.status !== 'all') {
+
+      if (input.status !== "all") {
         conditions.push(eq(proposals.status, input.status));
       }
 
@@ -63,29 +67,34 @@ export const proposalsRouter = router({
    * Emits the original request event as *.validated
    */
   approve: protectedProcedure
-    .input(z.object({
-      proposalId: z.string(),
-      comment: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        proposalId: z.string(),
+        comment: z.string().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      
+
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
       });
 
       if (!proposal) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Proposal not found' });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
       }
 
       // 1. Emit the VALIDATED event
       // We reconstruct the event from the stored request
       const request = proposal.request as any;
-      const { inngest } = await import('@synap/jobs');
-      
+      const { inngest } = await import("@synap/jobs");
+
       // Construct event name: e.g. "documents.create.validated"
       const eventName = `${request.targetType}s.${request.changeType}.validated`;
-      
+
       await inngest.send({
         name: eventName,
         data: {
@@ -100,9 +109,10 @@ export const proposalsRouter = router({
       });
 
       // 2. Mark proposal as validated (archived)
-      await db.update(proposals)
+      await db
+        .update(proposals)
         .set({
-          status: 'validated',
+          status: "validated",
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -116,16 +126,19 @@ export const proposalsRouter = router({
    * Reject a proposal
    */
   reject: protectedProcedure
-    .input(z.object({
-      proposalId: z.string(),
-      reason: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        proposalId: z.string(),
+        reason: z.string().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      await db.update(proposals)
+      await db
+        .update(proposals)
         .set({
-          status: 'rejected',
+          status: "rejected",
           rejectionReason: input.reason,
           reviewedBy: userId,
           reviewedAt: new Date(),
@@ -143,22 +156,30 @@ export const proposalsRouter = router({
    * If not -> Pending Proposal.
    */
   submit: protectedProcedure
-    .input(z.object({
-      targetType: z.enum(['document', 'entity', 'relation', 'workspace', 'view']),
-      targetId: z.string().optional(),
-      changeType: z.enum(['create', 'update', 'delete']),
-      data: z.record(z.any()),
-      reasoning: z.string().optional(),
-    }))
+    .input(
+      z.object({
+        targetType: z.enum([
+          "document",
+          "entity",
+          "relation",
+          "workspace",
+          "view",
+        ]),
+        targetId: z.string().optional(),
+        changeType: z.enum(["create", "update", "delete"]),
+        data: z.record(z.any()),
+        reasoning: z.string().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { inngest } = await import('@synap/jobs');
-      const { randomUUID } = await import('crypto');
+      const { inngest } = await import("@synap/jobs");
+      const { randomUUID } = await import("crypto");
       const requestId = randomUUID();
 
       // Construct event name
       // e.g. documents.create.requested
-      const subject = `${input.targetType}s`; 
+      const subject = `${input.targetType}s`;
       const eventName = `${subject}.${input.changeType}.requested`;
 
       await inngest.send({
@@ -170,18 +191,18 @@ export const proposalsRouter = router({
           reasoning: input.reasoning,
           // Metadata for the validator
           metadata: {
-            source: 'user_proposal', // Explicit proposal
+            source: "user_proposal", // Explicit proposal
             submittedBy: userId,
-          }
+          },
         },
         user: { id: userId },
       });
 
-      return { 
-        success: true, 
-        requestId, 
-        status: 'requested',
-        message: 'Proposal submitted for validation' 
+      return {
+        success: true,
+        requestId,
+        status: "requested",
+        message: "Proposal submitted for validation",
       };
     }),
 });

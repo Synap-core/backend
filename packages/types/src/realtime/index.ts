@@ -1,12 +1,17 @@
 /**
  * Real-Time Collaboration Types
- * 
+ *
  * Types for real-time presence and collaboration features.
  * Re-exports Yjs types from yjs package for single source of truth.
  */
 
 // Re-export Yjs types (single source of truth)
-export type { Doc as YDoc, Map as YMap, Array as YArray, Text as YText } from 'yjs';
+export type {
+  Doc as YDoc,
+  Map as YMap,
+  Array as YArray,
+  Text as YText,
+} from "yjs";
 
 /**
  * User presence in a view
@@ -28,7 +33,7 @@ export interface UserPresence {
 /**
  * Presence status
  */
-export type PresenceStatus = 'active' | 'idle' | 'offline';
+export type PresenceStatus = "active" | "idle" | "offline";
 
 /**
  * Collaboration event

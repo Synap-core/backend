@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 import {
   Modal,
   TextInput,
@@ -9,9 +9,9 @@ import {
   Badge,
   ScrollArea,
   ActionIcon,
-} from '@mantine/core';
-import { IconSearch, IconX, IconClock } from '@tabler/icons-react';
-import { colors, spacing, typography } from '../../theme/tokens';
+} from "@mantine/core";
+import { IconSearch, IconX, IconClock } from "@tabler/icons-react";
+import { colors, spacing, typography } from "../../theme/tokens";
 
 interface SearchModalProps {
   opened: boolean;
@@ -20,7 +20,7 @@ interface SearchModalProps {
   title?: string;
   placeholder?: string;
   label?: string;
-  type?: 'user' | 'event' | 'mixed';
+  type?: "user" | "event" | "mixed";
   history?: string[];
   presets?: Array<{ label: string; value: string }>;
 }
@@ -29,14 +29,14 @@ export default function SearchModal({
   opened,
   onClose,
   onSearch,
-  title = 'Search',
-  placeholder = 'Enter search term...',
-  label = 'Search',
-  type = 'mixed',
+  title = "Search",
+  placeholder = "Enter search term...",
+  label = "Search",
+  type = "mixed",
   history = [],
   presets = [],
 }: SearchModalProps) {
-  const [searchValue, setSearchValue] = useState('');
+  const [searchValue, setSearchValue] = useState("");
   const [localHistory, setLocalHistory] = useState<string[]>([]);
 
   // Load history from localStorage on mount
@@ -59,12 +59,15 @@ export default function SearchModal({
     if (!searchValue.trim()) return;
 
     // Save to history
-    const newHistory = [searchValue, ...localHistory.filter((h) => h !== searchValue)].slice(0, 10);
+    const newHistory = [
+      searchValue,
+      ...localHistory.filter((h) => h !== searchValue),
+    ].slice(0, 10);
     setLocalHistory(newHistory);
     localStorage.setItem(`search-history-${type}`, JSON.stringify(newHistory));
 
     onSearch(searchValue);
-    setSearchValue('');
+    setSearchValue("");
     onClose();
   };
 
@@ -100,7 +103,7 @@ export default function SearchModal({
           value={searchValue}
           onChange={(e) => setSearchValue(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            if (e.key === "Enter") {
               handleSearch();
             }
           }}
@@ -110,7 +113,7 @@ export default function SearchModal({
               <ActionIcon
                 variant="subtle"
                 size="sm"
-                onClick={() => setSearchValue('')}
+                onClick={() => setSearchValue("")}
                 aria-label="Clear search"
               >
                 <IconX size={14} />
@@ -122,7 +125,12 @@ export default function SearchModal({
 
         {presets.length > 0 && (
           <div>
-            <Text size="xs" fw={typography.fontWeight.semibold} c={colors.text.tertiary} mb={spacing[2]}>
+            <Text
+              size="xs"
+              fw={typography.fontWeight.semibold}
+              c={colors.text.tertiary}
+              mb={spacing[2]}
+            >
               PRESETS
             </Text>
             <Group gap={spacing[2]}>
@@ -130,7 +138,7 @@ export default function SearchModal({
                 <Badge
                   key={preset.value}
                   variant="light"
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: "pointer" }}
                   onClick={() => handlePresetClick(preset.value)}
                 >
                   {preset.label}
@@ -143,7 +151,11 @@ export default function SearchModal({
         {allHistory.length > 0 && (
           <div>
             <Group justify="space-between" mb={spacing[2]}>
-              <Text size="xs" fw={typography.fontWeight.semibold} c={colors.text.tertiary}>
+              <Text
+                size="xs"
+                fw={typography.fontWeight.semibold}
+                c={colors.text.tertiary}
+              >
                 RECENT SEARCHES
               </Text>
               <Button
@@ -155,7 +167,7 @@ export default function SearchModal({
                 Clear
               </Button>
             </Group>
-            <ScrollArea style={{ maxHeight: '200px' }}>
+            <ScrollArea style={{ maxHeight: "200px" }}>
               <Stack gap={spacing[1]}>
                 {allHistory.map((item, index) => (
                   <Group
@@ -163,16 +175,18 @@ export default function SearchModal({
                     justify="space-between"
                     style={{
                       padding: spacing[2],
-                      borderRadius: '4px',
-                      cursor: 'pointer',
+                      borderRadius: "4px",
+                      cursor: "pointer",
                       backgroundColor: colors.background.secondary,
                     }}
                     onClick={() => handleHistoryClick(item)}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = colors.background.secondary;
+                      e.currentTarget.style.backgroundColor =
+                        colors.background.secondary;
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = colors.background.secondary;
+                      e.currentTarget.style.backgroundColor =
+                        colors.background.secondary;
                     }}
                   >
                     <Group gap={spacing[2]}>
@@ -198,4 +212,3 @@ export default function SearchModal({
     </Modal>
   );
 }
-

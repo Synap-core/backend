@@ -1,7 +1,23 @@
-import { Card, Title, Text, Stack, SegmentedControl, Group } from '@mantine/core';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { useState } from 'react';
-import { format } from 'date-fns';
+import {
+  Card,
+  Title,
+  Text,
+  Stack,
+  SegmentedControl,
+  Group,
+} from "@mantine/core";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
+import { useState } from "react";
+import { format } from "date-fns";
 
 interface DataPoint {
   timestamp: number;
@@ -16,21 +32,21 @@ interface TimeSeriesChartProps {
     label: string;
     color: string;
   }>;
-  timeRange?: '5m' | '15m' | '1h' | '6h';
-  onTimeRangeChange?: (range: '5m' | '15m' | '1h' | '6h') => void;
+  timeRange?: "5m" | "15m" | "1h" | "6h";
+  onTimeRangeChange?: (range: "5m" | "15m" | "1h" | "6h") => void;
 }
 
 export default function TimeSeriesChart({
   title,
   data,
   metrics,
-  timeRange = '15m',
+  timeRange = "15m",
   onTimeRangeChange,
 }: TimeSeriesChartProps) {
   const [selectedTimeRange, setSelectedTimeRange] = useState(timeRange);
 
   const handleTimeRangeChange = (value: string) => {
-    const range = value as '5m' | '15m' | '1h' | '6h';
+    const range = value as "5m" | "15m" | "1h" | "6h";
     setSelectedTimeRange(range);
     if (onTimeRangeChange) {
       onTimeRangeChange(range);
@@ -38,7 +54,7 @@ export default function TimeSeriesChart({
   };
 
   const formatXAxis = (timestamp: number) => {
-    return format(new Date(timestamp), 'HH:mm:ss');
+    return format(new Date(timestamp), "HH:mm:ss");
   };
 
   return (
@@ -55,10 +71,10 @@ export default function TimeSeriesChart({
             value={selectedTimeRange}
             onChange={handleTimeRangeChange}
             data={[
-              { label: '5m', value: '5m' },
-              { label: '15m', value: '15m' },
-              { label: '1h', value: '1h' },
-              { label: '6h', value: '6h' },
+              { label: "5m", value: "5m" },
+              { label: "15m", value: "15m" },
+              { label: "1h", value: "1h" },
+              { label: "6h", value: "6h" },
             ]}
             size="xs"
           />
@@ -71,19 +87,21 @@ export default function TimeSeriesChart({
               dataKey="timestamp"
               tickFormatter={formatXAxis}
               stroke="#868e96"
-              style={{ fontSize: '12px' }}
+              style={{ fontSize: "12px" }}
             />
-            <YAxis stroke="#868e96" style={{ fontSize: '12px' }} />
+            <YAxis stroke="#868e96" style={{ fontSize: "12px" }} />
             <Tooltip
-              labelFormatter={(timestamp) => format(new Date(timestamp as number), 'HH:mm:ss')}
+              labelFormatter={(timestamp) =>
+                format(new Date(timestamp as number), "HH:mm:ss")
+              }
               contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #dee2e6',
-                borderRadius: '4px',
-                fontSize: '12px',
+                backgroundColor: "#fff",
+                border: "1px solid #dee2e6",
+                borderRadius: "4px",
+                fontSize: "12px",
               }}
             />
-            <Legend wrapperStyle={{ fontSize: '12px' }} />
+            <Legend wrapperStyle={{ fontSize: "12px" }} />
             {metrics.map((metric) => (
               <Line
                 key={metric.key}

@@ -1,13 +1,13 @@
 /**
  * Hub Protocol V1.0 - Schemas
- * 
+ *
  * Standardized schemas for communication between Synap Intelligence Hub
  * and Synap Core OS (Data Pod).
- * 
+ *
  * These schemas ensure type safety and validation at runtime.
  */
 
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // ACTION SCHEMA
@@ -15,7 +15,7 @@ import { z } from 'zod';
 
 /**
  * Action Schema
- * 
+ *
  * Represents an action to be transformed into a SynapEvent.
  * Used in insights of type 'action_plan' or 'automation'.
  */
@@ -25,29 +25,29 @@ export const ActionSchema = z.object({
    * @example 'task.creation.requested', 'project.creation.requested'
    */
   eventType: z.string().min(1),
-  
+
   /**
    * Aggregate ID (optional, for linking to existing entity)
    */
   aggregateId: z.string().uuid().optional(),
-  
+
   /**
    * Event data (must correspond to the eventType schema)
    */
   data: z.record(z.unknown()),
-  
+
   /**
    * If true, the action requires user confirmation before execution
    * @default false
    */
   requiresConfirmation: z.boolean().default(false),
-  
+
   /**
    * Priority (0-100) for execution order
    * Higher priority actions are executed first
    */
   priority: z.number().int().min(0).max(100).optional(),
-  
+
   /**
    * Action-specific metadata
    */
@@ -64,7 +64,7 @@ export type Action = z.infer<typeof ActionSchema>;
  * Source Schema (for analysis sources)
  */
 const SourceSchema = z.object({
-  type: z.enum(['note', 'task', 'project', 'conversation', 'external']),
+  type: z.enum(["note", "task", "project", "conversation", "external"]),
   id: z.string().optional(),
   title: z.string().optional(),
   url: z.string().url().optional(),
@@ -72,7 +72,7 @@ const SourceSchema = z.object({
 
 /**
  * Analysis Schema
- * 
+ *
  * For insights of type 'analysis' or 'suggestion'.
  * Contains textual analysis to be displayed to the user.
  */
@@ -81,27 +81,27 @@ export const AnalysisSchema = z.object({
    * Title of the analysis
    */
   title: z.string().min(1),
-  
+
   /**
    * Content of the analysis (markdown supported)
    */
   content: z.string().min(1),
-  
+
   /**
    * Key points (bullet points)
    */
   keyPoints: z.array(z.string()).optional(),
-  
+
   /**
    * Recommendations (optional)
    */
   recommendations: z.array(z.string()).optional(),
-  
+
   /**
    * Sources or references (optional)
    */
   sources: z.array(SourceSchema).optional(),
-  
+
   /**
    * Tags for categorization
    */
@@ -116,10 +116,10 @@ export type Analysis = z.infer<typeof AnalysisSchema>;
 
 /**
  * Hub Insight Schema V1.0
- * 
+ *
  * Standardized format for insights returned by the Intelligence Hub.
  * This schema guarantees reliable transformation into events.
- * 
+ *
  * @example
  * ```typescript
  * const insight: HubInsight = {
@@ -142,48 +142,48 @@ export const HubInsightSchema = z.object({
   /**
    * Schema version (for future migrations)
    */
-  version: z.literal('1.0'),
-  
+  version: z.literal("1.0"),
+
   /**
    * Type of insight
    */
   type: z.enum([
-    'action_plan',    // Plan d'action avec événements à créer
-    'suggestion',     // Suggestion à présenter à l'utilisateur
-    'analysis',       // Analyse sans action immédiate
-    'automation',     // Automatisation à exécuter
+    "action_plan", // Plan d'action avec événements à créer
+    "suggestion", // Suggestion à présenter à l'utilisateur
+    "analysis", // Analyse sans action immédiate
+    "automation", // Automatisation à exécuter
   ]),
-  
+
   /**
    * Correlation ID (link with initial request)
    * Must be a UUID matching the requestId from the Hub
    */
   correlationId: z.string().uuid(),
-  
+
   /**
    * Actions to execute (for type: 'action_plan' or 'automation')
    * Each action will be transformed into a SynapEvent
    */
   actions: z.array(ActionSchema).optional(),
-  
+
   /**
    * Textual analysis (for type: 'analysis' or 'suggestion')
    * Contains content to display to the user
    */
   analysis: AnalysisSchema.optional(),
-  
+
   /**
    * Confidence level (0.0 to 1.0)
    * Indicates how confident the agent is in this insight
    */
   confidence: z.number().min(0).max(1),
-  
+
   /**
    * Agent reasoning (optional)
    * Explains why this insight was generated
    */
   reasoning: z.string().optional(),
-  
+
   /**
    * Additional metadata
    */
@@ -198,7 +198,7 @@ export type HubInsight = z.infer<typeof HubInsightSchema>;
 
 /**
  * Validate a Hub Insight
- * 
+ *
  * @param data - Data to validate
  * @returns Validated HubInsight
  * @throws ZodError if validation fails
@@ -209,7 +209,7 @@ export function validateHubInsight(data: unknown): HubInsight {
 
 /**
  * Validate an Action
- * 
+ *
  * @param data - Data to validate
  * @returns Validated Action
  * @throws ZodError if validation fails
@@ -220,7 +220,7 @@ export function validateAction(data: unknown): Action {
 
 /**
  * Validate an Analysis
- * 
+ *
  * @param data - Data to validate
  * @returns Validated Analysis
  * @throws ZodError if validation fails
@@ -236,18 +236,26 @@ export function validateAnalysis(data: unknown): Analysis {
 /**
  * Type guard to check if an insight is an action plan
  */
-export function isActionPlan(insight: HubInsight): insight is HubInsight & { type: 'action_plan' | 'automation'; actions: Action[] } {
-  return (insight.type === 'action_plan' || insight.type === 'automation') && 
-         insight.actions !== undefined && 
-         insight.actions.length > 0;
+export function isActionPlan(insight: HubInsight): insight is HubInsight & {
+  type: "action_plan" | "automation";
+  actions: Action[];
+} {
+  return (
+    (insight.type === "action_plan" || insight.type === "automation") &&
+    insight.actions !== undefined &&
+    insight.actions.length > 0
+  );
 }
 
 /**
  * Type guard to check if an insight is an analysis
  */
-export function isAnalysis(insight: HubInsight): insight is HubInsight & { type: 'analysis' | 'suggestion'; analysis: Analysis } {
-  return (insight.type === 'analysis' || insight.type === 'suggestion') && 
-         insight.analysis !== undefined;
+export function isAnalysis(insight: HubInsight): insight is HubInsight & {
+  type: "analysis" | "suggestion";
+  analysis: Analysis;
+} {
+  return (
+    (insight.type === "analysis" || insight.type === "suggestion") &&
+    insight.analysis !== undefined
+  );
 }
-
-

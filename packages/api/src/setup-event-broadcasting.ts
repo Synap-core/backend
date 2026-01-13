@@ -7,11 +7,11 @@
  * Call setupEventBroadcasting() at application startup.
  */
 
-import { eventRepository, type EventHook } from '@synap/database';
-import { eventStreamManager } from './event-stream-manager.js';
-import { createLogger } from '@synap-core/core';
+import { eventRepository, type EventHook } from "@synap/database";
+import { eventStreamManager } from "./event-stream-manager.js";
+import { createLogger } from "@synap-core/core";
 
-const logger = createLogger({ module: 'event-broadcasting' });
+const logger = createLogger({ module: "event-broadcasting" });
 
 let isSetup = false;
 
@@ -23,7 +23,7 @@ let isSetup = false;
  */
 export function setupEventBroadcasting(): void {
   if (isSetup) {
-    logger.warn('Event broadcasting already setup, skipping');
+    logger.warn("Event broadcasting already setup, skipping");
     return;
   }
 
@@ -35,6 +35,6 @@ export function setupEventBroadcasting(): void {
   // Register the hook
   eventRepository.addEventHook(broadcastHook);
 
-  logger.info('Event broadcasting hook registered with EventRepository');
+  logger.info("Event broadcasting hook registered with EventRepository");
   isSetup = true;
 }

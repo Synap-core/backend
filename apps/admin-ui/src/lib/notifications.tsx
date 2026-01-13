@@ -1,12 +1,17 @@
 /**
  * Notification System
- * 
+ *
  * Centralized notification utilities using Mantine's notification system.
  * Provides type-safe wrappers for showing success, error, warning, and info notifications.
  */
 
-import { notifications } from '@mantine/notifications';
-import { IconCheck, IconX, IconAlertCircle, IconInfoCircle } from '@tabler/icons-react';
+import { notifications } from "@mantine/notifications";
+import {
+  IconCheck,
+  IconX,
+  IconAlertCircle,
+  IconInfoCircle,
+} from "@tabler/icons-react";
 
 interface NotificationOptions {
   title?: string;
@@ -20,9 +25,9 @@ interface NotificationOptions {
  */
 export function showSuccessNotification(options: NotificationOptions): void {
   notifications.show({
-    title: options.title || 'Success',
+    title: options.title || "Success",
     message: options.message,
-    color: 'green',
+    color: "green",
     icon: <IconCheck size={18} />,
     autoClose: options.duration ?? 4000,
   });
@@ -33,9 +38,9 @@ export function showSuccessNotification(options: NotificationOptions): void {
  */
 export function showErrorNotification(options: NotificationOptions): void {
   notifications.show({
-    title: options.title || 'Error',
+    title: options.title || "Error",
     message: options.message,
-    color: 'red',
+    color: "red",
     icon: <IconX size={18} />,
     autoClose: options.duration ?? 6000,
   });
@@ -46,9 +51,9 @@ export function showErrorNotification(options: NotificationOptions): void {
  */
 export function showWarningNotification(options: NotificationOptions): void {
   notifications.show({
-    title: options.title || 'Warning',
+    title: options.title || "Warning",
     message: options.message,
-    color: 'yellow',
+    color: "yellow",
     icon: <IconAlertCircle size={18} />,
     autoClose: options.duration ?? 5000,
   });
@@ -59,9 +64,9 @@ export function showWarningNotification(options: NotificationOptions): void {
  */
 export function showInfoNotification(options: NotificationOptions): void {
   notifications.show({
-    title: options.title || 'Info',
+    title: options.title || "Info",
     message: options.message,
-    color: 'blue',
+    color: "blue",
     icon: <IconInfoCircle size={18} />,
     autoClose: options.duration ?? 4000,
   });
@@ -71,14 +76,21 @@ export function showInfoNotification(options: NotificationOptions): void {
  * Show a notification for API errors
  * Extracts error message from tRPC/API errors
  */
-export function showApiErrorNotification(error: unknown, options?: Omit<NotificationOptions, 'message'>): void {
-  let errorMessage = 'An unexpected error occurred';
+export function showApiErrorNotification(
+  error: unknown,
+  options?: Omit<NotificationOptions, "message">,
+): void {
+  let errorMessage = "An unexpected error occurred";
 
   if (error instanceof Error) {
     errorMessage = error.message;
-  } else if (typeof error === 'object' && error !== null && 'message' in error) {
+  } else if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error
+  ) {
     errorMessage = String(error.message);
-  } else if (typeof error === 'string') {
+  } else if (typeof error === "string") {
     errorMessage = error;
   }
 
@@ -87,4 +99,3 @@ export function showApiErrorNotification(error: unknown, options?: Omit<Notifica
     message: errorMessage,
   });
 }
-

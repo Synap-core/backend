@@ -6,19 +6,15 @@
 // Re-export types from database schema (single source of truth)
 export type {
   Document,
-  NewDocument,
-  DocumentVersion,
   NewDocumentVersion,
   DocumentSession,
   NewDocumentSession,
-} from '@synap/database/schema';
+} from "@synap/database/schema";
 
 // Re-export Zod schemas for runtime validation
 export {
-  insertDocumentSchema,
-  selectDocumentSchema,
   insertDocumentVersionSchema,
   selectDocumentVersionSchema,
   insertDocumentSessionSchema,
-
-} from '@synap/database/schema';
+  selectDocumentSessionSchema,
+} from "@synap/database/schema";

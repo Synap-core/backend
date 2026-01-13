@@ -1,18 +1,26 @@
 #!/usr/bin/env node
 /**
  * Table Code Generator
- * 
+ *
  * Scaffolds worker, permissions, event helpers, and tests for new database tables.
- * 
+ *
  * Usage:
  *   pnpm codegen:table <tableName>
  *   pnpm codegen:table projects --dry-run
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { intro, outro, text, confirm, select, spinner, note } from '@clack/prompts';
-import pc from 'picocolors';
+import * as fs from "fs/promises";
+import * as path from "path";
+import {
+  intro,
+  outro,
+  text,
+  confirm,
+  select,
+  spinner,
+  note,
+} from "@clack/prompts";
+import pc from "picocolors";
 
 interface TableConfig {
   tableName: string;
@@ -28,18 +36,18 @@ interface GeneratedFiles {
   tests?: string;
 }
 
-const BACKEND_ROOT = path.resolve(process.cwd(), '../..');
+const BACKEND_ROOT = path.resolve(process.cwd(), "../..");
 
 async function main() {
   const args = process.argv.slice(2);
   const tableName = args[0];
-  const isDryRun = args.includes('--dry-run');
+  const isDryRun = args.includes("--dry-run");
 
-  intro(pc.bgCyan(pc.black(' Table Code Generator ')));
+  intro(pc.bgCyan(pc.black(" Table Code Generator ")));
 
   // Validate table name
   if (!tableName) {
-    note('Usage: pnpm codegen:table <tableName>', 'Error');
+    note("Usage: pnpm codegen:table <tableName>", "Error");
     process.exit(1);
   }
 
@@ -47,22 +55,26 @@ async function main() {
 
   // Interactive prompts
   const hasWorkspace = await confirm({
-    message: 'Does this table belong to a workspace?',
+    message: "Does this table belong to a workspace?",
     initialValue: false,
   });
 
   const hasUserId = await confirm({
-    message: 'Does this table have a userId field (owner)?',
+    message: "Does this table have a userId field (owner)?",
     initialValue: true,
   });
 
   const generateTests = await confirm({
-    message: 'Generate test files?',
+    message: "Generate test files?",
     initialValue: true,
   });
 
-  if (hasWorkspace === false || hasUserId === false || generateTests === false) {
-    outro(pc.red('Cancelled'));
+  if (
+    hasWorkspace === false ||
+    hasUserId === false ||
+    generateTests === false
+  ) {
+    outro(pc.red("Cancelled"));
     process.exit(0);
   }
 
@@ -75,43 +87,43 @@ async function main() {
 
   // Generate code
   const s = spinner();
-  s.start('Generating files...');
+  s.start("Generating files...");
 
   try {
     const files = await generateAllFiles(config);
 
     if (isDryRun) {
-      s.stop(pc.yellow('Dry run - files not written'));
-      console.log('\n' + pc.bold('Generated files preview:\n'));
+      s.stop(pc.yellow("Dry run - files not written"));
+      console.log("\n" + pc.bold("Generated files preview:\n"));
       Object.entries(files).forEach(([name, content]) => {
         console.log(pc.cyan(`${name}:`));
-        console.log(pc.dim(content.substring(0, 200) + '...\n'));
+        console.log(pc.dim(content.substring(0, 200) + "...\n"));
       });
     } else {
       await writeFiles(config, files);
-      s.stop(pc.green('Files generated successfully'));
+      s.stop(pc.green("Files generated successfully"));
 
       note(
-        `${pc.green('✓')} Worker: packages/jobs/src/functions/${tableName}.ts\n` +
-        `${pc.green('✓')} Tests: packages/jobs/src/functions/${tableName}.test.ts\n` +
-        `${pc.green('✓')} Event Helpers: packages/events/src/helpers/${tableName}.ts\n` +
-        `${pc.yellow('⚠')} Updated: permission-validator.ts (review changes)\n` +
-        `${pc.yellow('⚠')} Updated: index.ts (review changes)`,
-        'Generated Files'
+        `${pc.green("✓")} Worker: packages/jobs/src/functions/${tableName}.ts\n` +
+          `${pc.green("✓")} Tests: packages/jobs/src/functions/${tableName}.test.ts\n` +
+          `${pc.green("✓")} Event Helpers: packages/events/src/helpers/${tableName}.ts\n` +
+          `${pc.yellow("⚠")} Updated: permission-validator.ts (review changes)\n` +
+          `${pc.yellow("⚠")} Updated: index.ts (review changes)`,
+        "Generated Files",
       );
 
       note(
         `1. Review generated files\n` +
-        `2. Customize TODO sections as needed\n` +
-        `3. Run: ${pc.cyan(`pnpm --filter @synap/jobs test ${tableName}`)}\n` +
-        `4. Commit changes`,
-        'Next Steps'
+          `2. Customize TODO sections as needed\n` +
+          `3. Run: ${pc.cyan(`pnpm --filter @synap/jobs test ${tableName}`)}\n` +
+          `4. Commit changes`,
+        "Next Steps",
       );
     }
 
-    outro(pc.green('Done! 🎉'));
+    outro(pc.green("Done! 🎉"));
   } catch (error) {
-    s.stop(pc.red('Generation failed'));
+    s.stop(pc.red("Generation failed"));
     console.error(error);
     process.exit(1);
   }
@@ -169,7 +181,7 @@ export const ${tableName}Worker = inngest.createFunction(
         await db.insert(${tableName}).values({
           id: data.${tableName}Id,
           userId,
-          ${hasWorkspace ? 'workspaceId: data.workspaceId,' : ''}
+          ${hasWorkspace ? "workspaceId: data.workspaceId," : ""}
           // TODO: Add other fields from data
         });
         
@@ -296,7 +308,9 @@ function generatePermissionSnippet(config: TableConfig): string {
     // ========================================
     if (table === '${tableName}') {
       if (action === 'create') {
-        ${hasWorkspace ? `
+        ${
+          hasWorkspace
+            ? `
         // Check workspace membership
         const isMember = await db.select()
           .from(workspaceMembers)
@@ -311,11 +325,13 @@ function generatePermissionSnippet(config: TableConfig): string {
           return { approved: true, reason: 'Workspace member' };
         }
         return { approved: false, reason: 'Not a workspace member' };
-        ` : `
+        `
+            : `
         // Auto-approve owner creating their own resource
         await publishApproved();
         return { approved: true, reason: 'Owner can create' };
-        `}
+        `
+        }
       }
       
       if (action === 'update' || action === 'delete') {
@@ -332,9 +348,13 @@ function generatePermissionSnippet(config: TableConfig): string {
           return { approved: true, reason: 'Owner' };
         }
         
-        ${hasWorkspace ? `
+        ${
+          hasWorkspace
+            ? `
         // TODO: Add workspace admin/editor check if needed
-        ` : ''}
+        `
+            : ""
+        }
         
         return { approved: false, reason: 'Not authorized' };
       }
@@ -435,7 +455,7 @@ describe('${TableName} Worker', () => {
         name: '${tableName}.create.approved',
         data: {
           ${tableName}Id,
-          ${hasWorkspace ? 'workspaceId: crypto.randomUUID(),' : ''}
+          ${hasWorkspace ? "workspaceId: crypto.randomUUID()," : ""}
           // TODO: Add required fields
         },
         user: { id: userId }
@@ -486,47 +506,65 @@ async function writeFiles(config: TableConfig, files: GeneratedFiles) {
   const { tableName } = config;
 
   // Write worker
-  const workerPath = path.join(BACKEND_ROOT, 'packages/jobs/src/functions', `${tableName}.ts`);
-  await fs.writeFile(workerPath, files.worker, 'utf-8');
+  const workerPath = path.join(
+    BACKEND_ROOT,
+    "packages/jobs/src/functions",
+    `${tableName}.ts`,
+  );
+  await fs.writeFile(workerPath, files.worker, "utf-8");
 
   // Write tests
   if (files.tests) {
-    const testsPath = path.join(BACKEND_ROOT, 'packages/jobs/src/functions', `${tableName}.test.ts`);
-    await fs.writeFile(testsPath, files.tests, 'utf-8');
+    const testsPath = path.join(
+      BACKEND_ROOT,
+      "packages/jobs/src/functions",
+      `${tableName}.test.ts`,
+    );
+    await fs.writeFile(testsPath, files.tests, "utf-8");
   }
 
   // Write event helpers
-  const helpersPath = path.join(BACKEND_ROOT, 'packages/events/src/helpers', `${tableName}.ts`);
-  await fs.writeFile(helpersPath, files.helpers, 'utf-8');
+  const helpersPath = path.join(
+    BACKEND_ROOT,
+    "packages/events/src/helpers",
+    `${tableName}.ts`,
+  );
+  await fs.writeFile(helpersPath, files.helpers, "utf-8");
 
   // Update permission-validator.ts (append)
-  const permValidatorPath = path.join(BACKEND_ROOT, 'packages/jobs/src/functions/permission-validator.ts');
-  const permContent = await fs.readFile(permValidatorPath, 'utf-8');
-  
+  const permValidatorPath = path.join(
+    BACKEND_ROOT,
+    "packages/jobs/src/functions/permission-validator.ts",
+  );
+  const permContent = await fs.readFile(permValidatorPath, "utf-8");
+
   // Find the last closing brace of the main switch/if statement and insert before it
-  const insertMarker = '  // END OF AUTO-GENERATED PERMISSIONS';
-  const updatedPerm = permContent.replace(insertMarker, files.permissions + '\n    ' + insertMarker);
-  await fs.writeFile(permValidatorPath, updatedPerm, 'utf-8');
+  const insertMarker = "  // END OF AUTO-GENERATED PERMISSIONS";
+  const updatedPerm = permContent.replace(
+    insertMarker,
+    files.permissions + "\n    " + insertMarker,
+  );
+  await fs.writeFile(permValidatorPath, updatedPerm, "utf-8");
 
   // Update index.ts (add worker to exports and functions array)
-  const indexPath = path.join(BACKEND_ROOT, 'packages/jobs/src/index.ts');
-  const indexContent = await fs.readFile(indexPath, 'utf-8');
-  
+  const indexPath = path.join(BACKEND_ROOT, "packages/jobs/src/index.ts");
+  const indexContent = await fs.readFile(indexPath, "utf-8");
+
   // Add import
   const importLine = `import { ${tableName}Worker } from './functions/${tableName}.js';\n`;
   const updatedIndex = indexContent.replace(
-    'import { permissionValidator }',
-    importLine + 'import { permissionValidator }'
+    "import { permissionValidator }",
+    importLine + "import { permissionValidator }",
   );
-  
+
   // Add to functions array
   const functionLine = `  ${tableName}Worker,\n`;
   const finalIndex = updatedIndex.replace(
-    '  permissionValidator, // Phase 2',
-    `  permissionValidator, // Phase 2\n${functionLine}`
+    "  permissionValidator, // Phase 2",
+    `  permissionValidator, // Phase 2\n${functionLine}`,
   );
-  
-  await fs.writeFile(indexPath, finalIndex, 'utf-8');
+
+  await fs.writeFile(indexPath, finalIndex, "utf-8");
 }
 
 function capitalize(str: string): string {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   Container,
   Title,
@@ -15,7 +15,7 @@ import {
   Badge,
   Tabs,
   Timeline,
-} from '@mantine/core';
+} from "@mantine/core";
 import {
   IconInfoCircle,
   IconAlertCircle,
@@ -23,9 +23,9 @@ import {
   IconX,
   IconPlayerPlay,
   IconTools,
-} from '@tabler/icons-react';
-import { trpc } from '../lib/trpc';
-import Editor from '@monaco-editor/react';
+} from "@tabler/icons-react";
+import { trpc } from "../lib/trpc";
+import Editor from "@monaco-editor/react";
 
 interface ExecutionHistoryItem {
   id: string;
@@ -38,17 +38,20 @@ interface ExecutionHistoryItem {
 }
 
 export default function AIToolsPlaygroundPage() {
-  const [selectedTool, setSelectedTool] = useState<string>('');
-  const [userId, setUserId] = useState('test-user-id');
-  const [parametersJson, setParametersJson] = useState('{}');
-  const [executionHistory, setExecutionHistory] = useState<ExecutionHistoryItem[]>([]);
+  const [selectedTool, setSelectedTool] = useState<string>("");
+  const [userId, setUserId] = useState("test-user-id");
+  const [parametersJson, setParametersJson] = useState("{}");
+  const [executionHistory, setExecutionHistory] = useState<
+    ExecutionHistoryItem[]
+  >([]);
 
   const { data: capabilities } = trpc.system.getCapabilities.useQuery();
 
-  const { data: toolSchema, isLoading: schemaLoading } = trpc.system.getToolSchema.useQuery(
-    { toolName: selectedTool },
-    { enabled: !!selectedTool }
-  );
+  const { data: toolSchema, isLoading: schemaLoading } =
+    trpc.system.getToolSchema.useQuery(
+      { toolName: selectedTool },
+      { enabled: !!selectedTool },
+    );
 
   const executeMutation = trpc.system.executeTool.useMutation({
     onSuccess: (data) => {
@@ -69,7 +72,9 @@ export default function AIToolsPlaygroundPage() {
     },
   });
 
-  const addToHistory = (item: Omit<ExecutionHistoryItem, 'id' | 'timestamp'>) => {
+  const addToHistory = (
+    item: Omit<ExecutionHistoryItem, "id" | "timestamp">,
+  ) => {
     setExecutionHistory((prev) => [
       {
         ...item,
@@ -105,7 +110,7 @@ export default function AIToolsPlaygroundPage() {
   const handleToolChange = (value: string | null) => {
     if (value) {
       setSelectedTool(value);
-      setParametersJson('{}'); // Reset parameters when tool changes
+      setParametersJson("{}"); // Reset parameters when tool changes
     }
   };
 
@@ -121,9 +126,14 @@ export default function AIToolsPlaygroundPage() {
           </Text>
         </div>
 
-        <Alert icon={<IconInfoCircle size={16} />} title="Testing Environment" color="blue">
-          This playground allows you to execute AI tools independently of the event system. Perfect
-          for testing tool behavior, debugging, and understanding tool schemas.
+        <Alert
+          icon={<IconInfoCircle size={16} />}
+          title="Testing Environment"
+          color="blue"
+        >
+          This playground allows you to execute AI tools independently of the
+          event system. Perfect for testing tool behavior, debugging, and
+          understanding tool schemas.
         </Alert>
 
         <Card withBorder padding="lg">
@@ -143,14 +153,26 @@ export default function AIToolsPlaygroundPage() {
                 {schemaLoading ? (
                   <Loader size="sm" />
                 ) : toolSchema ? (
-                  <Alert icon={<IconTools size={16} />} title="Tool Information" color="gray">
+                  <Alert
+                    icon={<IconTools size={16} />}
+                    title="Tool Information"
+                    color="gray"
+                  >
                     <Stack gap="xs">
                       <Text size="sm">
                         <strong>Description:</strong> {toolSchema.description}
                       </Text>
                       <Group gap="xs">
-                        <Badge variant="outline">{toolSchema.metadata.version}</Badge>
-                        <Badge color={toolSchema.metadata.source === 'core' ? 'blue' : 'gray'}>
+                        <Badge variant="outline">
+                          {toolSchema.metadata.version}
+                        </Badge>
+                        <Badge
+                          color={
+                            toolSchema.metadata.source === "core"
+                              ? "blue"
+                              : "gray"
+                          }
+                        >
                           {toolSchema.metadata.source}
                         </Badge>
                       </Group>
@@ -172,26 +194,27 @@ export default function AIToolsPlaygroundPage() {
                   </Text>
                   {toolSchema && (
                     <Text size="xs" c="dimmed" mb="xs">
-                      Required fields:{' '}
-                      {toolSchema.schema.required?.join(', ') || 'None (all optional)'}
+                      Required fields:{" "}
+                      {toolSchema.schema.required?.join(", ") ||
+                        "None (all optional)"}
                     </Text>
                   )}
                   <div
                     style={{
-                      border: '1px solid #dee2e6',
-                      borderRadius: '4px',
-                      overflow: 'hidden',
+                      border: "1px solid #dee2e6",
+                      borderRadius: "4px",
+                      overflow: "hidden",
                     }}
                   >
                     <Editor
                       height="200px"
                       defaultLanguage="json"
                       value={parametersJson}
-                      onChange={(value) => setParametersJson(value || '{}')}
+                      onChange={(value) => setParametersJson(value || "{}")}
                       options={{
                         minimap: { enabled: false },
                         fontSize: 14,
-                        lineNumbers: 'on',
+                        lineNumbers: "on",
                         scrollBeyondLastLine: false,
                         automaticLayout: true,
                       }}
@@ -199,7 +222,7 @@ export default function AIToolsPlaygroundPage() {
                     />
                   </div>
                   {toolSchema && (
-                    <Code block mt="xs" style={{ fontSize: '11px' }}>
+                    <Code block mt="xs" style={{ fontSize: "11px" }}>
                       {JSON.stringify(toolSchema.schema.properties, null, 2)}
                     </Code>
                   )}
@@ -225,7 +248,9 @@ export default function AIToolsPlaygroundPage() {
           <Tabs defaultValue="latest">
             <Tabs.List>
               <Tabs.Tab value="latest">Latest Result</Tabs.Tab>
-              <Tabs.Tab value="history">Execution History ({executionHistory.length})</Tabs.Tab>
+              <Tabs.Tab value="history">
+                Execution History ({executionHistory.length})
+              </Tabs.Tab>
             </Tabs.List>
 
             <Tabs.Panel value="latest" pt="md">
@@ -234,13 +259,20 @@ export default function AIToolsPlaygroundPage() {
                   <Stack gap="md">
                     <Group justify="space-between">
                       <Text fw={500}>
-                        {executionHistory[0].toolName} - {executionHistory[0].timestamp.toLocaleTimeString()}
+                        {executionHistory[0].toolName} -{" "}
+                        {executionHistory[0].timestamp.toLocaleTimeString()}
                       </Text>
                       <Badge
-                        color={executionHistory[0].success ? 'green' : 'red'}
-                        leftSection={executionHistory[0].success ? <IconCheck size={14} /> : <IconX size={14} />}
+                        color={executionHistory[0].success ? "green" : "red"}
+                        leftSection={
+                          executionHistory[0].success ? (
+                            <IconCheck size={14} />
+                          ) : (
+                            <IconX size={14} />
+                          )
+                        }
                       >
-                        {executionHistory[0].success ? 'Success' : 'Failed'}
+                        {executionHistory[0].success ? "Success" : "Failed"}
                       </Badge>
                     </Group>
 
@@ -248,7 +280,13 @@ export default function AIToolsPlaygroundPage() {
                       <Text size="sm" fw={500} mb="xs">
                         Parameters
                       </Text>
-                      <Code block>{JSON.stringify(executionHistory[0].parameters, null, 2)}</Code>
+                      <Code block>
+                        {JSON.stringify(
+                          executionHistory[0].parameters,
+                          null,
+                          2,
+                        )}
+                      </Code>
                     </div>
 
                     {executionHistory[0].success ? (
@@ -256,10 +294,16 @@ export default function AIToolsPlaygroundPage() {
                         <Text size="sm" fw={500} mb="xs">
                           Result
                         </Text>
-                        <Code block>{JSON.stringify(executionHistory[0].result, null, 2)}</Code>
+                        <Code block>
+                          {JSON.stringify(executionHistory[0].result, null, 2)}
+                        </Code>
                       </div>
                     ) : (
-                      <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
+                      <Alert
+                        icon={<IconAlertCircle size={16} />}
+                        title="Error"
+                        color="red"
+                      >
                         {executionHistory[0].error}
                       </Alert>
                     )}
@@ -274,8 +318,14 @@ export default function AIToolsPlaygroundPage() {
                   {executionHistory.map((item) => (
                     <Timeline.Item
                       key={item.id}
-                      bullet={item.success ? <IconCheck size={12} /> : <IconX size={12} />}
-                      color={item.success ? 'green' : 'red'}
+                      bullet={
+                        item.success ? (
+                          <IconCheck size={12} />
+                        ) : (
+                          <IconX size={12} />
+                        )
+                      }
+                      color={item.success ? "green" : "red"}
                     >
                       <Group justify="space-between" mb="xs">
                         <Text size="sm" fw={500}>
@@ -291,7 +341,8 @@ export default function AIToolsPlaygroundPage() {
                         </Text>
                       ) : (
                         <Text size="xs" c="dimmed">
-                          Executed with {Object.keys(item.parameters).length} parameter(s)
+                          Executed with {Object.keys(item.parameters).length}{" "}
+                          parameter(s)
                         </Text>
                       )}
                     </Timeline.Item>

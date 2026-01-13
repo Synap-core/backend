@@ -1,7 +1,22 @@
-import { Card, Group, Badge, Text, Stack, Code, Collapse, Button } from '@mantine/core';
-import { useState, memo } from 'react';
-import { IconChevronDown, IconChevronUp, IconClock, IconUser, IconHash } from '@tabler/icons-react';
-import { formatDistanceToNow } from 'date-fns';
+import {
+  Card,
+  Group,
+  Badge,
+  Text,
+  Stack,
+  Code,
+  Collapse,
+  Button,
+} from "@mantine/core";
+import { useState, memo } from "react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconClock,
+  IconUser,
+  IconHash,
+} from "@tabler/icons-react";
+import { formatDistanceToNow } from "date-fns";
 
 interface EventCardProps {
   event: {
@@ -28,10 +43,10 @@ function EventCard({ event, isHighlighted, onClick }: EventCardProps) {
     <Card
       withBorder
       padding="md"
-      bg={isHighlighted ? 'blue.0' : undefined}
+      bg={isHighlighted ? "blue.0" : undefined}
       style={{
-        cursor: onClick ? 'pointer' : undefined,
-        transition: 'all 0.2s',
+        cursor: onClick ? "pointer" : undefined,
+        transition: "all 0.2s",
       }}
       onClick={onClick}
     >
@@ -51,7 +66,9 @@ function EventCard({ event, isHighlighted, onClick }: EventCardProps) {
           <Group gap="xs">
             <IconClock size={14} />
             <Text size="xs" c="dimmed">
-              {formatDistanceToNow(new Date(event.timestamp), { addSuffix: true })}
+              {formatDistanceToNow(new Date(event.timestamp), {
+                addSuffix: true,
+              })}
             </Text>
           </Group>
         </Group>
@@ -98,9 +115,15 @@ function EventCard({ event, isHighlighted, onClick }: EventCardProps) {
             e.stopPropagation();
             setExpanded(!expanded);
           }}
-          rightSection={expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+          rightSection={
+            expanded ? (
+              <IconChevronUp size={14} />
+            ) : (
+              <IconChevronDown size={14} />
+            )
+          }
         >
-          {expanded ? 'Hide' : 'Show'} Details
+          {expanded ? "Hide" : "Show"} Details
         </Button>
 
         {/* Expanded Content */}
@@ -110,7 +133,7 @@ function EventCard({ event, isHighlighted, onClick }: EventCardProps) {
               <Text size="sm" fw={500} mb="xs">
                 Event Data
               </Text>
-              <Code block style={{ fontSize: '12px' }}>
+              <Code block style={{ fontSize: "12px" }}>
                 {JSON.stringify(event.data, null, 2)}
               </Code>
             </div>
@@ -119,7 +142,7 @@ function EventCard({ event, isHighlighted, onClick }: EventCardProps) {
                 <Text size="sm" fw={500} mb="xs">
                   Metadata
                 </Text>
-                <Code block style={{ fontSize: '12px' }}>
+                <Code block style={{ fontSize: "12px" }}>
                   {JSON.stringify(event.metadata, null, 2)}
                 </Code>
               </div>

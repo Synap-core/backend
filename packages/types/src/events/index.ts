@@ -1,14 +1,14 @@
 /**
  * Domain Event Types
- * 
+ *
  * Type definitions for Socket.IO domain events.
  * These are emitted by Inngest workers via the realtime bridge
  * to notify clients about data changes.
- * 
+ *
  * SINGLE SOURCE OF TRUTH - Frontend imports from here.
  */
 
-import type { Entity } from '../index.js';
+import type { Entity } from "../index.js";
 
 // =============================================================================
 // Entity Events
@@ -45,7 +45,7 @@ export interface EntityApprovalEvent {
   entityId?: string;
   workspaceId: string;
   entityType: string;
-  status: 'pending' | 'approved' | 'rejected' | 'created';
+  status: "pending" | "approved" | "rejected" | "created";
   reason?: string;
   createdBy: string;
   timestamp: string;
@@ -79,9 +79,9 @@ export interface DocumentVersionCreatedEvent {
 export interface AIProposalEvent {
   proposalId: string;
   workspaceId: string;
-  targetType: 'entity' | 'document';
+  targetType: "entity" | "document";
   targetId?: string;
-  operation: 'create' | 'update' | 'delete';
+  operation: "create" | "update" | "delete";
   data: unknown;
   reasoning: string;
   confidence: number;
@@ -91,7 +91,7 @@ export interface AIProposalEvent {
 export interface AIProposalStatusEvent {
   proposalId: string;
   workspaceId: string;
-  status: 'approved' | 'rejected';
+  status: "approved" | "rejected";
   processedBy: string;
   processedAt: string;
 }
@@ -104,7 +104,7 @@ export interface ChatMessageEvent {
   threadId: string;
   messageId: string;
   workspaceId: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   createdAt: string;
 }
@@ -126,25 +126,25 @@ export interface ChatStreamEvent {
  */
 export interface DomainServerToClientEvents {
   // Entities
-  'entity:created': (data: EntityCreatedEvent) => void;
-  'entity:updated': (data: EntityUpdatedEvent) => void;
-  'entity:deleted': (data: EntityDeletedEvent) => void;
-  'entity:approval': (data: EntityApprovalEvent) => void;
-  
+  "entity:created": (data: EntityCreatedEvent) => void;
+  "entity:updated": (data: EntityUpdatedEvent) => void;
+  "entity:deleted": (data: EntityDeletedEvent) => void;
+  "entity:approval": (data: EntityApprovalEvent) => void;
+
   // Documents
-  'document:updated': (data: DocumentUpdatedEvent) => void;
-  'document:version': (data: DocumentVersionCreatedEvent) => void;
-  
+  "document:updated": (data: DocumentUpdatedEvent) => void;
+  "document:version": (data: DocumentVersionCreatedEvent) => void;
+
   // AI
-  'ai:proposal': (data: AIProposalEvent) => void;
-  'ai:proposal:status': (data: AIProposalStatusEvent) => void;
-  
+  "ai:proposal": (data: AIProposalEvent) => void;
+  "ai:proposal:status": (data: AIProposalStatusEvent) => void;
+
   // Chat
-  'chat:message': (data: ChatMessageEvent) => void;
-  'chat:stream': (data: ChatStreamEvent) => void;
-  
+  "chat:message": (data: ChatMessageEvent) => void;
+  "chat:stream": (data: ChatStreamEvent) => void;
+
   // System
-  'error': (data: { code: string; message: string }) => void;
+  error: (data: { code: string; message: string }) => void;
 }
 
 // =============================================================================
@@ -156,10 +156,10 @@ export interface DomainServerToClientEvents {
  */
 export interface DomainClientToServerEvents {
   // Room management
-  'join-workspace': (workspaceId: string) => void;
-  'leave-workspace': (workspaceId: string) => void;
-  'join-document': (documentId: string) => void;
-  'leave-document': (documentId: string) => void;
+  "join-workspace": (workspaceId: string) => void;
+  "leave-workspace": (workspaceId: string) => void;
+  "join-document": (documentId: string) => void;
+  "leave-document": (documentId: string) => void;
 }
 
 // =============================================================================
@@ -170,15 +170,16 @@ export interface DomainClientToServerEvents {
  * All domain event names for type checking
  */
 export const DomainEventNames = {
-  ENTITY_CREATED: 'entity:created',
-  ENTITY_UPDATED: 'entity:updated',
-  ENTITY_DELETED: 'entity:deleted',
-  DOCUMENT_UPDATED: 'document:updated',
-  DOCUMENT_VERSION: 'document:version',
-  AI_PROPOSAL: 'ai:proposal',
-  AI_PROPOSAL_STATUS: 'ai:proposal:status',
-  CHAT_MESSAGE: 'chat:message',
-  CHAT_STREAM: 'chat:stream',
+  ENTITY_CREATED: "entity:created",
+  ENTITY_UPDATED: "entity:updated",
+  ENTITY_DELETED: "entity:deleted",
+  DOCUMENT_UPDATED: "document:updated",
+  DOCUMENT_VERSION: "document:version",
+  AI_PROPOSAL: "ai:proposal",
+  AI_PROPOSAL_STATUS: "ai:proposal:status",
+  CHAT_MESSAGE: "chat:message",
+  CHAT_STREAM: "chat:stream",
 } as const;
 
-export type DomainEventName = typeof DomainEventNames[keyof typeof DomainEventNames];
+export type DomainEventName =
+  (typeof DomainEventNames)[keyof typeof DomainEventNames];

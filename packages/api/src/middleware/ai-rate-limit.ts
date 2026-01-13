@@ -1,14 +1,14 @@
 /**
  * AI Rate Limiting Middleware for tRPC
- * 
+ *
  * V1.0 Security Hardening: Stricter rate limiting for AI endpoints
- * 
+ *
  * This middleware applies rate limiting to tRPC procedures that call AI services.
  * It uses an in-memory store (can be replaced with Redis for distributed systems).
  */
 
-import { TRPCError } from '@trpc/server';
-import { middleware } from '../trpc.js';
+import { TRPCError } from "@trpc/server";
+import { middleware } from "../trpc.js";
 
 // Simple in-memory rate limit store
 // In production, replace with Redis for distributed systems
@@ -41,7 +41,11 @@ setInterval(cleanupExpiredEntries, 60 * 1000);
 /**
  * Check if a request should be rate limited
  */
-function checkRateLimit(key: string): { allowed: boolean; remaining: number; resetAt: number } {
+function checkRateLimit(key: string): {
+  allowed: boolean;
+  remaining: number;
+  resetAt: number;
+} {
   const now = Date.now();
   const entry = rateLimitStore.get(key);
 
@@ -59,14 +63,18 @@ function checkRateLimit(key: string): { allowed: boolean; remaining: number; res
 
   // Increment count
   entry.count++;
-  return { allowed: true, remaining: MAX_REQUESTS - entry.count, resetAt: entry.resetAt };
+  return {
+    allowed: true,
+    remaining: MAX_REQUESTS - entry.count,
+    resetAt: entry.resetAt,
+  };
 }
 
 /**
  * AI Rate Limiting Middleware
- * 
+ *
  * Applies stricter rate limiting to procedures that call AI services.
- * 
+ *
  * Usage:
  * ```typescript
  * export const chatRouter = router({
@@ -87,7 +95,7 @@ export const aiRateLimitMiddleware = middleware(async (opts) => {
     key = `ai:user:${ctx.userId}`;
   } else {
     // Fallback to IP if no user context (shouldn't happen in protected procedures)
-    key = `ai:ip:${(opts as any).req?.headers?.['x-forwarded-for'] || 'unknown'}`;
+    key = `ai:ip:${(opts as any).req?.headers?.["x-forwarded-for"] || "unknown"}`;
   }
 
   const result = checkRateLimit(key);
@@ -95,11 +103,11 @@ export const aiRateLimitMiddleware = middleware(async (opts) => {
   if (!result.allowed) {
     const resetIn = Math.ceil((result.resetAt - Date.now()) / 1000);
     throw new TRPCError({
-      code: 'TOO_MANY_REQUESTS',
+      code: "TOO_MANY_REQUESTS",
       message: `AI endpoint rate limit exceeded. Please wait ${resetIn} seconds before making more requests.`,
       cause: {
         limit: MAX_REQUESTS,
-        window: '5 minutes',
+        window: "5 minutes",
         resetIn,
         resetAt: new Date(result.resetAt).toISOString(),
       },
@@ -117,4 +125,3 @@ export const aiRateLimitMiddleware = middleware(async (opts) => {
     ctx,
   });
 });
-

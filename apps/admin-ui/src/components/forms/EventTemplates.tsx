@@ -1,6 +1,6 @@
-import { Button, Group, Stack, Text } from '@mantine/core';
-import { IconTemplate } from '@tabler/icons-react';
-import { colors, spacing, typography } from '../../theme/tokens';
+import { Button, Group, Stack, Text } from "@mantine/core";
+import { IconTemplate } from "@tabler/icons-react";
+import { colors, spacing, typography } from "../../theme/tokens";
 
 interface EventTemplate {
   name: string;
@@ -11,35 +11,35 @@ interface EventTemplate {
 
 const EVENT_TEMPLATES: EventTemplate[] = [
   {
-    name: 'Note Creation',
-    eventType: 'note.creation.requested',
-    description: 'Create a new note',
+    name: "Note Creation",
+    eventType: "note.creation.requested",
+    description: "Create a new note",
     data: {
-      content: 'Your note content here',
-      title: 'Note Title',
-      tags: ['tag1', 'tag2'],
+      content: "Your note content here",
+      title: "Note Title",
+      tags: ["tag1", "tag2"],
       autoEnrich: true,
       useRAG: false,
     },
   },
   {
-    name: 'Task Creation',
-    eventType: 'task.creation.requested',
-    description: 'Create a new task',
+    name: "Task Creation",
+    eventType: "task.creation.requested",
+    description: "Create a new task",
     data: {
-      title: 'Task Title',
-      description: 'Task description',
+      title: "Task Title",
+      description: "Task description",
       dueDate: new Date().toISOString(),
-      priority: 'medium',
+      priority: "medium",
     },
   },
   {
-    name: 'Project Creation',
-    eventType: 'project.creation.requested',
-    description: 'Create a new project',
+    name: "Project Creation",
+    eventType: "project.creation.requested",
+    description: "Create a new project",
     data: {
-      title: 'Project Title',
-      description: 'Project description',
+      title: "Project Title",
+      description: "Project description",
       startDate: new Date().toISOString(),
     },
   },
@@ -49,12 +49,18 @@ interface EventTemplatesProps {
   onSelectTemplate: (template: EventTemplate) => void;
 }
 
-export default function EventTemplates({ onSelectTemplate }: EventTemplatesProps) {
+export default function EventTemplates({
+  onSelectTemplate,
+}: EventTemplatesProps) {
   return (
     <Stack gap={spacing[2]}>
       <Group gap={spacing[2]}>
         <IconTemplate size={16} color={colors.text.secondary} />
-        <Text size="sm" fw={typography.fontWeight.semibold} c={colors.text.primary}>
+        <Text
+          size="sm"
+          fw={typography.fontWeight.semibold}
+          c={colors.text.primary}
+        >
           Templates
         </Text>
       </Group>
@@ -74,4 +80,3 @@ export default function EventTemplates({ onSelectTemplate }: EventTemplatesProps
     </Stack>
   );
 }
-

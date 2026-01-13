@@ -1,10 +1,10 @@
 /**
  * NotificationRoom - Durable Object for Real-Time Notifications
- * 
+ *
  * This Durable Object manages WebSocket connections for a specific room.
  * Rooms are identified by userId or requestId, allowing multiple clients
  * to subscribe to the same notification stream.
- * 
+ *
  * Features:
  * - WebSocket connection management
  * - Broadcast messages to all connected clients
@@ -21,12 +21,12 @@ export interface NotificationMessage {
   data: Record<string, unknown>;
   requestId?: string;
   timestamp?: string;
-  status?: 'success' | 'error' | 'pending';
+  status?: "success" | "error" | "pending";
 }
 
 /**
  * NotificationRoom Durable Object
- * 
+ *
  * Manages WebSocket connections for a specific room (userId or requestId).
  * Supports:
  * - GET /subscribe - Upgrade HTTP to WebSocket
@@ -44,7 +44,7 @@ export class NotificationRoom {
 
   /**
    * Handle incoming requests
-   * 
+   *
    * Routes:
    * - GET /subscribe - Upgrade to WebSocket connection
    * - POST /broadcast - Broadcast message to all clients
@@ -53,42 +53,42 @@ export class NotificationRoom {
     const url = new URL(request.url);
 
     // Handle WebSocket upgrade
-    if (request.method === 'GET' && url.pathname === '/subscribe') {
+    if (request.method === "GET" && url.pathname === "/subscribe") {
       return this.handleWebSocketUpgrade(request);
     }
 
     // Handle broadcast
-    if (request.method === 'POST' && url.pathname === '/broadcast') {
+    if (request.method === "POST" && url.pathname === "/broadcast") {
       return this.handleBroadcast(request);
     }
 
     // Health check
-    if (request.method === 'GET' && url.pathname === '/health') {
+    if (request.method === "GET" && url.pathname === "/health") {
       return new Response(
         JSON.stringify({
-          status: 'ok',
+          status: "ok",
           connections: this.connections.size,
           roomId: this.state.id.toString(),
         }),
         {
-          headers: { 'Content-Type': 'application/json' },
-        }
+          headers: { "Content-Type": "application/json" },
+        },
       );
     }
 
-    return new Response('Not found', { status: 404 });
+    return new Response("Not found", { status: 404 });
   }
 
   /**
    * Handle WebSocket upgrade request
-   * 
+   *
    * Upgrades HTTP connection to WebSocket and manages the connection lifecycle.
    */
   private async handleWebSocketUpgrade(request: Request): Promise<Response> {
     // Check if request is a WebSocket upgrade
-    const upgradeHeader = request.headers.get('Upgrade');
-    if (upgradeHeader !== 'websocket') {
-      return new Response('Expected WebSocket upgrade', { status: 426 });
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (upgradeHeader !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
     // Create WebSocket pair
@@ -102,20 +102,20 @@ export class NotificationRoom {
     this.connections.add(server);
 
     // Handle WebSocket events
-    server.addEventListener('message', (event) => {
+    server.addEventListener("message", (event) => {
       // Echo back ping messages for keepalive
-      if (event.data === 'ping') {
-        server.send('pong');
+      if (event.data === "ping") {
+        server.send("pong");
       }
     });
 
-    server.addEventListener('close', () => {
+    server.addEventListener("close", () => {
       // Remove from connections when closed
       this.connections.delete(server);
     });
 
-    server.addEventListener('error', (error) => {
-      console.error('WebSocket error:', error);
+    server.addEventListener("error", (error) => {
+      console.error("WebSocket error:", error);
       this.connections.delete(server);
     });
 
@@ -128,7 +128,7 @@ export class NotificationRoom {
 
   /**
    * Handle broadcast request
-   * 
+   *
    * Receives a notification message and broadcasts it to all connected clients.
    */
   private async handleBroadcast(request: Request): Promise<Response> {
@@ -139,8 +139,10 @@ export class NotificationRoom {
       // Validate message structure
       if (!message.type || !message.data) {
         return new Response(
-          JSON.stringify({ error: 'Invalid message format. Required: type, data' }),
-          { status: 400, headers: { 'Content-Type': 'application/json' } }
+          JSON.stringify({
+            error: "Invalid message format. Required: type, data",
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
         );
       }
 
@@ -156,28 +158,28 @@ export class NotificationRoom {
         JSON.stringify({
           success: true,
           broadcastCount,
-          message: 'Notification broadcasted',
+          message: "Notification broadcasted",
         }),
         {
           status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }
+          headers: { "Content-Type": "application/json" },
+        },
       );
     } catch (error) {
-      console.error('Broadcast error:', error);
+      console.error("Broadcast error:", error);
       return new Response(
         JSON.stringify({
-          error: 'Failed to broadcast message',
+          error: "Failed to broadcast message",
           details: error instanceof Error ? error.message : String(error),
         }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
   }
 
   /**
    * Broadcast message to all connected clients
-   * 
+   *
    * Sends the notification message to all active WebSocket connections.
    * Removes closed connections from the set.
    */
@@ -198,7 +200,7 @@ export class NotificationRoom {
           closedConnections.push(connection);
         }
       } catch (error) {
-        console.error('Error sending to client:', error);
+        console.error("Error sending to client:", error);
         closedConnections.push(connection);
       }
     }
@@ -211,4 +213,3 @@ export class NotificationRoom {
     return broadcastCount;
   }
 }
-

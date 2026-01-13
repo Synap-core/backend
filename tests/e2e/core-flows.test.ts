@@ -1,6 +1,6 @@
 /**
  * E2E Tests - Core Flows
- * 
+ *
  * Tests critical end-to-end flows:
  * 1. Complete conversation flow
  * 2. Event-driven flow (event → worker → projection)
@@ -8,50 +8,54 @@
  * 4. Security isolation test
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setupTestEnvironment, type TestEnvironment } from './setup.js';
-import { randomUUID } from 'crypto';
-import { createLogger } from '@synap-core/core';
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { setupTestEnvironment, type TestEnvironment } from "./setup.js";
+import { randomUUID } from "crypto";
+import { createLogger } from "@synap-core/core";
 
-const logger = createLogger({ module: 'e2e-core-flows' });
+const logger = createLogger({ module: "e2e-core-flows" });
 
-describe('E2E Core Flows', () => {
+describe("E2E Core Flows", () => {
   let testEnv: TestEnvironment;
   let startTime: number;
 
   beforeAll(async () => {
     startTime = Date.now();
     testEnv = await setupTestEnvironment();
-    logger.info('E2E tests starting');
+    logger.info("E2E tests starting");
   }, 300000); // 5 minutes for setup
 
   afterAll(async () => {
     const duration = Date.now() - startTime;
-    logger.info({ duration: `${duration}ms` }, 'E2E tests completed');
+    logger.info({ duration: `${duration}ms` }, "E2E tests completed");
     if (testEnv) {
       await testEnv.cleanup();
     }
   });
 
-  describe('1. Complete Conversation Flow', () => {
-    it('should handle complete conversation: send message → AI response → action execution', async () => {
+  describe("1. Complete Conversation Flow", () => {
+    it("should handle complete conversation: send message → AI response → action execution", async () => {
       const { apiUrl, users } = testEnv;
       const user = users.userA;
       const threadId = randomUUID();
 
       // Step 1: Send message
       const sendMessageStart = Date.now();
-      const sendMessageResponse = await fetch(`${apiUrl}/trpc/chat.sendMessage`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': user.sessionCookie || '',
+      const sendMessageResponse = await fetch(
+        `${apiUrl}/trpc/chat.sendMessage`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: user.sessionCookie || "",
+          },
+          body: JSON.stringify({
+            threadId,
+            content:
+              "Rappelle-moi d'appeler Jean pour le projet X demain à 14h",
+          }),
         },
-        body: JSON.stringify({
-          threadId,
-          content: 'Rappelle-moi d\'appeler Jean pour le projet X demain à 14h',
-        }),
-      });
+      );
 
       expect(sendMessageResponse.ok).toBe(true);
       const sendMessageResult = await sendMessageResponse.json();
@@ -60,7 +64,10 @@ describe('E2E Core Flows', () => {
       expect(sendMessageResult.result?.data?.threadId).toBe(threadId);
 
       const sendMessageDuration = Date.now() - sendMessageStart;
-      logger.info({ duration: `${sendMessageDuration}ms` }, 'Send message completed');
+      logger.info(
+        { duration: `${sendMessageDuration}ms` },
+        "Send message completed",
+      );
 
       // Step 2: Wait for AI processing (simulate - in real flow, this would be async)
       // Note: In a real E2E test, we'd wait for the Inngest job to complete
@@ -71,11 +78,11 @@ describe('E2E Core Flows', () => {
       const getThreadResponse = await fetch(
         `${apiUrl}/trpc/chat.getThread?input=${encodeURIComponent(JSON.stringify({ threadId, limit: 10 }))}`,
         {
-          method: 'GET',
+          method: "GET",
           headers: {
-            'Cookie': user.sessionCookie || '',
+            Cookie: user.sessionCookie || "",
           },
-        }
+        },
       );
 
       expect(getThreadResponse.ok).toBe(true);
@@ -85,28 +92,31 @@ describe('E2E Core Flows', () => {
       expect(Array.isArray(threadResult.result?.data?.messages)).toBe(true);
 
       const totalDuration = Date.now() - sendMessageStart;
-      logger.info({ duration: `${totalDuration}ms` }, 'Complete conversation flow completed');
+      logger.info(
+        { duration: `${totalDuration}ms` },
+        "Complete conversation flow completed",
+      );
 
       // Performance assertion
       expect(totalDuration).toBeLessThan(10000); // Should complete in < 10 seconds
     }, 30000); // 30s timeout
   });
 
-  describe('2. Event-Driven Flow', () => {
-    it('should handle event: note.creation.requested → worker → entity created', async () => {
+  describe("2. Event-Driven Flow", () => {
+    it("should handle event: note.creation.requested → worker → entity created", async () => {
       const { apiUrl, users } = testEnv;
       const user = users.userA;
 
       // Step 1: Create a note via API
       const createNoteStart = Date.now();
       const createNoteResponse = await fetch(`${apiUrl}/trpc/notes.create`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Cookie': user.sessionCookie || '',
+          "Content-Type": "application/json",
+          Cookie: user.sessionCookie || "",
         },
         body: JSON.stringify({
-          content: 'E2E Test Note - Event Flow',
+          content: "E2E Test Note - Event Flow",
           autoEnrich: false, // Skip AI enrichment for faster test
         }),
       });
@@ -117,7 +127,10 @@ describe('E2E Core Flows', () => {
       const noteId = createNoteResult.result?.data?.id;
 
       const createNoteDuration = Date.now() - createNoteStart;
-      logger.info({ duration: `${createNoteDuration}ms`, noteId }, 'Note created');
+      logger.info(
+        { duration: `${createNoteDuration}ms`, noteId },
+        "Note created",
+      );
 
       // Step 2: Wait for worker to process event
       // In a real E2E test, we'd wait for Inngest to process the event
@@ -128,33 +141,36 @@ describe('E2E Core Flows', () => {
       const getNoteResponse = await fetch(
         `${apiUrl}/trpc/notes.getById?input=${encodeURIComponent(JSON.stringify({ id: noteId }))}`,
         {
-          method: 'GET',
+          method: "GET",
           headers: {
-            'Cookie': user.sessionCookie || '',
+            Cookie: user.sessionCookie || "",
           },
-        }
+        },
       );
 
       expect(getNoteResponse.ok).toBe(true);
       const noteResult = await getNoteResponse.json();
       expect(noteResult.result?.data?.id).toBe(noteId);
-      expect(noteResult.result?.data?.content).toContain('E2E Test Note');
+      expect(noteResult.result?.data?.content).toContain("E2E Test Note");
 
       const totalDuration = Date.now() - createNoteStart;
-      logger.info({ duration: `${totalDuration}ms` }, 'Event-driven flow completed');
+      logger.info(
+        { duration: `${totalDuration}ms` },
+        "Event-driven flow completed",
+      );
 
       // Performance assertion
       expect(totalDuration).toBeLessThan(10000); // Should complete in < 10 seconds
     }, 30000);
   });
 
-  describe('3. Hub Protocol Flow', () => {
-    it('should handle Hub Protocol: generateAccessToken → requestData → submitInsight', async () => {
+  describe("3. Hub Protocol Flow", () => {
+    it("should handle Hub Protocol: generateAccessToken → requestData → submitInsight", async () => {
       const { apiUrl, users } = testEnv;
       const user = users.userA;
 
       if (!user.apiKey) {
-        logger.warn('API key not available, skipping Hub Protocol test');
+        logger.warn("API key not available, skipping Hub Protocol test");
         return;
       }
 
@@ -163,18 +179,21 @@ describe('E2E Core Flows', () => {
 
       // Step 1: Generate access token
       const generateTokenStart = Date.now();
-      const generateTokenResponse = await fetch(`${apiUrl}/trpc/hub.generateAccessToken`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': user.sessionCookie || '',
+      const generateTokenResponse = await fetch(
+        `${apiUrl}/trpc/hub.generateAccessToken`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: user.sessionCookie || "",
+          },
+          body: JSON.stringify({
+            requestId,
+            scope: ["preferences", "notes", "tasks"],
+            expiresIn: 300,
+          }),
         },
-        body: JSON.stringify({
-          requestId,
-          scope: ['preferences', 'notes', 'tasks'],
-          expiresIn: 300,
-        }),
-      });
+      );
 
       expect(generateTokenResponse.ok).toBe(true);
       const tokenResult = await generateTokenResponse.json();
@@ -183,31 +202,40 @@ describe('E2E Core Flows', () => {
       const token = tokenResult.result?.data?.token;
 
       const generateTokenDuration = Date.now() - generateTokenStart;
-      logger.info({ duration: `${generateTokenDuration}ms` }, 'Access token generated');
+      logger.info(
+        { duration: `${generateTokenDuration}ms` },
+        "Access token generated",
+      );
 
       // Step 2: Request data
       const requestDataStart = Date.now();
-      const requestDataResponse = await fetch(`${apiUrl}/trpc/hub.requestData`, {
-        method: 'GET',
-        headers: {
-          'Cookie': user.sessionCookie || '',
+      const requestDataResponse = await fetch(
+        `${apiUrl}/trpc/hub.requestData`,
+        {
+          method: "GET",
+          headers: {
+            Cookie: user.sessionCookie || "",
+          },
+          // Note: tRPC GET requests use query params
         },
-        // Note: tRPC GET requests use query params
-      });
+      );
 
       // For tRPC, we need to use POST for mutations/queries with body
-      const requestDataResponsePost = await fetch(`${apiUrl}/trpc/hub.requestData`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': user.sessionCookie || '',
+      const requestDataResponsePost = await fetch(
+        `${apiUrl}/trpc/hub.requestData`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: user.sessionCookie || "",
+          },
+          body: JSON.stringify({
+            token,
+            scope: ["notes"],
+            filters: {},
+          }),
         },
-        body: JSON.stringify({
-          token,
-          scope: ['notes'],
-          filters: {},
-        }),
-      });
+      );
 
       expect(requestDataResponsePost.ok).toBe(true);
       const dataResult = await requestDataResponsePost.json();
@@ -215,39 +243,42 @@ describe('E2E Core Flows', () => {
       expect(dataResult.result?.data?.scope).toBeDefined();
 
       const requestDataDuration = Date.now() - requestDataStart;
-      logger.info({ duration: `${requestDataDuration}ms` }, 'Data requested');
+      logger.info({ duration: `${requestDataDuration}ms` }, "Data requested");
 
       // Step 3: Submit insight
       const submitInsightStart = Date.now();
       const insight = {
-        version: '1.0',
-        type: 'action_plan' as const,
+        version: "1.0",
+        type: "action_plan" as const,
         correlationId: requestId,
         actions: [
           {
-            eventType: 'task.creation.requested',
+            eventType: "task.creation.requested",
             data: {
-              title: 'E2E Test Task from Hub',
-              description: 'Created via Hub Protocol E2E test',
+              title: "E2E Test Task from Hub",
+              description: "Created via Hub Protocol E2E test",
             },
           },
         ],
         confidence: 0.95,
-        reasoning: 'E2E test insight',
+        reasoning: "E2E test insight",
       };
 
-      const submitInsightResponse = await fetch(`${apiUrl}/trpc/hub.submitInsight`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': user.sessionCookie || '',
+      const submitInsightResponse = await fetch(
+        `${apiUrl}/trpc/hub.submitInsight`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: user.sessionCookie || "",
+          },
+          body: JSON.stringify({
+            token,
+            requestId,
+            insight,
+          }),
         },
-        body: JSON.stringify({
-          token,
-          requestId,
-          insight,
-        }),
-      });
+      );
 
       expect(submitInsightResponse.ok).toBe(true);
       const insightResult = await submitInsightResponse.json();
@@ -256,31 +287,37 @@ describe('E2E Core Flows', () => {
       expect(Array.isArray(insightResult.result?.data?.eventIds)).toBe(true);
 
       const submitInsightDuration = Date.now() - submitInsightStart;
-      logger.info({ duration: `${submitInsightDuration}ms` }, 'Insight submitted');
+      logger.info(
+        { duration: `${submitInsightDuration}ms` },
+        "Insight submitted",
+      );
 
       const totalDuration = Date.now() - hubFlowStart;
-      logger.info({ duration: `${totalDuration}ms` }, 'Hub Protocol flow completed');
+      logger.info(
+        { duration: `${totalDuration}ms` },
+        "Hub Protocol flow completed",
+      );
 
       // Performance assertion
       expect(totalDuration).toBeLessThan(5000); // Should complete in < 5 seconds
     }, 30000);
   });
 
-  describe('4. Security Isolation Test', () => {
-    it('should prevent user A from accessing user B\'s data', async () => {
+  describe("4. Security Isolation Test", () => {
+    it("should prevent user A from accessing user B's data", async () => {
       const { apiUrl, users } = testEnv;
       const userA = users.userA;
       const userB = users.userB;
 
       // Step 1: User A creates a note
       const createNoteResponse = await fetch(`${apiUrl}/trpc/notes.create`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'Cookie': userA.sessionCookie || '',
+          "Content-Type": "application/json",
+          Cookie: userA.sessionCookie || "",
         },
         body: JSON.stringify({
-          content: 'Private note from User A',
+          content: "Private note from User A",
           autoEnrich: false,
         }),
       });
@@ -290,17 +327,17 @@ describe('E2E Core Flows', () => {
       const noteId = createNoteResult.result?.data?.id;
       expect(noteId).toBeDefined();
 
-      logger.info({ noteId, userId: userA.id }, 'User A created note');
+      logger.info({ noteId, userId: userA.id }, "User A created note");
 
       // Step 2: User B tries to access User A's note
       const getNoteResponse = await fetch(
         `${apiUrl}/trpc/notes.getById?input=${encodeURIComponent(JSON.stringify({ id: noteId }))}`,
         {
-          method: 'GET',
+          method: "GET",
           headers: {
-            'Cookie': userB.sessionCookie || '',
+            Cookie: userB.sessionCookie || "",
           },
-        }
+        },
       );
 
       // Should fail with 403 Forbidden or return null/empty
@@ -313,8 +350,7 @@ describe('E2E Core Flows', () => {
         expect(getNoteResponse.status).toBeGreaterThanOrEqual(400);
       }
 
-      logger.info('Security isolation verified');
+      logger.info("Security isolation verified");
     }, 15000);
   });
 });
-

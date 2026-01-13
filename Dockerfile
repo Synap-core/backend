@@ -4,7 +4,7 @@
 FROM node:20-alpine AS base
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@8.15.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 
 # Set working directory
 WORKDIR /app
@@ -36,7 +36,7 @@ RUN pnpm build --filter='!admin-ui'
 FROM node:20-alpine AS production
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@8.15.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 
 WORKDIR /app
 
@@ -78,18 +78,18 @@ RUN apk add --no-cache postgresql-client
 
 # Create startup script that runs migrations then starts server
 RUN echo '#!/bin/sh\n\
-set -e\n\
-echo "🚀 Synap Backend Starting..."\n\
-echo ""\n\
-# Wait for PostgreSQL to be ready\n\
-if [ -n "$DATABASE_URL" ]; then\n\
+  set -e\n\
+  echo "🚀 Synap Backend Starting..."\n\
+  echo ""\n\
+  # Wait for PostgreSQL to be ready\n\
+  if [ -n "$DATABASE_URL" ]; then\n\
   echo "⏳ Waiting for database..."\n\
   DB_HOST=$(echo $DATABASE_URL | sed -n "s/.*@\\([^:]*\\):.*/\\1/p")\n\
   DB_PORT=$(echo $DATABASE_URL | sed -n "s/.*@[^:]*:\\([0-9]*\\)\\/.*/\\1/p" || echo "5432")\n\
   DB_USER=$(echo $DATABASE_URL | sed -n "s/.*:\\/\\/\\([^:]*\\):.*/\\1/p")\n\
   until pg_isready -h "${DB_HOST:-postgres}" -p "${DB_PORT:-5432}" -U "${DB_USER:-postgres}" 2>/dev/null; do\n\
-    echo "  Database not ready, waiting..."\n\
-    sleep 2\n\
+  echo "  Database not ready, waiting..."\n\
+  sleep 2\n\
   done\n\
   echo "✅ Database is ready"\n\
   echo ""\n\
@@ -97,10 +97,10 @@ if [ -n "$DATABASE_URL" ]; then\n\
   echo "📦 Running database migrations..."\n\
   cd packages/database && pnpm db:migrate || echo "⚠️  Migration failed, continuing anyway..."\n\
   echo ""\n\
-fi\n\
-echo "🚀 Starting API server..."\n\
-exec pnpm --filter api start\n\
-' > /app/start.sh && chmod +x /app/start.sh
+  fi\n\
+  echo "🚀 Starting API server..."\n\
+  exec pnpm --filter api start\n\
+  ' > /app/start.sh && chmod +x /app/start.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

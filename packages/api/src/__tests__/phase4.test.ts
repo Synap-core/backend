@@ -1,29 +1,30 @@
 /**
  * Phase 4 Integration Test - CQRS API Layer
- * 
+ *
  * Tests the complete CQRS pattern:
  * 1. Command (mutation) publishes event and returns pending status
  * 2. Query reads directly from projections
  * 3. RLS ensures user isolation
- * 
+ *
  * This test validates:
  * - Commands are asynchronous (return pending immediately)
  * - Queries are fast (read from projections)
  * - Security is enforced (RLS prevents cross-user access)
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
-import { createSynapEvent } from '@synap-core/core';
-import { getEventRepository } from '@synap/database';
-import { db, entities } from '@synap/database';
-import { eq } from '@synap/database';
-import { randomUUID } from 'crypto';
-import { inngest } from '../utils/inngest-client.js';
+import { describe, it, expect, afterAll } from "vitest";
+import { createSynapEvent } from "@synap-core/core";
+import { getEventRepository } from "@synap/database";
+import { db, entities } from "@synap/database";
+import { eq } from "@synap/database";
+import { randomUUID } from "crypto";
+import { inngest } from "../utils/inngest-client.js";
 
-describe('Phase 4: CQRS API Layer Integration Test', () => {
+describe("Phase 4: CQRS API Layer Integration Test", () => {
   const userAId = `test-user-a-${randomUUID()}`;
   const userBId = `test-user-b-${randomUUID()}`;
-  const testNoteContent = '# Test Note\n\nThis is a test note for Phase 4 CQRS testing.';
+  const testNoteContent =
+    "# Test Note\n\nThis is a test note for Phase 4 CQRS testing.";
 
   afterAll(async () => {
     // Cleanup test data
@@ -32,12 +33,12 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
       await db.delete(entities).where(eq(entities.userId, userAId) as any);
       await db.delete(entities).where(eq(entities.userId, userBId) as any);
     } catch (error) {
-      console.warn('Cleanup failed:', error);
+      console.warn("Cleanup failed:", error);
     }
   });
 
-  describe('CQRS Pattern', () => {
-    it('should return pending status immediately for mutations', async () => {
+  describe("CQRS Pattern", () => {
+    it("should return pending status immediately for mutations", async () => {
       // Simulate a mutation call (notes.create)
       const requestId = randomUUID();
       const entityId = randomUUID();
@@ -45,14 +46,14 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
 
       // Create event (simulating what the mutation does)
       const event = createSynapEvent({
-        type: 'entities.create.requested',
+        type: "entities.create.requested",
         userId: userAId,
         aggregateId: entityId,
         data: {
           content: testNoteContent,
-          title: 'Test Note',
+          title: "Test Note",
         },
-        source: 'api',
+        source: "api",
         requestId,
         correlationId,
       });
@@ -63,26 +64,26 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
 
       // Verify event was stored
       expect(eventRecord.id).toBe(event.id);
-      expect(eventRecord.eventType).toBe('note.creation.requested');
+      expect(eventRecord.eventType).toBe("note.creation.requested");
 
       // Simulate mutation response (what API returns)
       const mutationResponse = {
         success: true,
-        status: 'pending' as const,
+        status: "pending" as const,
         requestId,
         entityId,
-        message: 'Note creation request received. Processing asynchronously.',
+        message: "Note creation request received. Processing asynchronously.",
       };
 
       // Verify response format
       expect(mutationResponse.success).toBe(true);
-      expect(mutationResponse.status).toBe('pending');
+      expect(mutationResponse.status).toBe("pending");
       expect(mutationResponse.requestId).toBe(requestId);
       expect(mutationResponse.entityId).toBe(entityId);
 
       // Publish to Inngest (simulating what mutation does)
       await inngest.send({
-        name: 'api/event.logged',
+        name: "api/event.logged",
         data: {
           id: eventRecord.id,
           type: eventRecord.eventType,
@@ -104,7 +105,7 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
       });
     }, 30000);
 
-    it('should read from projections after async processing', async () => {
+    it("should read from projections after async processing", async () => {
       // Wait for handlers to process the event
       await new Promise((resolve) => setTimeout(resolve, 3000));
 
@@ -122,26 +123,26 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
       if (queryResult.length > 0) {
         const note = queryResult[0] as any;
         expect(note.userId).toBe(userAId);
-        expect(note.type).toBe('note');
+        expect(note.type).toBe("note");
         expect(note.filePath).toBeTruthy(); // File reference from storage
         expect(note.content).toBeUndefined(); // ✅ No content in DB
       }
     }, 30000);
   });
 
-  describe('RLS Security', () => {
-    it('should prevent user B from accessing user A notes', async () => {
+  describe("RLS Security", () => {
+    it("should prevent user B from accessing user A notes", async () => {
       // Create a note for user A
       const userANoteId = randomUUID();
       const userAEvent = createSynapEvent({
-        type: 'entities.create.requested',
+        type: "entities.create.requested",
         userId: userAId,
         aggregateId: userANoteId,
         data: {
-          content: 'User A private note',
-          title: 'User A Note',
+          content: "User A private note",
+          title: "User A Note",
         },
-        source: 'api',
+        source: "api",
       });
 
       const eventRepo = getEventRepository();
@@ -149,12 +150,12 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
 
       // Publish to Inngest
       await inngest.send({
-        name: 'api/event.logged',
+        name: "api/event.logged",
         data: {
           id: userAEvent.id,
           type: userAEvent.type,
           aggregateId: userAEvent.aggregateId,
-          aggregateType: 'entity',
+          aggregateType: "entity",
           userId: userAEvent.userId,
           version: 1,
           timestamp: userAEvent.timestamp.toISOString(),
@@ -180,7 +181,9 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
         .limit(10);
 
       // Verify user B cannot see user A's notes
-      const userANotesInBQuery = userBQuery.filter((note: any) => note.userId === userAId);
+      const userANotesInBQuery = userBQuery.filter(
+        (note: any) => note.userId === userAId,
+      );
       expect(userANotesInBQuery.length).toBe(0); // ✅ RLS prevents cross-user access
 
       // Verify user A can see their own notes
@@ -190,15 +193,17 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
         .where(eq(entities.userId, userAId) as any)
         .limit(10);
 
-      const userANotesInAQuery = userAQuery.filter((note: any) => note.userId === userAId);
+      const userANotesInAQuery = userAQuery.filter(
+        (note: any) => note.userId === userAId,
+      );
       // User A should see their own notes (if processing completed)
       // This validates that RLS allows users to see their own data
       expect(userANotesInAQuery.length).toBeGreaterThanOrEqual(0);
     }, 30000);
   });
 
-  describe('Query Performance', () => {
-    it('should read directly from projections (no events generated)', async () => {
+  describe("Query Performance", () => {
+    it("should read directly from projections (no events generated)", async () => {
       // Query should be fast (direct DB read)
       const startTime = Date.now();
 
@@ -219,4 +224,3 @@ describe('Phase 4: CQRS API Layer Integration Test', () => {
     });
   });
 });
-

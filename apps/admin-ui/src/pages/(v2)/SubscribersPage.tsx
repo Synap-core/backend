@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   Title,
   Text,
@@ -19,21 +19,31 @@ import {
   Drawer,
   ScrollArea,
   Divider,
-} from '@mantine/core';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { 
-  IconWebhook, IconRefresh, IconPlus, IconTrash, IconCheck,
-  IconCpu, IconBolt, IconArrowRight
-} from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
-import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
-import { AdminSDK } from '../../lib/sdk';
-import { trpc } from '../../lib/trpc';
+} from "@mantine/core";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import {
+  IconWebhook,
+  IconRefresh,
+  IconPlus,
+  IconTrash,
+  IconCheck,
+  IconCpu,
+  IconBolt,
+  IconArrowRight,
+} from "@tabler/icons-react";
+import { notifications } from "@mantine/notifications";
+import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
+import { AdminSDK } from "../../lib/sdk";
+import { trpc } from "../../lib/trpc";
 
 export default function SubscribersPage() {
-  const [activeTab, setActiveTab] = useState<string | null>('workers');
+  const [activeTab, setActiveTab] = useState<string | null>("workers");
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [newWebhook, setNewWebhook] = useState({ name: '', url: '', eventTypes: [] as string[] });
+  const [newWebhook, setNewWebhook] = useState({
+    name: "",
+    url: "",
+    eventTypes: [] as string[],
+  });
   const [selectedWorker, setSelectedWorker] = useState<any | null>(null);
 
   // Fetch capabilities for event types and workers
@@ -41,8 +51,13 @@ export default function SubscribersPage() {
   const workers = (capabilities as any)?.workers || [];
 
   // List Webhooks
-  const { data: webhooks, isLoading, refetch, error } = useQuery({
-    queryKey: ['webhooks', 'list'],
+  const {
+    data: webhooks,
+    isLoading,
+    refetch,
+    error,
+  } = useQuery({
+    queryKey: ["webhooks", "list"],
     queryFn: () => AdminSDK.webhooks.list(),
     retry: false,
   });
@@ -51,31 +66,49 @@ export default function SubscribersPage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => AdminSDK.webhooks.create(data),
     onSuccess: () => {
-      notifications.show({ title: 'Webhook Created', message: 'Subscription added', color: 'green' });
+      notifications.show({
+        title: "Webhook Created",
+        message: "Subscription added",
+        color: "green",
+      });
       setCreateModalOpen(false);
-      setNewWebhook({ name: '', url: '', eventTypes: [] });
+      setNewWebhook({ name: "", url: "", eventTypes: [] });
       refetch();
     },
     onError: (err: any) => {
-      notifications.show({ title: 'Failed', message: err.message, color: 'red' });
-    }
+      notifications.show({
+        title: "Failed",
+        message: err.message,
+        color: "red",
+      });
+    },
   });
 
   // Delete Webhook
   const deleteMutation = useMutation({
     mutationFn: (id: string) => AdminSDK.webhooks.delete(id),
     onSuccess: () => {
-      notifications.show({ title: 'Deleted', message: 'Webhook removed', color: 'green' });
+      notifications.show({
+        title: "Deleted",
+        message: "Webhook removed",
+        color: "green",
+      });
       refetch();
-    }
+    },
   });
 
   return (
-    <div style={{ width: '100%', padding: spacing[8] }}>
+    <div style={{ width: "100%", padding: spacing[8] }}>
       <Stack gap={spacing[6]}>
         {/* Header */}
         <div>
-          <Title order={1} style={{ fontFamily: typography.fontFamily.sans, color: colors.text.primary }}>
+          <Title
+            order={1}
+            style={{
+              fontFamily: typography.fontFamily.sans,
+              color: colors.text.primary,
+            }}
+          >
             Automation
           </Title>
           <Text size="sm" style={{ color: colors.text.secondary }}>
@@ -98,33 +131,52 @@ export default function SubscribersPage() {
           <Tabs.Panel value="workers" pt="md">
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
               {workers.map((worker: any) => (
-                <Card 
+                <Card
                   key={worker.name}
-                  padding="md" 
+                  padding="md"
                   radius="md"
-                  style={{ 
-                    cursor: 'pointer', 
+                  style={{
+                    cursor: "pointer",
                     border: `1px solid ${colors.border.light}`,
-                    transition: 'all 0.15s ease',
+                    transition: "all 0.15s ease",
                   }}
                   onClick={() => setSelectedWorker(worker)}
-                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = colors.border.interactive; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = colors.border.light; }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor =
+                      colors.border.interactive;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = colors.border.light;
+                  }}
                 >
                   <Group gap="sm" mb="sm">
-                    <ThemeIcon size={36} radius="md" color="violet" variant="light">
+                    <ThemeIcon
+                      size={36}
+                      radius="md"
+                      color="violet"
+                      variant="light"
+                    >
                       <IconCpu size={20} />
                     </ThemeIcon>
                     <div style={{ flex: 1 }}>
-                      <Text size="sm" fw={500}>{worker.name}</Text>
-                      <Text size="xs" c="dimmed">{worker.description || 'Inngest Worker'}</Text>
+                      <Text size="sm" fw={500}>
+                        {worker.name}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {worker.description || "Inngest Worker"}
+                      </Text>
                     </div>
                   </Group>
-                  
+
                   <Group gap={4} wrap="wrap">
                     {worker.triggers?.slice(0, 2).map((trigger: string) => (
-                      <Badge key={trigger} size="xs" variant="light" color="blue">
-                        {trigger.split('.').slice(-2).join('.')}
+                      <Badge
+                        key={trigger}
+                        size="xs"
+                        variant="light"
+                        color="blue"
+                      >
+                        {trigger.split(".").slice(-2).join(".")}
                       </Badge>
                     ))}
                     {worker.triggers?.length > 2 && (
@@ -135,9 +187,12 @@ export default function SubscribersPage() {
                   </Group>
                 </Card>
               ))}
-              
+
               {workers.length === 0 && (
-                <Card padding="xl" style={{ gridColumn: '1 / -1', textAlign: 'center' }}>
+                <Card
+                  padding="xl"
+                  style={{ gridColumn: "1 / -1", textAlign: "center" }}
+                >
                   <Text c="dimmed">No workers registered</Text>
                 </Card>
               )}
@@ -146,21 +201,37 @@ export default function SubscribersPage() {
 
           {/* Webhooks Tab */}
           <Tabs.Panel value="webhooks" pt="md">
-            <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
+            <Card
+              padding="md"
+              radius={borderRadius.lg}
+              style={{ border: `1px solid ${colors.border.default}` }}
+            >
               <Group justify="space-between" mb="md">
-                <Text size="lg" fw={600}>Webhooks</Text>
+                <Text size="lg" fw={600}>
+                  Webhooks
+                </Text>
                 <Group>
-                  <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => refetch()} loading={isLoading}>
+                  <Button
+                    variant="light"
+                    leftSection={<IconRefresh size={16} />}
+                    onClick={() => refetch()}
+                    loading={isLoading}
+                  >
                     Refresh
                   </Button>
-                  <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
+                  <Button
+                    leftSection={<IconPlus size={16} />}
+                    onClick={() => setCreateModalOpen(true)}
+                  >
                     Add Webhook
                   </Button>
                 </Group>
               </Group>
 
               {error ? (
-                <Text c="red" size="sm">Failed to load webhooks: {(error as Error).message}</Text>
+                <Text c="red" size="sm">
+                  Failed to load webhooks: {(error as Error).message}
+                </Text>
               ) : (
                 <Table striped highlightOnHover>
                   <Table.Thead>
@@ -175,27 +246,43 @@ export default function SubscribersPage() {
                   <Table.Tbody>
                     {(webhooks as any[])?.map((wh: any) => (
                       <Table.Tr key={wh.id}>
-                        <Table.Td><Text size="sm" fw={500}>{wh.name}</Text></Table.Td>
                         <Table.Td>
-                          <Code style={{ fontSize: typography.fontSize.xs }}>{wh.url}</Code>
+                          <Text size="sm" fw={500}>
+                            {wh.name}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Code style={{ fontSize: typography.fontSize.xs }}>
+                            {wh.url}
+                          </Code>
                         </Table.Td>
                         <Table.Td>
                           <Group gap={4}>
                             {wh.eventTypes?.slice(0, 2).map((et: string) => (
-                              <Badge key={et} size="xs" variant="light">{et.split('.').slice(-2).join('.')}</Badge>
+                              <Badge key={et} size="xs" variant="light">
+                                {et.split(".").slice(-2).join(".")}
+                              </Badge>
                             ))}
                             {wh.eventTypes?.length > 2 && (
-                              <Badge size="xs" variant="light" color="gray">+{wh.eventTypes.length - 2}</Badge>
+                              <Badge size="xs" variant="light" color="gray">
+                                +{wh.eventTypes.length - 2}
+                              </Badge>
                             )}
                           </Group>
                         </Table.Td>
                         <Table.Td>
-                          <Badge color="green" size="sm" leftSection={<IconCheck size={10} />}>Active</Badge>
+                          <Badge
+                            color="green"
+                            size="sm"
+                            leftSection={<IconCheck size={10} />}
+                          >
+                            Active
+                          </Badge>
                         </Table.Td>
                         <Table.Td>
-                          <ActionIcon 
-                            variant="subtle" 
-                            color="red" 
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
                             onClick={() => deleteMutation.mutate(wh.id)}
                             loading={deleteMutation.isPending}
                           >
@@ -207,7 +294,9 @@ export default function SubscribersPage() {
                     {(!webhooks || (webhooks as any[]).length === 0) && (
                       <Table.Tr>
                         <Table.Td colSpan={5}>
-                          <Text ta="center" c="dimmed" py="lg">No webhooks configured</Text>
+                          <Text ta="center" c="dimmed" py="lg">
+                            No webhooks configured
+                          </Text>
                         </Table.Td>
                       </Table.Tr>
                     )}
@@ -230,26 +319,36 @@ export default function SubscribersPage() {
             <ThemeIcon size={28} radius="md" color="violet">
               <IconCpu size={16} />
             </ThemeIcon>
-            <Text size="lg" fw={600}>{selectedWorker?.name}</Text>
+            <Text size="lg" fw={600}>
+              {selectedWorker?.name}
+            </Text>
           </Group>
         }
       >
         {selectedWorker && (
           <Stack gap="md">
             <div>
-              <Text size="sm" fw={600} mb="xs">Description</Text>
-              <Text size="sm" c="dimmed">{selectedWorker.description || 'No description'}</Text>
+              <Text size="sm" fw={600} mb="xs">
+                Description
+              </Text>
+              <Text size="sm" c="dimmed">
+                {selectedWorker.description || "No description"}
+              </Text>
             </div>
 
             <Divider />
 
             <div>
-              <Text size="sm" fw={600} mb="xs">Triggers ({selectedWorker.triggers?.length || 0})</Text>
+              <Text size="sm" fw={600} mb="xs">
+                Triggers ({selectedWorker.triggers?.length || 0})
+              </Text>
               <Stack gap={4}>
                 {selectedWorker.triggers?.map((trigger: string) => (
                   <Group key={trigger} gap="xs">
                     <IconBolt size={14} color={colors.eventTypes.created} />
-                    <Code style={{ fontSize: typography.fontSize.xs }}>{trigger}</Code>
+                    <Code style={{ fontSize: typography.fontSize.xs }}>
+                      {trigger}
+                    </Code>
                   </Group>
                 ))}
               </Stack>
@@ -258,20 +357,30 @@ export default function SubscribersPage() {
             <Divider />
 
             <div>
-              <Text size="sm" fw={600} mb="xs">Flow</Text>
+              <Text size="sm" fw={600} mb="xs">
+                Flow
+              </Text>
               <Group gap="xs" align="center">
-                <Badge variant="light" color="blue" size="lg">Event Triggers</Badge>
+                <Badge variant="light" color="blue" size="lg">
+                  Event Triggers
+                </Badge>
                 <IconArrowRight size={16} color={colors.text.tertiary} />
-                <Badge variant="filled" color="violet" size="lg">{selectedWorker.name}</Badge>
+                <Badge variant="filled" color="violet" size="lg">
+                  {selectedWorker.name}
+                </Badge>
                 <IconArrowRight size={16} color={colors.text.tertiary} />
-                <Badge variant="light" color="green" size="lg">Output Events</Badge>
+                <Badge variant="light" color="green" size="lg">
+                  Output Events
+                </Badge>
               </Group>
             </div>
 
             <Divider />
 
             <div>
-              <Text size="sm" fw={600} mb="xs">Metadata</Text>
+              <Text size="sm" fw={600} mb="xs">
+                Metadata
+              </Text>
               <ScrollArea style={{ maxHeight: 200 }}>
                 <Code block>{JSON.stringify(selectedWorker, null, 2)}</Code>
               </ScrollArea>
@@ -281,33 +390,43 @@ export default function SubscribersPage() {
       </Drawer>
 
       {/* Create Webhook Modal */}
-      <Modal 
-        opened={createModalOpen} 
-        onClose={() => setCreateModalOpen(false)} 
+      <Modal
+        opened={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
         title="Add Webhook"
       >
         <Stack gap="sm">
-          <TextInput 
-            label="Name" 
-            placeholder="My Integration" 
+          <TextInput
+            label="Name"
+            placeholder="My Integration"
             value={newWebhook.name}
-            onChange={(e) => setNewWebhook({...newWebhook, name: e.target.value})}
+            onChange={(e) =>
+              setNewWebhook({ ...newWebhook, name: e.target.value })
+            }
           />
-          <TextInput 
-            label="Endpoint URL" 
-            placeholder="https://api.example.com/webhook" 
+          <TextInput
+            label="Endpoint URL"
+            placeholder="https://api.example.com/webhook"
             value={newWebhook.url}
-            onChange={(e) => setNewWebhook({...newWebhook, url: e.target.value})}
+            onChange={(e) =>
+              setNewWebhook({ ...newWebhook, url: e.target.value })
+            }
           />
           <MultiSelect
             label="Event Types"
             placeholder="Select events"
             data={capabilities?.eventTypes?.map((et: any) => et.type) || []}
             value={newWebhook.eventTypes}
-            onChange={(val) => setNewWebhook({...newWebhook, eventTypes: val})}
+            onChange={(val) =>
+              setNewWebhook({ ...newWebhook, eventTypes: val })
+            }
             searchable
           />
-          <Button fullWidth onClick={() => createMutation.mutate(newWebhook)} loading={createMutation.isPending}>
+          <Button
+            fullWidth
+            onClick={() => createMutation.mutate(newWebhook)}
+            loading={createMutation.isPending}
+          >
             Create Webhook
           </Button>
         </Stack>

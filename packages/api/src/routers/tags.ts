@@ -1,44 +1,45 @@
 /**
  * Tags Router - Tag Management API
- * 
+ *
  * Handles tag CRUD and entity-tag relationships
  * Uses: tags, entity_tags tables
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { db, tags, entityTags, eq, and, desc } from '@synap/database';
-import { insertTagSchema, insertEntityTagSchema } from '@synap/database/schema';
-import { createLogger } from '@synap-core/core';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import { db, tags, entityTags, eq, and, desc } from "@synap/database";
+import { insertTagSchema, insertEntityTagSchema } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
 
-const logger = createLogger({ module: 'tags-router' });
+const logger = createLogger({ module: "tags-router" });
 
 export const tagsRouter = router({
   /**
    * List all tags for the user
    */
-  list: protectedProcedure
-    .query(async ({ ctx }) => {
-      const userId = ctx.userId;
+  list: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.userId;
 
-      const results = await db.query.tags.findMany({
-        where: eq(tags.userId, userId),
-        orderBy: [desc(tags.createdAt)],
-      });
+    const results = await db.query.tags.findMany({
+      where: eq(tags.userId, userId),
+      orderBy: [desc(tags.createdAt)],
+    });
 
-      logger.debug({ userId, count: results.length }, 'Listed tags');
-      
-      return { tags: results };
-    }),
+    logger.debug({ userId, count: results.length }, "Listed tags");
+
+    return { tags: results };
+  }),
 
   /**
    * Create a new tag
    */
   create: protectedProcedure
-    .input(insertTagSchema.pick({
-      name: true,
-      color: true,
-    }))
+    .input(
+      insertTagSchema.pick({
+        name: true,
+        color: true,
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
@@ -46,7 +47,7 @@ export const tagsRouter = router({
       const existing = await db.query.tags.findFirst({
         where: and(
           eq(tags.userId, userId),
-          eq(tags.name, input.name)
+          eq(tags.name, input.name as string),
         ),
       });
 
@@ -54,15 +55,16 @@ export const tagsRouter = router({
         throw new Error(`Tag with name "${input.name}" already exists`);
       }
 
-      const [tag] = await db.insert(tags)
+      const [tag] = await db
+        .insert(tags)
         .values({
           userId,
-          name: input.name,
-          color: input.color || '#gray',
-        })
+          name: input.name as string,
+          color: input.color || "#gray",
+        } as any)
         .returning();
 
-      logger.info({ userId, tagId: tag.id, name: tag.name }, 'Created tag');
+      logger.info({ userId, tagId: tag.id, name: tag.name }, "Created tag");
 
       return { tag };
     }),
@@ -71,33 +73,35 @@ export const tagsRouter = router({
    * Update tag
    */
   update: protectedProcedure
-    .input(insertTagSchema.pick({
-      id: true,
-      name: true,
-      color: true,
-    }).partial({
-      name: true,
-      color: true,
-    }))
+    .input(
+      insertTagSchema
+        .pick({
+          id: true,
+          name: true,
+          color: true,
+        })
+        .partial({
+          name: true,
+          color: true,
+        }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
-      const [updated] = await db.update(tags)
+      const [updated] = await db
+        .update(tags)
         .set({
           name: input.name,
           color: input.color,
-        })
-        .where(and(
-          eq(tags.id, input.id),
-          eq(tags.userId, userId)
-        ))
+        } as any)
+        .where(and(eq(tags.id, input.id as string), eq(tags.userId, userId)))
         .returning();
 
       if (!updated) {
-        throw new Error('Tag not found');
+        throw new Error("Tag not found");
       }
 
-      logger.info({ userId, tagId: updated.id }, 'Updated tag');
+      logger.info({ userId, tagId: updated.id }, "Updated tag");
 
       return { tag: updated };
     }),
@@ -106,25 +110,25 @@ export const tagsRouter = router({
    * Delete tag (and remove all entity associations)
    */
   delete: protectedProcedure
-    .input(insertTagSchema.pick({
-      id: true,
-    }))
+    .input(
+      insertTagSchema.pick({
+        id: true,
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
       // Delete tag (entity_tags will cascade via DB foreign key)
-      const result = await db.delete(tags)
-        .where(and(
-          eq(tags.id, input.id),
-          eq(tags.userId, userId)
-        ))
+      const result = await db
+        .delete(tags)
+        .where(and(eq(tags.id, input.id as string), eq(tags.userId, userId)))
         .returning({ id: tags.id });
 
       if (result.length === 0) {
-        throw new Error('Tag not found');
+        throw new Error("Tag not found");
       }
 
-      logger.info({ userId, tagId: input.id }, 'Deleted tag');
+      logger.info({ userId, tagId: input.id }, "Deleted tag");
 
       return { success: true };
     }),
@@ -133,35 +137,38 @@ export const tagsRouter = router({
    * Attach tag to entity
    */
   attach: protectedProcedure
-    .input(insertEntityTagSchema.pick({
-      tagId: true,
-      entityId: true,
-    }))
+    .input(
+      insertEntityTagSchema.pick({
+        tagId: true,
+        entityId: true,
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
       // Verify tag ownership
       const tag = await db.query.tags.findFirst({
-        where: and(
-          eq(tags.id, input.tagId),
-          eq(tags.userId, userId)
-        ),
+        where: and(eq(tags.id, input.tagId as string), eq(tags.userId, userId)),
       });
 
       if (!tag) {
-        throw new Error('Tag not found');
+        throw new Error("Tag not found");
       }
 
       // Insert with ON CONFLICT DO NOTHING (idempotent)
-      await db.insert(entityTags)
+      await db
+        .insert(entityTags)
         .values({
           userId,
-          tagId: input.tagId,
-          entityId: input.entityId,
-        })
+          tagId: input.tagId as string,
+          entityId: input.entityId as string,
+        } as any)
         .onConflictDoNothing();
 
-      logger.debug({ userId, tagId: input.tagId, entityId: input.entityId }, 'Attached tag to entity');
+      logger.debug(
+        { userId, tagId: input.tagId, entityId: input.entityId },
+        "Attached tag to entity",
+      );
 
       return { success: true };
     }),
@@ -170,18 +177,26 @@ export const tagsRouter = router({
    * Detach tag from entity
    */
   detach: protectedProcedure
-    .input(insertEntityTagSchema.pick({
-      tagId: true,
-      entityId: true,
-    }))
+    .input(
+      insertEntityTagSchema.pick({
+        tagId: true,
+        entityId: true,
+      }),
+    )
     .mutation(async ({ input }) => {
-      await db.delete(entityTags)
-        .where(and(
-          eq(entityTags.tagId, input.tagId),
-          eq(entityTags.entityId, input.entityId)
-        ));
+      await db
+        .delete(entityTags)
+        .where(
+          and(
+            eq(entityTags.tagId, input.tagId as string),
+            eq(entityTags.entityId, input.entityId as string),
+          ),
+        );
 
-      logger.debug({ tagId: input.tagId, entityId: input.entityId }, 'Detached tag from entity');
+      logger.debug(
+        { tagId: input.tagId, entityId: input.entityId },
+        "Detached tag from entity",
+      );
 
       return { success: true };
     }),
@@ -190,15 +205,17 @@ export const tagsRouter = router({
    * Get all tags for an entity
    */
   getForEntity: protectedProcedure
-    .input(insertEntityTagSchema.pick({
-      entityId: true,
-    }))
+    .input(
+      insertEntityTagSchema.pick({
+        entityId: true,
+      }),
+    )
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;
 
       // Query entity_tags join tags
       const results = await db.query.entityTags.findMany({
-        where: eq(entityTags.entityId, input.entityId),
+        where: eq(entityTags.entityId, input.entityId as string),
         with: {
           tag: true,
         },
@@ -216,33 +233,34 @@ export const tagsRouter = router({
    * Get all entities with a specific tag
    */
   getEntitiesWithTag: protectedProcedure
-    .input(insertEntityTagSchema.pick({
-      tagId: true,
-    }).extend({
-      limit: z.number().min(1).max(100).default(50),
-    }))
+    .input(
+      insertEntityTagSchema
+        .pick({
+          tagId: true,
+        })
+        .extend({
+          limit: z.number().min(1).max(100).default(50),
+        }),
+    )
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;
 
       // Verify tag ownership
       const tag = await db.query.tags.findFirst({
-        where: and(
-          eq(tags.id, input.tagId),
-          eq(tags.userId, userId)
-        ),
+        where: and(eq(tags.id, input.tagId as string), eq(tags.userId, userId)),
       });
 
       if (!tag) {
-        throw new Error('Tag not found');
+        throw new Error("Tag not found");
       }
 
       // Get entities via entity_tags join
       const results = await db.query.entityTags.findMany({
-        where: eq(entityTags.tagId, input.tagId),
+        where: eq(entityTags.tagId, input.tagId as string),
         with: {
           entity: true,
         },
-        limit: input.limit,
+        limit: input.limit as number,
       });
 
       const entities = results

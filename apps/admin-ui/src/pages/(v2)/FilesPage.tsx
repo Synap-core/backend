@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   Title,
   Text,
@@ -16,7 +16,7 @@ import {
   ScrollArea,
   ThemeIcon,
   Tooltip,
-} from '@mantine/core';
+} from "@mantine/core";
 import {
   IconFolder,
   IconFile,
@@ -27,41 +27,49 @@ import {
   IconChevronRight,
   IconHome,
   IconAlertCircle,
-} from '@tabler/icons-react';
-import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
-import { trpc } from '../../lib/trpc';
-import { showSuccessNotification, showErrorNotification } from '../../lib/notifications';
+} from "@tabler/icons-react";
+import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
+import { trpc } from "../../lib/trpc";
+import {
+  showSuccessNotification,
+  showErrorNotification,
+} from "../../lib/notifications";
 
 // Format file size
 function formatSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
+  if (bytes === 0) return "0 B";
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
 // Format date
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  if (!dateStr) return "-";
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
 export default function FilesPage() {
-  const [currentBucket, setCurrentBucket] = useState('synap-storage');
+  const [currentBucket, setCurrentBucket] = useState("synap-storage");
   const [currentPath, setCurrentPath] = useState<string[]>([]);
 
   // Fetch buckets
-  const { data: bucketsData, isLoading: isLoadingBuckets } = trpc.storage.listBuckets.useQuery();
+  const { data: bucketsData, isLoading: isLoadingBuckets } =
+    trpc.storage.listBuckets.useQuery();
 
   // Fetch files
-  const prefix = currentPath.length > 0 ? currentPath.join('/') + '/' : '';
-  const { data: filesData, isLoading: isLoadingFiles, refetch } = trpc.storage.listFiles.useQuery({
+  const prefix = currentPath.length > 0 ? currentPath.join("/") + "/" : "";
+  const {
+    data: filesData,
+    isLoading: isLoadingFiles,
+    refetch,
+  } = trpc.storage.listFiles.useQuery({
     bucket: currentBucket,
     prefix,
   });
@@ -69,7 +77,7 @@ export default function FilesPage() {
   // Delete mutation
   const deleteMutation = trpc.storage.deleteFile.useMutation({
     onSuccess: () => {
-      showSuccessNotification({ message: 'File deleted successfully' });
+      showSuccessNotification({ message: "File deleted successfully" });
       refetch();
     },
     onError: (err) => {
@@ -91,26 +99,35 @@ export default function FilesPage() {
 
   const handleDownload = async (path: string) => {
     // Open download URL in new tab
-    window.open(`${import.meta.env.VITE_API_URL || ''}/api/files/download?path=${encodeURIComponent(path)}`, '_blank');
+    window.open(
+      `${import.meta.env.VITE_API_URL || ""}/api/files/download?path=${encodeURIComponent(path)}`,
+      "_blank",
+    );
   };
 
   const handleDelete = (path: string) => {
-    if (confirm('Are you sure you want to delete this file?')) {
+    if (confirm("Are you sure you want to delete this file?")) {
       deleteMutation.mutate({ path });
     }
   };
 
   const buckets = bucketsData?.buckets || [];
   const items = filesData?.items || [];
-  const hasError = 'error' in (filesData || {});
+  const hasError = "error" in (filesData || {});
 
   return (
-    <div style={{ width: '100%', padding: spacing[8] }}>
+    <div style={{ width: "100%", padding: spacing[8] }}>
       <Stack gap={spacing[6]}>
         {/* Header */}
         <Group justify="space-between">
           <div>
-            <Title order={1} style={{ fontFamily: typography.fontFamily.sans, color: colors.text.primary }}>
+            <Title
+              order={1}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                color: colors.text.primary,
+              }}
+            >
               Files
             </Title>
             <Text size="sm" style={{ color: colors.text.secondary }}>
@@ -128,10 +145,22 @@ export default function FilesPage() {
         </Group>
 
         {/* Main Content */}
-        <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: spacing[4] }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "200px 1fr",
+            gap: spacing[4],
+          }}
+        >
           {/* Buckets Sidebar */}
-          <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
-            <Text size="sm" fw={600} mb="sm">Buckets</Text>
+          <Card
+            padding="md"
+            radius={borderRadius.lg}
+            style={{ border: `1px solid ${colors.border.default}` }}
+          >
+            <Text size="sm" fw={600} mb="sm">
+              Buckets
+            </Text>
             {isLoadingBuckets ? (
               <Loader size="sm" />
             ) : (
@@ -140,7 +169,9 @@ export default function FilesPage() {
                   buckets.map((bucket) => (
                     <Button
                       key={bucket.name}
-                      variant={currentBucket === bucket.name ? 'light' : 'subtle'}
+                      variant={
+                        currentBucket === bucket.name ? "light" : "subtle"
+                      }
                       size="xs"
                       fullWidth
                       justify="flex-start"
@@ -154,21 +185,27 @@ export default function FilesPage() {
                     </Button>
                   ))
                 ) : (
-                  <Text size="xs" c="dimmed">No buckets found</Text>
+                  <Text size="xs" c="dimmed">
+                    No buckets found
+                  </Text>
                 )}
               </Stack>
             )}
           </Card>
 
           {/* Files Area */}
-          <Card padding="md" radius={borderRadius.lg} style={{ border: `1px solid ${colors.border.default}` }}>
+          <Card
+            padding="md"
+            radius={borderRadius.lg}
+            style={{ border: `1px solid ${colors.border.default}` }}
+          >
             {/* Breadcrumbs */}
             <Group mb="md">
               <Breadcrumbs separator={<IconChevronRight size={14} />}>
                 <Anchor
                   size="sm"
                   onClick={() => handleBreadcrumbClick(-1)}
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: "pointer" }}
                 >
                   <Group gap={4}>
                     <IconHome size={14} />
@@ -180,7 +217,7 @@ export default function FilesPage() {
                     key={index}
                     size="sm"
                     onClick={() => handleBreadcrumbClick(index)}
-                    style={{ cursor: 'pointer' }}
+                    style={{ cursor: "pointer" }}
                   >
                     {segment}
                   </Anchor>
@@ -191,7 +228,7 @@ export default function FilesPage() {
             {/* Error Alert */}
             {hasError && (
               <Alert icon={<IconAlertCircle size={16} />} color="red" mb="md">
-                {(filesData as any).error || 'Failed to load files'}
+                {(filesData as any).error || "Failed to load files"}
               </Alert>
             )}
 
@@ -201,51 +238,67 @@ export default function FilesPage() {
                 <Loader />
               </Group>
             ) : (
-              <ScrollArea style={{ maxHeight: '500px' }}>
+              <ScrollArea style={{ maxHeight: "500px" }}>
                 <Table highlightOnHover>
                   <Table.Thead>
                     <Table.Tr>
                       <Table.Th>Name</Table.Th>
                       <Table.Th>Size</Table.Th>
                       <Table.Th>Modified</Table.Th>
-                      <Table.Th style={{ width: '100px' }}>Actions</Table.Th>
+                      <Table.Th style={{ width: "100px" }}>Actions</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
                     {items.length > 0 ? (
                       items.map((item) => (
-                        <Table.Tr 
+                        <Table.Tr
                           key={item.path}
-                          style={{ cursor: item.type === 'folder' ? 'pointer' : 'default' }}
-                          onClick={() => item.type === 'folder' && handleNavigate(item.name)}
+                          style={{
+                            cursor:
+                              item.type === "folder" ? "pointer" : "default",
+                          }}
+                          onClick={() =>
+                            item.type === "folder" && handleNavigate(item.name)
+                          }
                         >
                           <Table.Td>
                             <Group gap="xs">
-                              <ThemeIcon 
-                                size={24} 
-                                radius="sm" 
-                                color={item.type === 'folder' ? 'blue' : 'gray'}
+                              <ThemeIcon
+                                size={24}
+                                radius="sm"
+                                color={item.type === "folder" ? "blue" : "gray"}
                                 variant="light"
                               >
-                                {item.type === 'folder' ? <IconFolder size={14} /> : <IconFile size={14} />}
+                                {item.type === "folder" ? (
+                                  <IconFolder size={14} />
+                                ) : (
+                                  <IconFile size={14} />
+                                )}
                               </ThemeIcon>
-                              <Text size="sm" fw={item.type === 'folder' ? 500 : 400}>
+                              <Text
+                                size="sm"
+                                fw={item.type === "folder" ? 500 : 400}
+                              >
                                 {item.name}
                               </Text>
                             </Group>
                           </Table.Td>
                           <Table.Td>
                             <Text size="sm" c="dimmed">
-                              {item.type === 'file' ? formatSize((item as any).size || 0) : '-'}
+                              {item.type === "file"
+                                ? formatSize((item as any).size || 0)
+                                : "-"}
                             </Text>
                           </Table.Td>
                           <Table.Td>
                             <Text size="sm" c="dimmed">
-                              {item.type === 'file' ? formatDate((item as any).lastModified) : '-'}
+                              {item.type === "file"
+                                ? formatDate((item as any).lastModified)
+                                : "-"}
                             </Text>
                           </Table.Td>
                           <Table.Td>
-                            {item.type === 'file' && (
+                            {item.type === "file" && (
                               <Group gap={4}>
                                 <Tooltip label="Download">
                                   <ActionIcon
@@ -295,10 +348,10 @@ export default function FilesPage() {
             {/* Stats */}
             <Group mt="md" gap="xs">
               <Badge variant="light" color="gray">
-                {items.filter(i => i.type === 'folder').length} folders
+                {items.filter((i) => i.type === "folder").length} folders
               </Badge>
               <Badge variant="light" color="gray">
-                {items.filter(i => i.type === 'file').length} files
+                {items.filter((i) => i.type === "file").length} files
               </Badge>
             </Group>
           </Card>

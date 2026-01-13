@@ -1,6 +1,6 @@
 /**
  * Chat Types - Domain Model
- * 
+ *
  * Chat-related types for Synap's infinite chat with branching.
  * Leverages database-generated types and Hub Protocol types.
  */
@@ -11,7 +11,7 @@ import type {
   BranchDecision,
   AgentTypeString,
   MessageMetadata,
-} from '../hub-protocol/index.js';
+} from "../hub-protocol/index.js";
 
 // =============================================================================
 // Database Types (Re-exported from Drizzle schema)
@@ -19,23 +19,20 @@ import type {
 
 /**
  * Chat thread (conversation)
- * 
+ *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ChatThread,
-  NewChatThread,
-} from '@synap/database/schema';
+export type { ChatThread, NewChatThread } from "@synap/database/schema";
 
 /**
  * Chat message
- * 
+ *
  * Generated from database schema - DO NOT manually define
  */
 export type {
   ConversationMessageRow as ChatMessage,
   NewConversationMessageRow as NewChatMessage,
-} from '@synap/database/schema';
+} from "@synap/database/schema";
 
 // =============================================================================
 // UI State Types
@@ -51,7 +48,7 @@ export interface BranchNode {
   children: string[];
   depth: number;
   agentType: AgentTypeString;
-  status: 'active' | 'archived' | 'merged';
+  status: "active" | "archived" | "merged";
   title?: string;
   branchPurpose?: string;
   createdAt: string;
@@ -125,7 +122,10 @@ export interface UseChatThreadResult {
   isLoading: boolean;
   error: Error | null;
   sendMessage: (content: string) => Promise<void>;
-  createBranch: (messageId: string, agentType: AgentTypeString) => Promise<string>;
+  createBranch: (
+    messageId: string,
+    agentType: AgentTypeString,
+  ) => Promise<string>;
 }
 
 /**
