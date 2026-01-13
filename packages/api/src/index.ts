@@ -47,7 +47,6 @@ import { captureRouter } from "./routers/capture.js";
 import { entitiesRouter } from "./routers/entities.js";
 
 import { infiniteChatRouter as chatRouter } from "./routers/infinite-chat.js";
-import { approvalsRouter } from "./routers/approvals.js";
 import { proposalsRouter } from "./routers/proposals.js"; // NEW
 import { suggestionsRouter } from "./routers/suggestions.js";
 import { setupRouter } from "./routers/setup.js";
@@ -103,11 +102,6 @@ registerRouter("chat", chatRouter, {
   version: "1.0.0",
   source: "core",
   description: "Infinite chat with branching and AI integration",
-});
-registerRouter("approvals", approvalsRouter, {
-  version: "1.0.0",
-  source: "core",
-  description: "Approval workflow for AI proposals and actions",
 });
 registerRouter("proposals", proposalsRouter, {
   version: "1.0.0",
@@ -230,45 +224,12 @@ registerRouter("whiteboards", whiteboardsRouter, {
   description: "Whiteboard version control and snapshots",
 });
 
-// Build the main app router from all registered routers
-// This enables plugins to add routers without modifying core code
+import { coreRouter } from "./root.js";
+export type { AppRouter } from "./root.js";
+export { coreRouter };
+
+// Export the dynamically built app router for the server
 export const appRouter = buildAppRouter();
-
-// Explicitly define AppRouter type with core routers for client type safety
-// This ensures clients like admin-ui can see the core router structure
-import { router } from "./trpc.js";
-const coreRouter = router({
-  setup: setupRouter,
-  events: eventsRouter,
-  capture: captureRouter,
-  entities: entitiesRouter,
-
-  chat: chatRouter,
-  approvals: approvalsRouter,
-  proposals: proposalsRouter, // NEW
-  suggestions: suggestionsRouter,
-  system: systemRouter,
-  hub: hubRouter,
-  apiKeys: apiKeysRouter,
-  health: healthRouter,
-  // n8n: n8nActionsRouter, // DISABLED - router not imported
-  integrations: webhooksRouter, // Renamed from webhooks to avoid collision
-  documents: documentsRouter,
-  content: contentRouter,
-  storage: filesRouter, // Renamed from files to avoid collision
-  tags: tagsRouter,
-  search: searchRouter,
-  relations: relationsRouter,
-  graph: graphRouter,
-  workspaces: workspacesRouter,
-  views: viewsRouter,
-  preferences: preferencesRouter,
-  roles: rolesRouter,
-  sharing: sharingRouter,
-  templates: templatesRouter,
-});
-
-export type AppRouter = typeof coreRouter;
 
 // Re-export router registry functions for plugin developers
 export {

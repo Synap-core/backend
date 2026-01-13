@@ -9,9 +9,12 @@ export interface IntelligenceHubRequest {
   threadId: string;
   userId: string;
   agentId?: string;
-  agentType?: string; // ✅ ADDED: Agent type for multi-agent routing
-  agentConfig?: Record<string, any>; // ✅ ADDED: Custom agent configuration
+  agentType?: string;
+  agentConfig?: Record<string, any>;
   projectId?: string;
+  // Data Pod credentials for Hub Protocol access
+  dataPodUrl?: string;
+  dataPodApiKey?: string;
 }
 
 export interface IntelligenceHubResponse {
@@ -67,6 +70,8 @@ export class IntelligenceHubClient {
           userId: request.userId,
           agentId: request.agentId || "orchestrator",
           projectId: request.projectId,
+          dataPodUrl: request.dataPodUrl || process.env.PUBLIC_URL || "http://localhost:3000",
+          dataPodApiKey: request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
         }),
       });
 
@@ -137,7 +142,9 @@ export class IntelligenceHubClient {
         agentType: request.agentType,
         agentConfig: request.agentConfig,
         projectId: request.projectId,
-        stream: true, // Enable streaming
+        stream: true,
+        dataPodUrl: request.dataPodUrl || process.env.PUBLIC_URL || "http://localhost:3000",
+        dataPodApiKey: request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
       }),
     });
 

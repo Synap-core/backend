@@ -157,6 +157,8 @@ export const globalValidator = inngest.createFunction(
             changeType: action as any,
             data: data,
             reasoning: policyResult.reason,
+            // Pass through AI metadata for frontend display
+            aiMetadata: (data as any).aiMetadata,
           },
           status: "pending",
         })

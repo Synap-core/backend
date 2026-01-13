@@ -82,6 +82,14 @@ export const EntitiesCreateRequestedPayload = z.object({
 
   // Request context
   ...RequestContextSchema.shape,
+  
+  // AI-specific metadata for tracking AI-generated proposals
+  aiMetadata: z.object({
+    messageId: z.string().optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    model: z.string().optional(),
+    reasoning: z.string().optional(),
+  }).optional(),
 });
 
 /**

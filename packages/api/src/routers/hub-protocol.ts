@@ -167,6 +167,13 @@ export const hubProtocolRouter = router({
         type: z.string(),
         title: z.string(),
         description: z.string().optional(),
+        // AI metadata for tracking AI-generated proposals
+        aiMetadata: z.object({
+          messageId: z.string().optional(),
+          confidence: z.number().min(0).max(1).optional(),
+          model: z.string().optional(),
+          reasoning: z.string().optional(),
+        }).optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -176,11 +183,12 @@ export const hubProtocolRouter = router({
       await inngest.send({
         name: "entities.create.requested",
         data: {
-          type: input.type,
+          entityType: input.type as any,
           title: input.title,
           preview: input.description,
           userId: input.userId,
-          source: "intelligence-hub",
+          source: "ai", // Mark as AI-generated
+          aiMetadata: input.aiMetadata, // Pass through AI metadata
         },
         user: { id: input.userId },
       });

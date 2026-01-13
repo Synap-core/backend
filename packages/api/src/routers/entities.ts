@@ -72,6 +72,7 @@ export const entitiesRouter = router({
     .input(
       z.object({
         type: EntityTypeSchema.optional(),
+        workspaceId: z.string().uuid().optional(),
         limit: z.number().min(1).max(100).default(50),
       }),
     )
