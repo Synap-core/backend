@@ -10,6 +10,19 @@
 import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
+export interface WorkspaceSettings {
+  defaultEntityTypes?: string[];
+  theme?: string;
+  aiEnabled?: boolean;
+  allowExternalSharing?: boolean;
+  // Intelligence service configuration
+  intelligenceServiceId?: string; // Default for workspace
+  intelligenceServiceOverrides?: {
+    chat?: string;
+    analysis?: string;
+  };
+}
+
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").defaultRandom().primaryKey(),
 
@@ -22,7 +35,7 @@ export const workspaces = pgTable("workspaces", {
   type: text("type").default("personal").notNull(), // 'personal' | 'team' | 'enterprise'
 
   // Settings (JSONB for flexibility)
-  settings: jsonb("settings").default("{}").notNull(),
+  settings: jsonb("settings").$type<WorkspaceSettings>().default({}).notNull(),
   // {
   //   defaultEntityTypes: ['note', 'task'],
   //   theme: 'light',
@@ -155,3 +168,4 @@ export const insertWorkspaceInviteSchema = createInsertSchema(workspaceInvites);
  * @internal For monorepo usage - enables schema composition in API layer
  */
 export const selectWorkspaceInviteSchema = createSelectSchema(workspaceInvites);
+

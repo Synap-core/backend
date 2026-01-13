@@ -16,7 +16,7 @@ import {
   conversationMessages,
   insertChatThreadSchema,
 } from "@synap/database/schema";
-import { intelligenceHubClient } from "../clients/intelligence-hub.js";
+import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 
@@ -104,13 +104,20 @@ export const infiniteChatRouter = router({
         hash: userMessageHash,
       });
 
-      // Stream from Intelligence Hub
+      // Resolve intelligence service dynamically
+      const resolvedService = await resolveIntelligenceService({
+        userId: ctx.userId,
+        workspaceId: thread.projectId ?? undefined,
+        capability: 'chat'
+      });
+
+      // Stream from Intelligence Service (now dynamic)
       let fullContent = "";
       const aiSteps: any[] = [];
       let hubResponse: any = null;
 
       try {
-        const stream = intelligenceHubClient.sendMessageStream({
+        const stream = resolvedService.client.sendMessageStream({
           query: content,
           threadId,
           userId: ctx.userId,
@@ -175,8 +182,8 @@ export const infiniteChatRouter = router({
           fallback: true,
         });
 
-        // Fallback to non-streaming
-        hubResponse = await intelligenceHubClient.sendMessage({
+        // Fallback to non-streaming using the same resolved service
+        hubResponse = await resolvedService.client.sendMessage({
           query: content,
           threadId,
           userId: ctx.userId,

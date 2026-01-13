@@ -8,10 +8,14 @@
  */
 
 import type { Config } from "drizzle-kit";
+import * as dotenv from "dotenv";
+
+// Load environment variables from parent directory
+dotenv.config({ path: "../../.env" });
 
 const config: Config = {
   // PostgreSQL with pgvector
-  schema: "./src/schema/index.ts", // Use source directly with tsx
+  schema: "./dist/schema/index.js", // Use compiled JS to avoid TSX import resolution issues with .js extensions
   out: "./migrations-drizzle", // Auto-generated migrations
   dialect: "postgresql",
   dbCredentials: {

@@ -254,4 +254,88 @@ export const preferencesRouter = router({
 
       return { success: true, viewModes: newUiPrefs.viewModes };
     }),
+
+  // ============================================================================
+  // INTELLIGENCE SERVICE PREFERENCES
+  // ============================================================================
+
+  /**
+   * Get intelligence service preferences and available services
+   */
+  getIntelligenceServices: protectedProcedure.query(async ({ ctx }) => {
+    const prefs = await ctx.db.query.userPreferences.findFirst({
+      where: eq(userPreferences.userId, ctx.userId),
+    });
+
+    const { intelligenceServices } = await import("@synap/database/schema");
+    
+    return {
+      preferences: prefs?.intelligenceServicePreferences || {},
+      available: await ctx.db.query.intelligenceServices.findMany({
+        where: eq(intelligenceServices.status, 'active'),
+        columns: {
+          id: true,
+          serviceId: true,
+          name: true,
+          capabilities: true,
+          pricing: true,
+        }
+      }),
+    };
+  }),
+
+  /**
+   * Set intelligence service for a capability
+   */
+  setIntelligenceService: protectedProcedure
+    .input(z.object({
+      serviceId: z.string(),
+      capability: z.enum(['default', 'chat', 'analysis']).default('default'),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { intelligenceServices, and } = await import("@synap/database");
+      
+      // Verify service exists and is active
+      const service = await ctx.db.query.intelligenceServices.findFirst({
+        where: and(
+          eq(intelligenceServices.serviceId, input.serviceId),
+          eq(intelligenceServices.status, 'active')
+        )
+      });
+
+      if (!service) {
+        throw new Error('Intelligence service not found or inactive');
+      }
+
+      // Get current preferences
+      const current = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      });
+
+      const currentPrefs = (current?.intelligenceServicePreferences || {}) as any;
+
+      // Merge new preference
+      const newPrefs = {
+        ...currentPrefs,
+        [input.capability]: input.serviceId,
+      };
+
+      // Upsert
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          intelligenceServicePreferences: newPrefs,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            intelligenceServicePreferences: newPrefs,
+            updatedAt: new Date(),
+          },
+        });
+
+      return { success: true, preferences: newPrefs };
+    }),
 });

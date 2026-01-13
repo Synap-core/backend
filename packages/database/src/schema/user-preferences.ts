@@ -102,6 +102,16 @@ export const userPreferences = pgTable("user_preferences", {
     .default({})
     .notNull(),
 
+  // Intelligence Service Preferences
+  intelligenceServicePreferences: jsonb("intelligence_service_preferences")
+    .$type<{
+      default?: string; // serviceId for general use
+      chat?: string; // serviceId specifically for chat
+      analysis?: string; // for future capabilities
+    }>()
+    .default({})
+    .notNull(),
+
   // Onboarding
   onboardingCompleted: boolean("onboarding_completed").default(false).notNull(),
   onboardingStep: text("onboarding_step"),
