@@ -17,8 +17,7 @@ import {
   workspaces,
   workspaceMembers,
   workspaceInvites,
-  insertWorkspaceSchema,
-  insertWorkspaceInviteSchema,
+
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
@@ -33,16 +32,12 @@ export const workspacesRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertWorkspaceSchema
-        .pick({
-          name: true,
-          description: true,
-          settings: true,
-        })
-        .extend({
-          name: z.string().min(1).max(100),
-          type: z.enum(["personal", "team", "enterprise"]).default("personal"),
-        }),
+      z.object({
+        name: z.string().min(1).max(100),
+        description: z.string().optional(),
+        settings: z.record(z.unknown()).optional(),
+        type: z.enum(["personal", "team", "enterprise"]).default("personal"),
+      }),
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event - worker will create workspace
@@ -123,17 +118,12 @@ export const workspacesRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertWorkspaceSchema
-        .pick({
-          name: true,
-          description: true,
-          settings: true,
-        })
-        .partial()
-        .extend({
-          id: z.string().uuid(),
-          name: z.string().min(1).max(100).optional(),
-        }),
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().min(1).max(100).optional(),
+        description: z.string().optional(),
+        settings: z.record(z.unknown()).optional(),
+      }),
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event - permission validator will check permissions
@@ -273,15 +263,11 @@ export const workspacesRouter = router({
    */
   createInvite: protectedProcedure
     .input(
-      insertWorkspaceInviteSchema
-        .pick({
-          workspaceId: true,
-          email: true,
-          role: true,
-        })
-        .extend({
-          role: z.enum(["admin", "editor", "viewer"]),
-        }),
+      z.object({
+        workspaceId: z.string().uuid(),
+        email: z.string().email(),
+        role: z.enum(["admin", "editor", "viewer"]),
+      }),
     )
     .mutation(async ({ input, ctx }) => {
       // Check user is owner/admin

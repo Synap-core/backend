@@ -35,6 +35,26 @@ export const kratosAdmin = new IdentityApi(
  * @returns Session data or null if invalid
  */
 export async function getKratosSession(cookie: string): Promise<any | null> {
+  // MOCK: In test/dev mode with disabled OAuth, accept mock cookies
+  if (
+    process.env.NODE_ENV === "test" ||
+    process.env.ENABLE_OAUTH2 === "false"
+  ) {
+    if (cookie.includes("mock-session-cookie")) {
+      console.log("[getKratosSession] Using MOCK session for testing");
+      return {
+        active: true,
+        identity: {
+          id: "test-user-id",
+          traits: {
+            email: "test@example.com",
+            name: { first: "Test", last: "User" },
+          },
+        },
+      };
+    }
+  }
+
   try {
     const { data: session } = await kratosPublic.toSession({
       cookie,

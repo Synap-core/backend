@@ -102,7 +102,7 @@ export async function projectEventMetadata(
           agentId: ai.agent,
           confidence: String(
             Math.max(
-              ...ai.classification.categories.map((c) => c.confidence),
+              ...ai.classification.categories.map((c: any ) => c.confidence), //TODO
               0,
             ),
           ),

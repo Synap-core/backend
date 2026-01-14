@@ -1,173 +1,184 @@
-# E2E Tests - Synap Backend
-
-End-to-end tests for validating critical flows in the Synap ecosystem.
+# E2E Testing Guide
 
 ## Overview
 
-These tests validate:
-1. **Complete Conversation Flow** - User sends message → AI responds → Action executed
-2. **Event-Driven Flow** - Event published → Worker processes → Entity created
-3. **Hub Protocol Flow** - Token generation → Data request → Insight submission
-4. **Security Isolation** - User A cannot access User B's data
+This directory contains end-to-end tests for the Synap backend, designed to test critical flows **without requiring a frontend**.
 
-## Prerequisites
+## Test Suites
 
-### Environment Setup
+### 1. Validation Flows (`validation-flows.test.ts`)
+Tests the global validator and proposal system:
+- ✅ User-initiated entity creation (auto-approve)
+- ✅ AI-initiated creation requiring approval
+- ✅ AI auto-approve when enabled
+- ✅ Permission denial for non-editors
+- ✅ Mixed user/AI scenarios
 
-1. **Database**: PostgreSQL (via Docker Compose) or SQLite
-2. **Services**: 
-   - API server (started automatically by tests)
-   - PostgreSQL (if using PostgreSQL mode)
-   - MinIO (for storage)
-   - Ory Kratos + Hydra (if using PostgreSQL mode)
+### 2. Hub Protocol (`hub-protocol-e2e.test.ts`)
+Tests external intelligence service integration:
+- ✅ Token generation with scopes
+- ✅ Data querying with access control
+- ✅ Entity creation via Hub Protocol
+- ✅ Proposal flow triggering
+- ✅ Complete intelligence service workflow
 
-### Environment Variables
-
-Create a `.env.test` file or set these variables:
-
-```bash
-# Database
-DATABASE_URL=postgresql://postgres:synap_dev_password@localhost:5432/synap_test
-# OR for SQLite:
-DB_DIALECT=sqlite
-SQLITE_DB_PATH=:memory:
-
-# Auth (for PostgreSQL)
-KRATOS_PUBLIC_URL=http://localhost:4433
-KRATOS_ADMIN_URL=http://localhost:4434
-HYDRA_PUBLIC_URL=http://localhost:4444
-HYDRA_ADMIN_URL=http://localhost:4445
-
-# Auth (for SQLite)
-SYNAP_SECRET_TOKEN=test-token-here
-
-# AI (optional, for conversation tests)
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-proj-...
-
-# Inngest (optional)
-INNGEST_EVENT_KEY=test-key
-```
+### 3. Core Flows (`core-flows.test.ts`)
+Tests basic system functionality:
+- ✅ Complete conversation flow
+- ✅ Event-driven processing
+- ✅ Security isolation between users
 
 ## Running Tests
 
-### Run All E2E Tests
+### Prerequisites
+```bash
+# Start required services
+docker compose up -d postgres minio
 
+# Run database migrations
+pnpm --filter database db:migrate
+
+# Start API server in another terminal
+pnpm --filter api dev
+```
+
+### Run All E2E Tests
 ```bash
 pnpm test:e2e
 ```
 
-### Run in Watch Mode
+### Run Specific Test Suite
+```bash
+pnpm test:e2e validation-flows
+pnpm test:e2e hub-protocol
+```
 
+### Watch Mode
 ```bash
 pnpm test:e2e:watch
 ```
 
-### Run Specific Test File
-
+### With Coverage
 ```bash
-pnpm test:e2e tests/e2e/core-flows.test.ts
+pnpm test:e2e -- --coverage
 ```
 
-## Test Structure
+## Test Architecture
 
-```
-tests/e2e/
-├── setup.ts              # Test environment setup
-├── vitest.config.ts      # Vitest configuration
-├── core-flows.test.ts    # Core flow tests
-└── README.md            # This file
-```
+### Test Harness (`test-harness.ts`)
+Provides utilities for testing:
+- **createTestClient**: tRPC client factory with authentication
+- **EventStreamListener**: SSE event monitoring for real-time assertions
+- **InngestEventSpy**: Inngest event tracking
+- **DatabaseTestHelpers**: Direct DB queries for assertions
+- **testDataFactory**: Factory functions for test data
+- **retryUntil**: Helper for eventually consistent operations
 
-## Test Environment
+### Setup (`setup.ts`)
+Handles test environment initialization:
+- Database setup (test database or in-memory)
+- Test user creation
+- API server verification
+- Global setup/teardown hooks
 
-The test setup (`setup.ts`) automatically:
-1. Initializes test database (PostgreSQL or SQLite)
-2. Applies migrations
-3. Starts API server on a random port
-4. Creates test users (User A and User B)
-5. Logs in users and gets session cookies
-6. Creates API keys for Hub Protocol testing
+## Writing New Tests
 
-## Performance Benchmarks
-
-Tests include performance assertions:
-- **Conversation Flow**: < 10 seconds
-- **Event-Driven Flow**: < 10 seconds
-- **Hub Protocol Flow**: < 5 seconds
-- **Security Isolation**: < 15 seconds
-
-## Troubleshooting
-
-### Tests Timeout
-
-- Check that all services are running (PostgreSQL, MinIO, Ory)
-- Verify environment variables are set correctly
-- Check API server logs for errors
-
-### Database Connection Errors
-
-- Ensure PostgreSQL is running: `docker compose ps`
-- Check DATABASE_URL is correct
-- Verify migrations have been applied
-
-### Authentication Errors
-
-- For PostgreSQL: Ensure Ory Kratos is running
-- For SQLite: Ensure SYNAP_SECRET_TOKEN is set
-- Check session cookies are being set correctly
-
-### API Server Not Starting
-
-- Check port conflicts (tests use random ports)
-- Verify all dependencies are installed
-- Check for build errors: `pnpm build`
-
-## Adding New Tests
-
-1. Create a new test file in `tests/e2e/`
-2. Import `setupTestEnvironment` from `./setup.ts`
-3. Use `testEnv` to access API URL and test users
-4. Follow existing test patterns
-
-Example:
-
+### Example Test Structure
 ```typescript
-import { describe, it, expect, beforeAll } from 'vitest';
-import { setupTestEnvironment } from './setup.js';
+import { describe, it, expect, beforeAll } from "vitest";
+import { setupTestEnvironment } from "./setup.js";
+import {
+  createTestClient,
+  testDataFactory,
+  DatabaseTestHelpers,
+  wait,
+} from "./test-harness.js";
 
-describe('My New Test', () => {
-  let testEnv: TestEnvironment;
+describe("My Feature", () => {
+  let testEnv, client, dbHelpers;
 
   beforeAll(async () => {
     testEnv = await setupTestEnvironment();
+    client = createTestClient(testEnv.apiUrl, testEnv.users.userA);
+    dbHelpers = new DatabaseTestHelpers(db);
   });
 
-  it('should test something', async () => {
-    const { apiUrl, users } = testEnv;
-    // Your test here
-  });
+  it("should do something", async () => {
+    const result = await client.client.myFeature.myMethod.mutate({
+      ...testDataFactory.entity("note"),
+    });
+
+    await wait(2000); // Wait for workers
+
+    const exists = await dbHelpers.hasEntity(result.id);
+    expect(exists).toBe(true);
+  }, 20000);
 });
 ```
 
-## CI/CD Integration
+### Best Practices
 
-These tests are designed to run in CI/CD pipelines:
+1. **Wait for Workers**: Inngest processing is async, use `wait()` or `retryUntil()`
+2. **Clean Up**: Use `dbHelpers.cleanup()` in `afterAll`
+3. **Timeout**: Set appropriate timeouts for E2E tests (20-45s)
+4. **Isolation**: Each test creates own workspace
+5. **Assertions**: Verify both API response AND database state
 
-```yaml
-# Example GitHub Actions
-- name: Run E2E Tests
-  run: |
-    docker compose up -d
-    pnpm test:e2e
-  env:
-    DATABASE_URL: postgresql://postgres:password@localhost:5432/synap_test
+## Environment Variables
+
+```bash
+# Test database (optional, defaults to main DB)
+TEST_DATABASE_URL=postgresql://postgres:password@localhost:5432/synap_test
+
+# API server URL (optional, defaults to localhost:3000)
+TEST_API_URL=http://localhost:3000
+
+# Test mode
+NODE_ENV=test
 ```
 
-## Notes
+## Troubleshooting
 
-- Tests use a separate test database to avoid affecting development data
-- API server starts on a random port to avoid conflicts
-- Test users are created fresh for each test run
-- Cleanup happens automatically after tests complete
+### Tests Timing Out
+- Ensure API server is running
+- Check Inngest is processing events
+- Increase test timeout if needed
 
+### Database Errors
+- Verify migrations are applied
+- Check DATABASE_URL is correct
+- Ensure test database exists
+
+### Permission Errors
+- Verify test users are created
+- Check workspace membership
+- Confirm API keys are valid
+
+## CI/CD Integration
+
+These tests are designed to run in CI/CD:
+
+```yaml
+# .github/workflows/ci.yml
+- name: E2E Tests
+  run: |
+    docker compose up -d
+    pnpm db:migrate
+    pnpm test:e2e
+  env:
+    DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+```
+
+## Performance Targets
+
+- **User entity creation**: < 5s (request → validated → DB)
+- **AI proposal creation**: < 5s (request → proposal in DB)
+- **Hub Protocol flow**: < 10s (token → query → create)
+- **Bulk operations** (5 entities): < 15s
+
+## Next Steps
+
+- [ ] Add metrics collection during tests
+- [ ] Implement chaos testing (random failures)
+- [ ] Add load testing scenarios
+- [ ] Set up test result reporting dashboard

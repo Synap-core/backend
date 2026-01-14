@@ -18,5 +18,6 @@ export default defineConfig({
     "@synap/events",
     "@trpc/server",
     "drizzle-orm",
+    "bcrypt",
   ],
 });

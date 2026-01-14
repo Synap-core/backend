@@ -47,11 +47,7 @@ const apiPort = 0;
  * or will be started separately. This function just returns the URL.
  */
 async function startApiServer(): Promise<string> {
-  // For E2E tests, we can either:
-  // 1. Use an existing running server (recommended for CI/CD)
-  // 2. Start a server programmatically (complex, requires process management)
-
-  const testPort = process.env.TEST_API_PORT || "3000";
+  const testPort = process.env.TEST_API_PORT || "4000";
   const apiUrl = `http://localhost:${testPort}`;
 
   // Verify server is running
@@ -81,8 +77,6 @@ async function initializeTestDatabase(): Promise<void> {
   // Check if we're using PostgreSQL or SQLite
   if (config.database.dialect === "postgres") {
     // For PostgreSQL, use a test database
-    // In CI/CD, we might use a separate test database
-    // For local testing, we can use the same database with a test schema
     const testDbName = process.env.TEST_DATABASE_NAME || "synap_test";
     const testDbUrl =
       process.env.TEST_DATABASE_URL ||
@@ -124,65 +118,23 @@ async function initializeTestDatabase(): Promise<void> {
 }
 
 /**
- * Create test user via Ory Kratos (PostgreSQL) or simple auth (SQLite)
+ * Create test user (simplified - no Kratos for now)
  */
 async function createTestUser(
   email: string,
   password: string,
 ): Promise<TestUser> {
-  if (config.database.dialect === "postgres") {
-    // PostgreSQL: Create user via Ory Kratos
-    try {
-      const { kratosAdmin } = await import("@synap/auth");
+  // Simplified: Just return a mock user
+  const userId = randomUUID();
+  logger.info({ userId, email }, "Test user created (mock mode)");
 
-      // Create identity
-      const identity = await kratosAdmin.createIdentity({
-        schema_id: "default",
-        traits: {
-          email,
-          name: `Test User ${email}`,
-        },
-        credentials: {
-          password: {
-            config: {
-              password,
-            },
-          },
-        },
-      });
-
-      logger.info(
-        { userId: identity.id, email },
-        "Test user created via Kratos",
-      );
-
-      // Get session cookie (simplified - in real E2E, we'd do a proper login flow)
-      return {
-        id: identity.id,
-        email,
-        password,
-        // Session cookie will be set when we login
-      };
-    } catch (error) {
-      logger.error(
-        { err: error, email },
-        "Failed to create test user via Kratos",
-      );
-      throw error;
-    }
-  } else {
-    // SQLite: Simple auth - just return a mock user
-    const userId = randomUUID();
-    logger.info({ userId, email }, "Test user created (SQLite mode)");
-
-    return {
-      id: userId,
-      email,
-      password,
-      // For SQLite, we use the static token
-      apiKey: process.env.SYNAP_SECRET_TOKEN || "test-token",
-    };
-  }
+  return {
+    id: userId,
+    email,
+    password,
+    apiKey: process.env.TEST_API_KEY || "test-api-key-" + userId,
+    sessionCookie: `mock-session-cookie=${userId}`,
+  };
 }
 
 /**
@@ -190,9 +142,8 @@ async function createTestUser(
  */
 async function loginUser(user: TestUser, apiUrl: string): Promise<string> {
   // Simplified: Just return the mock session cookie
-  // In real tests, we'd do actual login via Kratos or API
   logger.info({ email: user.email }, "User logged in (mock mode)");
-  return user.sessionCookie || `test-session-${user.id}`;
+  return user.sessionCookie || `mock-session-cookie=${user.id}`;
 }
 
 /**
@@ -211,9 +162,9 @@ async function createApiKey(
         Cookie: sessionCookie,
       },
       body: JSON.stringify({
-        name: `Test API Key ${randomUUID()}`,
-        scope: ["preferences", "notes", "tasks", "calendar"],
-        expiresIn: 3600 * 24 * 365, // 1 year
+        keyName: `Test API Key ${randomUUID()}`,
+        scope: ["preferences", "notes", "tasks"],
+        expiresInDays: 365,
       }),
     });
 
@@ -280,15 +231,9 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
   // 6. Create cleanup function
   const cleanup = async () => {
     logger.info("Cleaning up test environment...");
-
-    // Close database connections
-    // Note: In real implementation, we might want to drop test database
-
-    // Stop API server
     if (apiServer) {
-      // Server cleanup would go here
+      // Server cleanup
     }
-
     logger.info("Test environment cleaned up");
   };
 

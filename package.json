@@ -1,14 +1,15 @@
 {
   "name": "synap-backend",
   "version": "1.0.0",
+  "type": "module",
   "private": true,
   "description": "Synap - Event-Sourced Knowledge Backend",
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
-    "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
-    "test:e2e:watch": "vitest watch --config tests/e2e/vitest.config.ts",
+    "test:e2e": "pnpm --filter @synap/test-e2e test",
+    "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
     "test:system": "pnpm build && tsx scripts/test-system.ts",
     "db:migrate": "tsx packages/database/src/migrate.ts",
     "db:studio": "cd packages/database && pnpm drizzle-kit studio",
@@ -33,11 +34,13 @@
     "turbo": "^2.0.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.53.0",
-    "vitest": "^4.0.7"
+    "vitest": "^4.0.7",
+    "@synap-core/core": "workspace:*"
   },
   "pnpm": {
     "overrides": {
-      "drizzle-orm": "^0.45.1"
+      "drizzle-orm": "^0.45.1",
+      "zod": "3.23.8"
     }
   },
   "packageManager": "pnpm@10.28.0",
