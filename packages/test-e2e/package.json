@@ -9,18 +9,19 @@
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
+    "@synap-core/types": "workspace:*",
     "@synap/api": "workspace:*",
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
-    "@synap-core/types": "workspace:*",
     "@trpc/client": "^11.8.1",
     "@trpc/server": "^11.8.1",
+    "axios": "^1.6.0",
     "dotenv": "^16.4.5",
-    "axios": "^1.6.0"
+    "node-fetch": "^2.7.0"
   },
   "devDependencies": {
-    "vitest": "^1.3.1",
+    "@types/node": "^20.0.0",
     "typescript": "^5.3.3",
-    "@types/node": "^20.0.0"
+    "vitest": "^1.3.1"
   }
 }

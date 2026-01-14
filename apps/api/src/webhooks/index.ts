@@ -3,6 +3,7 @@
  *
  * Aggregates all webhook routes (N8N, Intelligence Services, etc.)
  */
+console.log("🔍 DEBUG: Loading apps/api/src/webhooks/index.ts");
 
 import { Hono } from "hono";
 import { n8nWebhookRouter } from "./n8n.js";

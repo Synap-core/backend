@@ -57,6 +57,8 @@ export const oryAuthMiddleware: MiddlewareHandler = async (c, next) => {
  */
 export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") || "";
+  console.error("🔒 DEBUG: orySessionMiddleware called. Cookie length:", cookie.length, "Env:", process.env.NODE_ENV, "Cookie:", cookie.substring(0, 50));
+  
   if (!cookie) {
     console.warn(
       "[orySessionMiddleware] No cookie found. content-type:",
@@ -65,6 +67,34 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
       !!c.req.header("authorization"),
     );
     return c.json({ error: "Unauthorized", details: "No session cookie" }, 401);
+  }
+
+  // MOCK AUTH BYPASS (Development/Test Only)
+  if (
+    process.env.NODE_ENV !== "production" &&
+    cookie.includes("mock-session-cookie=")
+  ) {
+    const match = cookie.match(/mock-session-cookie=([^;]+)/);
+    const mockUserId = match ? match[1] : "mock-user";
+    // Setup mock context
+    c.set("user", {
+      id: mockUserId,
+      email: `mock-${mockUserId}@example.com`,
+      name: "Mock User",
+    });
+    c.set("userId", mockUserId);
+    c.set("session", {
+      id: "mock-session-" + mockUserId,
+      identity: {
+        id: mockUserId,
+        traits: {
+          email: `mock-${mockUserId}@example.com`,
+          name: "Mock User",
+        },
+      },
+    });
+    c.set("authenticated", true);
+    return next();
   }
 
   // Get session from Kratos

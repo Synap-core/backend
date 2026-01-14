@@ -117,6 +117,36 @@ services:
       timeout: 10s
       retries: 3
 
+  # Database Migrator
+  # Automatically applies schema changes on startup
+  migrator:
+    image: node:22-alpine
+    container_name: synap-migrator
+    # Mount the entire repo to access scripts and node_modules
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      # Connection strings for both databases
+      - DB_URI_PROD=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-synap_dev_password}@postgres:5432/${DB_NAME:-synap}
+      - DB_URI_TEST=postgres://${DB_USER:-postgres}:${DB_PASSWORD:-synap_dev_password}@postgres:5432/synap_test
+    # 1. Install tsx globally (avoids arch mismatch with local node_modules)
+    # 2. Run migrate.ts for main database
+    # 3. Run migrate.ts for test database
+    command: >
+      sh -c "
+        npm install -g tsx &&
+        echo '🚀 Migrating Synap Database...' &&
+        DATABASE_URL=$$DB_URI_PROD tsx packages/database/scripts/migrate.ts &&
+        echo '🚀 Migrating Synap TEST Database...' &&
+        DATABASE_URL=$$DB_URI_TEST tsx packages/database/scripts/migrate.ts
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - synap-network
+
 volumes:
   postgres_data:
     name: synap-postgres-data

@@ -14,7 +14,6 @@ import { publicProcedure, router } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
-import { inngest, getAllWorkers } from "@synap/jobs";
 import { dynamicToolRegistry } from "@synap/ai";
 import { dynamicRouterRegistry } from "../router-registry.js";
 import { createSynapEvent } from "@synap-core/core";
@@ -55,6 +54,7 @@ export const systemRouter = router({
     const eventTypes = [...generatedEventTypes, ...customEventTypes];
 
     // Get all workers from registry
+    const { getAllWorkers } = await import("@synap/jobs");
     const workers = getAllWorkers();
 
     // Get all tools
@@ -236,6 +236,7 @@ export const systemRouter = router({
 
       // Publish to Inngest for worker processing
       // Note: Inngest events use a different format (name/data)
+      const { inngest } = await import("@synap/jobs");
       await inngest.send({
         name: "api/event.logged",
         data: {

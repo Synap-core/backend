@@ -15,6 +15,8 @@ import { config } from "@synap-core/core";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
+import { createTestClient, createMultiUserClients } from "./utils/test-client.js";
+import type { AppRouter } from "@synap/api";
 
 const execAsync = promisify(exec);
 const logger = createLogger({ module: "e2e-setup" });
@@ -25,6 +27,7 @@ export interface TestUser {
   password: string;
   sessionCookie?: string;
   apiKey?: string;
+  trpc: ReturnType<typeof createTestClient>;
 }
 
 export interface TestEnvironment {
@@ -48,21 +51,53 @@ const apiPort = 0;
  */
 async function startApiServer(): Promise<string> {
   const testPort = process.env.TEST_API_PORT || "4000";
-  const apiUrl = `http://localhost:${testPort}`;
+  // Use 127.0.0.1 to avoid IPv6 resolution issues
+  const apiUrl = `http://127.0.0.1:${testPort}`;
 
-  // Verify server is running
-  try {
-    const healthCheck = await fetch(`${apiUrl}/health`);
-    if (healthCheck.ok) {
-      logger.info({ apiUrl }, "API server is running");
+  // Wait for server to be ready (with retries)
+  const maxRetries = 30; // 30 seconds total
+  const retryDelay = 1000; // 1 second between retries
+
+  // Use net.connect to verify port is listening (simplest check)
+  const net = await import("net");
+  
+  logger.info({ apiUrl, maxRetries }, "Starting to poll API server port...");
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      console.log(`DEBUG: [Attempt ${i + 1}] Connecting to ${testPort}...`);
+      await new Promise<void>((resolve, reject) => {
+        const socket = net.createConnection(Number(testPort), "127.0.0.1");
+        socket.setTimeout(2000);
+        
+        socket.on("connect", () => {
+          socket.end();
+          resolve();
+        });
+        
+        socket.on("timeout", () => {
+          socket.destroy();
+          reject(new Error("Connection timed out"));
+        });
+        
+        socket.on("error", (err) => {
+          socket.destroy();
+          reject(err);
+        });
+      });
+      
+      console.log(`DEBUG: [Attempt ${i + 1}] ✅ API server port is open`);
       return apiUrl;
+    } catch (error) {
+      console.warn(`DEBUG: [Attempt ${i + 1}] Connection failed: ${error}`);
+      if (i === maxRetries - 1) {
+        console.error("API server failed to start after max retries");
+        throw new Error(`API server not responding after ${maxRetries} attempts`);
+      }
     }
-  } catch (error) {
-    logger.warn(
-      { err: error, apiUrl },
-      "API server not responding, tests may fail",
-    );
-  }
+      // Wait before retry
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    }
 
   logger.info({ apiUrl }, "Using API server URL (assuming it will be started)");
   return apiUrl;
@@ -71,8 +106,10 @@ async function startApiServer(): Promise<string> {
 /**
  * Initialize test database
  */
+console.log("DEBUG: setup.ts loaded");
+
 async function initializeTestDatabase(): Promise<void> {
-  logger.info("Initializing test database...");
+  console.log("DEBUG: Initializing test database...");
 
   // Check if we're using PostgreSQL or SQLite
   if (config.database.dialect === "postgres") {
@@ -91,6 +128,9 @@ async function initializeTestDatabase(): Promise<void> {
     }
 
     // Apply migrations
+    // SKIPPED: Migrations are now handled automatically by the Docker 'migrator' service.
+    // Running them here causes race conditions and database locks leading to timeouts.
+    /*
     try {
       await execAsync("cd packages/database && pnpm db:migrate", {
         env: { ...process.env, DATABASE_URL: testDbUrl },
@@ -99,6 +139,8 @@ async function initializeTestDatabase(): Promise<void> {
     } catch (error) {
       logger.warn({ err: error }, "Migration failed, continuing anyway");
     }
+    */
+    logger.info("Migrations skipped (handled by Docker)");
   } else {
     // SQLite: Use in-memory database for tests
     const testDbPath = ":memory:";
@@ -123,17 +165,22 @@ async function initializeTestDatabase(): Promise<void> {
 async function createTestUser(
   email: string,
   password: string,
+  apiUrl: string,
 ): Promise<TestUser> {
   // Simplified: Just return a mock user
   const userId = randomUUID();
   logger.info({ userId, email }, "Test user created (mock mode)");
+
+  const sessionCookie = `mock-session-cookie=${userId}`;
+  const trpc = createTestClient({ sessionCookie, apiUrl });
 
   return {
     id: userId,
     email,
     password,
     apiKey: process.env.TEST_API_KEY || "test-api-key-" + userId,
-    sessionCookie: `mock-session-cookie=${userId}`,
+    sessionCookie,
+    trpc,
   };
 }
 
@@ -191,36 +238,46 @@ async function createApiKey(
  * Setup test environment
  */
 export async function setupTestEnvironment(): Promise<TestEnvironment> {
+  console.log("DEBUG: setupTestEnvironment called");
   if (testEnv) {
     return testEnv;
   }
 
-  logger.info("Setting up E2E test environment...");
+  console.log("DEBUG: Setting up E2E test environment...");
+  logger.info("Setting up E2E test environment..."); // Keep original logging too
 
   // 1. Initialize database
   await initializeTestDatabase();
 
   // 2. Start API server
+  console.log("Step 2: Starting API server connection check...");
   const apiUrl = await startApiServer();
+  console.log("Step 2: API server ready at " + apiUrl);
 
   // 3. Create test users
+  console.log("Step 3: Creating test users...");
   const userA = await createTestUser(
     "test-user-a@synap.test",
     "test-password-123",
+    apiUrl,
   );
   const userB = await createTestUser(
     "test-user-b@synap.test",
     "test-password-123",
+    apiUrl,
   );
+  console.log("Step 3: Test users created");
 
   // 4. Login users and get session cookies
   userA.sessionCookie = await loginUser(userA, apiUrl);
   userB.sessionCookie = await loginUser(userB, apiUrl);
 
   // 5. Create API keys for Hub Protocol testing
+  console.log("Step 5: Creating API keys...");
   try {
     userA.apiKey = await createApiKey(userA.id, apiUrl, userA.sessionCookie);
     userB.apiKey = await createApiKey(userB.id, apiUrl, userB.sessionCookie);
+    console.log("Step 5: API keys created");
   } catch (error) {
     logger.warn(
       { err: error },

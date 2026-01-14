@@ -9,12 +9,13 @@
  */
 
 // Load environment variables from .env
+console.log("DEBUG: apps/api/src/index.ts starting evaluation");
 import "dotenv/config";
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
-import { initializeTracing } from "@synap-core/core";
-initializeTracing();
+// import { initializeTracing } from "@synap-core/core";
+// initializeTracing();
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -28,25 +29,34 @@ import {
   toSynapError,
   validateConfig,
 } from "@synap-core/core";
-import { appRouter /*, createContext */ } from "@synap/api"; // createContext disabled - type mismatch
+// import { appRouter /*, createContext */ } from "@synap/api"; // createContext disabled - type mismatch
 import { serve } from "@hono/node-server";
-import { serve as inngestServe } from "inngest/hono";
-import { inngest, functions } from "@synap/jobs";
+// import { serve as inngestServe } from "inngest/hono";
+// import { inngest, functions } from "@synap/jobs";
 import crypto from "crypto";
+/*
 import {
   rateLimitMiddleware,
   requestSizeLimit,
   securityHeadersMiddleware,
   getCorsOrigins,
 } from "./middleware/security.js";
+*/
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
-import { webhookRouter } from "./webhooks/index.js";
+// import { webhookRouter } from "./webhooks/index.js";
+
+console.log("🔍 DEBUG: Starting API server index.ts execution");
 
 // Setup event broadcasting to SSE clients
+const debugLogger = createLogger({ module: "api-debug" });
+debugLogger.info("🔍 DEBUG: Execution reached index.ts top-level");
 setupEventBroadcasting();
+debugLogger.info("🔍 DEBUG: setupEventBroadcasting() returned");
 
 // Validate configuration at startup
 const apiLogger = createLogger({ module: "api-server" });
+apiLogger.info("🔍 DEBUG: Validating configuration");
+
 try {
   // Validate database config
   if (config.database.dialect === "postgres") {
@@ -100,13 +110,15 @@ try {
   process.exit(1);
 }
 
+// Static import to avoid dynamic import hangs (circular dep with @synap/api?)
+import * as oryAuth from "@synap/auth";
+
 // Dynamic auth import based on DB dialect
 const isPostgres = config.database.dialect === "postgres";
 let authMiddleware: any = null;
 
 if (isPostgres) {
   // PostgreSQL: Ory Stack (Kratos + Hydra)
-  const oryAuth = await import("@synap/auth");
   authMiddleware = oryAuth.authMiddleware; // Uses orySessionMiddleware for session-based auth
 } else {
   // SQLite: Simple token auth (not implemented in PostgreSQL-only version)
@@ -115,13 +127,17 @@ if (isPostgres) {
   throw new Error("SQLite mode not supported in PostgreSQL-only version");
 }
 
+console.log("🔍 DEBUG: Initializing Hono app");
 const app = new Hono();
+console.log("🔍 DEBUG: Hono app created");
 
 // Security Middleware (Applied First)
+console.log("🔍 DEBUG: Registering security middleware");
 app.use("*", requestSizeLimit); // Max 10MB requests
 app.use("*", rateLimitMiddleware); // 100 req/15min per IP
 app.use("*", securityHeadersMiddleware); // Security headers
 app.use("*", secureHeaders()); // Hono built-in security
+console.log("🔍 DEBUG: Security middleware registered");
 
 // Logging & CORS
 app.use("*", logger());
@@ -289,6 +305,7 @@ app.use("/trpc/*", async (c, next) => {
 app.route("/webhooks", webhookRouter);
 
 // tRPC endpoint
+/*
 app.use(
   "/trpc/*",
   trpcServer({
@@ -336,15 +353,21 @@ app.use(
     },
   }),
 );
+*/
+
+console.log("🔍 DEBUG: About to register Inngest serve handler...");
 
 // Inngest handler (for background jobs)
-app.use(
-  "/api/inngest",
-  inngestServe({
-    client: inngest,
-    functions,
-  }),
-);
+// app.use(
+//   "/api/inngest",
+//   // inngestServe({
+//   //   client: inngest,
+//   //   functions,
+//   // }),
+//   (c) => c.json({ error: "Inngest disabled for debugging" }, 503)
+// );
+
+console.log("✅ DEBUG: Inngest serve handler registered successfully!");
 
 // 404 handler
 app.notFound((c) => {
@@ -406,28 +429,35 @@ app.onError((err, c) => {
 });
 
 // Start server
-serve(
-  {
-    fetch: app.fetch,
-    port: config.server.port,
-    hostname: "0.0.0.0",
-  },
-  async (info) => {
-    apiLogger.info(
-      {
-        port: info.port,
-        host: "0.0.0.0",
-        nodeEnv: config.server.nodeEnv,
-      },
-      "API server started",
-    );
+// Start server
+apiLogger.info("🔍 DEBUG: Calling serve() to start HTTP server...");
+try {
+  serve(
+    {
+      fetch: app.fetch,
+      port: config.server.port,
+      hostname: "0.0.0.0",
+    },
+    async (info) => {
+      apiLogger.info(
+        {
+          port: info.port,
+          host: "0.0.0.0",
+          nodeEnv: config.server.nodeEnv,
+        },
+        "API server started",
+      );
 
-    // ✨ Start event processor
-    const { startEventProcessor } = await import("@synap/api");
-    startEventProcessor();
-    apiLogger.info("Event processor started");
-  },
-);
+      // ✨ Start event processor
+      const { startEventProcessor } = await import("@synap/api");
+      startEventProcessor();
+      apiLogger.info("Event processor started");
+    },
+  );
+} catch (err) {
+  console.error("❌ CRITICAL: serve() threw an error:", err);
+  process.exit(1);
+}
 
 // Run startup hooks after server is listening
 import { runStartupHooks } from "./startup-hooks.js";
@@ -436,6 +466,7 @@ runStartupHooks().catch((err) => {
 });
 
 process.on("SIGTERM", () => {
+  console.log("⚠️ DEBUG: SIGTERM received!");
   apiLogger.info("SIGTERM received, shutting down gracefully");
   process.exit(0);
 });

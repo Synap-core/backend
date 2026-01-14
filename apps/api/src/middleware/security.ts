@@ -6,6 +6,7 @@
  * - Request size limits (prevent memory exhaustion)
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
+console.log("🔍 DEBUG: Loading apps/api/src/middleware/security.ts");
 
 import type { MiddlewareHandler } from "hono";
 import { rateLimiter } from "hono-rate-limiter";

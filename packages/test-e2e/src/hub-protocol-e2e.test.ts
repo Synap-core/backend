@@ -92,7 +92,7 @@ describe("E2E Hub Protocol", () => {
           token: result.token,
           filters: {},
         });
-        fail("Expected token expiration error");
+        expect.fail("Expected token expiration error");
       } catch (error: any) {
         expect(error.message).toContain("expired");
         logger.info("Token expiration validated");
