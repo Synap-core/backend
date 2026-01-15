@@ -18,6 +18,7 @@
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",
+    "test:unit": "vitest run -c vitest.unit.config.ts",
     "dev": "npx inngest-cli@latest dev",
     "index-entities": "tsx src/scripts/index-existing-entities.ts"
   },

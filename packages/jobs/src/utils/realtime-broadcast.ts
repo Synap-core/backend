@@ -55,7 +55,7 @@ export async function broadcastNotification(
 
     let userBroadcastCount = 0;
     if (userResponse.ok) {
-      const userResult = await userResponse.json();
+      const userResult = await userResponse.json() as { broadcastCount?: number };
       userBroadcastCount = userResult.broadcastCount || 0;
     }
 
@@ -75,7 +75,7 @@ export async function broadcastNotification(
       );
 
       if (requestResponse.ok) {
-        const requestResult = await requestResponse.json();
+        const requestResult = await requestResponse.json() as { broadcastCount?: number };
         requestBroadcastCount = requestResult.broadcastCount || 0;
       }
     }

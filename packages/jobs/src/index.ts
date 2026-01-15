@@ -4,9 +4,10 @@
  * V2.0: Simplified Schema-Driven Event Architecture
  *
  * This package exports:
- * - Table workers (entities, documents, messages, relations, workspaces, members)
+ * - Table workers (messages, workspace-members)
  * - AI workers (analyzer, embeddings, insights)
  * - Shared workers (webhooks, permissions)
+ * - Executors (Unified Execution Layer)
  * - Worker registry for admin UI
  */
 
@@ -15,14 +16,11 @@ export * from "./worker-registry.js";
 export * from "./utils/realtime-broadcast.js";
 
 // ============================================================================
-// Table Workers
+// Table Workers (Legacy - Being Replaced by Executors)
 // ============================================================================
-export { entitiesWorker } from "./functions/entities.js";
-export { documentsWorker } from "./functions/documents.js";
 export { messagesWorker } from "./functions/messages.js";
-export { relationsWorker } from "./functions/relations.js";
-export { workspacesWorker } from "./functions/workspaces.js";
 export { workspaceMembersWorker } from "./functions/workspace-members.js";
+export { projectMembersWorker } from "./functions/project-members.js";
 export {
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
@@ -50,15 +48,17 @@ export { handleWebhookDelivery } from "./functions/webhook-broker.js";
 export { globalValidator } from "./functions/global-validator.js";
 
 // ============================================================================
+// Executors (Unified Execution Layer)
+// ============================================================================
+export * from "./executors/index.js";
+
+// ============================================================================
 // INNGEST FUNCTION REGISTRY
 // ============================================================================
 
-import { entitiesWorker } from "./functions/entities.js";
-import { documentsWorker } from "./functions/documents.js";
 import { messagesWorker } from "./functions/messages.js";
-import { relationsWorker } from "./functions/relations.js";
-import { workspacesWorker } from "./functions/workspaces.js";
 import { workspaceMembersWorker } from "./functions/workspace-members.js";
+import { projectMembersWorker } from "./functions/project-members.js";
 import {
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
@@ -76,18 +76,27 @@ import { processAnalyzedThought } from "./functions/thought-processor.js";
 import { entityEmbeddingWorker } from "./functions/entity-embedding.js";
 import { handleWebhookDelivery } from "./functions/webhook-broker.js";
 import { globalValidator } from "./functions/global-validator.js";
+import {
+  tagsExecutor,
+  viewsExecutor,
+  entitiesExecutor,
+  documentsExecutor,
+  workspacesExecutor,
+  projectsExecutor,
+  inboxExecutor,
+  sharingExecutor,
+  templatesExecutor,
+  relationsExecutor,
+} from "./executors/index.js";
 
 /**
  * All Inngest functions to register with the serve handler.
  */
 export const functions = [
-  // Table workers
-  entitiesWorker,
-  documentsWorker,
+  // Table workers (legacy - being replaced by executors)
   messagesWorker,
-  relationsWorker,
-  workspacesWorker,
   workspaceMembersWorker,
+  projectMembersWorker,
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
   whiteboardAutoSaveWorker,
@@ -105,4 +114,16 @@ export const functions = [
   handleNewEvent,
   handleWebhookDelivery,
   globalValidator,
+
+  // Executors (Unified Execution Layer)
+  tagsExecutor,
+  viewsExecutor,
+  entitiesExecutor,
+  documentsExecutor,
+  workspacesExecutor,
+  projectsExecutor,
+  inboxExecutor,
+  sharingExecutor,
+  templatesExecutor,
+  relationsExecutor,
 ];

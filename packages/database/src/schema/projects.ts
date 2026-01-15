@@ -18,7 +18,10 @@ export const projects = pgTable(
   {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
+    
+    // Context
     userId: text("user_id").notNull(),
+    workspaceId: uuid("workspace_id").notNull(), // Every project belongs to a workspace
 
     // Project info
     name: text("name").notNull(),

@@ -44,7 +44,7 @@ const ScopeEnum = z.enum([
 const GenerateAccessTokenInputSchema = z.object({
   requestId: z.string().uuid("Invalid request ID"),
   scope: z.array(ScopeEnum).min(1, "At least one scope is required"),
-  expiresIn: z.number().int().min(60).max(300).default(300),
+  expiresIn: z.number().int().min(1).max(300).default(300),
 });
 
 const RequestDataInputSchema = z.object({
@@ -101,7 +101,9 @@ const hubTokenMiddleware = middleware(async (opts) => {
   });
 });
 
-export const hubTokenProcedure = publicProcedure.use(hubTokenMiddleware);
+export const hubTokenProcedure = publicProcedure
+  .input(z.object({ token: z.string().min(1) }).passthrough())
+  .use(hubTokenMiddleware);
 
 async function getPreferences(
   userId: string,
@@ -475,7 +477,7 @@ export const hubRouter = router({
       const errors: Array<{ actionIndex: number; error: string }> = [];
       if (insight.type === "action_plan" || insight.type === "automation") {
         try {
-          const events = transformInsightToEvents(insight, userId, requestId);
+          const events = await transformInsightToEvents(insight, userId, requestId);
           const eventRepo = getEventRepository();
           for (const event of events) {
             try {

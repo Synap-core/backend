@@ -17,11 +17,11 @@ import {
   workspaces,
   workspaceMembers,
   workspaceInvites,
-
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 /**
  * Workspace CRUD operations
@@ -40,23 +40,28 @@ export const workspacesRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - worker will create workspace
-      const { inngest } = await import("@synap/jobs");
+      const { randomUUID } = await import("crypto");
+      const workspaceId = randomUUID();
 
-      await inngest.send({
-        name: "workspaces.create.requested",
+      await emitRequestEvent({
+        type: "workspaces.create.requested",
+        subjectId: workspaceId,
+        subjectType: "workspace",
         data: {
+          id: workspaceId,
           name: input.name,
           description: input.description,
           type: input.type,
           userId: ctx.userId,
+          settings: input.settings,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
         status: "requested",
         message: "Workspace creation requested. It will be created shortly.",
+        workspaceId,
       };
     }),
 
@@ -126,19 +131,19 @@ export const workspacesRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - permission validator will check permissions
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "workspaces.update.requested",
+      await emitRequestEvent({
+        type: "workspaces.update.requested",
+        subjectId: input.id,
+        subjectType: "workspace",
         data: {
           workspaceId: input.id,
+          id: input.id,
           name: input.name,
           description: input.description,
           settings: input.settings,
           userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
@@ -153,13 +158,47 @@ export const workspacesRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - permission validator enforces owner-only
+      await emitRequestEvent({
+        type: "workspaces.delete.requested",
+        subjectId: input.id,
+        subjectType: "workspace",
+        data: {
+          workspaceId: input.id,
+          id: input.id,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message:
+          "Workspace deletion requested. Only the owner can approve this.",
+      };
+    }),
+
+  /**
+   * Add member to workspace
+   * Event-driven: emits workspaceMembers.add.requested
+   */
+  addMember: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string(),
+        role: z.enum(['owner', 'editor', 'viewer']),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
       const { inngest } = await import("@synap/jobs");
 
       await inngest.send({
-        name: "workspaces.delete.requested",
+        name: "workspaceMembers.add.requested",
         data: {
-          workspaceId: input.id,
+          workspaceId: input.workspaceId,
+          targetUserId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
           userId: ctx.userId,
         },
         user: { id: ctx.userId },
@@ -167,8 +206,7 @@ export const workspacesRouter = router({
 
       return {
         status: "requested",
-        message:
-          "Workspace deletion requested. Only the owner can approve this.",
+        message: "Member addition requested",
       };
     }),
 

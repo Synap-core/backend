@@ -11,7 +11,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 // REMOVED: Domain package - using simple string schemas instead
-// import { AggregateTypeSchema, EventSourceSchema } from '@synap/domain';
+// import { subjectTypeSchema, EventSourceSchema } from '@synap/domain';
 import { createSynapEvent } from "@synap-core/core";
 import type { EventType } from "@synap/events";
 import { getEventRepository } from "@synap/database";
@@ -19,7 +19,7 @@ import { publishEvent } from "../utils/inngest-client.js";
 import { randomUUID } from "crypto";
 
 // Temporary schemas until we refactor
-const AggregateTypeSchema = z.enum(["entity", "relation", "user", "system"]);
+const subjectTypeSchema = z.enum(["entity", "relation", "user", "system"]);
 const EventSourceSchema = z.enum([
   "api",
   "automation",
@@ -40,8 +40,8 @@ export const eventsRouter = router({
   log: protectedProcedure
     .input(
       z.object({
-        aggregateId: z.string().uuid(),
-        aggregateType: AggregateTypeSchema,
+        subjectId: z.string().uuid(),
+        subjectType: subjectTypeSchema,
         eventType: z.string().min(1),
         data: z.record(z.unknown()),
         metadata: z.record(z.string(), z.unknown()).optional(),
@@ -60,7 +60,7 @@ export const eventsRouter = router({
       const event = createSynapEvent({
         type: input.eventType as EventType,
         userId,
-        aggregateId: input.aggregateId,
+        subjectId: input.subjectId,
         data: input.data,
         source: input.source || "api",
         requestId,
@@ -79,8 +79,8 @@ export const eventsRouter = router({
         {
           id: eventRecord.id,
           type: eventRecord.eventType,
-          aggregateId: eventRecord.aggregateId,
-          aggregateType: input.aggregateType,
+          subjectId: eventRecord.subjectId,
+          subjectType: input.subjectType,
           userId: eventRecord.userId,
           version: input.version,
           timestamp: eventRecord.timestamp.toISOString(),

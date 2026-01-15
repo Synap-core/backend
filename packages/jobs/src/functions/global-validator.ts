@@ -11,7 +11,7 @@
  */
 
 import { inngest } from "../client.js";
-import { db, proposals, requireEditor, requireOwner } from "@synap/database";
+import { db, proposals } from "@synap/database";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 
@@ -23,7 +23,10 @@ export const globalValidator = inngest.createFunction(
     name: "Global Validator & Proposal Router",
     retries: 2,
   },
-  { event: "*.*.requested" },
+  [
+    { event: "entities.create.requested" },
+    { event: "*.*.requested" }
+  ],
   async ({ event, step }) => {
     const eventName = event.name as string;
     const [targetType, action] = eventName.split("."); // e.g. 'documents', 'create'
@@ -43,10 +46,11 @@ export const globalValidator = inngest.createFunction(
       "Validating request",
     );
 
-    // 1. Permission Check (Security Layer)
+
+    // 1. Permission Check (Security Layer) - NEW 3-LEVEL SYSTEM
     const permissionResult = await step.run("check-permissions", async () => {
       try {
-        const { getDb } = await import("@synap/database");
+        const { getDb, verifyPermission } = await import("@synap/database");
         const db = await getDb();
 
         // Personal resources (no workspace) - implicit ownership for now
@@ -54,25 +58,48 @@ export const globalValidator = inngest.createFunction(
           return { granted: true, reason: "personal-resource" };
         }
 
+        // Determine required permission based on action
+        let requiredPermission: 'read' | 'write' | 'delete' | 'manage' = 'read';
+        
         if (action === "delete") {
-          try {
-            await requireOwner(db, workspaceId, userId);
-            return { granted: true };
-          } catch (e) {
-            return { granted: false, reason: "Only owner can delete" };
-          }
+          requiredPermission = 'delete'; // Requires owner role
+        } else if (action === "create" || action === "update") {
+          requiredPermission = 'write'; // Requires editor or owner
+        } else if (action === "addMember" || action === "removeMember" || action === "updateMemberRole") {
+          requiredPermission = 'manage'; // Workspace/project management
         }
 
-        if (action === "create" || action === "update") {
-          try {
-            await requireEditor(db, workspaceId, userId);
-            return { granted: true };
-          } catch (e) {
-            return { granted: false, reason: "Must be editor to modify" };
-          }
+        // Get projectIds from event data if present
+        const projectIds = data.projectIds || [];
+
+        // 🔐 NEW: 3-Level Permission Check
+        const result = await verifyPermission({
+          db,
+          userId,
+          workspace: { id: workspaceId },
+          project: projectIds.length > 0 ? { ids: projectIds } : undefined,
+          requiredPermission,
+        });
+
+        if (!result.allowed) {
+          logger.warn(
+            { userId, workspaceId, projectIds, requiredPermission, reason: result.reason },
+            "Permission denied"
+          );
+          return { 
+            granted: false, 
+            reason: result.reason,
+            role: result.role,
+            context: result.context,
+          };
         }
 
-        return { granted: true }; // Read/List or unknown safe actions
+        logger.info(
+          { userId, workspaceId, role: result.role, context: result.context },
+          "Permission granted"
+        );
+        
+        return { granted: true, role: result.role, context: result.context };
       } catch (error) {
         return { granted: false, reason: "Permission check error" };
       }
@@ -117,8 +144,9 @@ export const globalValidator = inngest.createFunction(
       return { approved: true, reason: "User authorized" };
     });
 
-    // 3. Path A: Auto-Approve
+    // 3. Path A: Auto-Approve → Emit Validated
     if (policyResult.approved) {
+      // Always emit *.validated - executors will handle execution
       const validatedEventName = eventName.replace(".requested", ".validated");
 
       await step.run("emit-validated", async () => {

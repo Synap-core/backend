@@ -22,8 +22,8 @@ import { useState } from "react";
 export interface SearchFiltersState {
   userId?: string;
   eventType?: string;
-  aggregateType?: string;
-  aggregateId?: string;
+  subjectType?: string;
+  subjectId?: string;
   correlationId?: string;
   fromDate?: Date;
   toDate?: Date;
@@ -126,10 +126,10 @@ export default function SearchFilters({
                 <TextInput
                   label="Aggregate Type"
                   placeholder="e.g., note, task, conversation..."
-                  value={filters.aggregateType || ""}
+                  value={filters.subjectType || ""}
                   onChange={(e) =>
                     updateFilter(
-                      "aggregateType",
+                      "subjectType",
                       e.currentTarget.value || undefined,
                     )
                   }
@@ -139,10 +139,10 @@ export default function SearchFilters({
                 <TextInput
                   label="Aggregate ID"
                   placeholder="Enter aggregate ID..."
-                  value={filters.aggregateId || ""}
+                  value={filters.subjectId || ""}
                   onChange={(e) =>
                     updateFilter(
-                      "aggregateId",
+                      "subjectId",
                       e.currentTarget.value || undefined,
                     )
                   }

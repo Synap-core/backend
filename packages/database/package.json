@@ -26,6 +26,7 @@
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run -c vitest.unit.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx scripts/migrate.ts",

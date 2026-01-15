@@ -133,6 +133,20 @@ export function createTestClient(
         headers: {
           Cookie: user.sessionCookie || "",
         },
+        // Add timeout to prevent indefinite hangs
+        fetch: async (url, options) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          try {
+            const response = await fetch(url, {
+              ...options,
+              signal: controller.signal,
+            });
+            return response;
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
       }),
     ],
   });

@@ -22,7 +22,11 @@ export const documents = pgTable(
   "documents",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    
+    // Context
     userId: text("user_id").notNull(),
+    workspaceId: uuid("workspace_id").notNull(), // Every document belongs to a workspace
+    projectIds: uuid("project_ids").array(),      // Optional: documents can be in multiple projects
 
     // Document metadata
     title: text("title").notNull(),
@@ -47,7 +51,7 @@ export const documents = pgTable(
     }),
 
     // Relationships
-    projectId: text("project_id"), // Optional project association
+    projectId: text("project_id"), // DEPRECATED: Use projectIds array instead
 
     // Metadata
     metadata: jsonb("metadata"), // Custom metadata

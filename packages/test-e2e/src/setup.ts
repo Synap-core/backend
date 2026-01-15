@@ -202,6 +202,10 @@ async function createApiKey(
   sessionCookie: string,
 ): Promise<string> {
   try {
+    // Add timeout to prevent indefinite hang
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
     const response = await fetch(`${apiUrl}/trpc/apiKeys.create`, {
       method: "POST",
       headers: {
@@ -213,16 +217,21 @@ async function createApiKey(
         scope: ["preferences", "notes", "tasks"],
         expiresInDays: 365,
       }),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`API key creation failed: ${response.statusText}`);
     }
 
     const result = await response.json();
-    const apiKey = result.result?.data?.apiKey;
+    // Router returns { key: "...", keyId: "..." }
+    const apiKey = result.result?.data?.key;
 
     if (!apiKey) {
+      console.error("API Key Response:", JSON.stringify(result, null, 2));
       throw new Error("No API key in response");
     }
 

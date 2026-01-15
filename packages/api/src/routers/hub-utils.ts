@@ -58,8 +58,8 @@ export function generateHubAccessToken(
   scope: string[],
   expiresIn: number = 300,
 ): { token: string; expiresAt: number } {
-  // Clamp expiresIn between 60 and 300 seconds (1-5 minutes)
-  const validExpiresIn = Math.max(60, Math.min(300, expiresIn));
+  // Clamp expiresIn between 1 and 300 seconds
+  const validExpiresIn = Math.max(1, Math.min(300, expiresIn));
 
   const now = Math.floor(Date.now() / 1000);
   const exp = now + validExpiresIn;
@@ -74,7 +74,7 @@ export function generateHubAccessToken(
 
   const token = jwt.sign(payload, HUB_JWT_SECRET, {
     algorithm: "HS256",
-    expiresIn: validExpiresIn,
+    // expiresIn provided via payload.exp
   });
 
   logger.debug(

@@ -58,13 +58,13 @@ export async function projectEventMetadata(
   }
 
   const ai = event.metadata.ai;
-  const entityId = event.aggregateId;
+  const entityId = event.subjectId;
 
   // Must have an aggregate ID (entity) to project enrichments
   if (!entityId) {
     logger.debug(
       { eventId: event.id, eventType: event.type },
-      "Event has AI metadata but no aggregateId",
+      "Event has AI metadata but no subjectId",
     );
     return false;
   }

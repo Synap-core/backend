@@ -37,6 +37,9 @@ export async function processEvents() {
 
     for (const event of latestEvents) {
       try {
+        if (event.type.startsWith("entities")) {
+          logger.debug({ eventId: event.id, type: event.type }, "Found entities event in processor");
+        }
         // Route event to appropriate handler based on type
         switch (event.type) {
           case "inbox.item.received":
@@ -78,7 +81,18 @@ export async function processEvents() {
 
           // Add more event handlers here
           default:
-            // Unknown event type - skip
+            // Forward all other events to Inngest for background processing
+            // This is the bridge between the Event Store and Inngest
+            if (event.type.includes(".requested") || event.type.includes(".validated")) {
+              logger.info({ eventId: event.id, eventType: event.type }, "Forwarding event to Inngest");
+              const { inngest } = await import("@synap/jobs");
+              
+              await inngest.send({
+                name: event.type as any,
+                data: event.data as any,
+                user: { id: event.userId },
+              });
+            }
             break;
         }
       } catch (error) {
@@ -103,25 +117,28 @@ export async function processEvents() {
 
 /**
  * Start event processing loop
- * Polls for new events every 5 seconds
- *
- * Note: This is a simple implementation. In production, use a proper
- * message queue or event streaming system.
+ * Polls for new events with a delay between executions
  */
-export function startEventProcessor() {
-  logger.info("Starting event processor");
+export async function startEventProcessor() {
+  logger.info("Starting event processor...");
 
-  // Process immediately
-  processEvents().catch((err) =>
-    logger.error({ err }, "Event processing failed"),
-  );
+  const poll = async () => {
+    const start = Date.now();
+    try {
+      await processEvents();
+      const duration = Date.now() - start;
+      if (duration > 1000) {
+        logger.warn({ duration }, "Event processing took significant time");
+      }
+    } catch (err) {
+      logger.error({ err }, "Event processing failed");
+    }
 
-  // Then poll every 5 seconds
-  setInterval(() => {
-    processEvents().catch((err) =>
-      logger.error({ err }, "Event processing failed"),
-    );
-  }, 5000);
+    // Wait 5 seconds AFTER processing finishes before starting next poll
+    setTimeout(poll, 5000);
+  };
 
-  logger.info("Event processor started (polling every 5s)");
+  // Start the first poll
+  poll();
+  logger.info("Event processor started (adaptive polling)");
 }

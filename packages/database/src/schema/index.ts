@@ -38,6 +38,7 @@ export * from "./intelligence-services.js";
 
 // NEW: Workspace system
 export * from "./workspaces.js";
+export * from "./project-members.js";
 
 // NEW: Views system (whiteboards, timelines, etc.)
 export * from "./views.js";

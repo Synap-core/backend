@@ -29,10 +29,10 @@ import {
   toSynapError,
   validateConfig,
 } from "@synap-core/core";
-// import { appRouter /*, createContext */ } from "@synap/api"; // createContext disabled - type mismatch
+import { appRouter /*, createContext */ } from "@synap/api"; // createContext disabled - type mismatch
 import { serve } from "@hono/node-server";
-// import { serve as inngestServe } from "inngest/hono";
-// import { inngest, functions } from "@synap/jobs";
+import { serve as inngestServe } from "inngest/hono";
+import { inngest, functions } from "@synap/jobs";
 import crypto from "crypto";
 /*
 import {
@@ -129,13 +129,12 @@ if (isPostgres) {
 
 console.log("🔍 DEBUG: Initializing Hono app");
 const app = new Hono();
-console.log("🔍 DEBUG: Hono app created");
 
 // Security Middleware (Applied First)
 console.log("🔍 DEBUG: Registering security middleware");
-app.use("*", requestSizeLimit); // Max 10MB requests
-app.use("*", rateLimitMiddleware); // 100 req/15min per IP
-app.use("*", securityHeadersMiddleware); // Security headers
+// app.use("*", requestSizeLimit); // Max 10MB requests
+// app.use("*", rateLimitMiddleware); // 100 req/15min per IP
+// app.use("*", securityHeadersMiddleware); // Security headers
 app.use("*", secureHeaders()); // Hono built-in security
 console.log("🔍 DEBUG: Security middleware registered");
 
@@ -144,7 +143,7 @@ app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: getCorsOrigins(),
+    origin: "*", // getCorsOrigins(),
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "Cookie"],
@@ -302,10 +301,9 @@ app.use("/trpc/*", async (c, next) => {
 });
 
 // Webhook routes (before auth - uses webhook secret auth)
-app.route("/webhooks", webhookRouter);
+// app.route("/webhooks", webhookRouter);
 
 // tRPC endpoint
-/*
 app.use(
   "/trpc/*",
   trpcServer({
@@ -353,19 +351,18 @@ app.use(
     },
   }),
 );
-*/
 
 console.log("🔍 DEBUG: About to register Inngest serve handler...");
 
 // Inngest handler (for background jobs)
-// app.use(
-//   "/api/inngest",
-//   // inngestServe({
-//   //   client: inngest,
-//   //   functions,
-//   // }),
-//   (c) => c.json({ error: "Inngest disabled for debugging" }, 503)
-// );
+// Inngest handler (for background jobs)
+app.use(
+  "/api/inngest",
+  inngestServe({
+    client: inngest,
+    functions,
+  }),
+);
 
 console.log("✅ DEBUG: Inngest serve handler registered successfully!");
 
@@ -448,10 +445,12 @@ try {
         "API server started",
       );
 
-      // ✨ Start event processor
+      // ✨ Start event processor (Delayed to allow server to bind port first)
       const { startEventProcessor } = await import("@synap/api");
-      startEventProcessor();
-      apiLogger.info("Event processor started");
+      setTimeout(() => {
+        startEventProcessor();
+        apiLogger.info("Event processor started (delayed)");
+      }, 5000);
     },
   );
 } catch (err) {

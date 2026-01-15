@@ -75,7 +75,8 @@ async function handleEntityCreated(data: EventDataWithUser) {
     title,
     preview: content?.substring(0, 200),
     userId, // ✅ User isolation
-  });
+    workspaceId: userId, // TODO: Get from event data when available
+  } as any);
 
   // 2. If there's content, store it (inherits userId from entity via FK)
   // 3. If it's a task, create task details (inherits userId from entity via FK)
@@ -107,6 +108,7 @@ async function handleEntityCreated(data: EventDataWithUser) {
           .values({
             name: tagName,
             userId, // ✅ User isolation
+            workspaceId: userId, // TODO: Get from event data when available
           } as any)
           .returning();
         tag = Array.isArray(newTagsResult) ? newTagsResult[0] : newTagsResult;

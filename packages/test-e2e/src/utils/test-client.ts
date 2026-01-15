@@ -27,7 +27,19 @@ export function createTestClient(options: TestClientOptions) {
           Cookie: sessionCookie,
         },
         // @ts-ignore - node-fetch compatibility
-        fetch: fetch as any,
+        fetch: async (url, options) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          try {
+            const response = await fetch(url, {
+              ...options,
+              signal: controller.signal,
+            });
+            return response;
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
       }),
     ],
   });

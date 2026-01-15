@@ -29,9 +29,12 @@ export { searchEntityVectorsRaw } from "./repositories/vector-repository.js";
 // Export projectors (event handlers for materialized views)
 export * from "./projectors/index.js";
 
-// Export workspace permissions utilities
+// Export workspace permissions utilities (legacy)
 export * from "./utils/workspace-permissions.js";
 export { PermissionError } from "./utils/workspace-permissions.js";
+
+// Export new multi-level permission system
+export * from "./utils/permissions.js";
 
 // Re-export commonly used drizzle-orm functions
 export {

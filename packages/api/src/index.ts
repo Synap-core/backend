@@ -19,6 +19,8 @@ export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
+import { projectsRouter } from "./routers/projects.js";
+
 export {
   requireUserId,
   userScope,
@@ -222,6 +224,11 @@ registerRouter("whiteboards", whiteboardsRouter, {
   version: "1.0.0",
   source: "core",
   description: "Whiteboard version control and snapshots",
+});
+registerRouter("projects", projectsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Project management",
 });
 
 import { coreRouter } from "./root.js";

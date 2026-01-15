@@ -211,7 +211,7 @@ export const systemRouter = router({
         type: z.string().min(1),
         data: z.record(z.unknown()),
         userId: z.string().min(1),
-        aggregateId: z.string().uuid().optional(),
+        subjectId: z.string().uuid().optional(),
         source: z
           .enum(["api", "automation", "sync", "migration", "system"])
           .optional(),
@@ -225,7 +225,7 @@ export const systemRouter = router({
         type: input.type as any,
         data: input.data,
         userId: input.userId,
-        aggregateId: input.aggregateId,
+        subjectId: input.subjectId,
         source: input.source || "system",
         correlationId: input.correlationId,
         causationId: input.causationId,
@@ -242,7 +242,7 @@ export const systemRouter = router({
         data: {
           eventId: storedEvent.id,
           eventType: storedEvent.eventType,
-          aggregateId: storedEvent.aggregateId,
+          subjectId: storedEvent.subjectId,
           userId: storedEvent.userId,
           timestamp: storedEvent.timestamp.toISOString(),
           correlationId: storedEvent.correlationId,
@@ -320,7 +320,7 @@ export const systemRouter = router({
           type: event.eventType,
           timestamp: event.timestamp.toISOString(),
           userId: event.userId,
-          aggregateId: event.aggregateId,
+          subjectId: event.subjectId,
           data: event.data,
           metadata: event.metadata,
           causationId: event.causationId,
@@ -386,8 +386,8 @@ export const systemRouter = router({
       z.object({
         userId: z.string().optional(),
         eventType: z.string().optional(),
-        aggregateType: z.string().optional(),
-        aggregateId: z.string().optional(),
+        subjectType: z.string().optional(),
+        subjectId: z.string().optional(),
         correlationId: z.string().optional(),
         fromDate: z.string().datetime().optional(),
         toDate: z.string().datetime().optional(),
@@ -399,8 +399,8 @@ export const systemRouter = router({
       const filters = {
         userId: input.userId,
         eventType: input.eventType,
-        aggregateType: input.aggregateType as any,
-        aggregateId: input.aggregateId,
+        subjectType: input.subjectType as any,
+        subjectId: input.subjectId,
         correlationId: input.correlationId,
         fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
         toDate: input.toDate ? new Date(input.toDate) : undefined,
@@ -412,7 +412,7 @@ export const systemRouter = router({
       const totalCount = await eventRepository.countEvents({
         userId: input.userId,
         eventType: input.eventType,
-        aggregateType: input.aggregateType as any,
+        subjectType: input.subjectType as any,
         fromDate: filters.fromDate,
         toDate: filters.toDate,
       });
@@ -423,8 +423,8 @@ export const systemRouter = router({
           type: event.eventType,
           timestamp: event.timestamp.toISOString(),
           userId: event.userId,
-          aggregateId: event.aggregateId,
-          aggregateType: event.aggregateType,
+          subjectId: event.subjectId,
+          subjectType: event.subjectType,
           data: event.data,
           metadata: event.metadata,
           causationId: event.causationId,

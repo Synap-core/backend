@@ -8,6 +8,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, desc, and } from "@synap/database";
 import { entities, insertEntitySchema } from "@synap/database/schema";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 // TODO: Move to @synap-core/types or DB enum
 const EntityTypeSchema = z.enum([
@@ -40,12 +41,27 @@ export const entitiesRouter = router({
         }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - permission validator will handle permission checks
-      const { inngest } = await import("@synap/jobs");
+      const { randomUUID } = await import("crypto");
+      const entityId = randomUUID();
 
-      await inngest.send({
-        name: "entities.create.requested",
+      const optimisticEntity = {
+        id: entityId,
+        type: input.type,
+        title: input.title,
+        preview: input.description,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      // Emit request event (stores in event log + publishes to Inngest)
+      await emitRequestEvent({
+        type: "entities.create.requested",
+        subjectId: entityId,
+        subjectType: "entity",
         data: {
+          id: entityId,
           type: input.type,
           title: input.title,
           preview: input.description,
@@ -56,12 +72,14 @@ export const entitiesRouter = router({
           fileType: input.fileType,
           userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
         status: "requested",
         message: "Entity creation requested",
+        id: entityId,
+        entity: optimisticEntity,
       };
     }),
 
@@ -157,18 +175,18 @@ export const entitiesRouter = router({
         }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "entities.update.requested",
+      await emitRequestEvent({
+        type: "entities.update.requested",
+        subjectId: input.id,
+        subjectType: "entity",
         data: {
           entityId: input.id,
           title: input.title,
           preview: input.preview,
           userId: ctx.userId,
+          workspaceId: input.workspaceId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
@@ -187,16 +205,15 @@ export const entitiesRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "entities.delete.requested",
+      await emitRequestEvent({
+        type: "entities.delete.requested",
+        subjectId: input.id,
+        subjectType: "entity",
         data: {
           entityId: input.id,
           userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {

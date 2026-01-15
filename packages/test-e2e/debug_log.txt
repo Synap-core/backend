@@ -1,0 +1,38 @@
+
+ RUN  v1.6.1 /Users/antoine/Documents/Code/synap/synap-backend/packages/test-e2e
+
+stdout | src/setup.ts:109:9
+DEBUG: setup.ts loaded
+
+stdout | src/hub-protocol-e2e.test.ts > E2E Hub Protocol
+DEBUG: setupTestEnvironment called
+DEBUG: Setting up E2E test environment...
+DEBUG: Initializing test database...
+Step 2: Starting API server connection check...
+DEBUG: [Attempt 1] Connecting to 4000...
+
+stdout | src/hub-protocol-e2e.test.ts > E2E Hub Protocol
+DEBUG: [Attempt 1] ✅ API server port is open
+Step 2: API server ready at http://127.0.0.1:4000
+Step 3: Creating test users...
+Step 3: Test users created
+Step 5: Creating API keys...
+
+stdout | src/hub-protocol-e2e.test.ts > E2E Hub Protocol
+Step 5: API keys created
+
+ ❯ src/hub-protocol-e2e.test.ts  (8 tests | 4 failed | 3 skipped) 5325ms
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 1. Token Generation > should validate token expiration
+     → expected 'Token is required' to contain 'expired'
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 2. Data Querying > should query entities with valid token
+     → Token is required
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 2. Data Querying > should respect scope limitations
+     → expected 'Token is required' to contain 'scope'
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 3. Entity Creation via Hub Protocol > should submit insight successfully
+     → Token is required
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 1 passed | 3 skipped (8)
+   Start at  17:02:25
+   Duration  7.79s (transform 672ms, setup 1.34s, collect 941ms, tests 5.33s, environment 0ms, prepare 64ms)
+

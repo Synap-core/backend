@@ -82,19 +82,22 @@ export type EventType = SystemEventType;
  *
  * Checks if a string is a valid event type (system or generated).
  */
+// Imported statically to fix ESM 'require is not defined' error
+import { isGeneratedEventType } from "./generator.js";
+
+/**
+ * Validate event type
+ *
+ * Checks if a string is a valid event type (system or generated).
+ */
 export function isValidEventType(eventType: string): boolean {
   // Check system events
   if (Object.values(EventTypes).includes(eventType as EventType)) {
     return true;
   }
 
-  // Check generated - import locally to avoid circular dependency
-  try {
-    const { isGeneratedEventType } = require("./generator.js"); // eslint-disable-line @typescript-eslint/no-require-imports
-    return isGeneratedEventType(eventType);
-  } catch {
-    return false;
-  }
+  // Check generated
+  return isGeneratedEventType(eventType);
 }
 
 /**

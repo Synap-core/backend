@@ -61,7 +61,7 @@ export const contentRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId as string;
       const requestId = randomUUID();
-      const aggregateId = randomUUID();
+      const subjectId = randomUUID();
 
       logger.info(
         { userId, requestId, targetType: input.targetType },
@@ -72,7 +72,7 @@ export const contentRouter = router({
       const event = createSynapEvent({
         type: "entities.create.requested",
         userId,
-        aggregateId,
+        subjectId,
         data: {
           contentSource: "text-input",
           textContent: input.content,
@@ -94,7 +94,7 @@ export const contentRouter = router({
         {
           id: event.id,
           type: event.type,
-          aggregateId: event.aggregateId,
+          subjectId: event.subjectId,
           userId: event.userId,
           version: 1,
           timestamp: event.timestamp.toISOString(),
@@ -112,7 +112,7 @@ export const contentRouter = router({
         success: true,
         status: "pending" as const,
         requestId,
-        entityId: aggregateId,
+        entityId: subjectId,
       };
     }),
 
@@ -126,7 +126,7 @@ export const contentRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId as string;
       const requestId = randomUUID();
-      const aggregateId = randomUUID();
+      const subjectId = randomUUID();
 
       logger.info(
         {
@@ -162,7 +162,7 @@ export const contentRouter = router({
         const event = createSynapEvent({
           type: "entities.create.requested",
           userId,
-          aggregateId,
+          subjectId,
           data: {
             contentSource: "file-upload",
             stagingKey,
@@ -185,7 +185,7 @@ export const contentRouter = router({
           {
             id: event.id,
             type: event.type,
-            aggregateId: event.aggregateId,
+            subjectId: event.subjectId,
             userId: event.userId,
             version: 1,
             timestamp: event.timestamp.toISOString(),
@@ -206,9 +206,9 @@ export const contentRouter = router({
         };
 
         if (input.targetType === "note") {
-          result.entityId = aggregateId;
+          result.entityId = subjectId;
         } else {
-          result.documentId = aggregateId;
+          result.documentId = subjectId;
         }
 
         return result;

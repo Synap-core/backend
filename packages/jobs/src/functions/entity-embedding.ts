@@ -29,7 +29,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
   }
 
   const data = await response.json();
-  return data.embedding;
+  return (data as { embedding: number[] }).embedding;
 }
 
 /**

@@ -20,11 +20,10 @@ export const entities = pgTable("entities", {
   // Primary key
   id: uuid("id").defaultRandom().primaryKey(),
 
-  // Which user owns this entity?
+  // Context
   userId: text("user_id").notNull(),
-
-  // Workspace (for team entities, NULL for personal)
-  workspaceId: uuid("workspace_id"),
+  workspaceId: uuid("workspace_id").notNull(), // Every entity belongs to a workspace
+  projectIds: uuid("project_ids").array(),      // Optional: entities can be in multiple projects
 
   // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event', 'person', 'file'
   type: text("type").notNull(),

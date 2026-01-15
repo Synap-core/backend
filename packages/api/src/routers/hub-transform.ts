@@ -22,11 +22,11 @@ const logger = createLogger({ module: "hub-transform" });
  * @returns Array of SynapEvent objects
  * @throws ValidationError if insight cannot be transformed
  */
-export function transformInsightToEvents(
+export async function transformInsightToEvents(
   insight: HubInsight,
   userId: string,
   requestId: string,
-): Array<ReturnType<typeof createSynapEvent>> {
+): Promise<Array<ReturnType<typeof createSynapEvent>>> {
   const events: Array<ReturnType<typeof createSynapEvent>> = [];
 
   // Verify that the insight type is supported
@@ -49,11 +49,30 @@ export function transformInsightToEvents(
   // Transform each action into an event
   for (const [index, action] of insight.actions.entries()) {
     // Validate that the event type is valid
-    if (!isValidEventType(action.eventType)) {
-      throw new ValidationError(
-        `Invalid event type: '${action.eventType}'. Action index: ${index}`,
-        { eventType: action.eventType, actionIndex: index },
-      );
+    const isValid = isValidEventType(action.eventType);
+    
+    if (!isValid) {
+      // DEBUG: Double check using isGeneratedEventType directly and log available types
+      const { isGeneratedEventType, getAllGeneratedEventTypes } = await import("@synap/events");
+      const isGenerated = isGeneratedEventType(action.eventType);
+      const allEvents = getAllGeneratedEventTypes();
+      
+      logger.error({ 
+        eventType: action.eventType, 
+        isValidWrapper: isValid, 
+        isGeneratedDirect: isGenerated,
+        availableEventCount: allEvents.length,
+        sampleEvents: allEvents.slice(0, 5)
+      }, "Event type validation failed details");
+
+      if (!isGenerated) {
+        throw new ValidationError(
+          `Invalid event type: '${action.eventType}'. Action index: ${index}`,
+          { eventType: action.eventType, actionIndex: index },
+        );
+      } else {
+        logger.warn({ eventType: action.eventType }, "isValidEventType returned false but isGeneratedEventType returned true. Proceeding.");
+      }
     }
 
     // Create the event
@@ -61,7 +80,7 @@ export function transformInsightToEvents(
       type: action.eventType as EventType,
       data: action.data,
       userId,
-      aggregateId: action.aggregateId,
+      subjectId: action.subjectId,
       source: "automation", // Hub insights are considered automations
       correlationId: insight.correlationId,
       requestId,

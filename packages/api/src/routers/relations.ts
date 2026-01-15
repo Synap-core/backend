@@ -13,6 +13,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, and, or, desc } from "@synap/database";
 import { relations, entities } from "@synap/database/schema";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 /**
  * Relation type schema
@@ -166,7 +167,91 @@ export const relationsRouter = router({
 
       return { entities: relatedEntities };
     }),
-
+/**
+   * Create a relation between entities
+   * Event-driven: emits relations.create.requested
+   */
+  create: protectedProcedure
+    .input(
+      z.object({
+        sourceEntityId: z.string().uuid(),
+        targetEntityId: z.string().uuid(),
+        type: RelationTypeSchema,
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { randomUUID } = await import("crypto");
+      const relationId = randomUUID();
+      await emitRequestEvent({
+        eventRepo: ctx.eventRepo,
+        inngest: ctx.inngest,
+        type: "relations.create.requested",
+        subjectId: relationId,
+        subjectType: "relation",
+        data: {
+          id: relationId,
+          sourceEntityId: input.sourceEntityId,
+          targetEntityId: input.targetEntityId,
+          type: input.type,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      return { status: "requested", relationId };
+    }),
+  /**
+   * Update a relation type
+   * Event-driven: emits relations.update.requested
+   */
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        type: RelationTypeSchema,
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      await emitRequestEvent({
+        eventRepo: ctx.eventRepo,
+        inngest: ctx.inngest,
+        type: "relations.update.requested",
+        subjectId: input.id,
+        subjectType: "relation",
+        data: {
+          id: input.id,
+          type: input.type,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      return { status: "requested" };
+    }),
+  /**
+   * Delete a relation
+   * Event-driven: emits relations.delete.requested
+   */
+  delete: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      await emitRequestEvent({
+        eventRepo: ctx.eventRepo,
+        inngest: ctx.inngest,
+        type: "relations.delete.requested",
+        subjectId: input.id,
+        subjectType: "relation",
+        data: {
+          id: input.id,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      return { status: "requested" };
+    }),
+    
   /**
    * Get relation statistics for an entity
    */

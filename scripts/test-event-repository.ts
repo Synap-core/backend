@@ -6,7 +6,7 @@
 
 import {
   eventRepository,
-  AggregateType,
+  subjectType,
   EventSource,
 } from "../packages/database/src/repositories/event-repository.js";
 import { randomUUID } from "crypto";
@@ -14,15 +14,15 @@ import { randomUUID } from "crypto";
 async function runTests() {
   console.log("🧪 Testing EventRepository...\n");
 
-  const testAggregateId = randomUUID();
+  const testsubjectId = randomUUID();
   const testUserId = "test-user-" + Date.now();
 
   try {
     // Test 1: Append single event
     console.log("Test 1: Append single event");
     const event1 = await eventRepository.append({
-      aggregateId: testAggregateId,
-      aggregateType: AggregateType.ENTITY,
+      subjectId: testsubjectId,
+      subjectType: subjectType.ENTITY,
       eventType: "entity.created",
       userId: testUserId,
       data: {
@@ -39,8 +39,8 @@ async function runTests() {
     // Test 2: Append second event (version increment)
     console.log("\nTest 2: Append second event (version increment)");
     const event2 = await eventRepository.append({
-      aggregateId: testAggregateId,
-      aggregateType: AggregateType.ENTITY,
+      subjectId: testsubjectId,
+      subjectType: subjectType.ENTITY,
       eventType: "entity.updated",
       userId: testUserId,
       data: {
@@ -61,8 +61,8 @@ async function runTests() {
     );
     try {
       await eventRepository.append({
-        aggregateId: testAggregateId,
-        aggregateType: AggregateType.ENTITY,
+        subjectId: testsubjectId,
+        subjectType: subjectType.ENTITY,
         eventType: "entity.updated",
         userId: testUserId,
         data: { title: "Another Update" },
@@ -83,7 +83,7 @@ async function runTests() {
 
     // Test 4: Get aggregate stream
     console.log("\nTest 4: Get aggregate stream (event replay)");
-    const stream = await eventRepository.getAggregateStream(testAggregateId);
+    const stream = await eventRepository.getAggregateStream(testsubjectId);
     console.log(`✅ Stream has ${stream.length} events`);
     stream.forEach((event, index) => {
       console.log(`   ${index + 1}. v${event.version} ${event.eventType}`);
@@ -91,7 +91,7 @@ async function runTests() {
 
     // Test 5: Get aggregate version
     console.log("\nTest 5: Get aggregate version");
-    const version = await eventRepository.getAggregateVersion(testAggregateId);
+    const version = await eventRepository.getAggregateVersion(testsubjectId);
     console.log(`✅ Current version: ${version}`);
 
     // Test 6: Get user stream
@@ -105,12 +105,12 @@ async function runTests() {
     // Test 7: Batch append
     console.log("\nTest 7: Batch append (3 events)");
     const correlationId = randomUUID();
-    const batchAggregateId = randomUUID();
+    const batchsubjectId = randomUUID();
 
     const batchEvents = await eventRepository.appendBatch([
       {
-        aggregateId: batchAggregateId,
-        aggregateType: AggregateType.ENTITY,
+        subjectId: batchsubjectId,
+        subjectType: subjectType.ENTITY,
         eventType: "batch.event1",
         userId: testUserId,
         data: { step: 1 },
@@ -119,8 +119,8 @@ async function runTests() {
         source: EventSource.AUTOMATION,
       },
       {
-        aggregateId: batchAggregateId,
-        aggregateType: AggregateType.ENTITY,
+        subjectId: batchsubjectId,
+        subjectType: subjectType.ENTITY,
         eventType: "batch.event2",
         userId: testUserId,
         data: { step: 2 },
@@ -129,8 +129,8 @@ async function runTests() {
         source: EventSource.AUTOMATION,
       },
       {
-        aggregateId: batchAggregateId,
-        aggregateType: AggregateType.ENTITY,
+        subjectId: batchsubjectId,
+        subjectType: subjectType.ENTITY,
         eventType: "batch.event3",
         userId: testUserId,
         data: { step: 3 },

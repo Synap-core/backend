@@ -29,7 +29,7 @@ export const ActionSchema = z.object({
   /**
    * Aggregate ID (optional, for linking to existing entity)
    */
-  aggregateId: z.string().uuid().optional(),
+  subjectId: z.string().uuid().optional(),
 
   /**
    * Event data (must correspond to the eventType schema)

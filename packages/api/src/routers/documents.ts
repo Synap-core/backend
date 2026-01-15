@@ -23,6 +23,7 @@ import {
 import { insertDocumentSchema } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { randomUUID } from "crypto";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 // ============================================================================
 // SCHEMAS
@@ -68,13 +69,14 @@ export const documentsRouter = router({
     .input(UploadDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const documentId = randomUUID();
 
-      // ✅ Publish .requested event for document creation
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "documents.create.requested",
+      await emitRequestEvent({
+        type: "documents.create.requested",
+        subjectId: documentId,
+        subjectType: "document",
         data: {
+          id: documentId,
           title: input.title,
           type: input.type,
           language: input.language || undefined,
@@ -83,12 +85,13 @@ export const documentsRouter = router({
           projectId: input.projectId || undefined,
           userId,
         },
-        user: { id: userId },
+        userId,
       });
 
       return {
         status: "requested",
         message: "Document upload requested",
+        documentId,
       };
     }),
 
@@ -125,14 +128,15 @@ export const documentsRouter = router({
     }),
 
   /**
-   * Update document (DIRECT UPDATE - no event)
-   * Hybrid architecture: Performance optimized
+   * Update document (Hybrid: Storage sync + Event for Metadata/Governor)
    */
   update: protectedProcedure
     .input(UpdateDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const eventRepo = new EventRepository(db.$client);
 
+      // 1. Verify existence & authorization ownership (Optimistic check)
       const [document] = await db
         .select()
         .from(documents)
@@ -148,13 +152,11 @@ export const documentsRouter = router({
         });
       }
 
-      const newContent = input.delta?.[0]?.content || ""; // Simplified for example, real OT is complex
-      // If delta is missing, maybe we just increment version? Or error?
-      // Assuming delta is present for content updates.
-
+      // 2. Direct storage update (to handle large content without blocking)
+      // Note: This bypasses strict governance for content, but governance will catch the metadata update
+      const newContent = input.delta?.[0]?.content || ""; 
       const newVersion = document.currentVersion + 1;
 
-      // Direct storage update
       if (input.delta) {
         await storage.upload(
           document.storageKey,
@@ -163,25 +165,25 @@ export const documentsRouter = router({
         );
       }
 
-      // Direct DB update
-      await db
-        .update(documents)
-        .set({ currentVersion: newVersion, updatedAt: new Date() })
-        .where(eq(documents.id, input.documentId));
-
-      // Periodic snapshots (every 10 versions)
-      if (newVersion % 10 === 0 || input.message) {
-        await db.insert(documentVersions).values({
-          documentId: input.documentId,
+      // 3. Emit Event for Metadata/DB Update
+      // This ensures the DB update goes through the unified flow (governance -> executor)
+      await emitRequestEvent({
+        type: "documents.update.requested",
+        subjectId: input.documentId,
+        subjectType: "document",
+        data: {
+          id: input.documentId,
+          currentVersion: newVersion,
+          title: document.title,
           version: newVersion,
-          content: newContent,
-          delta: input.delta as any, // Cast JSONB
-          author: "user",
-          authorId: userId,
-          message: input.message || `Auto-snapshot v${newVersion}`,
-        });
-      }
+          message: input.message,
+          userId,
+        },
+        userId,
+      });
 
+      // 4. Optimistic Response
+      // We assume storage succeeded and DB will follow.
       return { version: newVersion, success: true };
     }),
 
@@ -212,15 +214,19 @@ export const documentsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not authorized" });
       }
 
-      // Delete from storage
-      // Fix: 'deleteFile' might be named 'delete' or 'remove' in IFileStorage interface?
-      // Checking usage elsewhere or interface definition is best.
-      // Assuming 'delete' based on common patterns, or I need to check @synap/storage.
-      // If 'deleteFile' does not exist, I will try 'delete'.
-      await storage.delete(document.storageKey);
+      await emitRequestEvent({
+        type: "documents.delete.requested",
+        subjectId: input.documentId,
+        subjectType: "document",
+        data: {
+          id: input.documentId,
+          userId,
+        },
+        userId,
+      });
 
-      // Delete from DB
-      await db.delete(documents).where(eq(documents.id, input.documentId));
+      // Storage delete kept synchronous for safety
+      await storage.delete(document.storageKey);
 
       return { success: true };
     }),

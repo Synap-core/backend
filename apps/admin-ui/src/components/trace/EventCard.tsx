@@ -24,8 +24,8 @@ interface EventCardProps {
     type: string;
     timestamp: string;
     userId: string;
-    aggregateId?: string;
-    aggregateType?: string;
+    subjectId?: string;
+    subjectType?: string;
     data: Record<string, unknown>;
     metadata?: Record<string, unknown>;
     causationId?: string | null;
@@ -81,11 +81,11 @@ function EventCard({ event, isHighlighted, onClick }: EventCardProps) {
               {event.userId}
             </Text>
           </Group>
-          {event.aggregateId && (
+          {event.subjectId && (
             <Group gap="xs">
               <IconHash size={14} />
               <Text size="sm" c="dimmed">
-                {event.aggregateType}: {event.aggregateId.slice(0, 8)}...
+                {event.subjectType}: {event.subjectId.slice(0, 8)}...
               </Text>
             </Group>
           )}

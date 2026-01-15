@@ -43,7 +43,7 @@ describe("ActionSchema", () => {
   it("should validate optional fields", () => {
     const action: Action = {
       eventType: "project.creation.requested",
-      aggregateId: "123e4567-e89b-12d3-a456-426614174000",
+      subjectId: "123e4567-e89b-12d3-a456-426614174000",
       data: { title: "My Project" },
       requiresConfirmation: true,
       priority: 80,
@@ -51,7 +51,7 @@ describe("ActionSchema", () => {
     };
 
     const result = validateAction(action);
-    expect(result.aggregateId).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(result.subjectId).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(result.priority).toBe(80);
     expect(result.metadata?.source).toBe("hub");
   });

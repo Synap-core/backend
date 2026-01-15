@@ -85,7 +85,7 @@ import { createSynapEvent, EventTypes, type SynapEvent } from '@synap/types';
 const event = createSynapEvent({
   type: EventTypes.NOTE_CREATION_REQUESTED,
   userId: 'user-123',
-  aggregateId: 'entity-456',
+  subjectId: 'entity-456',
   data: { content: 'Hello' },
   source: 'api',
 });

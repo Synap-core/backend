@@ -26,6 +26,7 @@ export const entityTemplates = pgTable(
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
+    projectIds: uuid("project_ids").array(), // Optional: templates can be scoped to projects
 
     // Target Configuration
     targetType: text("target_type").notNull(),

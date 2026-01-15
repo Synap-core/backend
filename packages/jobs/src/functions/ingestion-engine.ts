@@ -104,8 +104,8 @@ export const ingestionEngineV1 = inngest.createFunction(
           data: {
             id: synapEvent.id,
             type: synapEvent.type,
-            aggregateId: synapEvent.aggregateId,
-            aggregateType: 'entity',
+            subjectId: synapEvent.subjectId,
+            subjectType: 'entity',
             userId: synapEvent.userId,
             version: 1,
             timestamp: timestamp.toISOString(),

@@ -48,7 +48,7 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
       const event = createSynapEvent({
         type: "entities.create.requested",
         userId: userAId,
-        aggregateId: entityId,
+        subjectId: entityId,
         data: {
           content: testNoteContent,
           title: "Test Note",
@@ -87,8 +87,8 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
         data: {
           id: eventRecord.id,
           type: eventRecord.eventType,
-          aggregateId: eventRecord.aggregateId,
-          aggregateType: eventRecord.aggregateType,
+          subjectId: eventRecord.subjectId,
+          subjectType: eventRecord.subjectType,
           userId: eventRecord.userId,
           version: eventRecord.version,
           timestamp: eventRecord.timestamp.toISOString(),
@@ -137,7 +137,7 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
       const userAEvent = createSynapEvent({
         type: "entities.create.requested",
         userId: userAId,
-        aggregateId: userANoteId,
+        subjectId: userANoteId,
         data: {
           content: "User A private note",
           title: "User A Note",
@@ -154,8 +154,8 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
         data: {
           id: userAEvent.id,
           type: userAEvent.type,
-          aggregateId: userAEvent.aggregateId,
-          aggregateType: "entity",
+          subjectId: userAEvent.subjectId,
+          subjectType: "entity",
           userId: userAEvent.userId,
           version: 1,
           timestamp: userAEvent.timestamp.toISOString(),

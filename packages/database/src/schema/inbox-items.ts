@@ -21,7 +21,11 @@ export const inboxItems = pgTable(
   {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
+    
+    // Context
     userId: text("user_id").notNull(),
+    workspaceId: uuid("workspace_id").notNull(), // Every inbox item belongs to a workspace
+    projectIds: uuid("project_ids").array(),      // Optional: items can be related to projects
 
     // External source (direct columns for queryability)
     provider: varchar("provider", { length: 50 }).notNull(), // 'gmail', 'google_calendar', 'slack'
@@ -69,13 +73,14 @@ export const inboxItems = pgTable(
       table.userId,
       table.status,
     ),
-    userTimestampIdx: index("idx_inbox_user_timestamp").on(
+    providerIdx: index("idx_inbox_provider").on(table.provider),
+    timestampIdx: index("idx_inbox_timestamp").on(
       table.userId,
       table.timestamp,
     ),
     snoozedIdx: index("idx_inbox_snoozed").on(table.userId, table.snoozedUntil),
     priorityIdx: index("idx_inbox_priority").on(table.userId, table.priority),
-    uniqueSourceIdx: uniqueIndex("idx_inbox_unique_source").on(
+    externalUnique: uniqueIndex("idx_inbox_external_unique").on(
       table.userId,
       table.provider,
       table.externalId,
@@ -83,18 +88,13 @@ export const inboxItems = pgTable(
   }),
 );
 
-export type InboxItem = typeof inboxItems.$inferSelect;
-export type NewInboxItem = typeof inboxItems.$inferInsert;
-
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-/**
- * @internal For monorepo usage - enables schema composition in API layer
- */
 export const insertInboxItemSchema = createInsertSchema(inboxItems);
-/**
- * @internal For monorepo usage - enables schema composition in API layer
- */
 export const selectInboxItemSchema = createSelectSchema(inboxItems);
-export type InsertInboxItem = NewInboxItem;
-export type SelectInboxItem = InboxItem;
+
+export type InboxItem = typeof inboxItems.$inferSelect;
+export type NewInboxItem = typeof inboxItems.$inferInsert;

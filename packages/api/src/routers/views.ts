@@ -39,6 +39,7 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
+import { emitRequestEvent } from "../utils/emit-event.js";
 import {
   requireEditor,
   requireViewer,
@@ -144,32 +145,44 @@ export const viewsRouter = router({
         message: "Initial version",
       });
 
-      // Create view
-      const [view] = await db
-        .insert(views)
-        .values({
-          workspaceId: input.workspaceId,
-          userId: ctx.userId,
-          type: input.type,
-          category,
-          name: input.name,
-          description: input.description,
-          documentId: doc.id,
-          metadata: {
-            entityCount: 0,
-            createdBy: ctx.userId,
-          },
-        } as any)
-        .returning();
+      // Create view (Event-Driven)
+      const { randomUUID } = await import("crypto");
+      const viewId = randomUUID();
 
-      await ViewEvents.createValidated(ctx.userId, {
-        id: view.id,
-        type: view.type,
-        name: view.name,
+      const optimisticView = {
+        id: viewId,
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+        type: input.type,
+        category,
+        name: input.name,
+        description: input.description,
         documentId: doc.id,
+        metadata: {
+          entityCount: 0,
+          createdBy: ctx.userId,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await emitRequestEvent({
+        type: "views.create.requested",
+        subjectId: viewId,
+        subjectType: "view",
+        data: {
+          id: viewId,
+          type: input.type,
+          name: input.name,
+          documentId: doc.id,
+          workspaceId: input.workspaceId,
+          config: optimisticView.metadata,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
       });
 
-      return { view, documentId: doc.id };
+      return { view: optimisticView, documentId: doc.id, status: "requested" };
     }),
 
   /**
@@ -506,17 +519,23 @@ export const viewsRouter = router({
         requireResourceOwner(view, ctx.userId);
       }
 
-      const [updated] = await db
-        .update(views)
-        .set({
+      await emitRequestEvent({
+        type: "views.update.requested",
+        subjectId: input.id,
+        subjectType: "view",
+        data: {
+          id: input.id,
           name: input.name,
           description: input.description,
-          updatedAt: new Date(),
-        })
-        .where(eq(views.id, input.id))
-        .returning();
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
-      return updated;
+      return {
+        status: "requested",
+        message: "View update requested",
+      };
     }),
 
   /**
@@ -540,15 +559,23 @@ export const viewsRouter = router({
         requireResourceOwner(view, ctx.userId);
       }
 
-      // Delete view
-      await db.delete(views).where(eq(views.id, input.id));
+      await emitRequestEvent({
+        type: "views.delete.requested",
+        subjectId: input.id,
+        subjectType: "view",
+        data: {
+          id: input.id,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
-      // Optionally delete document too
+      // Optionally delete document (keeping this synchronous for safety/cleanup as discussed)
       if (view.documentId) {
         await db.delete(documents).where(eq(documents.id, view.documentId));
       }
 
-      return { success: true };
+      return { success: true, status: "requested" };
     }),
 
   /**

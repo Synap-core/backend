@@ -144,14 +144,17 @@ export const GeneratedEventTypes = {
 /**
  * Flat list of all generated event types (for type checking)
  *
- * V2.0: Only requested/validated patterns
+ * V2.1: Added .approved phase for 3-phase flow
  */
 export type GeneratedEventType =
   | `${CoreTable}.create.requested`
+  | `${CoreTable}.create.approved`
   | `${CoreTable}.create.validated`
   | `${CoreTable}.update.requested`
+  | `${CoreTable}.update.approved`
   | `${CoreTable}.update.validated`
   | `${CoreTable}.delete.requested`
+  | `${CoreTable}.delete.approved`
   | `${CoreTable}.delete.validated`;
 
 /**
@@ -163,10 +166,13 @@ export function getAllGeneratedEventTypes(): GeneratedEventType[] {
   for (const table of CORE_TABLES) {
     events.push(
       `${table}.create.requested`,
+      `${table}.create.approved`,
       `${table}.create.validated`,
       `${table}.update.requested`,
+      `${table}.update.approved`,
       `${table}.update.validated`,
       `${table}.delete.requested`,
+      `${table}.delete.approved`,
       `${table}.delete.validated`,
     );
   }
@@ -198,10 +204,13 @@ export function parseEventType(
   // Validate action is a known pattern
   const validActions: TableAction[] = [
     "create.requested",
+    "create.approved",
     "create.validated",
     "update.requested",
+    "update.approved",
     "update.validated",
     "delete.requested",
+    "delete.approved",
     "delete.validated",
   ];
 

@@ -1,0 +1,56 @@
+
+ RUN  v1.6.1 /Users/antoine/Documents/Code/synap/synap-backend/packages/test-e2e
+
+stdout | src/setup.ts:109:9
+DEBUG: setup.ts loaded
+
+stdout | src/hub-protocol-e2e.test.ts > E2E Hub Protocol
+DEBUG: setupTestEnvironment called
+DEBUG: Setting up E2E test environment...
+DEBUG: Initializing test database...
+Step 2: Starting API server connection check...
+DEBUG: [Attempt 1] Connecting to 4000...
+
+stdout | src/hub-protocol-e2e.test.ts > E2E Hub Protocol
+DEBUG: [Attempt 1] ✅ API server port is open
+Step 2: API server ready at http://127.0.0.1:4000
+Step 3: Creating test users...
+Step 3: Test users created
+Step 5: Creating API keys...
+
+stdout | src/hub-protocol-e2e.test.ts > E2E Hub Protocol
+Step 5: API keys created
+
+ ❯ src/hub-protocol-e2e.test.ts  (8 tests | 3 failed | 3 skipped) 8424ms
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 2. Data Querying > should query entities with valid token
+     → expected 0 to be greater than or equal to 2
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 2. Data Querying > should respect scope limitations
+     → expected 'Invalid insight schema: [\n  {\n    "…' to contain 'scope'
+   ❯ src/hub-protocol-e2e.test.ts > E2E Hub Protocol > 3. Entity Creation via Hub Protocol > should submit insight successfully
+     → Invalid insight schema: [
+  {
+    "code": "invalid_literal",
+    "expected": "1.0",
+    "path": [
+      "version"
+    ],
+    "message": "Invalid literal value, expected \"1.0\""
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "actions",
+      0,
+      "eventType"
+    ],
+    "message": "Required"
+  }
+]
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 2 passed | 3 skipped (8)
+   Start at  17:05:36
+   Duration  10.10s (transform 526ms, setup 956ms, collect 476ms, tests 8.42s, environment 0ms, prepare 72ms)
+

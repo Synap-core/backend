@@ -86,7 +86,7 @@ The main schema for insights returned by the Intelligence Hub.
 Represents an action to be transformed into a SynapEvent.
 
 - `eventType`: String (must match EventTypes)
-- `aggregateId`: UUID string (optional)
+- `subjectId`: UUID string (optional)
 - `data`: Record<string, unknown>
 - `requiresConfirmation`: Boolean (default: false)
 - `priority`: Number 0-100 (optional)

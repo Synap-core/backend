@@ -31,7 +31,10 @@ export const SynapEventSchema = z.object({
 
   // Event Classification
   type: z.string().min(1).max(128), // e.g., 'note.creation.requested', 'task.completed'
-  aggregateId: z.string().uuid().optional(), // Optional for system events
+  
+  // Event Sourcing: What is this event about?
+  subjectId: z.string().uuid().optional(), // Optional for system events
+  subjectType: z.string().optional(), // e.g., 'tag', 'entity', 'document'
 
   // Event Data (the core payload - what happened)
   data: z.record(z.unknown()), // Event payload (validated by specific event type schemas)
@@ -157,7 +160,8 @@ export function createSynapEvent(input: {
   type: string; // Accepts generated (e.g., 'entities.create.requested') and system event types
   data: Record<string, unknown>; // Event payload
   userId: string;
-  aggregateId?: string;
+  subjectId?: string;
+  subjectType?: string;
   source?: SynapEvent["source"];
   correlationId?: string;
   causationId?: string;
@@ -182,7 +186,8 @@ export function createSynapEvent(input: {
     id: randomUUID(),
     version: "v1",
     type: input.type,
-    aggregateId: input.aggregateId,
+    subjectId: input.subjectId,
+    subjectType: input.subjectType,
     data: validatedData,
     metadata: input.metadata,
     userId: input.userId,

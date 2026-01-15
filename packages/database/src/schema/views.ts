@@ -16,11 +16,12 @@ import { documents } from "./documents.js";
 export const views = pgTable("views", {
   id: uuid("id").defaultRandom().primaryKey(),
 
-  // Ownership
+  // Ownership & Context
   workspaceId: uuid("workspace_id").references(() => workspaces.id, {
     onDelete: "cascade",
   }),
   userId: text("user_id").notNull(), // Creator
+  projectIds: uuid("project_ids").array(), // Optional: views can be scoped to projects
 
   // View type (extensible)
   type: text("type").notNull(),
