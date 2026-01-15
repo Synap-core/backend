@@ -234,19 +234,13 @@ export const systemRouter = router({
       // Store in event repository (this will also broadcast via SSE hook)
       const storedEvent = await eventRepository.append(event);
 
-      // Publish to Inngest for worker processing
-      // Note: Inngest events use a different format (name/data)
+      // Publish to Inngest using the ACTUAL event type
+      // This allows the event to flow through the proper executor pipeline
       const { inngest } = await import("@synap/jobs");
       await inngest.send({
-        name: "api/event.logged",
-        data: {
-          eventId: storedEvent.id,
-          eventType: storedEvent.eventType,
-          subjectId: storedEvent.subjectId,
-          userId: storedEvent.userId,
-          timestamp: storedEvent.timestamp.toISOString(),
-          correlationId: storedEvent.correlationId,
-        },
+        name: input.type, // Use the actual event type, not "api/event.logged"
+        data: input.data,
+        user: { id: input.userId },
       });
 
       return {

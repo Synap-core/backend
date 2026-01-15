@@ -42,14 +42,6 @@ export const entities = pgTable("entities", {
   // Stores entity type-specific fields (task status, person email, etc.)
   metadata: jsonb("metadata").default("{}"),
 
-  // File storage references (R2/S3/Local) - DEPRECATED, use documents table
-  // TODO: Remove these columns after migration
-  fileUrl: text("file_url"), // Public URL: https://r2.../users/123/notes/456.md
-  filePath: text("file_path"), // Storage key: users/123/notes/456.md
-  fileSize: integer("file_size"), // Size in bytes
-  fileType: text("file_type"), // 'markdown', 'pdf', 'audio', 'video', 'image'
-  checksum: text("checksum"), // SHA256 hash for integrity verification
-
   // Optimistic locking
   version: integer("version").default(1).notNull(),
 

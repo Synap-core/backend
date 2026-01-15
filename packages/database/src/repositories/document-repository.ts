@@ -93,6 +93,8 @@ export class DocumentRepository extends BaseRepository<Document, CreateDocumentI
   /**
    * Delete a document
    * Emits: documents.delete.completed
+   * 
+   * NOTE: Storage cleanup is handled by the executor, not here
    */
   async delete(id: string, userId: string): Promise<void> {
     const result = await this.db

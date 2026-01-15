@@ -53,6 +53,7 @@ export type InboxItemReceivedEvent = BaseEvent<
     timestamp: Date;
     deepLink?: string;
     rawData: Record<string, unknown>;
+    workspaceId: string; // ✅ Required workspace context
   }
 >;
 

@@ -72,6 +72,7 @@ export const inboxRouter = router({
               timestamp: item.timestamp,
               data: item.data,
               status: "unread",
+              workspaceId: item.workspaceId,
             })
             .onConflictDoNothing({
               target: [

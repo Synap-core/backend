@@ -79,7 +79,7 @@ export class IntelligenceHubClient {
         throw new Error(`Intelligence Hub error: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      const data = await response.json() as IntelligenceHubResponse;
       return data;
     } catch (error) {
       console.error("Failed to call Intelligence Hub:", error);
@@ -106,7 +106,7 @@ export class IntelligenceHubClient {
     }
 
     const data = await response.json();
-    return data.embedding;
+    return (data as any).embedding; //TODO: resolve
   }
 
   /**

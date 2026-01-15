@@ -12,7 +12,7 @@
 // Types
 // ============================================================================
 
-export type UserRole = 'owner' | 'editor' | 'viewer';
+export type UserRole = 'owner' | 'admin' | 'editor' | 'viewer';
 export type PermissionType = 'read' | 'write' | 'delete' | 'manage' | 'invite';
 export type ContextType = 'workspace' | 'project';
 
@@ -47,6 +47,7 @@ export interface PermissionResult {
 
 const ROLE_PERMISSIONS: Record<UserRole, PermissionType[]> = {
   owner: ['read', 'write', 'delete', 'manage', 'invite'],
+  admin: ['read', 'write', 'manage', 'invite'],  // Can manage but not delete
   editor: ['read', 'write'],
   viewer: ['read'],
 };
@@ -144,10 +145,16 @@ export async function getProjectMembership(
 // ============================================================================
 
 /**
- * Check permissions with 3-level hierarchy:
- * 1. Workspace membership (required)
- * 2. Workspace role permissions (evaluated)
- * 3. Project membership (optional, if resource has projects)
+ * Check permissions with project-first hierarchy:
+ * 
+ * When projectId is provided:
+ * 1. Check workspace membership (required for all)
+ * 2. Check project membership and role (takes precedence)
+ * 3. Workspace owners bypass project membership requirement
+ * 
+ * When no projectId:
+ * 1. Check workspace membership
+ * 2. Check workspace role permissions
  */
 export async function verifyPermission(
   params: PermissionCheckParams
@@ -156,7 +163,7 @@ export async function verifyPermission(
   const { db, userId, workspace, project, requiredPermission } = params;
   
   // ========================================================================
-  // Level 1: Workspace Membership Check (REQUIRED)
+  // Level 1: Workspace Membership Check (ALWAYS REQUIRED)
   // ========================================================================
   
   if (!workspace?.id) {
@@ -181,7 +188,67 @@ export async function verifyPermission(
   }
   
   // ========================================================================
-  // Level 2: Workspace Role Permission Check
+  // Level 2: Project-First Logic (when resource has projectId)
+  // ========================================================================
+  
+  if (project?.ids && project.ids.length > 0) {
+    const projectMember = await getProjectMembership(
+      db,
+      project.ids,
+      userId
+    );
+    
+    // User is a member of the project - use project role (takes precedence)
+    if (projectMember) {
+      const hasProjectPermission = hasRolePermission(
+        projectMember.role,
+        requiredPermission
+      );
+      
+      if (hasProjectPermission) {
+        return {
+          allowed: true,
+          role: projectMember.role,
+          context: 'project'
+        };
+      } else {
+        return {
+          allowed: false,
+          reason: `Insufficient project permissions (role: ${projectMember.role})`,
+          role: projectMember.role,
+          context: 'project'
+        };
+      }
+    }
+    
+    // User is NOT a project member
+    // Special case: Workspace owners can access all projects
+    if (workspaceMember.role === 'owner') {
+      const hasOwnerPermission = hasRolePermission(
+        workspaceMember.role,
+        requiredPermission
+      );
+      
+      if (hasOwnerPermission) {
+        return {
+          allowed: true,
+          role: workspaceMember.role,
+          context: 'workspace'  // Owner bypass
+        };
+      }
+    }
+    
+    // Not in project and not workspace owner
+    return {
+      allowed: false,
+      reason: "User is not a member of any of the resource's projects",
+      role: workspaceMember.role,
+      context: 'project'
+    };
+  }
+  
+  // ========================================================================
+  // Level 3: Workspace-Only (no project context)
   // ========================================================================
   
   const hasWorkspacePermission = hasRolePermission(
@@ -198,57 +265,13 @@ export async function verifyPermission(
     };
   }
   
-  // ========================================================================
-  // Level 3: Project Permission Check (OPTIONAL - if resource has projects)
-  // ========================================================================
-  
-  if (project?.ids && project.ids.length > 0) {
-    const projectMember = await getProjectMembership(
-      db,
-      project.ids,
-      userId
-    );
-    
-    if (!projectMember) {
-      return {
-        allowed: false,
-        reason: "User is not a member of any of the resource's projects",
-        context: 'project'
-      };
-    }
-    
-    const hasProjectPermission = hasRolePermission(
-      projectMember.role,
-      requiredPermission
-    );
-    
-    if (!hasProjectPermission) {
-      return {
-        allowed: false,
-        reason: `Insufficient project permissions (role: ${projectMember.role})`,
-        role: projectMember.role,
-        context: 'project'
-      };
-    }
-    
-    // Has project permission - this takes precedence
-    return {
-      allowed: true,
-      role: projectMember.role,
-      context: 'project'
-    };
-  }
-  
-  // ========================================================================
-  // All Checks Passed!
-  // ========================================================================
-  
   return {
     allowed: true,
     role: workspaceMember.role,
     context: 'workspace'
   };
 }
+
 
 // ============================================================================
 // Convenience Wrappers (for backward compatibility with existing code)
@@ -291,3 +314,4 @@ export async function canManage(
   
   return result.allowed;
 }
+

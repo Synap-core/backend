@@ -43,6 +43,7 @@ export async function handleInboxItemReceived(
       timestamp: event.data.timestamp,
       deepLink: event.data.deepLink,
       data: event.data.rawData,
+      workspaceId: event.data.workspaceId,
       status: "unread",
     });
 

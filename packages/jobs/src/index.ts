@@ -18,9 +18,6 @@ export * from "./utils/realtime-broadcast.js";
 // ============================================================================
 // Table Workers (Legacy - Being Replaced by Executors)
 // ============================================================================
-export { messagesWorker } from "./functions/messages.js";
-export { workspaceMembersWorker } from "./functions/workspace-members.js";
-export { projectMembersWorker } from "./functions/project-members.js";
 export {
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
@@ -43,7 +40,7 @@ export { entityEmbeddingWorker } from "./functions/entity-embedding.js";
 // ============================================================================
 // Shared Workers
 // ============================================================================
-export { handleNewEvent } from "./functions/projectors.js";
+
 export { handleWebhookDelivery } from "./functions/webhook-broker.js";
 export { globalValidator } from "./functions/global-validator.js";
 
@@ -56,9 +53,7 @@ export * from "./executors/index.js";
 // INNGEST FUNCTION REGISTRY
 // ============================================================================
 
-import { messagesWorker } from "./functions/messages.js";
-import { workspaceMembersWorker } from "./functions/workspace-members.js";
-import { projectMembersWorker } from "./functions/project-members.js";
+
 import {
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
@@ -70,7 +65,7 @@ import {
   documentAutoSaveWorker,
 } from "./functions/document-snapshots.js";
 import { documentPersistenceWorker } from "./functions/document-persistence.js";
-import { handleNewEvent } from "./functions/projectors.js";
+
 import { analyzeCapturedThought } from "./functions/ai-analyzer.js";
 import { processAnalyzedThought } from "./functions/thought-processor.js";
 import { entityEmbeddingWorker } from "./functions/entity-embedding.js";
@@ -87,6 +82,9 @@ import {
   sharingExecutor,
   templatesExecutor,
   relationsExecutor,
+  messagesExecutor,
+  workspaceMembersExecutor,
+  projectMembersExecutor,
 } from "./executors/index.js";
 
 /**
@@ -94,9 +92,6 @@ import {
  */
 export const functions = [
   // Table workers (legacy - being replaced by executors)
-  messagesWorker,
-  workspaceMembersWorker,
-  projectMembersWorker,
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
   whiteboardAutoSaveWorker,
@@ -111,7 +106,6 @@ export const functions = [
   entityEmbeddingWorker,
 
   // Shared workers
-  handleNewEvent,
   handleWebhookDelivery,
   globalValidator,
 
@@ -126,4 +120,7 @@ export const functions = [
   sharingExecutor,
   templatesExecutor,
   relationsExecutor,
+  messagesExecutor,
+  workspaceMembersExecutor,
+  projectMembersExecutor,
 ];

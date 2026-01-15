@@ -19,7 +19,7 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "tsup",
+    "build": "tsc --noEmit && tsup",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

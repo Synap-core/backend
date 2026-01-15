@@ -22,9 +22,9 @@ import {
   type SQL,
   entityTemplates,
   insertEntityTemplateSchema,
+  verifyPermission,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
-import { requireEditor } from "../utils/workspace-permissions.js";
 import { emitRequestEvent } from "../utils/emit-event.js";
 
 export const templatesRouter = router({
@@ -210,7 +210,8 @@ export const templatesRouter = router({
 
       // Check permissions - workspace templates require editor, personal require ownership
       if (existing.workspaceId) {
-        await requireEditor(db, existing.workspaceId, ctx.userId);
+        const permResult = await verifyPermission({ db, userId: ctx.userId, workspace: { id: existing.workspaceId }, requiredPermission: 'write' });
+        if (!permResult.allowed) throw new TRPCError({ code: 'FORBIDDEN', message: permResult.reason || 'Insufficient permissions' });
       } else if (existing.userId) {
         if (existing.userId !== ctx.userId) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
@@ -249,7 +250,8 @@ export const templatesRouter = router({
 
       // Workspace templates require editor role, personal require ownership
       if (template.workspaceId) {
-        await requireEditor(db, template.workspaceId, ctx.userId);
+        const permResult = await verifyPermission({ db, userId: ctx.userId, workspace: { id: template.workspaceId }, requiredPermission: 'write' });
+        if (!permResult.allowed) throw new TRPCError({ code: 'FORBIDDEN', message: permResult.reason || 'Insufficient permissions' });
       } else if (template.userId && template.userId !== ctx.userId) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
       }
@@ -321,7 +323,8 @@ export const templatesRouter = router({
 
       // Check permissions
       if (template.workspaceId) {
-        await requireEditor(db, template.workspaceId, ctx.userId);
+        const permResult = await verifyPermission({ db, userId: ctx.userId, workspace: { id: template.workspaceId }, requiredPermission: 'write' });
+        if (!permResult.allowed) throw new TRPCError({ code: 'FORBIDDEN', message: permResult.reason || 'Insufficient permissions' });
       } else if (template.userId && template.userId !== ctx.userId) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
       }

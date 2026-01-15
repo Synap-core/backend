@@ -134,7 +134,6 @@ export const documentsRouter = router({
     .input(UpdateDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const eventRepo = new EventRepository(db.$client);
 
       // 1. Verify existence & authorization ownership (Optimistic check)
       const [document] = await db

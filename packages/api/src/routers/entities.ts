@@ -30,10 +30,7 @@ export const entitiesRouter = router({
         .pick({
           title: true,
           workspaceId: true,
-          fileUrl: true,
-          filePath: true,
-          fileSize: true,
-          fileType: true,
+          documentId: true,
         })
         .extend({
           type: EntityTypeSchema,
@@ -51,6 +48,7 @@ export const entitiesRouter = router({
         preview: input.description,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        documentId: input.documentId,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -66,10 +64,7 @@ export const entitiesRouter = router({
           title: input.title,
           preview: input.description,
           workspaceId: input.workspaceId,
-          fileUrl: input.fileUrl,
-          filePath: input.filePath,
-          fileSize: input.fileSize,
-          fileType: input.fileType,
+          documentId: input.documentId,
           userId: ctx.userId,
         },
         userId: ctx.userId,
@@ -165,10 +160,7 @@ export const entitiesRouter = router({
           preview: true,
           title: true,
           workspaceId: true,
-          fileUrl: true,
-          filePath: true,
-          fileSize: true,
-          fileType: true,
+          documentId: true,
         })
         .extend({
           id: z.string().uuid(),

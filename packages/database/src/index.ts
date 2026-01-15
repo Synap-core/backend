@@ -18,6 +18,12 @@ export * from "./schema/index.js";
 
 // Export all repositories
 export * from "./repositories/index.js";
+
+// Utilities
+export * from "./utils/preferences.js";
+
+// Database client
+export * from "./client.js";
 export type { EventHook } from "./repositories/event-repository.js";
 export type {
   VectorSearchParams,
@@ -29,12 +35,9 @@ export { searchEntityVectorsRaw } from "./repositories/vector-repository.js";
 // Export projectors (event handlers for materialized views)
 export * from "./projectors/index.js";
 
-// Export workspace permissions utilities (legacy)
-export * from "./utils/workspace-permissions.js";
-export { PermissionError } from "./utils/workspace-permissions.js";
-
 // Export new multi-level permission system
 export * from "./utils/permissions.js";
+export * from "./utils/preferences.js";
 
 // Re-export commonly used drizzle-orm functions
 export {
