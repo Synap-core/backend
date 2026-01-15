@@ -22,3 +22,5 @@ export * from "./roles-executor.js";
 export * from "./api-keys-executor.js";
 export * from "./chat-threads-executor.js";
 export * from "./user-entity-state-executor.js";
+export * from "./agents-executor.js";
+export * from "./proposals-executor.js";
