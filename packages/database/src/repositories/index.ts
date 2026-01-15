@@ -34,3 +34,6 @@ export * from "./inbox-repository.js";
 export * from "./sharing-repository.js";
 export * from "./template-repository.js";
 export * from "./relation-repository.js";
+export * from "./proposal-repository.js";
+export * from "./role-repository.js";
+export * from "./api-key-repository.js";

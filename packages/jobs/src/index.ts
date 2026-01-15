@@ -85,7 +85,8 @@ import {
   messagesExecutor,
   workspaceMembersExecutor,
   projectMembersExecutor,
-} from "./executors/index.js";
+  rolesExecutor,
+  apiKeysExecutor,} from "./executors/index.js";
 
 /**
  * All Inngest functions to register with the serve handler.
@@ -122,5 +123,6 @@ export const functions = [
   relationsExecutor,
   messagesExecutor,
   workspaceMembersExecutor,
-  projectMembersExecutor,
+  rolesExecutor,
+  apiKeysExecutor,  projectMembersExecutor,
 ];

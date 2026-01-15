@@ -18,3 +18,5 @@ export * from "./messages-executor.js";
 export * from "./workspace-members-executor.js";
 export * from "./project-members-executor.js";
 
+export * from "./roles-executor.js";
+export * from "./api-keys-executor.js";

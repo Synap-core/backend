@@ -1,8 +1,9 @@
 /**
  * Relations Router - Relationship Querying
  *
- * READ operations for entity relationships.
- * WRITE operations (create/delete) go through events.log → relationsWorker
+ * Full CRUD operations for entity relationships.
+ * CREATE and DELETE operations go through event flow (requested → validated → completed)
+ * READ operations query the database directly
  *
  * This router provides:
  * - get() - Get relations for an entity
@@ -14,6 +15,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, and, or, desc } from "@synap/database";
 import { relations, entities } from "@synap/database/schema";
 import { emitRequestEvent } from "../utils/emit-event.js";
+import { randomUUID } from "crypto";
 
 /**
  * Relation type schema
@@ -168,87 +170,6 @@ export const relationsRouter = router({
       return { entities: relatedEntities };
     }),
 /**
-   * Create a relation between entities
-   * Event-driven: emits relations.create.requested
-   */
-  create: protectedProcedure
-    .input(
-      z.object({
-        sourceEntityId: z.string().uuid(),
-        targetEntityId: z.string().uuid(),
-        type: RelationTypeSchema,
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { randomUUID } = await import("crypto");
-      const relationId = randomUUID();
-      await emitRequestEvent({
-              
-        type: "relations.create.requested",
-        subjectId: relationId,
-        subjectType: "relation",
-        data: {
-          id: relationId,
-          sourceEntityId: input.sourceEntityId,
-          targetEntityId: input.targetEntityId,
-          type: input.type,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      return { status: "requested", relationId };
-    }),
-  /**
-   * Update a relation type
-   * Event-driven: emits relations.update.requested
-   */
-  update: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        type: RelationTypeSchema,
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
-              
-        type: "relations.update.requested",
-        subjectId: input.id,
-        subjectType: "relation",
-        data: {
-          id: input.id,
-          type: input.type,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      return { status: "requested" };
-    }),
-  /**
-   * Delete a relation
-   * Event-driven: emits relations.delete.requested
-   */
-  delete: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
-              
-        type: "relations.delete.requested",
-        subjectId: input.id,
-        subjectType: "relation",
-        data: {
-          id: input.id,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      return { status: "requested" };
-    }),
-    
   /**
    * Get relation statistics for an entity
    */
@@ -284,6 +205,70 @@ export const relationsRouter = router({
           (r) => r.targetEntityId === input.entityId,
         ).length,
         byType,
+      };
+    }),
+
+  /**
+   * Create a new relation between entities
+   */
+  create: protectedProcedure
+    .input(
+      z.object({
+        sourceEntityId: z.string().uuid(),
+        targetEntityId: z.string().uuid(),
+        type: RelationTypeSchema,
+        metadata: z.record(z.any()).optional(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const id = randomUUID();
+
+      await emitRequestEvent({
+        type: "relations.create.requested",
+        subjectId: id,
+        subjectType: "relation",
+        data: {
+          id,
+          sourceEntityId: input.sourceEntityId,
+          targetEntityId: input.targetEntityId,
+          type: input.type,
+          metadata: input.metadata,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        id,
+        status: "requested",
+        message: "Relation creation requested",
+      };
+    }),
+
+  /**
+   * Delete a relation
+   */
+  delete: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      await emitRequestEvent({
+        type: "relations.delete.requested",
+        subjectId: input.id,
+        subjectType: "relation",
+        data: {
+          id: input.id,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message: "Relation deletion requested",
       };
     }),
 });

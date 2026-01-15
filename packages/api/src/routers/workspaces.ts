@@ -190,18 +190,161 @@ export const workspacesRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "workspaceMembers.add.requested",
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
-          targetUserId: input.userId,
+          userId: input.userId,
           role: input.role,
           invitedBy: ctx.userId,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
       });
 
       return {
@@ -245,17 +388,15 @@ export const workspacesRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "workspaceMembers.remove.requested",
+      await emitRequestEvent({
+        type: "workspace_members.delete.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
@@ -276,18 +417,16 @@ export const workspacesRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "workspaceMembers.updateRole.requested",
+      await emitRequestEvent({
+        type: "workspace_members.update.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
           newRole: input.role,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
@@ -402,20 +541,18 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
       }
 
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
-
-      await inngest.send({
-        name: "workspaceMembers.add.requested",
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${invite.workspaceId}-${ctx.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: invite.workspaceId,
-          targetUserId: ctx.userId,
+          userId: ctx.userId,
           role: invite.role,
           invitedBy: invite.invitedBy,
           inviteId: invite.id,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
       return {
