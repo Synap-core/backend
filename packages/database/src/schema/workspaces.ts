@@ -11,15 +11,49 @@ import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export interface WorkspaceSettings {
+  // Entity & UI Settings
   defaultEntityTypes?: string[];
   theme?: string;
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
+  
   // Intelligence service configuration
   intelligenceServiceId?: string; // Default for workspace
   intelligenceServiceOverrides?: {
     chat?: string;
     analysis?: string;
+  };
+  
+  // Validation Policy Overrides
+  // Allows workspace owners to customize which operations require validation
+  // Overrides GLOBAL_VALIDATION_DEFAULTS from ValidationPolicyService
+  validationRules?: {
+    [tableName: string]: {
+      create?: boolean;  // true = require validation, false = fast-path
+      update?: boolean;
+      delete?: boolean;
+    };
+  };
+  
+  // Role-Based Permissions (Fine-grained RBAC)
+  // Allows workspace owners to customize permissions per role per table
+  rolePermissions?: {
+    [role: string]: {  // 'owner' | 'admin' | 'editor' | 'viewer'
+      [tableName: string]: {
+        create?: boolean;
+        read?: boolean;
+        update?: boolean;
+        delete?: boolean;
+      };
+    };
+  };
+  
+  // AI Governance Settings
+  aiGovernance?: {
+    autoApprove?: boolean;  // Auto-approve AI-generated content
+    requireReviewFor?: string[];  // Event types requiring review (e.g., ['agent.create'])
+    maxAgentsPerUser?: number;  // Limit AI agents per user
+    allowAgentCreation?: boolean;  // Allow users to create custom agents
   };
 }
 
