@@ -23,6 +23,7 @@ import {
   requireViewer,
   requireResourceOwner,
 } from "../utils/workspace-permissions.js";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 export const sharingRouter = router({
   /**
@@ -76,13 +77,18 @@ export const sharingRouter = router({
 
       // Generate secure token
       const token = randomBytes(16).toString("hex");
+      const { randomUUID } = await import("crypto");
+      const shareId = randomUUID();
 
-      // Create share
-      const [share] = await db
-        .insert(resourceShares)
-        .values({
-          resourceType: input.resourceType as string,
-          resourceId: input.resourceId as string,
+      // Emit event for share creation
+      await emitRequestEvent({
+        type: "sharing.createPublicLink.requested",
+        subjectId: shareId,
+        subjectType: "share",
+        data: {
+          id: shareId,
+          resourceType: input.resourceType,
+          resourceId: input.resourceId,
           visibility: "public",
           publicToken: token,
           permissions: { read: true },
@@ -93,11 +99,14 @@ export const sharingRouter = router({
               )
             : null,
           createdBy: ctx.userId,
-        })
-        .returning();
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
       return {
-        share,
+        status: "requested",
+        shareId,
         url: `${process.env.APP_URL}/s/${token}`,
       };
     }),
@@ -117,44 +126,25 @@ export const sharingRouter = router({
         }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Get or create share
-      let share = await db.query.resourceShares.findFirst({
-        where: and(
-          eq(resourceShares.resourceType, input.resourceType as string),
-          eq(resourceShares.resourceId, input.resourceId as string),
-        ),
+      const { randomUUID } = await import("crypto");
+      const inviteId = randomUUID();
+
+      // Emit event for invitation
+      await emitRequestEvent({
+        type: "sharing.invite.requested",
+        subjectId: inviteId,
+        subjectType: "share",
+        data: {
+          id: inviteId,
+          resourceType: input.resourceType,
+          resourceId: input.resourceId,
+          userEmail: input.userEmail,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
       });
 
-      if (!share) {
-        [share] = await db
-          .insert(resourceShares)
-          .values({
-            resourceType: input.resourceType as string,
-            resourceId: input.resourceId as string,
-            visibility: "invite_only",
-            permissions: { read: true },
-            createdBy: ctx.userId,
-          })
-          .returning();
-      }
-
-      // Add user to invited list
-      await db
-        .update(resourceShares)
-        .set({
-          invitedUsers: sqlDrizzle`array_append(${resourceShares.invitedUsers}, ${input.userEmail})`,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(resourceShares.resourceId, input.resourceId as string),
-            eq(resourceShares.resourceType, input.resourceType as string),
-          ),
-        );
-
-      // TODO: Send email notification
-
-      return { success: true };
+      return { status: "requested", inviteId };
     }),
 
   /**
@@ -326,10 +316,18 @@ export const sharingRouter = router({
         requireResourceOwner(resource, ctx.userId);
       }
 
-      await db
-        .delete(resourceShares)
-        .where(eq(resourceShares.id, input.shareId));
+      // Emit event for share revocation
+      await emitRequestEvent({
+        type: "sharing.revoke.requested",
+        subjectId: input.shareId,
+        subjectType: "share",
+        data: {
+          shareId: input.shareId,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
-      return { success: true };
+      return { status: "requested" };
     }),
 });

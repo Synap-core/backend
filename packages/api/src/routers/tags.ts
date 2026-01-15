@@ -191,8 +191,7 @@ export const tagsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
+              
         type: "tags.attach.requested",
         subjectId: input.tagId as string,
         subjectType: "tag",
@@ -203,7 +202,7 @@ export const tagsRouter = router({
         },
         userId: ctx.userId,
       });
-      
+
       logger.debug(
         { userId: ctx.userId, tagId: input.tagId, entityId: input.entityId },
         "Requested tag attach",
@@ -224,8 +223,7 @@ export const tagsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
     await emitRequestEvent({
-      eventRepo: ctx.eventRepo,
-      inngest: ctx.inngest,
+          
       type: "tags.detach.requested",
       subjectId: input.tagId as string,
       subjectType: "tag",

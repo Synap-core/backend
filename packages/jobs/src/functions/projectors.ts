@@ -6,7 +6,7 @@
  */
 
 import { inngest } from "../client.js";
-import { db, entities, taskDetails, tags, entityTags } from "@synap/database";
+import { db, entities, tags, entityTags } from "@synap/database";
 import { eq, and } from "@synap/database";
 
 /**
@@ -68,7 +68,7 @@ export const handleNewEvent = inngest.createFunction(
 async function handleEntityCreated(data: EventDataWithUser) {
   const { entityId, type, title, content, tagNames, userId } = data;
 
-  // 1. Create entity record with userId
+  // 1. Create entity record with userId and task metadata
   await db.insert(entities).values({
     id: entityId,
     type,
@@ -76,18 +76,14 @@ async function handleEntityCreated(data: EventDataWithUser) {
     preview: content?.substring(0, 200),
     userId, // ✅ User isolation
     workspaceId: userId, // TODO: Get from event data when available
+    metadata: type === "task" && data.dueDate ? {
+      task: {
+        status: "todo",
+        dueDate: data.dueDate,
+        priority: data.priority || 0,
+      },
+    } : {},
   } as any);
-
-  // 2. If there's content, store it (inherits userId from entity via FK)
-  // 3. If it's a task, create task details (inherits userId from entity via FK)
-  if (type === "task" && data.dueDate) {
-    await db.insert(taskDetails).values({
-      entityId,
-      status: "todo",
-      dueDate: new Date(data.dueDate),
-      priority: data.priority || 0,
-    });
-  }
 
   // 4. Handle tags (user-scoped)
   if (tagNames && tagNames.length > 0) {
@@ -180,15 +176,32 @@ async function handleEntityDeleted(data: EventDataWithUser) {
 async function handleTaskCompleted(data: EventDataWithUser) {
   const { entityId, userId } = data;
 
-  // Update task details (user verification implicit via entity FK)
-  // Type assertion needed for multi-dialect compatibility
-  await db
-    .update(taskDetails)
-    .set({
-      status: "done",
-      completedAt: new Date(),
-    } as any)
-    .where(eq((taskDetails as any).entityId, entityId) as any);
+  // Update task metadata on entity
+  const entity = await db.query.entities.findFirst({
+    where: and(
+      eq((entities as any).id, entityId),
+      eq((entities as any).userId, userId),
+    ),
+  });
+
+  if (entity) {
+    const existingMetadata = (entity.metadata || {}) as Record<string, any>;
+    const existingTask = existingMetadata.task || {};
+    
+    await db
+      .update(entities)
+      .set({
+        metadata: {
+          ...existingMetadata,
+          task: {
+            ...existingTask,
+            status: "done",
+            completedAt: new Date(),
+          },
+        },
+      } as any)
+      .where(eq((entities as any).id, entityId) as any);
+  }
 
   console.log(`✅ Marked task ${entityId} as completed for user ${userId}`);
   return { status: "completed", entityId };

@@ -183,8 +183,7 @@ export const relationsRouter = router({
       const { randomUUID } = await import("crypto");
       const relationId = randomUUID();
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
+              
         type: "relations.create.requested",
         subjectId: relationId,
         subjectType: "relation",
@@ -212,8 +211,7 @@ export const relationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
+              
         type: "relations.update.requested",
         subjectId: input.id,
         subjectType: "relation",
@@ -238,8 +236,7 @@ export const relationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
+              
         type: "relations.delete.requested",
         subjectId: input.id,
         subjectType: "relation",

@@ -19,7 +19,7 @@ export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
-import { projectsRouter } from "./routers/projects.js";
+export { projectsRouter } from "./routers/projects.js";
 
 export {
   requireUserId,
@@ -74,6 +74,7 @@ import { rolesRouter } from "./routers/roles.js";
 import { sharingRouter } from "./routers/sharing.js";
 import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
+import { projectsRouter } from "./routers/projects.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 

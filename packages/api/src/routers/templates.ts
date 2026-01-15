@@ -25,6 +25,7 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { requireEditor } from "../utils/workspace-permissions.js";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 export const templatesRouter = router({
   // List templates (user's + workspace's)
@@ -148,35 +149,15 @@ export const templatesRouter = router({
         }),
     )
     .mutation(async ({ ctx, input }) => {
-      // If setting as default, unset previous default
-      if (input.isDefault) {
-        const conditions: (SQL | undefined)[] = [
-          input.workspaceId
-            ? eq(entityTemplates.workspaceId, input.workspaceId as string)
-            : eq(entityTemplates.userId, ctx.userId),
-          eq(entityTemplates.targetType, input.targetType as string),
-          input.entityType
-            ? eq(entityTemplates.entityType, input.entityType as string)
-            : undefined,
-          input.inboxItemType
-            ? eq(entityTemplates.inboxItemType, input.inboxItemType as string)
-            : undefined,
-          eq(entityTemplates.isDefault, true),
-        ];
+      const { randomUUID } = await import("crypto");
+      const templateId = randomUUID();
 
-        const validConditions = conditions.filter(
-          (c): c is SQL => c !== undefined,
-        );
-
-        await db
-          .update(entityTemplates)
-          .set({ isDefault: false })
-          .where(and(...validConditions));
-      }
-
-      const [template] = await db
-        .insert(entityTemplates)
-        .values({
+      await emitRequestEvent({
+        type: "templates.create.requested",
+        subjectId: templateId,
+        subjectType: "template",
+        data: {
+          id: templateId,
           userId: input.workspaceId ? null : ctx.userId,
           workspaceId: input.workspaceId || null,
           name: input.name,
@@ -184,14 +165,16 @@ export const templatesRouter = router({
           targetType: input.targetType,
           entityType: input.entityType || null,
           inboxItemType: input.inboxItemType || null,
-          config: input.config as any,
+          config: input.config,
           isDefault: input.isDefault,
           isPublic: input.isPublic,
           version: 1,
-        } as any)
-        .returning();
+          requestingUserId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
-      return template;
+      return { status: "requested", templateId };
     }),
 
   // Update template
@@ -234,46 +217,19 @@ export const templatesRouter = router({
         }
       }
 
-      // If setting as default, unset previous default
-      if (updates.isDefault) {
-        const conditions: (SQL | undefined)[] = [
-          existing.workspaceId
-            ? eq(entityTemplates.workspaceId, existing.workspaceId)
-            : eq(entityTemplates.userId, ctx.userId),
-          eq(entityTemplates.targetType, existing.targetType as string),
-          existing.entityType
-            ? eq(entityTemplates.entityType, existing.entityType as string)
-            : undefined,
-          existing.inboxItemType
-            ? eq(
-                entityTemplates.inboxItemType,
-                existing.inboxItemType as string,
-              )
-            : undefined,
-          eq(entityTemplates.isDefault, true),
-        ];
-
-        const validConditions = conditions.filter(
-          (c): c is SQL => c !== undefined,
-        );
-
-        await db
-          .update(entityTemplates)
-          .set({ isDefault: false })
-          .where(and(...validConditions));
-      }
-
-      const [template] = await db
-        .update(entityTemplates)
-        .set({
+      await emitRequestEvent({
+        type: "templates.update.requested",
+        subjectId: id,
+        subjectType: "template",
+        data: {
+          id,
           ...updates,
-          updatedAt: new Date(),
-          config: updates.config as any,
-        } as any)
-        .where(eq(entityTemplates.id, id as string))
-        .returning();
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
-      return template;
+      return { status: "requested" };
     }),
 
   // Delete template
@@ -298,11 +254,18 @@ export const templatesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
       }
 
-      await db
-        .delete(entityTemplates)
-        .where(eq(entityTemplates.id, input.id as string));
+      await emitRequestEvent({
+        type: "templates.delete.requested",
+        subjectId: input.id,
+        subjectType: "template",
+        data: {
+          id: input.id,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
 
-      return { success: true };
+      return { status: "requested" };
     }),
 
   // Duplicate template

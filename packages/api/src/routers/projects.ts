@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, projects, eq, desc, and } from "@synap/database";
+import { projects, eq, desc, and } from "@synap/database";
 import { emitRequestEvent } from "../utils/emit-event.js";
 
 export const projectsRouter = router({
@@ -84,8 +84,7 @@ export const projectsRouter = router({
       const projectId = randomUUID();
 
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
+              
         type: "projects.create.requested",
         subjectId: projectId,
         subjectType: "project",
@@ -121,8 +120,7 @@ export const projectsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
+              
         type: "projects.update.requested",
         subjectId: input.id,
         subjectType: "project",
@@ -153,8 +151,6 @@ export const projectsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
         type: "projects.delete.requested",
         subjectId: input.id,
         subjectType: "project",
@@ -166,124 +162,5 @@ export const projectsRouter = router({
       });
 
       return { status: "requested" };
-    }),
-
-  /**
-   * List project members
-   */
-  listMembers: protectedProcedure
-    .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
-      const { projectMembers, eq } = await import("@synap/database");
-      
-      // TODO: Check if user has access to this project
-      const members = await ctx.db.query.projectMembers.findMany({
-        where: eq(projectMembers.projectId, input.projectId),
-      });
-
-      return { members };
-    }),
-
-  /**
-   * Add member to project
-   * Event-driven: emits projectMembers.add.requested
-   */
-  addMember: protectedProcedure
-    .input(
-      z.object({
-        projectId: z.string().uuid(),
-        userId: z.string(),
-        role: z.enum(['owner', 'editor', 'viewer']),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
-        type: "projectMembers.add.requested",
-        subjectId: input.projectId,
-        subjectType: "project",
-        data: {
-          projectId: input.projectId,
-          targetUserId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-
-      return {
-        status: "requested",
-        message: "Project member addition requested",
-      };
-    }),
-
-  /**
-   * Remove member from project
-   * Event-driven: emits projectMembers.remove.requested
-   */
-  removeMember: protectedProcedure
-    .input(
-      z.object({
-        projectId: z.string().uuid(),
-        userId: z.string(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
-        type: "projectMembers.remove.requested",
-        subjectId: input.projectId,
-        subjectType: "project",
-        data: {
-          projectId: input.projectId,
-          targetUserId: input.userId,
-          removedBy: ctx.userId,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-
-      return {
-        status: "requested",
-        message: "Project member removal requested",
-      };
-    }),
-
-  /**
-   * Update member role in project
-   * Event-driven: emits projectMembers.updateRole.requested
-   */
-  updateMemberRole: protectedProcedure
-    .input(
-      z.object({
-        projectId: z.string().uuid(),
-        userId: z.string(),
-        role: z.enum(['owner', 'editor', 'viewer']),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
-        eventRepo: ctx.eventRepo,
-        inngest: ctx.inngest,
-        type: "projectMembers.updateRole.requested",
-        subjectId: input.projectId,
-        subjectType: "project",
-        data: {
-          projectId: input.projectId,
-          targetUserId: input.userId,
-          newRole: input.role,
-          updatedBy: ctx.userId,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-
-      return {
-        status: "requested",
-        message: "Project member role update requested",
-      };
     }),
 });
