@@ -1,11 +1,7 @@
 /**
  * User Entity State Executor
  * 
- * Handles validated user entity state events:
- * - user_entity_state.update.validated (starred/pinned changes)
- * - user_entity_state.delete.validated (unstar/unpin)
- * 
- * Note: View tracking is handled directly in the router (high-frequency, no validation)
+ * Handles validated user entity state events.
  */
 
 import { inngest } from "../client.js";
@@ -28,29 +24,34 @@ export const userEntityStateExecutor = inngest.createFunction(
 
     return await step.run("execute-user-entity-state-operation", async () => {
       const db = await getDb();
-      const repo = new UserEntityStateRepository(db.$client);
+      const repo = new UserEntityStateRepository(db as any);
 
       if (eventType === "user_entity_state.update.validated") {
-        const state = await repo.update(data.userId, data.entityId, {
-          starred: data.starred,
-          pinned: data.pinned,
-        });
+        const state = await repo.update(
+          data.userId,
+          data.itemId,
+          {
+            starred: data.starred,
+            pinned: data.pinned,
+          },
+          data.itemType || "entity"
+        );
 
         return {
           status: "completed",
           userId: state.userId,
-          entityId: state.entityId,
+          itemId: state.itemId,
           message: "User entity state updated successfully",
         };
       }
 
       if (eventType === "user_entity_state.delete.validated") {
-        await repo.delete(data.userId, data.entityId);
+        await repo.delete(data.userId, data.itemId, data.itemType || "entity");
 
         return {
           status: "completed",
           userId: data.userId,
-          entityId: data.entityId,
+          itemId: data.itemId,
           message: "User entity state deleted successfully",
         };
       }

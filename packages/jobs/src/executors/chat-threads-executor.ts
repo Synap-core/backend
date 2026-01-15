@@ -1,10 +1,7 @@
 /**
  * Chat Threads Executor
  * 
- * Handles validated chat thread events:
- * - chat_threads.create.validated
- * - chat_threads.update.validated
- * - chat_threads.delete.validated
+ * Handles validated chat thread events.
  */
 
 import { inngest } from "../client.js";
@@ -28,7 +25,7 @@ export const chatThreadsExecutor = inngest.createFunction(
 
     return await step.run("execute-chat-thread-operation", async () => {
       const db = await getDb();
-      const repo = new ChatThreadRepository(db.$client);
+      const repo = new ChatThreadRepository(db as any);
 
       if (eventType === "chat_threads.create.validated") {
         const thread = await repo.create({
@@ -60,7 +57,7 @@ export const chatThreadsExecutor = inngest.createFunction(
           contextSummary: data.contextSummary,
           metadata: data.metadata,
           mergedAt: data.mergedAt,
-        });
+        }, data.userId);
 
         return {
           status: "completed",
@@ -70,7 +67,7 @@ export const chatThreadsExecutor = inngest.createFunction(
       }
 
       if (eventType === "chat_threads.delete.validated") {
-        await repo.delete(data.id);
+        await repo.delete(data.id, data.userId);
 
         return {
           status: "completed",
