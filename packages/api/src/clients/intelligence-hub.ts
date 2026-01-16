@@ -4,41 +4,34 @@
  * REST client for calling Intelligence Hub from Backend
  */
 
+import type {
+  HubResponse,
+  HubStreamEvent,
+  ExtractedEntity,
+  BranchDecision,
+  TokenUsage,
+  AIStep,
+} from '@synap-core/types';
+
 export interface IntelligenceHubRequest {
   query: string;
   threadId: string;
   userId: string;
   agentId?: string;
   agentType?: string;
-  agentConfig?: Record<string, any>;
+  agentConfig?: Record<string, unknown>;
   projectId?: string;
   // Data Pod credentials for Hub Protocol access
   dataPodUrl?: string;
   dataPodApiKey?: string;
 }
 
-export interface IntelligenceHubResponse {
-  content: string;
-  thinkingSteps: string[];
-  entities: Array<{
-    type: string;
-    title: string;
-    description?: string;
-    properties?: Record<string, any>;
-  }>;
-  branchDecision?: {
-    shouldBranch: boolean;
-    branchType?: string;
-    purpose?: string;
-    agentId?: string;
-    reasoning: string;
-  };
-  toolCalls?: any[];
-  usage: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
+// Re-export HubResponse from types package
+export type { HubResponse, ExtractedEntity, BranchDecision, TokenUsage, AIStep };
+
+// Legacy interface for backwards compatibility
+export interface IntelligenceHubResponse extends HubResponse {
+  // All fields inherited from HubResponse
 }
 
 /**
@@ -105,28 +98,14 @@ export class IntelligenceHubClient {
       );
     }
 
-    const data = await response.json();
-    return (data as any).embedding; //TODO: resolve
+    const data = await response.json() as { embedding: number[] };
+    return data.embedding;
   }
 
   /**
    * Send message with streaming support
    */
-  async *sendMessageStream(request: IntelligenceHubRequest): AsyncGenerator<{
-    type:
-      | "chunk"
-      | "step"
-      | "entities"
-      | "branch_decision"
-      | "complete"
-      | "error";
-    content?: string;
-    step?: any;
-    entities?: any[];
-    decision?: any;
-    data?: any;
-    error?: string;
-  }> {
+  async *sendMessageStream(request: IntelligenceHubRequest): AsyncGenerator<HubStreamEvent> {
     const response = await fetch(`${this.baseUrl}/api/chat/stream`, {
       // ✅ UPDATED: New endpoint
       method: "POST",

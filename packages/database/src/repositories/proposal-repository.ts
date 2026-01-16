@@ -65,6 +65,25 @@ export class ProposalRepository {
   }
 
   /**
+   * Update proposal status (approve/reject)
+   * Used by jobs executor
+   * NO EVENT EMISSION
+   */
+  async updateStatus(
+    id: string,
+    status: 'approved' | 'rejected',
+    reviewedBy: string,
+    reviewNotes?: string
+  ): Promise<any> {
+    return this.update(id, {
+      status,
+      reviewedBy,
+      reviewedAt: new Date(),
+      rejectionReason: reviewNotes,
+    });
+  }
+
+  /**
    * Delete a proposal
    * NO EVENT EMISSION
    */
@@ -124,11 +143,7 @@ export class ProposalRepository {
    * Approve proposal (update status to validated)
    */
   async approve(id: string, reviewedBy: string): Promise<any> {
-    return this.update(id, {
-      status: 'validated',
-      reviewedBy,
-      reviewedAt: new Date(),
-    });
+    return this.updateStatus(id, 'approved', reviewedBy);
   }
 
   /**
@@ -139,11 +154,6 @@ export class ProposalRepository {
     reviewedBy: string,
     reason: string,
   ): Promise<any> {
-    return this.update(id, {
-      status: 'rejected',
-      reviewedBy,
-      reviewedAt: new Date(),
-      rejectionReason: reason,
-    });
+    return this.updateStatus(id, 'rejected', reviewedBy, reason);
   }
 }

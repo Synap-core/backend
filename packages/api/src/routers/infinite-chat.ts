@@ -19,6 +19,7 @@ import {
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
+import type { AIStep, HubResponse } from "@synap-core/types";
 
 /**
  * Infinite Chat Router (Week 2 implementation)
@@ -113,8 +114,8 @@ export const infiniteChatRouter = router({
 
       // Stream from Intelligence Service (now dynamic)
       let fullContent = "";
-      const aiSteps: any[] = [];
-      let hubResponse: any = null;
+      const aiSteps: AIStep[] = [];
+      let hubResponse: Partial<HubResponse> = { content: "" };
 
       try {
         const stream = resolvedService.client.sendMessageStream({
@@ -148,14 +149,14 @@ export const infiniteChatRouter = router({
             });
           } else if (chunk.type === "entities" && chunk.entities) {
             // ✅ ADDED: Handle entities from stream
-            hubResponse = { ...hubResponse, entities: chunk.entities };
+            hubResponse.entities = chunk.entities;
           } else if (chunk.type === "branch_decision" && chunk.decision) {
             // ✅ ADDED: Handle branch decision from stream
-            hubResponse = { ...hubResponse, branchDecision: chunk.decision };
+            hubResponse.branchDecision = chunk.decision;
           } else if (chunk.type === "complete") {
             // ✅ FIXED: Extract data from complete event
             if (chunk.data) {
-              hubResponse = chunk.data;
+              hubResponse = { ...hubResponse, ...(chunk.data as Partial<HubResponse>) };
             }
 
             // Final emission
@@ -192,7 +193,7 @@ export const infiniteChatRouter = router({
           projectId: thread.projectId ?? undefined,
         });
 
-        fullContent = hubResponse.content;
+        fullContent = hubResponse.content || "";
       }
 
       // Save assistant message
@@ -211,9 +212,9 @@ export const infiniteChatRouter = router({
         hash: assistantMessageHash,
         metadata: {
           aiSteps:
-            aiSteps.length > 0 ? aiSteps : hubResponse?.thinkingSteps || [],
+            aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
           tokens: hubResponse?.usage?.totalTokens,
-        } as any,
+        } as any, // Drizzle JSONB type is flexible
       });
 
       // Create entities via event chain for consistency
@@ -257,8 +258,8 @@ export const infiniteChatRouter = router({
             projectId: thread.projectId,
             parentThreadId: threadId,
             branchedFromMessageId: assistantMessageId,
-            branchPurpose: branchDecision.purpose,
-            agentId: branchDecision.agentId || "research-agent",
+            branchPurpose: branchDecision.suggestedPurpose || branchDecision.reason,
+            agentId: branchDecision.suggestedAgentType || "research-agent",
             threadType: "branch",
             status: "active",
           })
