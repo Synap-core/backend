@@ -26,7 +26,7 @@ import type { AIStep, HubResponse } from "@synap-core/types";
  *
  * Uses insertChatThreadSchema from database for true SSOT.
  */
-export const infiniteChatRouter = router({
+export const infiniteChatRouter: ReturnType<typeof router> = router({
   /**
    * Create a new chat thread - TRUE SSOT using .omit()
    */

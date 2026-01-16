@@ -29,7 +29,10 @@ import { sharingRouter } from "./routers/sharing.js";
 import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
 
-export const coreRouter = router({
+/**
+ * Core API Router
+ */
+export const coreRouter: ReturnType<typeof router> = router({
   setup: setupRouter,
   events: eventsRouter,
   capture: captureRouter,
