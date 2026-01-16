@@ -8,6 +8,7 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
+    "generate:table": "tsx scripts/generate-table.ts",
     "test:e2e": "pnpm --filter @synap/test-e2e test",
     "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
     "test:system": "pnpm build && tsx scripts/test-system.ts",
