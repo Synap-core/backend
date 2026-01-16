@@ -8,13 +8,10 @@
  * @see docs/brain/permission_roadmap.md - Future evolution plan
  */
 
-import {
-  eq,
-  and,
-  workspaceMembers,
-  type WorkspaceMember,
-} from "@synap/database";
+import { eq, and } from "@synap/database";
+import { workspaceMembers, type WorkspaceMember } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
+import type { DatabaseClient } from "../types/context.js";
 
 /**
  * Role hierarchy for built-in workspace roles
@@ -90,6 +87,23 @@ export async function requireWorkspaceRole(
 }
 
 /**
+ * Check if user is a member of workspace
+ */
+export async function checkWorkspaceMembership(
+  db: DatabaseClient,
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId),
+    ),
+  });
+  return !!membership;
+}
+
+/**
  * Require user to be a viewer (or higher) in workspace
  *
  * @example
@@ -99,7 +113,7 @@ export async function requireWorkspaceRole(
  * ```
  */
 export async function requireViewer(
-  db: any,
+  db: DatabaseClient,
   workspaceId: string,
   userId: string,
 ): Promise<WorkspaceMember> {
@@ -118,7 +132,7 @@ export async function requireViewer(
  * ```
  */
 export async function requireEditor(
-  db: any,
+  db: DatabaseClient,
   workspaceId: string,
   userId: string,
 ): Promise<WorkspaceMember> {

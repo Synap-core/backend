@@ -7,6 +7,10 @@
 import { getDb } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { InternalServerError } from "@synap-core/types";
+import type { Context, KratosSession, User } from "./types/context.js";
+
+// Re-export types
+export type { Context, KratosSession, User };
 
 const contextLogger = createLogger({ module: "api-context" });
 
@@ -17,16 +21,6 @@ async function getDbInstance() {
     dbInstance = await getDb();
   }
   return dbInstance;
-}
-
-export interface Context extends Record<string, unknown> {
-  db: any; // Awaited<ReturnType<typeof getDb>>; // Fix TS2742
-  authenticated: boolean;
-  userId?: string | null;
-  user?: any;
-  session?: any;
-  req?: Request;
-  socketIO?: any; // ✅ ADDED: Socket.IO server instance for real-time events
 }
 
 export async function createContext(req: Request): Promise<Context> {
