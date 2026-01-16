@@ -63,6 +63,7 @@ export class IntelligenceHubClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
         },
         body: JSON.stringify({
           query: request.query,
@@ -99,6 +100,7 @@ export class IntelligenceHubClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
       },
       body: JSON.stringify({ text }),
     });
@@ -125,6 +127,7 @@ export class IntelligenceHubClient {
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
+        "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
       },
       body: JSON.stringify({
         query: request.query,

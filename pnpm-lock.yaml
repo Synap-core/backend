@@ -551,12 +551,18 @@ importers:
       '@types/bcrypt':
         specifier: ^6.0.0
         version: 6.0.0
+      '@types/bcryptjs':
+        specifier: ^3.0.0
+        version: 3.0.0
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.7
       '@vitest/coverage-v8':
         specifier: ^4.0.15
         version: 4.0.17(vitest@4.0.17)
+      bcryptjs:
+        specifier: ^3.0.3
+        version: 3.0.3
       drizzle-kit:
         specifier: ^0.31.8
         version: 0.31.8
@@ -3511,6 +3517,10 @@ packages:
   '@types/bcrypt@6.0.0':
     resolution: {integrity: sha512-/oJGukuH3D2+D+3H4JWLaAsJ/ji86dhRidzZ/Od7H/i8g+aCmvkeCc6Ni/f9uxGLSQVCRZkX2/lqEFG2BvWtlQ==}
 
+  '@types/bcryptjs@3.0.0':
+    resolution: {integrity: sha512-WRZOuCuaz8UcZZE4R5HXTco2goQSI2XxjGY3hbM/xDvwmqFWd4ivooImsMx65OKM6CtNKbnZ5YL+YwAwK7c1dg==}
+    deprecated: This is a stub types definition. bcryptjs provides its own type definitions, so you do not need this installed.
+
   '@types/bunyan@1.8.11':
     resolution: {integrity: sha512-758fRH7umIMk5qt5ELmRMff4mLDlN+xyYzC+dkPTdKwbSkJFvz6xwyScrytPU0QIBbRRwbiE8/BIg8bpajerNQ==}
 
@@ -4009,6 +4019,10 @@ packages:
   bcrypt@6.0.0:
     resolution: {integrity: sha512-cU8v/EGSrnH+HnxV2z0J7/blxH8gq7Xh2JFT6Aroax7UohdmiJJlxApMxtKfuI7z68NvvVcmR78k2LbT6efhRg==}
     engines: {node: '>= 18'}
+
+  bcryptjs@3.0.3:
+    resolution: {integrity: sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==}
+    hasBin: true
 
   bignumber.js@9.3.1:
     resolution: {integrity: sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==}
@@ -10277,6 +10291,10 @@ snapshots:
     dependencies:
       '@types/node': 24.10.7
 
+  '@types/bcryptjs@3.0.0':
+    dependencies:
+      bcryptjs: 3.0.3
+
   '@types/bunyan@1.8.11':
     dependencies:
       '@types/node': 24.10.7
@@ -10641,6 +10659,14 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.0.3
 
+  '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@20.19.28)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2))':
+    dependencies:
+      '@vitest/spy': 4.0.17
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 7.3.1(@types/node@20.19.28)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2)
+
   '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@24.10.7)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2))':
     dependencies:
       '@vitest/spy': 4.0.17
@@ -10699,7 +10725,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/ui@4.0.17)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2)
+      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@24.10.7)(@vitest/ui@4.0.17)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/utils@1.6.1':
     dependencies:
@@ -10901,6 +10927,8 @@ snapshots:
     dependencies:
       node-addon-api: 8.5.0
       node-gyp-build: 4.8.4
+
+  bcryptjs@3.0.3: {}
 
   bignumber.js@9.3.1: {}
 
@@ -14215,7 +14243,7 @@ snapshots:
   vitest@4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.17
-      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@25.0.7)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2))
+      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@20.19.28)(jiti@1.21.7)(tsx@4.21.0)(yaml@2.8.2))
       '@vitest/pretty-format': 4.0.17
       '@vitest/runner': 4.0.17
       '@vitest/snapshot': 4.0.17

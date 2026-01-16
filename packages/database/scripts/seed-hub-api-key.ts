@@ -19,7 +19,7 @@ async function seedHubProtocolKey() {
 
   try {
     // Hash the API key
-    const keyHash = await bcrypt.hash(HUB_API_KEY_KEY_RAW, 12);
+    const keyHash = await bcrypt.hash(HUB_API_KEY_RAW, 12);
 
     // Insert API key
     const result = await sql`
