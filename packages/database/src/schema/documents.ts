@@ -22,11 +22,11 @@ export const documents = pgTable(
   "documents",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    
+
     // Context
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id").notNull(), // Every document belongs to a workspace
-    projectIds: uuid("project_ids").array(),      // Optional: documents can be in multiple projects
+    projectIds: uuid("project_ids").array(), // Optional: documents can be in multiple projects
 
     // Document metadata
     title: text("title").notNull(),
@@ -69,7 +69,7 @@ export const documents = pgTable(
     userIdIdx: index("documents_user_id_idx").on(table.userId),
     projectIdIdx: index("documents_project_id_idx").on(table.projectId),
     typeIdx: index("documents_type_idx").on(table.type),
-  }),
+  })
 );
 
 /**
@@ -102,13 +102,13 @@ export const documentVersions = pgTable(
   },
   (table) => ({
     documentIdIdx: index("document_versions_document_id_idx").on(
-      table.documentId,
+      table.documentId
     ),
     versionIdx: index("document_versions_version_idx").on(
       table.documentId,
-      table.version,
+      table.version
     ),
-  }),
+  })
 );
 
 /**
@@ -139,11 +139,11 @@ export const documentSessions = pgTable(
   },
   (table) => ({
     documentIdIdx: index("document_sessions_document_id_idx").on(
-      table.documentId,
+      table.documentId
     ),
     userIdIdx: index("document_sessions_user_id_idx").on(table.userId),
     activeIdx: index("document_sessions_active_idx").on(table.isActive),
-  }),
+  })
 );
 
 // Type exports

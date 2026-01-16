@@ -43,14 +43,14 @@ export const captureRouter = router({
           .record(z.any())
           .optional()
           .describe("Optional context metadata"),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
       logger.debug(
         { userId, contentLength: input.content.length },
-        "Processing thought capture",
+        "Processing thought capture"
       );
 
       // Step 1: Try plugins first
@@ -64,7 +64,7 @@ export const captureRouter = router({
         if (pluginResult && pluginResult.success) {
           logger.info(
             { userId, requestId: pluginResult.requestId, mode: "plugin" },
-            "Thought processed via plugin",
+            "Thought processed via plugin"
           );
           return {
             success: true,
@@ -76,7 +76,7 @@ export const captureRouter = router({
       } catch (error) {
         logger.warn(
           { err: error, userId },
-          "Plugin processing failed, falling back to local",
+          "Plugin processing failed, falling back to local"
         );
         // Continue to fallback
       }

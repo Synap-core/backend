@@ -13,18 +13,20 @@ This package has been superseded by the **Intelligence Service** (`synap-intelli
 ## Migration Path
 
 ### If you're using `dynamicToolRegistry`:
+
 ```typescript
 // OLD (deprecated)
-import { dynamicToolRegistry } from '@synap/ai';
+import { dynamicToolRegistry } from "@synap/ai";
 
 // NEW - Call Intelligence Service
 // Use Intelligence Service /api/tools endpoint instead
 ```
 
 ### If you're using `ConversationalAgent`:
+
 ```typescript
 // OLD (deprecated)
-import { ConversationalAgent } from '@synap/ai';
+import { ConversationalAgent } from "@synap/ai";
 
 // NEW - Use Intelligence Service
 // The Intelligence Service provides full agent capabilities
@@ -33,6 +35,7 @@ import { ConversationalAgent } from '@synap/ai';
 ## Current Usage
 
 This package is currently used in:
+
 - `packages/api/src/routers/system.ts` - Tool registry stats (non-critical)
 - `packages/api/src/plugins/plugin-manager.ts` - Commented out, not active
 

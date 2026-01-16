@@ -1,6 +1,6 @@
 /**
  * Proposals Executor
- * 
+ *
  * Handles validated proposal events.
  * Proposals are created by the validation system, so create events bypass validation.
  */

@@ -43,7 +43,7 @@ export const inboxRouter = router({
     .input(
       z.object({
         items: z.array(InboxItemSchema),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -52,7 +52,7 @@ export const inboxRouter = router({
 
       logger.info(
         { count: input.items.length, userId },
-        "Ingesting inbox items",
+        "Ingesting inbox items"
       );
 
       for (const item of input.items) {
@@ -87,13 +87,13 @@ export const inboxRouter = router({
             created.push(result[0].id);
             logger.debug(
               { id: result[0].id, type: item.type, title: item.title },
-              "Created inbox item",
+              "Created inbox item"
             );
           } else {
             skipped.push(item.externalId);
             logger.debug(
               { externalId: item.externalId },
-              "Skipped duplicate inbox item",
+              "Skipped duplicate inbox item"
             );
           }
         } catch (error) {
@@ -103,7 +103,7 @@ export const inboxRouter = router({
 
       logger.info(
         { created: created.length, skipped: skipped.length },
-        "Inbox ingestion complete",
+        "Inbox ingestion complete"
       );
 
       return {
@@ -125,7 +125,7 @@ export const inboxRouter = router({
         types: z.array(z.string()).optional(),
         limit: z.number().optional(),
         offset: z.number().optional(),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -142,7 +142,7 @@ export const inboxRouter = router({
       // Filter by type
       if (input.types && input.types.length > 0) {
         conditions.push(
-          or(...input.types.map((type: string) => eq(inboxItems.type, type)))!,
+          or(...input.types.map((type: string) => eq(inboxItems.type, type)))!
         );
       }
 
@@ -168,14 +168,14 @@ export const inboxRouter = router({
         id: z.string().uuid(),
         status: z.enum(["read", "archived", "snoozed"]),
         snoozedUntil: z.coerce.date().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
       logger.debug(
         { id: input.id, status: input.status },
-        "Updating inbox item status",
+        "Updating inbox item status"
       );
 
       const result = await db
@@ -194,7 +194,7 @@ export const inboxRouter = router({
 
       logger.info(
         { id: input.id, status: input.status },
-        "Updated inbox item status",
+        "Updated inbox item status"
       );
 
       return { success: true, id: result[0].id };
@@ -209,7 +209,7 @@ export const inboxRouter = router({
         ids: z.array(z.string().uuid()),
         action: z.enum(["archive", "snooze", "markRead"]),
         snoozedUntil: z.coerce.date().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -223,7 +223,7 @@ export const inboxRouter = router({
 
       logger.info(
         { count: input.ids.length, action: input.action },
-        "Batch updating inbox items",
+        "Batch updating inbox items"
       );
 
       const result = await db
@@ -236,8 +236,8 @@ export const inboxRouter = router({
         .where(
           and(
             eq(inboxItems.userId, userId),
-            or(...input.ids.map((id) => eq(inboxItems.id, id)))!,
-          ),
+            or(...input.ids.map((id) => eq(inboxItems.id, id)))!
+          )
         )
         .returning({ id: inboxItems.id });
 
@@ -260,13 +260,13 @@ export const inboxRouter = router({
         .select({ count: inboxItems.id })
         .from(inboxItems)
         .where(
-          and(eq(inboxItems.userId, userId), eq(inboxItems.status, "unread")),
+          and(eq(inboxItems.userId, userId), eq(inboxItems.status, "unread"))
         ),
       db
         .select({ count: inboxItems.id })
         .from(inboxItems)
         .where(
-          and(eq(inboxItems.userId, userId), eq(inboxItems.status, "snoozed")),
+          and(eq(inboxItems.userId, userId), eq(inboxItems.status, "snoozed"))
         ),
     ]);
 

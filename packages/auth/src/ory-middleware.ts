@@ -57,14 +57,21 @@ export const oryAuthMiddleware: MiddlewareHandler = async (c, next) => {
  */
 export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") || "";
-  console.error("🔒 DEBUG: orySessionMiddleware called. Cookie length:", cookie.length, "Env:", process.env.NODE_ENV, "Cookie:", cookie.substring(0, 50));
-  
+  console.error(
+    "🔒 DEBUG: orySessionMiddleware called. Cookie length:",
+    cookie.length,
+    "Env:",
+    process.env.NODE_ENV,
+    "Cookie:",
+    cookie.substring(0, 50)
+  );
+
   if (!cookie) {
     console.warn(
       "[orySessionMiddleware] No cookie found. content-type:",
       c.req.header("content-type"),
       "authorization:",
-      !!c.req.header("authorization"),
+      !!c.req.header("authorization")
     );
     return c.json({ error: "Unauthorized", details: "No session cookie" }, 401);
   }
@@ -106,7 +113,7 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
       {
         hasSession: !!session,
         hasIdentity: !!session?.identity,
-      },
+      }
     );
     return c.json({ error: "Invalid session" }, 401);
   }

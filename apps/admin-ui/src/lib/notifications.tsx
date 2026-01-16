@@ -78,7 +78,7 @@ export function showInfoNotification(options: NotificationOptions): void {
  */
 export function showApiErrorNotification(
   error: unknown,
-  options?: Omit<NotificationOptions, "message">,
+  options?: Omit<NotificationOptions, "message">
 ): void {
   let errorMessage = "An unexpected error occurred";
 

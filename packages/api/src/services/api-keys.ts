@@ -74,7 +74,7 @@ export class ApiKeyService {
     keyName: string,
     scope: ApiKeyScope[],
     hubId?: string,
-    expiresInDays?: number,
+    expiresInDays?: number
   ): Promise<{ key: string; keyId: string }> {
     // 1. Generate random key
     const randomPart = randomBytes(32).toString("base64url");
@@ -101,7 +101,7 @@ export class ApiKeyService {
       : null;
 
     const rotationScheduledAt = new Date(
-      Date.now() + DEFAULT_ROTATION_DAYS * 24 * 60 * 60 * 1000,
+      Date.now() + DEFAULT_ROTATION_DAYS * 24 * 60 * 60 * 1000
     );
 
     // 5. Store in database
@@ -152,8 +152,8 @@ export class ApiKeyService {
         and(
           eq(apiKeys.keyPrefix, prefix),
           eq(apiKeys.isActive, true),
-          or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date())),
-        ),
+          or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date()))
+        )
       );
 
     // 3. Compare hash for each candidate
@@ -186,7 +186,7 @@ export class ApiKeyService {
   async revokeApiKey(
     keyId: string,
     userId: string,
-    reason?: string,
+    reason?: string
   ): Promise<void> {
     await db
       .update(apiKeys)
@@ -210,7 +210,7 @@ export class ApiKeyService {
    */
   async rotateApiKey(
     keyId: string,
-    userId: string,
+    userId: string
   ): Promise<{ newKey: string; newKeyId: string }> {
     // 1. Get the existing key
     const [existingKey] = await db
@@ -235,9 +235,9 @@ export class ApiKeyService {
       existingKey.expiresAt
         ? Math.ceil(
             (existingKey.expiresAt.getTime() - Date.now()) /
-              (24 * 60 * 60 * 1000),
+              (24 * 60 * 60 * 1000)
           )
-        : undefined,
+        : undefined
     );
 
     // 3. Update new key to link to old key
@@ -280,7 +280,7 @@ export class ApiKeyService {
    */
   checkRateLimit(
     keyId: string,
-    action: "generate" | "request" | "submit",
+    action: "generate" | "request" | "submit"
   ): boolean {
     const config = RATE_LIMITS[action];
     const now = Date.now();
@@ -347,8 +347,8 @@ export class ApiKeyService {
       .where(
         and(
           eq(apiKeys.isActive, true),
-          sql`${apiKeys.rotationScheduledAt} < NOW()`,
-        ),
+          sql`${apiKeys.rotationScheduledAt} < NOW()`
+        )
       );
   }
 }

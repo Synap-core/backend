@@ -15,7 +15,10 @@ import { config } from "@synap-core/core";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
-import { createTestClient, createMultiUserClients } from "./utils/test-client.js";
+import {
+  createTestClient,
+  createMultiUserClients,
+} from "./utils/test-client.js";
 import type { AppRouter } from "@synap/api";
 
 const execAsync = promisify(exec);
@@ -60,7 +63,7 @@ async function startApiServer(): Promise<string> {
 
   // Use net.connect to verify port is listening (simplest check)
   const net = await import("net");
-  
+
   logger.info({ apiUrl, maxRetries }, "Starting to poll API server port...");
 
   for (let i = 0; i < maxRetries; i++) {
@@ -69,35 +72,37 @@ async function startApiServer(): Promise<string> {
       await new Promise<void>((resolve, reject) => {
         const socket = net.createConnection(Number(testPort), "127.0.0.1");
         socket.setTimeout(2000);
-        
+
         socket.on("connect", () => {
           socket.end();
           resolve();
         });
-        
+
         socket.on("timeout", () => {
           socket.destroy();
           reject(new Error("Connection timed out"));
         });
-        
+
         socket.on("error", (err) => {
           socket.destroy();
           reject(err);
         });
       });
-      
+
       console.log(`DEBUG: [Attempt ${i + 1}] ✅ API server port is open`);
       return apiUrl;
     } catch (error) {
       console.warn(`DEBUG: [Attempt ${i + 1}] Connection failed: ${error}`);
       if (i === maxRetries - 1) {
         console.error("API server failed to start after max retries");
-        throw new Error(`API server not responding after ${maxRetries} attempts`);
+        throw new Error(
+          `API server not responding after ${maxRetries} attempts`
+        );
       }
     }
-      // Wait before retry
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
-    }
+    // Wait before retry
+    await new Promise((resolve) => setTimeout(resolve, retryDelay));
+  }
 
   logger.info({ apiUrl }, "Using API server URL (assuming it will be started)");
   return apiUrl;
@@ -123,7 +128,7 @@ async function initializeTestDatabase(): Promise<void> {
       process.env.DATABASE_URL = testDbUrl;
       logger.info(
         { testDbUrl: testDbUrl.replace(/:[^:@]+@/, ":****@") },
-        "Using test database",
+        "Using test database"
       );
     }
 
@@ -165,7 +170,7 @@ async function initializeTestDatabase(): Promise<void> {
 async function createTestUser(
   email: string,
   password: string,
-  apiUrl: string,
+  apiUrl: string
 ): Promise<TestUser> {
   // Simplified: Just return a mock user
   const userId = randomUUID();
@@ -199,7 +204,7 @@ async function loginUser(user: TestUser, apiUrl: string): Promise<string> {
 async function createApiKey(
   userId: string,
   apiUrl: string,
-  sessionCookie: string,
+  sessionCookie: string
 ): Promise<string> {
   try {
     // Add timeout to prevent indefinite hang
@@ -268,12 +273,12 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
   const userA = await createTestUser(
     "test-user-a@synap.test",
     "test-password-123",
-    apiUrl,
+    apiUrl
   );
   const userB = await createTestUser(
     "test-user-b@synap.test",
     "test-password-123",
-    apiUrl,
+    apiUrl
   );
   console.log("Step 3: Test users created");
 
@@ -290,7 +295,7 @@ export async function setupTestEnvironment(): Promise<TestEnvironment> {
   } catch (error) {
     logger.warn(
       { err: error },
-      "Failed to create API keys, continuing without them",
+      "Failed to create API keys, continuing without them"
     );
   }
 

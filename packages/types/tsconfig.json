@@ -5,14 +5,8 @@
     "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
-    "composite": false,
-    "incremental": false
+    "composite": false
   },
-  "include": [
-    "src"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
 }

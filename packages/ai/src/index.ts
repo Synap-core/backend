@@ -26,7 +26,6 @@ export type {
 
 // LangGraph Helpers
 export {
-  CommonStateFields,
   StateGraph,
   START,
   END,

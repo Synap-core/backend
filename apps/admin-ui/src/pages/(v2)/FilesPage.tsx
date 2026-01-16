@@ -101,7 +101,7 @@ export default function FilesPage() {
     // Open download URL in new tab
     window.open(
       `${import.meta.env.VITE_API_URL || ""}/api/files/download?path=${encodeURIComponent(path)}`,
-      "_blank",
+      "_blank"
     );
   };
 

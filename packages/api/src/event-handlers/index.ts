@@ -38,7 +38,10 @@ export async function processEvents() {
     for (const event of latestEvents) {
       try {
         if (event.type.startsWith("entities")) {
-          logger.debug({ eventId: event.id, type: event.type }, "Found entities event in processor");
+          logger.debug(
+            { eventId: event.id, type: event.type },
+            "Found entities event in processor"
+          );
         }
         // Route event to appropriate handler based on type
         switch (event.type) {
@@ -83,10 +86,16 @@ export async function processEvents() {
           default:
             // Forward all other events to Inngest for background processing
             // This is the bridge between the Event Store and Inngest
-            if (event.type.includes(".requested") || event.type.includes(".validated")) {
-              logger.info({ eventId: event.id, eventType: event.type }, "Forwarding event to Inngest");
+            if (
+              event.type.includes(".requested") ||
+              event.type.includes(".validated")
+            ) {
+              logger.info(
+                { eventId: event.id, eventType: event.type },
+                "Forwarding event to Inngest"
+              );
               const { inngest } = await import("@synap/jobs");
-              
+
               await inngest.send({
                 name: event.type as any,
                 data: event.data as any,
@@ -102,7 +111,7 @@ export async function processEvents() {
             eventId: event.id,
             eventType: event.type,
           },
-          "Error processing event",
+          "Error processing event"
         );
         // Continue processing other events
       }

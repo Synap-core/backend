@@ -23,10 +23,7 @@ export const globalValidator = inngest.createFunction(
     name: "Global Validator & Proposal Router",
     retries: 2,
   },
-  [
-    { event: "entities.create.requested" },
-    { event: "*.*.requested" }
-  ],
+  [{ event: "entities.create.requested" }, { event: "*.*.requested" }],
   async ({ event, step }) => {
     const eventName = event.name as string;
     const [targetType, action] = eventName.split("."); // e.g. 'documents', 'create'
@@ -43,9 +40,8 @@ export const globalValidator = inngest.createFunction(
 
     logger.info(
       { eventName, userId, action, targetType, source },
-      "Validating request",
+      "Validating request"
     );
-
 
     // 1. Permission Check (Security Layer) - NEW 3-LEVEL SYSTEM
     const permissionResult = await step.run("check-permissions", async () => {
@@ -59,14 +55,18 @@ export const globalValidator = inngest.createFunction(
         }
 
         // Determine required permission based on action
-        let requiredPermission: 'read' | 'write' | 'delete' | 'manage' = 'read';
-        
+        let requiredPermission: "read" | "write" | "delete" | "manage" = "read";
+
         if (action === "delete") {
-          requiredPermission = 'delete'; // Requires owner role
+          requiredPermission = "delete"; // Requires owner role
         } else if (action === "create" || action === "update") {
-          requiredPermission = 'write'; // Requires editor or owner
-        } else if (action === "addMember" || action === "removeMember" || action === "updateMemberRole") {
-          requiredPermission = 'manage'; // Workspace/project management
+          requiredPermission = "write"; // Requires editor or owner
+        } else if (
+          action === "addMember" ||
+          action === "removeMember" ||
+          action === "updateMemberRole"
+        ) {
+          requiredPermission = "manage"; // Workspace/project management
         }
 
         // Get projectIds from event data if present
@@ -83,11 +83,17 @@ export const globalValidator = inngest.createFunction(
 
         if (!result.allowed) {
           logger.warn(
-            { userId, workspaceId, projectIds, requiredPermission, reason: result.reason },
+            {
+              userId,
+              workspaceId,
+              projectIds,
+              requiredPermission,
+              reason: result.reason,
+            },
             "Permission denied"
           );
-          return { 
-            granted: false, 
+          return {
+            granted: false,
             reason: result.reason,
             role: result.role,
             context: result.context,
@@ -98,7 +104,7 @@ export const globalValidator = inngest.createFunction(
           { userId, workspaceId, role: result.role, context: result.context },
           "Permission granted"
         );
-        
+
         return { granted: true, role: result.role, context: result.context };
       } catch (error) {
         return { granted: false, reason: "Permission check error" };
@@ -232,5 +238,5 @@ export const globalValidator = inngest.createFunction(
       status: "proposal_created",
       proposalId: proposalResult.proposalId,
     };
-  },
+  }
 );

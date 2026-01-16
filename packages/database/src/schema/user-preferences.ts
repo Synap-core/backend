@@ -87,7 +87,7 @@ export const userPreferences = pgTable("user_preferences", {
   // Entity Customization
   customEntityTypes: jsonb("custom_entity_types").$type<CustomEntityType[]>(),
   entityMetadataSchemas: jsonb(
-    "entity_metadata_schemas",
+    "entity_metadata_schemas"
   ).$type<EntityMetadataSchemas>(),
 
   // UI Preferences

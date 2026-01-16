@@ -20,7 +20,7 @@ export async function logEvent(
     subjectType?: string;
     metadata?: Record<string, any>;
     source?: string;
-  },
+  }
 ): Promise<void> {
   await db.insert(events).values({
     userId,
@@ -43,7 +43,7 @@ export async function logEvent(
 export const WorkspaceEvents = {
   createRequested: (
     userId: string,
-    data: { name: string; type: string; description?: string },
+    data: { name: string; type: string; description?: string }
   ) =>
     logEvent(userId, "workspaces.create.requested", data, {
       subjectType: "workspace",
@@ -51,7 +51,7 @@ export const WorkspaceEvents = {
 
   createValidated: (
     userId: string,
-    workspace: { id: string; name: string; type: string; ownerId: string },
+    workspace: { id: string; name: string; type: string; ownerId: string }
   ) =>
     logEvent(userId, "workspaces.create.validated", workspace, {
       subjectId: workspace.id,
@@ -61,7 +61,7 @@ export const WorkspaceEvents = {
   updateRequested: (
     userId: string,
     workspaceId: string,
-    updates: Record<string, any>,
+    updates: Record<string, any>
   ) =>
     logEvent(
       userId,
@@ -70,13 +70,13 @@ export const WorkspaceEvents = {
       {
         subjectId: workspaceId,
         subjectType: "workspace",
-      },
+      }
     ),
 
   updateValidated: (
     userId: string,
     workspaceId: string,
-    changes: Record<string, any>,
+    changes: Record<string, any>
   ) =>
     logEvent(
       userId,
@@ -85,7 +85,7 @@ export const WorkspaceEvents = {
       {
         subjectId: workspaceId,
         subjectType: "workspace",
-      },
+      }
     ),
 
   deleteRequested: (userId: string, workspaceId: string) =>
@@ -96,7 +96,7 @@ export const WorkspaceEvents = {
       {
         subjectId: workspaceId,
         subjectType: "workspace",
-      },
+      }
     ),
 
   deleteValidated: (userId: string, workspaceId: string) =>
@@ -107,14 +107,14 @@ export const WorkspaceEvents = {
       {
         subjectId: workspaceId,
         subjectType: "workspace",
-      },
+      }
     ),
 };
 
 export const WorkspaceMemberEvents = {
   inviteRequested: (
     userId: string,
-    data: { workspaceId: string; email: string; role: string },
+    data: { workspaceId: string; email: string; role: string }
   ) =>
     logEvent(userId, "workspaceMembers.create.requested", data, {
       subjectId: data.workspaceId,
@@ -123,7 +123,7 @@ export const WorkspaceMemberEvents = {
 
   inviteValidated: (
     userId: string,
-    member: { id: string; workspaceId: string; userId: string; role: string },
+    member: { id: string; workspaceId: string; userId: string; role: string }
   ) =>
     logEvent(userId, "workspaceMembers.create.validated", member, {
       subjectId: member.id,
@@ -138,7 +138,7 @@ export const WorkspaceMemberEvents = {
       {
         subjectId: memberId,
         subjectType: "workspace_member",
-      },
+      }
     ),
 
   removeValidated: (userId: string, memberId: string) =>
@@ -149,7 +149,7 @@ export const WorkspaceMemberEvents = {
       {
         subjectId: memberId,
         subjectType: "workspace_member",
-      },
+      }
     ),
 };
 
@@ -160,7 +160,7 @@ export const WorkspaceMemberEvents = {
 export const ViewEvents = {
   createRequested: (
     userId: string,
-    data: { type: string; name: string; workspaceId: string },
+    data: { type: string; name: string; workspaceId: string }
   ) =>
     logEvent(userId, "views.create.requested", data, {
       subjectType: "view",
@@ -168,7 +168,7 @@ export const ViewEvents = {
 
   createValidated: (
     userId: string,
-    view: { id: string; type: string; name: string; documentId: string },
+    view: { id: string; type: string; name: string; documentId: string }
   ) =>
     logEvent(userId, "views.create.validated", view, {
       subjectId: view.id,
@@ -178,7 +178,7 @@ export const ViewEvents = {
   updateRequested: (
     userId: string,
     viewId: string,
-    saveType: "manual" | "publish",
+    saveType: "manual" | "publish"
   ) =>
     logEvent(
       userId,
@@ -187,7 +187,7 @@ export const ViewEvents = {
       {
         subjectId: viewId,
         subjectType: "view",
-      },
+      }
     ),
 
   updateValidated: (userId: string, viewId: string, versionNumber: number) =>
@@ -202,7 +202,7 @@ export const ViewEvents = {
       {
         subjectId: viewId,
         subjectType: "view",
-      },
+      }
     ),
 
   deleteRequested: (userId: string, viewId: string) =>
@@ -213,7 +213,7 @@ export const ViewEvents = {
       {
         subjectId: viewId,
         subjectType: "view",
-      },
+      }
     ),
 
   deleteValidated: (userId: string, viewId: string) =>
@@ -224,7 +224,7 @@ export const ViewEvents = {
       {
         subjectId: viewId,
         subjectType: "view",
-      },
+      }
     ),
 };
 
@@ -241,7 +241,7 @@ export const UserPreferencesEvents = {
       {
         subjectId: userId,
         subjectType: "user_preferences",
-      },
+      }
     ),
 
   updateValidated: (userId: string, changes: Record<string, any>) =>
@@ -252,7 +252,7 @@ export const UserPreferencesEvents = {
       {
         subjectId: userId,
         subjectType: "user_preferences",
-      },
+      }
     ),
 };
 
@@ -263,7 +263,7 @@ export const UserPreferencesEvents = {
 export const EntityEvents = {
   createRequested: (
     userId: string,
-    data: { type: string; title: string; workspaceId?: string },
+    data: { type: string; title: string; workspaceId?: string }
   ) =>
     logEvent(userId, "entities.create.requested", data, {
       subjectType: "entity",
@@ -271,7 +271,7 @@ export const EntityEvents = {
 
   createValidated: (
     userId: string,
-    entity: { id: string; type: string; title: string },
+    entity: { id: string; type: string; title: string }
   ) =>
     logEvent(userId, "entities.create.validated", entity, {
       subjectId: entity.id,
@@ -286,7 +286,7 @@ export const EntityEvents = {
   updateRequested: (
     userId: string,
     entityId: string,
-    updates: Record<string, any>,
+    updates: Record<string, any>
   ) =>
     logEvent(
       userId,
@@ -295,13 +295,13 @@ export const EntityEvents = {
       {
         subjectId: entityId,
         subjectType: "entity",
-      },
+      }
     ),
 
   updateValidated: (
     userId: string,
     entityId: string,
-    changes: Record<string, any>,
+    changes: Record<string, any>
   ) =>
     logEvent(
       userId,
@@ -310,7 +310,7 @@ export const EntityEvents = {
       {
         subjectId: entityId,
         subjectType: "entity",
-      },
+      }
     ),
 
   updateDenied: (userId: string, entityId: string, reason: string) =>
@@ -321,7 +321,7 @@ export const EntityEvents = {
       {
         subjectId: entityId,
         subjectType: "entity",
-      },
+      }
     ),
 
   deleteRequested: (userId: string, entityId: string) =>
@@ -332,7 +332,7 @@ export const EntityEvents = {
       {
         subjectId: entityId,
         subjectType: "entity",
-      },
+      }
     ),
 
   deleteValidated: (userId: string, entityId: string) =>
@@ -343,7 +343,7 @@ export const EntityEvents = {
       {
         subjectId: entityId,
         subjectType: "entity",
-      },
+      }
     ),
 
   deleteDenied: (userId: string, entityId: string, reason: string) =>
@@ -354,7 +354,7 @@ export const EntityEvents = {
       {
         subjectId: entityId,
         subjectType: "entity",
-      },
+      }
     ),
 };
 
@@ -365,7 +365,7 @@ export const EntityEvents = {
 export const RelationEvents = {
   createRequested: (
     userId: string,
-    data: { fromId: string; toId: string; type: string },
+    data: { fromId: string; toId: string; type: string }
   ) =>
     logEvent(userId, "relations.create.requested", data, {
       subjectType: "relation",
@@ -373,7 +373,7 @@ export const RelationEvents = {
 
   createValidated: (
     userId: string,
-    relation: { id: string; fromId: string; toId: string },
+    relation: { id: string; fromId: string; toId: string }
   ) =>
     logEvent(userId, "relations.create.validated", relation, {
       subjectId: relation.id,
@@ -388,7 +388,7 @@ export const RelationEvents = {
       {
         subjectId: relationId,
         subjectType: "relation",
-      },
+      }
     ),
 
   deleteValidated: (userId: string, relationId: string) =>
@@ -399,6 +399,6 @@ export const RelationEvents = {
       {
         subjectId: relationId,
         subjectType: "relation",
-      },
+      }
     ),
 };

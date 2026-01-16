@@ -24,7 +24,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
-    },
+    }
   );
 
   if (!response.ok) {
@@ -43,7 +43,7 @@ async function generateAndStoreEmbedding(
   userId: string,
   entityType: string,
   title: string,
-  description?: string,
+  description?: string
 ): Promise<void> {
   const textToEmbed = `${title} ${description || ""}`.trim();
 
@@ -83,7 +83,7 @@ async function indexExistingEntities() {
         entity.userId,
         entity.type,
         entity.title || "",
-        entity.preview || undefined,
+        entity.preview || undefined
       );
 
       indexed++;
@@ -92,7 +92,7 @@ async function indexExistingEntities() {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         const rate = ((indexed / (Date.now() - startTime)) * 1000).toFixed(1);
         console.log(
-          `✅ Indexed ${indexed}/${allEntities.length} entities (${rate} entities/sec, ${elapsed}s elapsed)`,
+          `✅ Indexed ${indexed}/${allEntities.length} entities (${rate} entities/sec, ${elapsed}s elapsed)`
         );
       }
 
@@ -102,7 +102,7 @@ async function indexExistingEntities() {
     } catch (error) {
       console.error(
         `❌ Failed to index ${entity.id} (${entity.title}):`,
-        error,
+        error
       );
       failed++;
     }

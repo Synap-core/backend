@@ -1,6 +1,6 @@
 /**
  * Chat Thread Repository
- * 
+ *
  * Standalone repository for chat threads.
  * Handles CRUD operations with event emission.
  */
@@ -20,7 +20,14 @@ export interface CreateChatThreadData {
   branchedFromMessageId?: string;
   branchPurpose?: string;
   agentId?: string;
-  agentType?: "default" | "meta" | "prompting" | "knowledge-search" | "code" | "writing" | "action";
+  agentType?:
+    | "default"
+    | "meta"
+    | "prompting"
+    | "knowledge-search"
+    | "code"
+    | "writing"
+    | "action";
   agentConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -73,7 +80,11 @@ export class ChatThreadRepository {
   /**
    * Update a chat thread
    */
-  async update(id: string, data: UpdateChatThreadData, userId: string): Promise<ChatThread> {
+  async update(
+    id: string,
+    data: UpdateChatThreadData,
+    userId: string
+  ): Promise<ChatThread> {
     const [thread] = await this.db
       .update(chatThreads)
       .set({
@@ -97,7 +108,7 @@ export class ChatThreadRepository {
   async delete(id: string, userId: string): Promise<void> {
     await this.db
       .update(chatThreads)
-      .set({ 
+      .set({
         status: "archived",
         updatedAt: new Date(),
       })
@@ -162,7 +173,11 @@ export class ChatThreadRepository {
   /**
    * Merge a branch thread
    */
-  async mergeBranch(branchId: string, contextSummary: string, userId: string): Promise<ChatThread> {
+  async mergeBranch(
+    branchId: string,
+    contextSummary: string,
+    userId: string
+  ): Promise<ChatThread> {
     const [thread] = await this.db
       .update(chatThreads)
       .set({

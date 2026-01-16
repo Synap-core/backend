@@ -91,7 +91,7 @@ describe("Hub Router", () => {
           requestId: "test-request-123",
           scope: ["invalid-scope"] as any,
           expiresIn: 300,
-        }),
+        })
       ).rejects.toThrow();
     });
 
@@ -103,7 +103,7 @@ describe("Hub Router", () => {
           requestId: "test-request-123",
           scope: ["preferences"],
           expiresIn: 50, // Too short
-        }),
+        })
       ).rejects.toThrow();
 
       await expect(
@@ -111,7 +111,7 @@ describe("Hub Router", () => {
           requestId: "test-request-123",
           scope: ["preferences"],
           expiresIn: 400, // Too long
-        }),
+        })
       ).rejects.toThrow();
     });
 
@@ -124,7 +124,7 @@ describe("Hub Router", () => {
           requestId: "test-request-123",
           scope: ["preferences"],
           expiresIn: 300,
-        }),
+        })
       ).rejects.toThrow(TRPCError);
     });
   });
@@ -155,7 +155,7 @@ describe("Hub Router", () => {
         caller.requestData({
           token: "invalid-token",
           scope: ["preferences"],
-        }),
+        })
       ).rejects.toThrow();
     });
 
@@ -221,7 +221,7 @@ describe("Hub Router", () => {
             type: "invalid-type",
             correlationId: "test-123",
           } as any as HubInsight,
-        }),
+        })
       ).rejects.toThrow();
     });
 
@@ -237,7 +237,7 @@ describe("Hub Router", () => {
       expect(transformInsightToEvents).toHaveBeenCalledWith(
         validInsight,
         "test-user-123",
-        expect.any(String),
+        expect.any(String)
       );
     });
 
@@ -253,7 +253,7 @@ describe("Hub Router", () => {
         caller.submitInsight({
           token: "invalid-token",
           insight: validInsight,
-        }),
+        })
       ).rejects.toThrow();
     });
   });

@@ -22,7 +22,7 @@ interface ParsedMetric {
 
 export function useMetrics(intervalMs: number = 5000) {
   const [currentMetrics, setCurrentMetrics] = useState<MetricsSnapshot | null>(
-    null,
+    null
   );
   const [metricsHistory, setMetricsHistory] = useState<MetricsSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,7 +38,7 @@ export function useMetrics(intervalMs: number = 5000) {
 
       // Parse metric line: metric_name{label="value"} value
       const match = line.match(
-        /^([a-zA-Z_][a-zA-Z0-9_]*)((?:\{[^}]*\})?) (.+)$/,
+        /^([a-zA-Z_][a-zA-Z0-9_]*)((?:\{[^}]*\})?) (.+)$/
       );
       if (!match) continue;
 
@@ -49,7 +49,7 @@ export function useMetrics(intervalMs: number = 5000) {
       const labels: Record<string, string> = {};
       if (labelsStr) {
         const labelMatches = labelsStr.matchAll(
-          /([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g,
+          /([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g
         );
         for (const labelMatch of labelMatches) {
           labels[labelMatch[1]] = labelMatch[2];

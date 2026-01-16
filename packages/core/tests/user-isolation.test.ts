@@ -301,8 +301,8 @@ describeIf("User Isolation (Application-Level Filtering)", () => {
       .where(
         and(
           eq(entities.id, entityIdA),
-          eq(entities.userId, userB), // ✅ Correct: filter by User B's ID
-        ),
+          eq(entities.userId, userB) // ✅ Correct: filter by User B's ID
+        )
         // This returns 0 rows because entityIdA belongs to User A
       );
 

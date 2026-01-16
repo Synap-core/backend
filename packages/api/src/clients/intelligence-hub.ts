@@ -11,7 +11,7 @@ import type {
   BranchDecision,
   TokenUsage,
   AIStep,
-} from '@synap-core/types';
+} from "@synap-core/types";
 
 export interface IntelligenceHubRequest {
   query: string;
@@ -27,9 +27,16 @@ export interface IntelligenceHubRequest {
 }
 
 // Re-export HubResponse from types package
-export type { HubResponse, ExtractedEntity, BranchDecision, TokenUsage, AIStep };
+export type {
+  HubResponse,
+  ExtractedEntity,
+  BranchDecision,
+  TokenUsage,
+  AIStep,
+};
 
 // Legacy interface for backwards compatibility
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface IntelligenceHubResponse extends HubResponse {
   // All fields inherited from HubResponse
 }
@@ -49,7 +56,7 @@ export class IntelligenceHubClient {
    * Send message to orchestrator agent
    */
   async sendMessage(
-    request: IntelligenceHubRequest,
+    request: IntelligenceHubRequest
   ): Promise<IntelligenceHubResponse> {
     try {
       const response = await fetch(`${this.baseUrl}/api/expertise/request`, {
@@ -63,8 +70,12 @@ export class IntelligenceHubClient {
           userId: request.userId,
           agentId: request.agentId || "orchestrator",
           projectId: request.projectId,
-          dataPodUrl: request.dataPodUrl || process.env.PUBLIC_URL || "http://localhost:3000",
-          dataPodApiKey: request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
+          dataPodUrl:
+            request.dataPodUrl ||
+            process.env.PUBLIC_URL ||
+            "http://localhost:3000",
+          dataPodApiKey:
+            request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
         }),
       });
 
@@ -72,7 +83,7 @@ export class IntelligenceHubClient {
         throw new Error(`Intelligence Hub error: ${response.statusText}`);
       }
 
-      const data = await response.json() as IntelligenceHubResponse;
+      const data = (await response.json()) as IntelligenceHubResponse;
       return data;
     } catch (error) {
       console.error("Failed to call Intelligence Hub:", error);
@@ -94,18 +105,20 @@ export class IntelligenceHubClient {
 
     if (!response.ok) {
       throw new Error(
-        `Intelligence Hub embedding error: ${response.statusText}`,
+        `Intelligence Hub embedding error: ${response.statusText}`
       );
     }
 
-    const data = await response.json() as { embedding: number[] };
+    const data = (await response.json()) as { embedding: number[] };
     return data.embedding;
   }
 
   /**
    * Send message with streaming support
    */
-  async *sendMessageStream(request: IntelligenceHubRequest): AsyncGenerator<HubStreamEvent> {
+  async *sendMessageStream(
+    request: IntelligenceHubRequest
+  ): AsyncGenerator<HubStreamEvent> {
     const response = await fetch(`${this.baseUrl}/api/chat/stream`, {
       // ✅ UPDATED: New endpoint
       method: "POST",
@@ -122,8 +135,12 @@ export class IntelligenceHubClient {
         agentConfig: request.agentConfig,
         projectId: request.projectId,
         stream: true,
-        dataPodUrl: request.dataPodUrl || process.env.PUBLIC_URL || "http://localhost:3000",
-        dataPodApiKey: request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
+        dataPodUrl:
+          request.dataPodUrl ||
+          process.env.PUBLIC_URL ||
+          "http://localhost:3000",
+        dataPodApiKey:
+          request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
       }),
     });
 

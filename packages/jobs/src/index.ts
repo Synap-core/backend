@@ -53,7 +53,6 @@ export * from "./executors/index.js";
 // INNGEST FUNCTION REGISTRY
 // ============================================================================
 
-
 import {
   whiteboardSnapshotWorker,
   whiteboardRestoreWorker,
@@ -86,7 +85,8 @@ import {
   workspaceMembersExecutor,
   projectMembersExecutor,
   rolesExecutor,
-  apiKeysExecutor,} from "./executors/index.js";
+  apiKeysExecutor,
+} from "./executors/index.js";
 
 /**
  * All Inngest functions to register with the serve handler.
@@ -124,5 +124,6 @@ export const functions = [
   messagesExecutor,
   workspaceMembersExecutor,
   rolesExecutor,
-  apiKeysExecutor,  projectMembersExecutor,
+  apiKeysExecutor,
+  projectMembersExecutor,
 ];

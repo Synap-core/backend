@@ -1,6 +1,6 @@
 /**
  * Project Members Schema
- * 
+ *
  * Provides project-level access control within workspaces.
  * A user can be in a workspace but only have access to specific projects.
  */
@@ -29,9 +29,7 @@ export const projectMembers = pgTable(
 
     // Role in this specific project
     // Uses same roles as workspace for consistency
-    role: text("role")
-      .notNull()
-      .default("viewer"), // 'owner' | 'editor' | 'viewer'
+    role: text("role").notNull().default("viewer"), // 'owner' | 'editor' | 'viewer'
 
     // Metadata
     invitedBy: text("invited_by"), // Who added them to this project

@@ -42,6 +42,7 @@ pnpm test       # Run unit & integration tests
 ## What Just Happened?
 
 The `start.sh` script:
+
 - ✅ Starts Docker services (Postgres, MinIO, Kratos)
 - ✅ Waits for all services to be healthy
 - ✅ Runs database migrations automatically
@@ -51,13 +52,13 @@ The `start.sh` script:
 
 ## Services
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| **PostgreSQL** | 5432 | Main database (TimescaleDB + pgvector) |
-| **MinIO** | 9000/9001 | S3-compatible object storage |
-| **Kratos** | 4433/4434 | Authentication & identity management |
-| **Inngest** | 8288 | Background job processing (optional) |
-| **n8n** | 5678 | Workflow automation (optional) |
+| Service        | Port      | Purpose                                |
+| -------------- | --------- | -------------------------------------- |
+| **PostgreSQL** | 5432      | Main database (TimescaleDB + pgvector) |
+| **MinIO**      | 9000/9001 | S3-compatible object storage           |
+| **Kratos**     | 4433/4434 | Authentication & identity management   |
+| **Inngest**    | 8288      | Background job processing (optional)   |
+| **n8n**        | 5678      | Workflow automation (optional)         |
 
 ---
 
@@ -85,9 +86,11 @@ synap-backend/
 ### 1. Environment Variables
 
 Copy `.env.example` to `.env`:
+
 ```bash
 cp .env.example .env
 ```
+
 Customize if needed (defaults work for local development).
 
 ### 2. Start Docker Services
@@ -97,6 +100,7 @@ docker compose --profile auth up -d
 ```
 
 **Profiles**:
+
 - `auth` - Adds Kratos for authentication
 - `jobs` - Adds Inngest for background jobs
 - `workflows` - Adds n8n for automation
@@ -107,6 +111,7 @@ docker compose --profile auth up -d
 cd packages/database
 pnpm run db:push
 ```
+
 This creates all tables in your database.
 
 ### 4. Start Development Servers
@@ -240,6 +245,7 @@ pnpm --filter @synap/realtime dev
 > **Note**: Production deployment guide coming soon. Current setup optimized for local development.
 
 Key differences for production:
+
 - Disable Kratos `--dev` mode
 - Use proper secrets (not defaults)
 - Enable TLS for Kratos

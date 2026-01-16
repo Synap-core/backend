@@ -42,7 +42,7 @@ class PluginManager {
       } catch (error) {
         logger.error(
           { err: error, plugin: plugin.name },
-          "Failed to initialize plugin",
+          "Failed to initialize plugin"
         );
         throw error;
       }
@@ -72,7 +72,7 @@ class PluginManager {
     if (plugin.registerAgent) {
       logger.warn(
         { plugin: plugin.name },
-        "Agent registration available - implement LangGraph integration",
+        "Agent registration available - implement LangGraph integration"
       );
       // TODO: Implement LangGraph agent registration when needed
       // const graph = new StateGraph({});
@@ -82,7 +82,7 @@ class PluginManager {
 
     logger.info(
       { plugin: plugin.name, version: plugin.version },
-      "Plugin registered",
+      "Plugin registered"
     );
   }
 
@@ -138,7 +138,7 @@ class PluginManager {
    */
   async processThought(input: ThoughtInput): Promise<ThoughtResponse | null> {
     const enabledPlugins = this.getEnabledPlugins().filter(
-      (p) => p.processThought,
+      (p) => p.processThought
     );
 
     for (const plugin of enabledPlugins) {
@@ -149,21 +149,21 @@ class PluginManager {
       try {
         logger.debug(
           { plugin: plugin.name, userId: input.userId },
-          "Trying plugin for thought processing",
+          "Trying plugin for thought processing"
         );
         const result = await plugin.processThought(input);
 
         if (result.success) {
           logger.info(
             { plugin: plugin.name, requestId: result.requestId },
-            "Plugin processed thought successfully",
+            "Plugin processed thought successfully"
           );
           return result;
         }
       } catch (error) {
         logger.warn(
           { err: error, plugin: plugin.name },
-          "Plugin processing failed, trying next",
+          "Plugin processing failed, trying next"
         );
         // Continue to next plugin
       }
@@ -191,7 +191,7 @@ class PluginManager {
         } catch (error) {
           logger.error(
             { err: error, plugin: plugin.name },
-            "Failed to initialize plugin",
+            "Failed to initialize plugin"
           );
           // Continue with other plugins
         }

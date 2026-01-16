@@ -66,7 +66,7 @@ intelligenceWebhookRouter.post("/callback", async (c) => {
 
     return c.json(
       { error: "Internal server error", message: error.message },
-      500,
+      500
     );
   }
 });

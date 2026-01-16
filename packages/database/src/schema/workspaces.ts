@@ -16,29 +16,30 @@ export interface WorkspaceSettings {
   theme?: string;
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
-  
+
   // Intelligence service configuration
   intelligenceServiceId?: string; // Default for workspace
   intelligenceServiceOverrides?: {
     chat?: string;
     analysis?: string;
   };
-  
+
   // Validation Policy Overrides
   // Allows workspace owners to customize which operations require validation
   // Overrides GLOBAL_VALIDATION_DEFAULTS from ValidationPolicyService
   validationRules?: {
     [tableName: string]: {
-      create?: boolean;  // true = require validation, false = fast-path
+      create?: boolean; // true = require validation, false = fast-path
       update?: boolean;
       delete?: boolean;
     };
   };
-  
+
   // Role-Based Permissions (Fine-grained RBAC)
   // Allows workspace owners to customize permissions per role per table
   rolePermissions?: {
-    [role: string]: {  // 'owner' | 'admin' | 'editor' | 'viewer'
+    [role: string]: {
+      // 'owner' | 'admin' | 'editor' | 'viewer'
       [tableName: string]: {
         create?: boolean;
         read?: boolean;
@@ -47,13 +48,13 @@ export interface WorkspaceSettings {
       };
     };
   };
-  
+
   // AI Governance Settings
   aiGovernance?: {
-    autoApprove?: boolean;  // Auto-approve AI-generated content
-    requireReviewFor?: string[];  // Event types requiring review (e.g., ['agent.create'])
-    maxAgentsPerUser?: number;  // Limit AI agents per user
-    allowAgentCreation?: boolean;  // Allow users to create custom agents
+    autoApprove?: boolean; // Auto-approve AI-generated content
+    requireReviewFor?: string[]; // Event types requiring review (e.g., ['agent.create'])
+    maxAgentsPerUser?: number; // Limit AI agents per user
+    allowAgentCreation?: boolean; // Allow users to create custom agents
   };
 }
 
@@ -147,7 +148,7 @@ export const workspaceMembersRelations = relations(
       fields: [workspaceMembers.workspaceId],
       references: [workspaces.id],
     }),
-  }),
+  })
 );
 
 export const workspaceInvitesRelations = relations(
@@ -157,7 +158,7 @@ export const workspaceInvitesRelations = relations(
       fields: [workspaceInvites.workspaceId],
       references: [workspaces.id],
     }),
-  }),
+  })
 );
 
 // Type exports
@@ -202,4 +203,3 @@ export const insertWorkspaceInviteSchema = createInsertSchema(workspaceInvites);
  * @internal For monorepo usage - enables schema composition in API layer
  */
 export const selectWorkspaceInviteSchema = createSelectSchema(workspaceInvites);
-

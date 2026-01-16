@@ -76,7 +76,7 @@ export function initializeTracing(): void {
   };
   diag.setLogger(
     new DiagConsoleLogger(),
-    diagLevelMap[diagLogLevel] || DiagLogLevel.ERROR,
+    diagLevelMap[diagLogLevel] || DiagLogLevel.ERROR
   );
 
   // Service identification via environment variables

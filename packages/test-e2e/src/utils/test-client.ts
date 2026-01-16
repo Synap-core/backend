@@ -1,6 +1,6 @@
 /**
  * Test Client Factory
- * 
+ *
  * Creates tRPC clients for E2E testing
  */
 
@@ -26,7 +26,6 @@ export function createTestClient(options: TestClientOptions) {
         headers: {
           Cookie: sessionCookie,
         },
-        // @ts-ignore - node-fetch compatibility
         fetch: async (url, options) => {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 10000);

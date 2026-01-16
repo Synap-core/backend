@@ -69,7 +69,7 @@ export const n8nActionsRouter = router({
           type,
           keyName: ctx.apiKeyName,
         },
-        "n8n: Creating entity",
+        "n8n: Creating entity"
       );
 
       try {
@@ -106,7 +106,7 @@ export const n8nActionsRouter = router({
             eventId: event.id,
             type,
           },
-          "n8n: Entity created successfully",
+          "n8n: Entity created successfully"
         );
 
         return {
@@ -122,7 +122,7 @@ export const n8nActionsRouter = router({
             userId,
             type,
           },
-          "n8n: Failed to create entity",
+          "n8n: Failed to create entity"
         );
 
         throw new TRPCError({
@@ -153,7 +153,7 @@ export const n8nActionsRouter = router({
           type,
           keyName: ctx.apiKeyName,
         },
-        "n8n: Searching entities",
+        "n8n: Searching entities"
       );
 
       try {
@@ -197,7 +197,7 @@ export const n8nActionsRouter = router({
             userId,
             resultCount: searchResults.length,
           },
-          "n8n: Search completed",
+          "n8n: Search completed"
         );
 
         return {
@@ -212,7 +212,7 @@ export const n8nActionsRouter = router({
             userId,
             query: query.substring(0, 50),
           },
-          "n8n: Search failed",
+          "n8n: Search failed"
         );
 
         throw new TRPCError({
@@ -242,7 +242,7 @@ export const n8nActionsRouter = router({
           analysisTypes,
           keyName: ctx.apiKeyName,
         },
-        "n8n: Analyzing content",
+        "n8n: Analyzing content"
       );
 
       try {
@@ -275,7 +275,7 @@ export const n8nActionsRouter = router({
             userId,
             analysisTypes,
           },
-          "n8n: Analysis completed",
+          "n8n: Analysis completed"
         );
 
         return {
@@ -288,7 +288,7 @@ export const n8nActionsRouter = router({
             err: error,
             userId,
           },
-          "n8n: Analysis failed",
+          "n8n: Analysis failed"
         );
 
         throw new TRPCError({
@@ -392,7 +392,7 @@ function extractTasks(content: string): string[] | undefined {
  * Analyze sentiment (simple implementation)
  */
 function analyzeSentiment(
-  content: string,
+  content: string
 ): "positive" | "negative" | "neutral" {
   const positiveWords = [
     "great",
@@ -415,10 +415,10 @@ function analyzeSentiment(
 
   const lowerContent = content.toLowerCase();
   const positiveCount = positiveWords.filter((w) =>
-    lowerContent.includes(w),
+    lowerContent.includes(w)
   ).length;
   const negativeCount = negativeWords.filter((w) =>
-    lowerContent.includes(w),
+    lowerContent.includes(w)
   ).length;
 
   if (positiveCount > negativeCount) return "positive";

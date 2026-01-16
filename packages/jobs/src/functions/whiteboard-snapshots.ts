@@ -55,7 +55,7 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
 
         logger.info(
           { yjsRoomId, size: buffer.byteLength },
-          "Fetched Yjs state",
+          "Fetched Yjs state"
         );
 
         return base64State;
@@ -127,7 +127,7 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
       versionId: version.id,
       version: newVersion,
     };
-  },
+  }
 );
 
 /**
@@ -150,7 +150,7 @@ export const whiteboardRestoreWorker = inngest.createFunction(
 
     logger.info(
       { viewId, versionId, yjsRoomId },
-      "Restoring whiteboard version",
+      "Restoring whiteboard version"
     );
 
     // Step 1: Validate view exists
@@ -180,7 +180,7 @@ export const whiteboardRestoreWorker = inngest.createFunction(
               "X-Internal-Request": "true",
             },
             body: JSON.stringify({ state: content }),
-          },
+          }
         );
 
         if (!response.ok) {
@@ -204,7 +204,7 @@ export const whiteboardRestoreWorker = inngest.createFunction(
     });
 
     return { success: true };
-  },
+  }
 );
 
 /**
@@ -224,5 +224,5 @@ export const whiteboardAutoSaveWorker = inngest.createFunction(
     // For now, this is a placeholder for future enhancement
 
     return { message: "Auto-save placeholder - implement session tracking" };
-  },
+  }
 );

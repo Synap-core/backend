@@ -6,6 +6,7 @@
 ## Executive Summary
 
 The "Infinite Chat" system is a **fully implemented, production-ready architecture** with sophisticated features including:
+
 - ✅ Thread-based conversations using DAG (Directed Acyclic Graph) structure
 - ✅ Message integrity via blockchain-style hash chains
 - ✅ Conversation branching and merging
@@ -31,14 +32,14 @@ The "Infinite Chat" system is a **fully implemented, production-ready architectu
 
 ### vs "Normal Chat"
 
-| Feature | Normal Chat | Infinite Chat |
-|---------|-------------|---------------|
-| **Structure** | Linear list of messages | Tree/DAG of threads |
-| **Branching** | No - creates new chat | Yes - branches preserve parent context |
-| **Merging** | Manual copy/paste | Automatic context summarization |
-| **History** | Single timeline | Multiple parallel timelines |
-| **Context** | Lost when switching chats | Preserved via parent references |
-| **Agent Routing** | Same AI for everything | Different agents per thread/task |
+| Feature           | Normal Chat               | Infinite Chat                          |
+| ----------------- | ------------------------- | -------------------------------------- |
+| **Structure**     | Linear list of messages   | Tree/DAG of threads                    |
+| **Branching**     | No - creates new chat     | Yes - branches preserve parent context |
+| **Merging**       | Manual copy/paste         | Automatic context summarization        |
+| **History**       | Single timeline           | Multiple parallel timelines            |
+| **Context**       | Lost when switching chats | Preserved via parent references        |
+| **Agent Routing** | Same AI for everything    | Different agents per thread/task       |
 
 ---
 
@@ -49,34 +50,38 @@ The "Infinite Chat" system is a **fully implemented, production-ready architectu
 **File**: [`chat-threads.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/database/src/schema/chat-threads.ts)
 
 ```typescript
-export const chatThreads = pgTable('chat_threads', {
-  id: uuid('id').primaryKey(),
-  userId: text('user_id').notNull(),
-  
+export const chatThreads = pgTable("chat_threads", {
+  id: uuid("id").primaryKey(),
+  userId: text("user_id").notNull(),
+
   // Thread type
-  threadType: text('thread_type', { enum: ['main', 'branch'] }).default('main'),
-  
+  threadType: text("thread_type", { enum: ["main", "branch"] }).default("main"),
+
   // 🌲 BRANCHING: Tree structure via self-reference
-  parentThreadId: uuid('parent_thread_id'),        // Parent thread (forms tree)
-  branchedFromMessageId: uuid('branched_from_message_id'), // Specific message that spawned branch
-  branchPurpose: text('branch_purpose'),           // "Research competitors for SaaS"
-  
+  parentThreadId: uuid("parent_thread_id"), // Parent thread (forms tree)
+  branchedFromMessageId: uuid("branched_from_message_id"), // Specific message that spawned branch
+  branchPurpose: text("branch_purpose"), // "Research competitors for SaaS"
+
   // AI agent assignment
-  agentId: text('agent_id').default('orchestrator'),
-  
+  agentId: text("agent_id").default("orchestrator"),
+
   // Status lifecycle
-  status: text('status', { enum: ['active', 'merged', 'archived'] }).default('active'),
-  
+  status: text("status", { enum: ["active", "merged", "archived"] }).default(
+    "active"
+  ),
+
   // Context compression (from merged branches)
-  contextSummary: text('context_summary'),
+  contextSummary: text("context_summary"),
 });
 ```
 
 **Key Insight**: This is a **tree structure**, not a linear chain. Each thread can have:
+
 - **One parent** (`parentThreadId`)
 - **Multiple children** (threads with `parentThreadId = this.id`)
 
 **Example**:
+
 ```
 Main Thread: "Build a SaaS product"
     ├─ Branch 1: "Research competitors" (agent: research-agent)
@@ -90,24 +95,25 @@ Main Thread: "Build a SaaS product"
 **File**: [`conversation-messages.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/database/src/schema/conversation-messages.ts)
 
 ```typescript
-export const conversationMessages = pgTable('conversation_messages', {
-  id: uuid('id').primaryKey(),
-  
+export const conversationMessages = pgTable("conversation_messages", {
+  id: uuid("id").primaryKey(),
+
   // Thread assignment
-  threadId: uuid('thread_id').notNull(),  // Messages belong to ONE thread
-  parentId: uuid('parent_id'),            // For message-level branching (future)
-  
+  threadId: uuid("thread_id").notNull(), // Messages belong to ONE thread
+  parentId: uuid("parent_id"), // For message-level branching (future)
+
   // Message content
-  role: text('role', { enum: ['user', 'assistant', 'system'] }).notNull(),
-  content: text('content').notNull(),
-  
+  role: text("role", { enum: ["user", "assistant", "system"] }).notNull(),
+  content: text("content").notNull(),
+
   // 🔗 BLOCKCHAIN-like integrity
-  previousHash: text('previous_hash'),   // Hash of previous message
-  hash: text('hash').notNull(),          // SHA256(id + content + previousHash)
+  previousHash: text("previous_hash"), // Hash of previous message
+  hash: text("hash").notNull(), // SHA256(id + content + previousHash)
 });
 ```
 
 **Key Insight**: Messages form an **immutable, auditable chain** within each thread.
+
 - You can verify no messages were tampered with
 - You can reconstruct exact conversation history
 - Similar to git commits or blockchain transactions
@@ -125,21 +131,24 @@ export const conversationMessages = pgTable('conversation_messages', {
 ### Core Features
 
 #### ✅ 1. Thread Creation
+
 ```typescript
 createThread: protectedProcedure
-  .input(z.object({
-    projectId: z.string().uuid().optional(),
-    parentThreadId: z.string().uuid().optional(),  // For branching
-    branchPurpose: z.string().optional(),
-    agentId: z.string().default('orchestrator'),
-  }))
+  .input(
+    z.object({
+      projectId: z.string().uuid().optional(),
+      parentThreadId: z.string().uuid().optional(), // For branching
+      branchPurpose: z.string().optional(),
+      agentId: z.string().default("orchestrator"),
+    })
+  )
   .mutation(async ({ input, ctx }) => {
     const thread = await db.insert(chatThreads).values({
       userId: ctx.userId,
-      parentThreadId: input.parentThreadId,  // 🌲 Creates tree structure
+      parentThreadId: input.parentThreadId, // 🌲 Creates tree structure
       branchPurpose: input.branchPurpose,
       agentId: input.agentId,
-      threadType: input.parentThreadId ? 'branch' : 'main',
+      threadType: input.parentThreadId ? "branch" : "main",
     });
     return { threadId, thread };
   });
@@ -148,6 +157,7 @@ createThread: protectedProcedure
 **What it does**: Creates a new conversation thread, optionally as a branch of an existing thread.
 
 #### ✅ 2. Send Message (Intelligence Hub Integration)
+
 ```typescript
 sendMessage: protectedProcedure
   .input(z.object({
@@ -162,7 +172,7 @@ sendMessage: protectedProcedure
       content: input.content,
       hash: createHash('sha256').update(...).digest('hex'),
     });
-    
+
     // 2. Call Intelligence Hub (EXTERNAL AI SERVICE)
     const hubResponse = await intelligenceHubClient.sendMessage({
       query: input.content,
@@ -170,14 +180,14 @@ sendMessage: protectedProcedure
       userId: ctx.userId,
       agentId: thread.agentId,
     });
-    
+
     // 3. Save AI response
     await db.insert(conversationMessages).values({
       threadId: input.threadId,
       role: 'assistant',
       content: hubResponse.content,
     });
-    
+
     // 4. Extract entities from AI response
     if (hubResponse.entities?.length > 0) {
       for (const entity of hubResponse.entities) {
@@ -187,7 +197,7 @@ sendMessage: protectedProcedure
         });
       }
     }
-    
+
     // 5. Auto-branch if AI suggests it
     if (hubResponse.branchDecision?.shouldBranch) {
       const branch = await db.insert(chatThreads).values({
@@ -196,12 +206,13 @@ sendMessage: protectedProcedure
         agentId: hubResponse.branchDecision.agentId,
       });
     }
-    
+
     return { messageId, content, entities, branchDecision };
   });
 ```
 
 **What it does**:
+
 1. Saves user message to database
 2. **Calls external Intelligence Hub AI service**
 3. Saves AI response
@@ -209,6 +220,7 @@ sendMessage: protectedProcedure
 5. **Automatically creates branches if AI suggests research is needed**
 
 #### ✅ 3. Branch Management
+
 ```typescript
 getBranches: protectedProcedure
   .input(z.object({ parentThreadId: z.string().uuid() }))
@@ -225,25 +237,26 @@ mergeBranch: protectedProcedure
     const branch = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, input.branchId),
     });
-    
+
     // Get all messages from branch
     const messages = await db.query.conversationMessages.findMany({
       where: eq(conversationMessages.threadId, input.branchId),
     });
-    
+
     // Create summary
     const summary = `Branch: ${branch.branchPurpose}\nCompleted with ${messages.length} messages.`;
-    
+
     // Add summary to parent thread
     await db.insert(conversationMessages).values({
       threadId: branch.parentThreadId,
-      role: 'system',
+      role: "system",
       content: `✅ ${branch.branchPurpose}: ${summary}`,
     });
-    
+
     // Mark branch as merged
-    await db.update(chatThreads)
-      .set({ status: 'merged', mergedAt: new Date() })
+    await db
+      .update(chatThreads)
+      .set({ status: "merged", mergedAt: new Date() })
       .where(eq(chatThreads.id, input.branchId));
   });
 ```
@@ -261,18 +274,21 @@ mergeBranch: protectedProcedure
 ```typescript
 export class IntelligenceHubClient {
   private baseUrl: string;
-  
+
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || process.env.INTELLIGENCE_HUB_URL || 'http://localhost:3002';
+    this.baseUrl =
+      baseUrl || process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
   }
-  
-  async sendMessage(request: IntelligenceHubRequest): Promise<IntelligenceHubResponse> {
+
+  async sendMessage(
+    request: IntelligenceHubRequest
+  ): Promise<IntelligenceHubResponse> {
     const response = await fetch(`${this.baseUrl}/api/expertise/request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, threadId, userId, agentId }),
     });
-    
+
     const data = await response.json();
     return data; // { content, entities, branchDecision, usage }
   }
@@ -282,6 +298,7 @@ export class IntelligenceHubClient {
 ### Architecture History (from CHANGELOG)
 
 **Original Design** (Pre-v0.3.0):
+
 ```
 ┌─────────────────────────────────────────┐
 │ Intelligence Hub (Proprietary)          │  <-- Separate AI service
@@ -300,6 +317,7 @@ export class IntelligenceHubClient {
 ```
 
 **Current Design** (v0.3.0+):
+
 ```
 Unclear - CHANGELOG says "Simplified architecture - Removed Intelligence Hub/Backend App separation"
 BUT the client code still calls localhost:3002
@@ -310,6 +328,7 @@ BUT the client code still calls localhost:3002
 **Critical Question**: Where is `http://localhost:3002` defined?
 
 Three possibilities:
+
 1. **Mock/Stub**: The endpoint doesn't exist, calls will fail
 2. **Separate Service**: You have a separate AI service running
 3. **Merged but Port Conflict**: It was merged into same codebase but runs on different port
@@ -340,6 +359,7 @@ ai: {
 ```
 
 **Current Support**:
+
 - ✅ Anthropic Claude (default)
 - ✅ OpenAI GPT
 - ❌ OpenRouter (NOT integrated)
@@ -349,12 +369,14 @@ ai: {
 **The Intelligence Hub is responsible for AI calls**, NOT the backend.
 
 **Backend's Role**:
+
 1. Receive user message
 2. Forward to Intelligence Hub
 3. Save response
 4. Process entities/branches
 
 **Intelligence Hub's Role** (UNKNOWN - not in this codebase):
+
 1. Receive query
 2. Call Anthropic / OpenAI / etc.
 3. Decide if branching needed
@@ -368,6 +390,7 @@ ai: {
 ### What is OpenRouter?
 
 OpenRouter (`https://openrouter.ai`) is an **AI gateway** that provides access to 100+ models via a single API:
+
 - OpenAI GPT-4, GPT-3.5
 - Anthropic Claude 3.5
 - Google Gemini
@@ -376,6 +399,7 @@ OpenRouter (`https://openrouter.ai`) is an **AI gateway** that provides access t
 - And many more...
 
 **Benefits**:
+
 1. **Single API key** for all models
 2. **Automatic fallback** if a model is down
 3. **Cost optimization** - route to cheapest model
@@ -388,6 +412,7 @@ OpenRouter (`https://openrouter.ai`) is an **AI gateway** that provides access t
 **Where**: Intelligence Hub code (NOT in this repo)
 
 **Change**:
+
 ```typescript
 // BEFORE
 const response = await anthropicClient.messages.create({
@@ -411,11 +436,13 @@ const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 ```
 
 **Pros**:
+
 - Minimal change
 - Keep existing architecture
 - Intelligence Hub remains AI orchestrator
 
 **Cons**:
+
 - Intelligence Hub code is separate (unknown location)
 - Can't control from backend
 
@@ -424,12 +451,13 @@ const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
 **Where**: Backend `infinite-chat.ts` router
 
 **Change**:
+
 ```typescript
 sendMessage: protectedProcedure
   .mutation(async ({ input, ctx }) => {
     // Save user message
     await db.insert(conversationMessages).values(...);
-    
+
     // DIRECT OpenRouter call (no Intelligence Hub)
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -444,9 +472,9 @@ sendMessage: protectedProcedure
         ],
       }),
     });
-    
+
     const aiResponse = await response.json();
-    
+
     // Save AI response
     await db.insert(conversationMessages).values({
       role: 'assistant',
@@ -456,11 +484,13 @@ sendMessage: protectedProcedure
 ```
 
 **Pros**:
+
 - Full control in backend
 - No external service dependency
 - Simpler architecture
 
 **Cons**:
+
 - Lose Intelligence Hub features (agent orchestration, auto-branching)
 - Need to reimplement entity extraction
 - Need to reimplement branch decision logic
@@ -468,6 +498,7 @@ sendMessage: protectedProcedure
 #### Option C: Hybrid - Keep Hub, Add OpenRouter Support
 
 **Config**:
+
 ```typescript
 // .env
 INTELLIGENCE_HUB_URL=http://localhost:3002
@@ -476,6 +507,7 @@ OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
 **Intelligence Hub** (if you control it):
+
 ```typescript
 // Inside Intelligence Hub
 const aiProvider = process.env.INTELLIGENCE_HUB_AI_PROVIDER || 'anthropic';
@@ -490,11 +522,13 @@ if (aiProvider === 'openrouter') {
 ```
 
 **Pros**:
+
 - Best of both worlds
 - Keep agent orchestration
 - Add model flexibility
 
 **Cons**:
+
 - Need to modify Intelligence Hub
 - More configuration complexity
 
@@ -519,6 +553,7 @@ Main Thread (T1)
 ```
 
 **Key Properties**:
+
 - Each thread has **at most one parent**
 - Threads can have **multiple children**
 - **No cycles** (you can't have T1 → T2 → T1)
@@ -527,16 +562,19 @@ Main Thread (T1)
 ### Why NOT a Linear Chain?
 
 **Linear Chain** (like traditional chat):
+
 ```
 Message 1 → Message 2 → Message 3 → Message 4
 ```
 
 **Problems**:
+
 - Context switching loses history
 - Can't explore multiple ideas simultaneously
 - Hard to organize complex research
 
 **Tree Structure** (current design):
+
 ```
 Message 1 → Message 2 → Message 3
                         ├─► Research Branch → ...
@@ -544,6 +582,7 @@ Message 1 → Message 2 → Message 3
 ```
 
 **Benefits**:
+
 - Parallel explorations don't interfere
 - Can switch between branches without losing main context
 - Summaries compress branch learnings
@@ -559,19 +598,24 @@ Branch B ──┘
 ```
 
 **Current Schema**: ❌ NOT SUPPORTED
+
 - `parentThreadId` is a single reference
 - Threads can only have ONE parent
 
 **To Support Full DAG**: Would need many-to-many join table:
+
 ```typescript
-export const threadRelations = pgTable('thread_relations', {
-  childThreadId: uuid('child_thread_id').notNull(),
-  parentThreadId: uuid('parent_thread_id').notNull(),
-  relationType: text('relation_type', { enum: ['branch', 'merge', 'reference'] }),
+export const threadRelations = pgTable("thread_relations", {
+  childThreadId: uuid("child_thread_id").notNull(),
+  parentThreadId: uuid("parent_thread_id").notNull(),
+  relationType: text("relation_type", {
+    enum: ["branch", "merge", "reference"],
+  }),
 });
 ```
 
 **Recommendation**: **Stick with tree structure** for now.
+
 - Tree is simpler to reason about
 - Covers 95% of use cases
 - Full graph adds complexity without clear benefit
@@ -583,6 +627,7 @@ export const threadRelations = pgTable('thread_relations', {
 ### Immediate Actions
 
 1. **Register Infinite Chat Router** (30 min)
+
    ```typescript
    // packages/api/src/index.ts
    import { infiniteChatRouter } from './routers/infinite-chat.js';
@@ -590,10 +635,11 @@ export const threadRelations = pgTable('thread_relations', {
    ```
 
 2. **Verify Intelligence Hub** (15 min)
+
    ```bash
    # Check if service is running
    curl http://localhost:3002/health
-   
+
    # If not, find the service or create a mock
    ```
 
@@ -613,13 +659,14 @@ export const threadRelations = pgTable('thread_relations', {
    - Keep existing Anthropic/OpenAI as fallback
 
 2. **Configure Model Routing**
+
    ```typescript
    // Intelligence Hub
    const modelRouter = {
-     'orchestrator': 'openrouter/anthropic/claude-3.5-sonnet',
-     'research-agent': 'openrouter/perplexity/llama-3-sonar-large',
-     'code-agent': 'openrouter/openai/gpt-4',
-     'writer-agent': 'openrouter/anthropic/claude-3-haiku',
+     orchestrator: "openrouter/anthropic/claude-3.5-sonnet",
+     "research-agent": "openrouter/perplexity/llama-3-sonar-large",
+     "code-agent": "openrouter/openai/gpt-4",
+     "writer-agent": "openrouter/anthropic/claude-3-haiku",
    };
    ```
 
@@ -653,6 +700,7 @@ export const threadRelations = pgTable('thread_relations', {
 ### What You Have
 
 ✅ **Production-ready infinite chat system** with:
+
 - Sophisticated branching using tree structure
 - Message integrity via hash chains
 - Intelligence Hub integration (external AI orchestrator)

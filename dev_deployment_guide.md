@@ -9,6 +9,7 @@
 
 **Q: What do I run for local development?**  
 A: 3 commands in 3 terminals:
+
 ```bash
 # Terminal 1: Backend services
 cd synap-backend && docker compose --profile auth up -d && pnpm run dev
@@ -66,6 +67,7 @@ synap-app/              ← Frontend monorepo
 #### Backend Services (Port 4000)
 
 **Run this ONCE**:
+
 ```bash
 cd synap-backend
 
@@ -77,6 +79,7 @@ pnpm run dev
 ```
 
 **This starts**:
+
 - ✅ `apps/api` - tRPC API on `localhost:4000`
 - ✅ `packages/jobs` - Inngest worker
 - ✅ `packages/realtime` - WebSocket on `localhost:4001` (if turbo config includes it)
@@ -85,6 +88,7 @@ pnpm run dev
 - ✅ Kratos - `localhost:4433` (public) / `localhost:4434` (admin)
 
 **Check services**:
+
 ```bash
 # Check what's running
 docker compose ps
@@ -92,7 +96,7 @@ docker compose ps
 # Kratos health
 curl http://localhost:4433/health/ready
 
-# API health  
+# API health
 curl http://localhost:4000/api/health
 
 # Realtime health
@@ -102,6 +106,7 @@ curl http://localhost:4001/health
 #### Frontend (Port 3000)
 
 **Run in separate terminal**:
+
 ```bash
 cd synap-app/apps/web
 
@@ -123,7 +128,7 @@ pnpm dev
 
 ❌ **`@synap-core/client`** - This is a **library package**, not a service  
 ❌ **`@synap-core/types`** - Library only  
-❌ **`@synap/database`** - Library only  
+❌ **`@synap/database`** - Library only
 
 These are dependencies used BY the services, they don't run standalone.
 
@@ -159,7 +164,7 @@ pnpm run dev
 # === FRONTEND ===
 cd ../synap-app
 
-# Install dependencies  
+# Install dependencies
 pnpm install
 
 # Create frontend env
@@ -194,6 +199,7 @@ pnpm dev
 
 **Problem**: Backend won't start  
 **Check**:
+
 ```bash
 docker compose ps  # Are containers running?
 pnpm run dev       # What's the error?
@@ -201,12 +207,14 @@ pnpm run dev       # What's the error?
 
 **Problem**: Frontend stuck loading  
 **Check**:
+
 1. Is Kratos running? `curl http://localhost:4433/health/ready`
 2. Is .env.local correct?
 3. Open browser console - any errors?
 
 **Problem**: "Cannot find module '@synap-core/types/realtime'"  
 **Fix**:
+
 ```bash
 cd synap-backend
 pnpm build --filter='@synap-core/types'
@@ -221,7 +229,7 @@ pnpm build --filter='@synap-core/types'
 **File**: `deploy/docker-compose.production.yml`
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   # === Database ===
@@ -327,6 +335,7 @@ volumes:
 ### Docker Build Files
 
 **Backend API**: `synap-backend/apps/api/Dockerfile`
+
 ```dockerfile
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -344,6 +353,7 @@ CMD ["node", "dist/apps/api/index.js"]
 ```
 
 **Frontend**: `synap-app/apps/web/Dockerfile`
+
 ```dockerfile
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -417,16 +427,18 @@ Users → app.synap.com → Single API instance
 ```
 
 **Implementation**:
+
 ```typescript
 // Middleware adds tenant context
 app.use(async (c, next) => {
-  const workspaceId = c.req.header('X-Workspace-ID');
-  c.set('workspaceId', workspaceId);
+  const workspaceId = c.req.header("X-Workspace-ID");
+  c.set("workspaceId", workspaceId);
   await next();
 });
 
 // All queries filtered by workspace
-const entities = await db.select()
+const entities = await db
+  .select()
   .from(entities)
   .where(eq(entities.workspaceId, workspaceId));
 ```
@@ -451,6 +463,7 @@ User B → workspace-xyz.synap.com → Dedicated container
 ```
 
 **Using Kubernetes**:
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -461,13 +474,13 @@ spec:
   template:
     spec:
       containers:
-      - name: api
-        image: synap/api:latest
-        env:
-        - name: WORKSPACE_ID
-          value: "${WORKSPACE_ID}"
-        - name: DATABASE_URL
-          value: "postgres://...?schema=workspace_${WORKSPACE_ID}"
+        - name: api
+          image: synap/api:latest
+          env:
+            - name: WORKSPACE_ID
+              value: "${WORKSPACE_ID}"
+            - name: DATABASE_URL
+              value: "postgres://...?schema=workspace_${WORKSPACE_ID}"
 ```
 
 **Pros**: Better isolation, dedicated resources  
@@ -488,10 +501,11 @@ Dedicated VPC (AWS/OVH)
 ```
 
 **Deployment via Terraform**:
+
 ```terraform
 module "tenant_infrastructure" {
   source = "./modules/tenant"
-  
+
   tenant_id   = "acme-corp"
   region      = "eu-west-1"
   db_instance = "db.t3.medium"
@@ -507,6 +521,7 @@ module "tenant_infrastructure" {
 ## Recommendations for Your Roadmap
 
 ### Phase 1: MVP (Current)
+
 **Goal**: Prove product-market fit  
 **Architecture**: Single self-hosted Docker Compose  
 **Cost**: ~$50/month (1 VPS)  
@@ -519,35 +534,41 @@ git clone your-repo
 docker compose up -d
 ```
 
-### Phase 2: Early Growth  
+### Phase 2: Early Growth
+
 **Goal**: Onboard first paid customers  
 **Architecture**: Multi-tenant shared infrastructure  
 **Cost**: ~$500/month (managed Postgres, container hosting)  
 **Users**: 100-1,000
 
 **Tech stack**:
+
 - Render.com or Railway for containers
 - Managed Postgres (Supabase/Neon)
 - Cloudflare R2 for storage
 
-### Phase 3: Scale  
+### Phase 3: Scale
+
 **Goal**: Enterprise customers  
 **Architecture**: Per-workspace containers + shared DB  
 **Cost**: Variable (~$50/workspace/month)  
 **Users**: 1,000-10,000
 
 **Tech stack**:
+
 - Kubernetes (EKS/GKE)
 - Aurora/Cloud SQL
 - S3/CloudStorage
 
 ### Phase 4: Enterprise
+
 **Goal**: Fortune 500 clients  
 **Architecture**: Dedicated VPCs per major client  
 **Cost**: $5,000+/month per enterprise  
 **Users**: Unlimited
 
 **Tech stack**:
+
 - Terraform IaC
 - Multi-region deployment
 - On-premise option
@@ -557,18 +578,21 @@ docker compose up -d
 ## Part 6: Practical Next Steps
 
 ### This Week
+
 - [x] Fix local dev environment
 - [ ] Create .env.local for frontend
 - [ ] Start Kratos (`docker compose --profile auth up -d`)
 - [ ] Test full auth flow (registration → login → workspace)
 
 ### This Month
+
 - [ ] Create Dockerfile for API
 - [ ] Create Dockerfile for frontend
 - [ ] Test Docker Compose deployment on local machine
 - [ ] Deploy to staging VPS (DigitalOcean/Hetzner)
 
 ### This Quarter
+
 - [ ] Add workspace isolation to all queries
 - [ ] Implement proper multi-tenancy
 - [ ] Setup monitoring (Sentry/LogRocket)
@@ -617,6 +641,7 @@ docker compose exec postgres pg_dump -U synap synap > backup.sql
 ## Summary
 
 **Local Dev**: 2 terminals, that's it
+
 ```
 Terminal 1: cd synap-backend && docker compose up -d && pnpm run dev
 Terminal 2: cd synap-app/apps/web && pnpm dev
@@ -625,6 +650,7 @@ Terminal 2: cd synap-app/apps/web && pnpm dev
 **Docker Deploy**: Single docker-compose.yml with all services
 
 **Future Scaling**:
+
 1. Start simple (single instance)
 2. Add multi-tenancy (shared DB, workspace isolation)
 3. Move to containers per workspace (K8s)

@@ -1,9 +1,9 @@
 /**
  * Router Types
- * 
+ *
  * Type definitions for API router responses and internal data structures.
  * These types improve type safety in routers that currently use 'any'.
- * 
+ *
  * Note: Hub Protocol types (HubResponse, AIStep, etc.) are imported from hub-protocol/index.ts
  */
 
@@ -17,7 +17,7 @@ export type {
   AIStep,
   HubContext,
   HubRequest,
-} from './hub-protocol/index.js';
+} from "./hub-protocol/index.js";
 
 /**
  * Database Row Types (for Hub Protocol transforms)
@@ -51,7 +51,7 @@ export interface HubDocumentRow {
 export interface HubMessageRow {
   id: string;
   thread_id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   content: string;
   metadata: Record<string, unknown>;
   created_at: Date;
@@ -156,7 +156,7 @@ export interface ContentResult {
 export interface DocumentContent {
   id: string;
   content: string;
-  format: 'markdown' | 'html' | 'text' | 'json';
+  format: "markdown" | "html" | "text" | "json";
   metadata: Record<string, unknown>;
 }
 
@@ -219,7 +219,10 @@ export type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
 };
 
-export type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Pick<T, Exclude<keyof T, Keys>> &
+export type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Pick<
+  T,
+  Exclude<keyof T, Keys>
+> &
   {
     [K in Keys]-?: Required<Pick<T, K>> & Partial<Pick<T, Exclude<Keys, K>>>;
   }[Keys];

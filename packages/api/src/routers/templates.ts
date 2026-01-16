@@ -37,7 +37,7 @@ export const templatesRouter = router({
         inboxItemType: z.string().optional(),
         workspaceId: z.string().uuid().optional(),
         includePublic: z.boolean().default(false),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       // Build conditions for visibility (User's OR Workspace's OR Public)
@@ -68,7 +68,7 @@ export const templatesRouter = router({
         .where(and(...conditions))
         .orderBy(
           desc(entityTemplates.isDefault),
-          desc(entityTemplates.createdAt),
+          desc(entityTemplates.createdAt)
         );
 
       return templates;
@@ -82,7 +82,7 @@ export const templatesRouter = router({
         entityType: z.string().optional(),
         inboxItemType: z.string().optional(),
         workspaceId: z.string().uuid().optional(),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       // 1. Try user template
@@ -96,7 +96,7 @@ export const templatesRouter = router({
           input.inboxItemType
             ? eq(entityTemplates.inboxItemType, input.inboxItemType)
             : undefined,
-          eq(entityTemplates.isDefault, true),
+          eq(entityTemplates.isDefault, true)
         ),
       });
 
@@ -114,7 +114,7 @@ export const templatesRouter = router({
             input.inboxItemType
               ? eq(entityTemplates.inboxItemType, input.inboxItemType)
               : undefined,
-            eq(entityTemplates.isDefault, true),
+            eq(entityTemplates.isDefault, true)
           ),
         });
 
@@ -146,7 +146,7 @@ export const templatesRouter = router({
           config: TemplateConfigSchema,
           isDefault: z.boolean().default(false),
           isPublic: z.boolean().default(false),
-        }),
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { randomUUID } = await import("crypto");
@@ -192,7 +192,7 @@ export const templatesRouter = router({
           id: z.string().uuid(),
           name: z.string().min(1).optional(),
           config: TemplateConfigSchema.optional(),
-        }),
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...updates } = input;
@@ -210,8 +210,17 @@ export const templatesRouter = router({
 
       // Check permissions - workspace templates require editor, personal require ownership
       if (existing.workspaceId) {
-        const permResult = await verifyPermission({ db, userId: ctx.userId, workspace: { id: existing.workspaceId }, requiredPermission: 'write' });
-        if (!permResult.allowed) throw new TRPCError({ code: 'FORBIDDEN', message: permResult.reason || 'Insufficient permissions' });
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: existing.workspaceId },
+          requiredPermission: "write",
+        });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
       } else if (existing.userId) {
         if (existing.userId !== ctx.userId) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
@@ -250,8 +259,17 @@ export const templatesRouter = router({
 
       // Workspace templates require editor role, personal require ownership
       if (template.workspaceId) {
-        const permResult = await verifyPermission({ db, userId: ctx.userId, workspace: { id: template.workspaceId }, requiredPermission: 'write' });
-        if (!permResult.allowed) throw new TRPCError({ code: 'FORBIDDEN', message: permResult.reason || 'Insufficient permissions' });
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: template.workspaceId },
+          requiredPermission: "write",
+        });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
       } else if (template.userId && template.userId !== ctx.userId) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
       }
@@ -323,8 +341,17 @@ export const templatesRouter = router({
 
       // Check permissions
       if (template.workspaceId) {
-        const permResult = await verifyPermission({ db, userId: ctx.userId, workspace: { id: template.workspaceId }, requiredPermission: 'write' });
-        if (!permResult.allowed) throw new TRPCError({ code: 'FORBIDDEN', message: permResult.reason || 'Insufficient permissions' });
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: template.workspaceId },
+          requiredPermission: "write",
+        });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
       } else if (template.userId && template.userId !== ctx.userId) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
       }
@@ -345,7 +372,7 @@ export const templatesRouter = router({
       ];
 
       const validConditions = conditions.filter(
-        (c): c is SQL => c !== undefined,
+        (c): c is SQL => c !== undefined
       );
 
       await db

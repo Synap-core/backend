@@ -15,7 +15,7 @@ export interface AgentToolDefinition<
   schema: TInputSchema;
   execute: (
     input: z.infer<TInputSchema>,
-    context: { userId: string; threadId: string },
+    context: { userId: string; threadId: string }
   ) => Promise<{ result: TOutput }>;
 }
 

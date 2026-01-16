@@ -97,7 +97,7 @@ describe("Webhooks Router", () => {
       ];
 
       vi.mocked(db.query.webhookSubscriptions.findMany).mockResolvedValue(
-        mockSubscriptions as any,
+        mockSubscriptions as any
       );
 
       const caller = webhooksRouter.createCaller(mockCtx);
@@ -149,7 +149,7 @@ describe("Webhooks Router", () => {
     it("should throw NOT_FOUND if subscription does not exist or not owned", async () => {
       const { db } = await import("@synap/database");
       vi.mocked(db.query.webhookSubscriptions.findFirst).mockResolvedValue(
-        undefined,
+        undefined
       );
 
       const caller = webhooksRouter.createCaller(mockCtx);
@@ -158,7 +158,7 @@ describe("Webhooks Router", () => {
         caller.update({
           id: "sub-1",
           name: "Updated Name",
-        }),
+        })
       ).rejects.toThrow("Webhook subscription not found");
     });
   });
@@ -191,7 +191,7 @@ describe("Webhooks Router", () => {
       const caller = webhooksRouter.createCaller(mockCtx);
 
       await expect(caller.delete({ id: "sub-1" })).rejects.toThrow(
-        "Webhook subscription not found",
+        "Webhook subscription not found"
       );
     });
   });

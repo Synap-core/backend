@@ -277,7 +277,7 @@ function loadConfig(): Config {
         },
         server: { port: config.server.port, env: config.server.nodeEnv },
       },
-      "Configuration loaded",
+      "Configuration loaded"
     );
 
     return config;
@@ -289,7 +289,7 @@ function loadConfig(): Config {
       }));
       configLogger.error({ issues }, "Configuration validation failed");
       throw new Error(
-        `Invalid configuration: ${issues.map((i) => `${i.path}: ${i.message}`).join(", ")}`,
+        `Invalid configuration: ${issues.map((i) => `${i.path}: ${i.message}`).join(", ")}`
       );
     }
     throw error;
@@ -330,7 +330,7 @@ if (typeof globalThis !== "undefined") {
  * ```
  */
 export function validateConfig(
-  feature: "r2" | "ory" | "ai" | "postgres" | "mem0",
+  feature: "r2" | "ory" | "ai" | "postgres" | "mem0"
 ): void {
   switch (feature) {
     case "r2":
@@ -340,7 +340,7 @@ export function validateConfig(
         !config.storage.r2SecretAccessKey
       ) {
         throw new Error(
-          "R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables",
+          "R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables"
         );
       }
       break;
@@ -348,12 +348,12 @@ export function validateConfig(
     case "ory":
       if (!config.auth.kratosPublicUrl || !config.auth.hydraPublicUrl) {
         throw new Error(
-          "Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables",
+          "Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables"
         );
       }
       if (!config.auth.hydraSecretsSystem) {
         throw new Error(
-          "Ory Hydra requires ORY_HYDRA_SECRETS_SYSTEM environment variable",
+          "Ory Hydra requires ORY_HYDRA_SECRETS_SYSTEM environment variable"
         );
       }
       break;
@@ -363,19 +363,19 @@ export function validateConfig(
 
       if (provider === "anthropic" && !anthropic.apiKey) {
         throw new Error(
-          "Anthropic provider requires ANTHROPIC_API_KEY environment variable",
+          "Anthropic provider requires ANTHROPIC_API_KEY environment variable"
         );
       }
 
       if (provider === "openai" && !openai.apiKey) {
         throw new Error(
-          "OpenAI provider requires OPENAI_API_KEY environment variable",
+          "OpenAI provider requires OPENAI_API_KEY environment variable"
         );
       }
 
       if (embeddings.provider === "openai" && !openai.apiKey) {
         throw new Error(
-          "OpenAI embeddings require OPENAI_API_KEY environment variable",
+          "OpenAI embeddings require OPENAI_API_KEY environment variable"
         );
       }
 
@@ -385,7 +385,7 @@ export function validateConfig(
     case "postgres":
       if (!config.database.url) {
         throw new Error(
-          "PostgreSQL requires DATABASE_URL environment variable",
+          "PostgreSQL requires DATABASE_URL environment variable"
         );
       }
       break;

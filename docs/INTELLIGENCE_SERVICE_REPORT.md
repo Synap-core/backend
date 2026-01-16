@@ -14,21 +14,25 @@ The **Synap Intelligence Service** is a **fully operational, production-ready** 
 ### Recent Enhancements (2026-01-08)
 
 ✅ **Agent Protocol Implementation** (3 phases complete)
+
 - Extended Hub Protocol with 6 new endpoints
 - Integrated Mem0 for long-term AI memory
 - Updated all tools to use Hub Protocol
 
 ✅ **Package Cleanup** (66% reduction)
+
 - Removed 4 unused packages
 - Consolidated tool registries
 - Streamlined dependencies
 
 ✅ **TypeScript Improvements**
+
 - Fixed all type inference issues
 - Resolved 12+ lint errors
 - Updated `defineTool` helper for automatic typing
 
 ✅ **Architecture Validation**
+
 - Vector search properly enabled
 - Memory search using Mem0
 - Document proposals integrated
@@ -63,6 +67,7 @@ The **Synap Intelligence Service** is a **fully operational, production-ready** 
 6. **`createDocumentProposal`** - Creates AI edit proposals in DB
 
 **Impact:**
+
 - Intelligence Service can now access all data pod capabilities
 - Clean API key authentication
 - Proper scoping (`hub-protocol.read`, `hub-protocol.write`)
@@ -74,19 +79,21 @@ The **Synap Intelligence Service** is a **fully operational, production-ready** 
 ```typescript
 // apps/intelligence-hub/src/clients/mem0.ts
 export class Mem0Client {
-  async search(userId: string, query: string): Promise<Mem0Memory[]>
-  async addMemory(userId: string, memory: string): Promise<void>
-  async getMemories(userId: string): Promise<Mem0Memory[]>
-  async deleteMemory(memoryId: string): Promise<void>
+  async search(userId: string, query: string): Promise<Mem0Memory[]>;
+  async addMemory(userId: string, memory: string): Promise<void>;
+  async getMemories(userId: string): Promise<Mem0Memory[]>;
+  async deleteMemory(memoryId: string): Promise<void>;
 }
 ```
 
 **Configuration:**
+
 - Uses `MEM0_API_KEY` environment variable
 - Uses `MEM0_API_URL` (defaults to `http://localhost:8000`)
 - Graceful degradation if service unavailable
 
 **Integration:**
+
 - Used directly by Intelligence Service (NOT via Hub Protocol)
 - AI-specific, cross-conversation memory
 - Separate from document/entity vectors
@@ -94,12 +101,14 @@ export class Mem0Client {
 #### Phase 3: Tool Implementations
 
 **Updated 4 existing tools:**
+
 - `search-entities.ts` → Uses `hubProtocol.searchEntities()`
 - `search-documents.ts` → Uses `hubProtocol.searchDocuments()`
 - `update-entity.ts` → Uses `hubProtocol.updateEntity()`
 - `update-document.ts` → Uses `hubProtocol.createDocumentProposal()`
 
 **Created 3 new tools:**
+
 - `vector-search.ts` → Semantic search via Hub Protocol
 - `get-document.ts` → Fetch full document content
 - `memory-search.ts` → Search Mem0 memories
@@ -118,12 +127,14 @@ export class Mem0Client {
 ```
 
 **Kept 2 essential packages:**
+
 ```bash
 ✅ packages/hub-types/  # Shared types
 ✅ packages/types/      # Shared types
 ```
 
 **Impact:**
+
 - Cleaner codebase
 - Faster installs
 - Less confusion
@@ -134,6 +145,7 @@ export class Mem0Client {
 ### 3. Tool Registry Consolidation ✅
 
 **Problem:** Dual registries causing confusion
+
 - `tools/registry.ts` (OLD) - In-memory fallback
 - `tools/tool-registry.ts` (NEW) - Was importing from OLD
 
@@ -142,6 +154,7 @@ export class Mem0Client {
 **Current Tool Inventory:**
 
 #### Context Tools (Read-Only, Auto-Execute)
+
 1. ✅ `search_entities` - Search entities by query
 2. ✅ `search_documents` - Search documents (metadata only)
 3. ✅ `vector_search` - Semantic search (Hub Protocol)
@@ -149,6 +162,7 @@ export class Mem0Client {
 5. ✅ `memory_search` - Search Mem0 memories
 
 #### Action Tools (Write, Requires Approval)
+
 6. ✅ `update_entity` - Update entity via Hub Protocol
 7. ✅ `update_document` - Create document proposal
 8. 🔄 `create_entity` - Legacy (to be migrated)
@@ -156,6 +170,7 @@ export class Mem0Client {
 10. 🔄 `create_branch` - Legacy (to be migrated)
 
 **Vector Search Status:**
+
 - ✅ **NOW ENABLED** using Hub Protocol
 - ⚠️ Backend returns empty (needs pgvector implementation)
 - Ready for pgvector when backend is updated
@@ -177,11 +192,8 @@ export function defineTool<TInput, TOutput>(
 }
 
 // AFTER
-export function defineTool<
-  TSchema extends z.ZodObject<any>,
-  TOutput = any
->(
-  tool: Omit<Tool<z.infer<TSchema>, TOutput>, 'execute'> & {
+export function defineTool<TSchema extends z.ZodObject<any>, TOutput = any>(
+  tool: Omit<Tool<z.infer<TSchema>, TOutput>, "execute"> & {
     inputSchema: TSchema;
     execute: (args: z.infer<TSchema>, context: ToolContext) => Promise<TOutput>;
   }
@@ -191,16 +203,19 @@ export function defineTool<
 ```
 
 **Impact:**
+
 - ✅ `args` parameter now automatically typed from `inputSchema`
 - ✅ Full IntelliSense support
 - ✅ Zero type errors in tool implementations
 
 **Fixed in `orchestrator.ts`:**
+
 - Added type annotations to all tool execute functions
 - Fixed toolCalls property access
 - Resolved 12+ TypeScript errors
 
 **Remaining (Cosmetic):**
+
 - 3 minor Vercel AI SDK typing issues
 - These are `(tc as any).args` workarounds
 - Runtime works perfectly, can be ignored
@@ -212,20 +227,24 @@ export function defineTool<
 **Validated key architectural decisions:**
 
 #### Vector Search (Data Pod) vs Mem0 (Intelligence Layer)
+
 - ✅ **CORRECT**: Vector search in Data Pod (pgvector)
 - ✅ **CORRECT**: Mem0 in Intelligence Layer (AI memory)
 - Both stay separate with different purposes
 
 #### Document Search Strategy
+
 - ✅ **Two-tier approach**: Simple text + Vector semantic
 - ✅ **Metadata-first**: Search returns metadata, fetch content on-demand
 
 #### Document Proposals
+
 - ✅ **Use existing table**: `document_proposals` in database
 - ✅ **AI creates proposals**: Stored in DB, not inline
 - ✅ **Frontend reviews**: Via `useDocumentProposals` hook
 
 #### Frontend vs AI Access
+
 - ✅ **Different patterns**: Frontend (tRPC) vs AI (Hub Protocol)
 - ✅ **Different auth**: User session vs API key
 - ✅ **Different needs**: UI rendering vs data synthesis
@@ -316,6 +335,7 @@ export function defineTool<
 **Provider Package**: `@openrouter/ai-sdk`
 
 **Environment Variables:**
+
 ```bash
 OPENROUTER_API_KEY=sk-or-xxx
 MEM0_API_KEY=your-mem0-key
@@ -329,7 +349,7 @@ HUB_PROTOCOL_API_KEY=your-api-key
 **File**: `apps/intelligence-hub/src/config/models.ts`
 
 ```typescript
-import { createOpenRouter } from '@openrouter/ai-sdk';
+import { createOpenRouter } from "@openrouter/ai-sdk";
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
@@ -337,22 +357,23 @@ const openrouter = createOpenRouter({
 
 export function getModel(agentType: AgentType, complexity: Complexity) {
   const modelMap = {
-    default: 'anthropic/claude-3.5-sonnet',
-    meta: 'anthropic/claude-3.5-sonnet',
-    'knowledge-search': 'anthropic/claude-3.5-sonnet',
-    code: 'openai/gpt-4o',
-    action: 'deepseek/deepseek-chat', // Cost optimization
+    default: "anthropic/claude-3.5-sonnet",
+    meta: "anthropic/claude-3.5-sonnet",
+    "knowledge-search": "anthropic/claude-3.5-sonnet",
+    code: "openai/gpt-4o",
+    action: "deepseek/deepseek-chat", // Cost optimization
   };
-  
-  if (complexity === 'simple') {
-    return openrouter('deepseek/deepseek-chat'); // $0.14/M tokens
+
+  if (complexity === "simple") {
+    return openrouter("deepseek/deepseek-chat"); // $0.14/M tokens
   }
-  
+
   return openrouter(modelMap[agentType]);
 }
 ```
 
 **Benefits:**
+
 - ✅ **Multi-model routing**: Different agents use different models
 - ✅ **Cost optimization**: DeepSeek for simple queries
 - ✅ **Fallback**: Auto-switch if primary model is down
@@ -365,6 +386,7 @@ export function getModel(agentType: AgentType, complexity: Complexity) {
 **Verdict**: **KEEP IT**
 
 **Reasons:**
+
 1. **Tool Calling**: Saves ~200 lines of boilerplate per agent
 2. **Streaming**: Real-time text streaming with minimal code
 3. **Type Safety**: Full TypeScript types for responses
@@ -372,6 +394,7 @@ export function getModel(agentType: AgentType, complexity: Complexity) {
 5. **Bundle Size**: 55KB is negligible for server-side
 
 **What it provides:**
+
 - Auto-handles multi-step reasoning loops
 - Formats tool calls for different LLM providers
 - SSE parsing for streaming
@@ -412,6 +435,7 @@ export function getModel(agentType: AgentType, complexity: Complexity) {
 ### Immediate Actions (This Week)
 
 1. **Run pnpm install** (5 min)
+
    ```bash
    cd synap-intelligence-service
    pnpm install  # Clean up after package removal
@@ -456,6 +480,7 @@ export function getModel(agentType: AgentType, complexity: Complexity) {
 ## 📈 Improvement Summary
 
 ### Before (2026-01-07)
+
 - ❌ 6 packages (4 unused)
 - ❌ Dual tool registries
 - ❌ Vector search using in-memory fallback
@@ -466,6 +491,7 @@ export function getModel(agentType: AgentType, complexity: Complexity) {
 - ❌ No document proposals integration
 
 ### After (2026-01-08)
+
 - ✅ 2 packages (66% reduction)
 - ✅ Single source of truth for tools
 - ✅ Vector search using Hub Protocol
@@ -516,16 +542,19 @@ export function getModel(agentType: AgentType, complexity: Complexity) {
 ## 📚 References
 
 ### New Documentation
+
 - [Agent Protocol Complete](file:///Users/antoine/.gemini/antigravity/brain/b143a7fd-97c9-4f9a-912e-358fe05f8de7/agent_protocol_complete.md)
 - [Intelligence Service Audit](file:///Users/antoine/.gemini/antigravity/brain/b143a7fd-97c9-4f9a-912e-358fe05f8de7/intelligence_service_audit.md)
 - [Cleanup Complete](file:///Users/antoine/.gemini/antigravity/brain/b143a7fd-97c9-4f9a-912e-358fe05f8de7/cleanup_complete.md)
 - [Vercel AI SDK Analysis](file:///Users/antoine/.gemini/antigravity/brain/b143a7fd-97c9-4f9a-912e-358fe05f8de7/vercel_ai_sdk_analysis.md)
 
 ### Original Documentation
+
 - [README.md](file:///Users/antoine/Documents/Code/synap/synap-intelligence-service/README.md)
 - [Intelligence Hub Documentation](file:///Users/antoine/Documents/Code/synap/synap-intelligence-service/intelligence_hub_documentation.md)
 
 ### Key Source Files (Updated)
+
 - [orchestrator.ts](file:///Users/antoine/Documents/Code/synap/synap-intelligence-service/apps/intelligence-hub/src/agents/orchestrator.ts) - Fixed TypeScript errors
 - [tool-registry.ts](file:///Users/antoine/Documents/Code/synap/synap-intelligence-service/apps/intelligence-hub/src/tools/tool-registry.ts) - Consolidated registry
 - [hub-protocol.ts](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/api/src/routers/hub-protocol.ts) - 6 new endpoints

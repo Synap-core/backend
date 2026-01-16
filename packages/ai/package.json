@@ -22,8 +22,8 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
-    "@langchain/core": "0.2.31",
-    "@langchain/langgraph": "0.2.0",
+    "@langchain/core": "^0.3.80",
+    "@langchain/langgraph": "^0.2.20",
     "@synap-core/core": "workspace:*",
     "ai": "^4.0.0",
     "drizzle-orm": "^0.45.1",

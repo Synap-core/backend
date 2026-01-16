@@ -37,14 +37,14 @@ export const graphRouter = router({
         includeRelations: z.boolean().default(true),
         includeRelatedPreviews: z.boolean().default(true),
         relationTypes: z.array(z.string()).optional(),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // 1. Get the entity
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.entityId),
-          eq(entities.userId, ctx.userId),
+          eq(entities.userId, ctx.userId)
         ),
       });
 
@@ -61,11 +61,11 @@ export const graphRouter = router({
         eq(relations.userId, ctx.userId),
         or(
           eq(relations.sourceEntityId, input.entityId),
-          eq(relations.targetEntityId, input.entityId),
+          eq(relations.targetEntityId, input.entityId)
         ),
         input.relationTypes
           ? inArray(relations.type, input.relationTypes)
-          : undefined,
+          : undefined
       );
 
       const allRelations = await db.query.relations.findMany({
@@ -89,7 +89,7 @@ export const graphRouter = router({
         relatedEntities = await db.query.entities.findMany({
           where: and(
             eq(entities.userId, ctx.userId),
-            inArray(entities.id, Array.from(relatedEntityIds)),
+            inArray(entities.id, Array.from(relatedEntityIds))
           ),
           columns: {
             id: true,
@@ -104,10 +104,10 @@ export const graphRouter = router({
 
       // 5. Calculate statistics
       const outgoing = allRelations.filter(
-        (r) => r.sourceEntityId === input.entityId,
+        (r) => r.sourceEntityId === input.entityId
       );
       const incoming = allRelations.filter(
-        (r) => r.targetEntityId === input.entityId,
+        (r) => r.targetEntityId === input.entityId
       );
 
       const byType: Record<string, number> = {};
@@ -145,14 +145,14 @@ export const graphRouter = router({
         entityIds: z.array(z.string().uuid()).min(1).max(100),
         includeInternalRelations: z.boolean().default(true),
         includeExternalRelations: z.boolean().default(false),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // 1. Fetch all requested entities
       const fetchedEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          inArray(entities.id, input.entityIds),
+          inArray(entities.id, input.entityIds)
         ),
       });
 
@@ -168,7 +168,7 @@ export const graphRouter = router({
         relationWhere = and(
           eq(relations.userId, ctx.userId),
           inArray(relations.sourceEntityId, input.entityIds),
-          inArray(relations.targetEntityId, input.entityIds),
+          inArray(relations.targetEntityId, input.entityIds)
         );
       } else {
         // Relations where at least ONE entity is in the set
@@ -176,8 +176,8 @@ export const graphRouter = router({
           eq(relations.userId, ctx.userId),
           or(
             inArray(relations.sourceEntityId, input.entityIds),
-            inArray(relations.targetEntityId, input.entityIds),
-          ),
+            inArray(relations.targetEntityId, input.entityIds)
+          )
         );
       }
 
@@ -200,7 +200,7 @@ export const graphRouter = router({
       z.object({
         entityId: z.string().uuid().optional(),
         entityType: z.string().optional(),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       if (input.entityId) {
@@ -213,9 +213,9 @@ export const graphRouter = router({
               eq(relations.userId, ctx.userId),
               or(
                 eq(relations.sourceEntityId, input.entityId),
-                eq(relations.targetEntityId, input.entityId),
-              ),
-            ),
+                eq(relations.targetEntityId, input.entityId)
+              )
+            )
           );
 
         return {
@@ -232,7 +232,7 @@ export const graphRouter = router({
       const allEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          input.entityType ? eq(entities.type, input.entityType) : undefined,
+          input.entityType ? eq(entities.type, input.entityType) : undefined
         ),
       });
 

@@ -53,9 +53,9 @@ export const userEntityState = pgTable(
     pinnedIdx: index("idx_user_state_pinned").on(table.userId, table.pinned),
     viewedIdx: index("idx_user_state_viewed").on(
       table.userId,
-      table.lastViewedAt,
+      table.lastViewedAt
     ),
-  }),
+  })
 );
 
 export type UserEntityState = typeof userEntityState.$inferSelect;

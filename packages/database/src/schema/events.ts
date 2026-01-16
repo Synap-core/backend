@@ -61,7 +61,7 @@ export const events = pgTable(
     subjectIdx: index("idx_events_subject").on(
       table.subjectType,
       table.subjectId,
-      table.timestamp,
+      table.timestamp
     ),
 
     // INDEX: For querying by user and event type
@@ -69,7 +69,7 @@ export const events = pgTable(
 
     // INDEX: For time-based queries
     timestampIdx: index("idx_events_timestamp").on(table.timestamp),
-  }),
+  })
 );
 
 export type Event = typeof events.$inferSelect;

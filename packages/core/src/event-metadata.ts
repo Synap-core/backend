@@ -65,7 +65,7 @@ export const AIClassificationMetadataSchema = z.object({
     z.object({
       name: z.string(),
       confidence: z.number().min(0).max(1),
-    }),
+    })
   ),
   tags: z.array(z.string()).optional(),
   method: z.enum(["embedding_similarity", "llm_analysis", "rule_based"]),
@@ -92,7 +92,7 @@ export const AIReasoningMetadataSchema = z.object({
       ]),
       content: z.string(),
       timestamp: z.coerce.date().optional(),
-    }),
+    })
   ),
 
   outcome: z
@@ -131,7 +131,7 @@ export const AIRelationshipMetadataSchema = z.object({
       ]),
       confidence: z.number().min(0).max(1),
       bidirectional: z.boolean().default(false),
-    }),
+    })
   ),
 });
 
@@ -394,7 +394,7 @@ export function createAIReasoningMetadata(params: {
  * Check if event has AI metadata
  */
 export function hasAIMetadata(
-  metadata: unknown,
+  metadata: unknown
 ): metadata is EventMetadata & { ai: AIMetadata } {
   return (
     typeof metadata === "object" &&

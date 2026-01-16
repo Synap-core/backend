@@ -33,7 +33,7 @@ export const entitiesDataRouter = router({
         type: EntityTypeSchema,
         title: z.string(),
         description: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event
@@ -65,14 +65,14 @@ export const entitiesDataRouter = router({
         type: EntityTypeSchema.optional(),
         limit: z.number().min(1).max(100).default(50),
         offset: z.number().min(0).default(0),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const results = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
           isNull(entities.deletedAt),
-          input.type ? eq(entities.type, input.type) : undefined,
+          input.type ? eq(entities.type, input.type) : undefined
         ),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -89,14 +89,14 @@ export const entitiesDataRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.id),
           eq(entities.userId, ctx.userId),
-          isNull(entities.deletedAt),
+          isNull(entities.deletedAt)
         ),
       });
 
@@ -116,7 +116,7 @@ export const entitiesDataRouter = router({
         query: z.string(),
         type: EntityTypeSchema.optional(),
         limit: z.number().min(1).max(50).default(20),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const searchPattern = `%${input.query}%`;
@@ -128,8 +128,8 @@ export const entitiesDataRouter = router({
           input.type ? eq(entities.type, input.type) : undefined,
           or(
             ilike(entities.title, searchPattern),
-            ilike(entities.preview, searchPattern),
-          ),
+            ilike(entities.preview, searchPattern)
+          )
         ),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -149,7 +149,7 @@ export const entitiesDataRouter = router({
         type: EntityTypeSchema.optional(),
         limit: z.number().min(1).max(50).default(10),
         minSimilarity: z.number().min(0).max(1).default(0.5),
-      }),
+      })
     )
     .query(
       async ({
@@ -170,19 +170,19 @@ export const entitiesDataRouter = router({
         let embedding: number[];
         try {
           embedding = await intelligenceHubClient.generateEmbedding(
-            input.query,
+            input.query
           );
         } catch (error) {
           console.error(
             "Failed to generate embedding, falling back to text search:",
-            error,
+            error
           );
           // Fallback to text search (simplified)
           const results = await db.query.entities.findMany({
             where: and(
               eq(entities.userId, ctx.userId),
               isNull(entities.deletedAt),
-              input.type ? eq(entities.type, input.type) : undefined,
+              input.type ? eq(entities.type, input.type) : undefined
             ),
             orderBy: [desc(entities.createdAt)],
             limit: input.limit,
@@ -224,7 +224,7 @@ export const entitiesDataRouter = router({
 
         // Filter by minimum similarity
         const filtered = results.filter(
-          (r: any) => r.similarity >= input.minSimilarity,
+          (r: any) => r.similarity >= input.minSimilarity
         );
 
         return {
@@ -238,7 +238,7 @@ export const entitiesDataRouter = router({
           })),
           embeddingGenerated: true,
         };
-      },
+      }
     ),
 
   /**
@@ -250,7 +250,7 @@ export const entitiesDataRouter = router({
         id: z.string().uuid(),
         title: z.string().optional(),
         description: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event
@@ -280,7 +280,7 @@ export const entitiesDataRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // ✅ Publish .requested event
@@ -311,7 +311,7 @@ export async function generateAndStoreEmbedding(
   userId: string,
   entityType: string,
   title: string,
-  description?: string,
+  description?: string
 ): Promise<void> {
   const textToEmbed = `${title} ${description || ""}`.trim();
 

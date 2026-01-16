@@ -26,6 +26,7 @@ This runbook provides step-by-step procedures for responding to common productio
 ## Scenario 1: High Error Rate
 
 ### Symptoms
+
 - Alert: `HighErrorRate` triggered
 - Dashboard shows error rate > 5%
 - User reports of failures
@@ -49,6 +50,7 @@ curl http://localhost:8288/api/health
 ### Mitigation
 
 **If recent deployment:**
+
 ```bash
 # Rollback to previous version
 git revert HEAD
@@ -57,6 +59,7 @@ docker compose up -d api
 ```
 
 **If database issue:**
+
 ```bash
 # Check connection pool
 psql $DATABASE_URL -c "SELECT count(*) FROM pg_stat_activity;"
@@ -66,10 +69,12 @@ docker compose restart api
 ```
 
 **If external service issue:**
+
 - Check Hub Protocol external services
 - Temporarily disable non-critical integrations
 
 ### Resolution
+
 1. Fix root cause in code
 2. Deploy fix through normal CI/CD
 3. Monitor error rate returns to < 1%
@@ -79,6 +84,7 @@ docker compose restart api
 ## Scenario 2: Worker Queue Backup
 
 ### Symptoms
+
 - Alert: `WorkerQueueBackup` triggered
 - Inngest dashboard shows queue depth > 100
 - Delayed event processing
@@ -102,6 +108,7 @@ psql $DATABASE_URL -c "SELECT * FROM pg_stat_activity WHERE state = 'active';"
 ### Mitigation
 
 **If workers are stuck:**
+
 ```bash
 # Restart worker service
 docker compose restart jobs
@@ -111,12 +118,13 @@ docker compose restart jobs
 ```
 
 **If database is slow:**
+
 ```bash
 # Check for long-running queries
 psql $DATABASE_URL -c "
-  SELECT pid, now() - query_start as duration, query 
-  FROM pg_stat_activity 
-  WHERE state = 'active' 
+  SELECT pid, now() - query_start as duration, query
+  FROM pg_stat_activity
+  WHERE state = 'active'
   ORDER BY duration DESC;
 "
 
@@ -125,11 +133,13 @@ psql $DATABASE_URL -c "SELECT pg_terminate_backend(<pid>);"
 ```
 
 **If event storm:**
+
 - Identify source of excessive events
 - Temporarily rate-limit event emission
 - Scale up worker instances
 
 ### Resolution
+
 1. Optimize slow worker functions
 2. Add database indexes if needed
 3. Implement event batching/throttling
@@ -140,6 +150,7 @@ psql $DATABASE_URL -c "SELECT pg_terminate_backend(<pid>);"
 ## Scenario 3: Database Connection Failure
 
 ### Symptoms
+
 - Alert: `DatabaseConnectionFailure` triggered
 - API returns 500 errors
 - Logs show "connection refused" or "too many connections"
@@ -152,16 +163,16 @@ docker compose ps postgres
 
 # 2. Check connection count
 psql $DATABASE_URL -c "
-  SELECT count(*) as connections, 
-         max_connections 
-  FROM pg_stat_activity, 
+  SELECT count(*) as connections,
+         max_connections
+  FROM pg_stat_activity,
        (SELECT setting::int as max_connections FROM pg_settings WHERE name='max_connections') s;
 "
 
 # 3. Check for connection leaks
 psql $DATABASE_URL -c "
-  SELECT application_name, count(*) 
-  FROM pg_stat_activity 
+  SELECT application_name, count(*)
+  FROM pg_stat_activity
   GROUP BY application_name;
 "
 ```
@@ -169,6 +180,7 @@ psql $DATABASE_URL -c "
 ### Mitigation
 
 **If PostgreSQL is down:**
+
 ```bash
 # Restart PostgreSQL
 docker compose restart postgres
@@ -178,6 +190,7 @@ docker compose ps postgres
 ```
 
 **If connection pool exhausted:**
+
 ```bash
 # Restart API to release connections
 docker compose restart api
@@ -188,17 +201,19 @@ docker compose restart postgres
 ```
 
 **If connection leak:**
+
 ```bash
 # Kill idle connections
 psql $DATABASE_URL -c "
-  SELECT pg_terminate_backend(pid) 
-  FROM pg_stat_activity 
-  WHERE state = 'idle' 
+  SELECT pg_terminate_backend(pid)
+  FROM pg_stat_activity
+  WHERE state = 'idle'
     AND state_change < now() - interval '10 minutes';
 "
 ```
 
 ### Resolution
+
 1. Fix connection leaks in code
 2. Optimize connection pool settings
 3. Implement connection retry logic
@@ -209,6 +224,7 @@ psql $DATABASE_URL -c "
 ## Scenario 4: Elevated Latency
 
 ### Symptoms
+
 - Alert: `ElevatedLatency` triggered
 - Dashboard shows p95 > 500ms
 - Users report slow responses
@@ -221,9 +237,9 @@ curl http://localhost:3000/metrics | grep api_request_duration
 
 # 2. Check database query performance
 psql $DATABASE_URL -c "
-  SELECT query, calls, mean_exec_time, max_exec_time 
-  FROM pg_stat_statements 
-  ORDER BY mean_exec_time DESC 
+  SELECT query, calls, mean_exec_time, max_exec_time
+  FROM pg_stat_statements
+  ORDER BY mean_exec_time DESC
   LIMIT 10;
 "
 
@@ -237,11 +253,12 @@ psql $DATABASE_URL -c "
 ### Mitigation
 
 **If database slow:**
+
 ```bash
 # Add missing indexes
 psql $DATABASE_URL -c "
-  SELECT schemaname, tablename, indexname 
-  FROM pg_indexes 
+  SELECT schemaname, tablename, indexname
+  FROM pg_indexes
   WHERE tablename = 'entities';
 "
 
@@ -250,17 +267,20 @@ psql $DATABASE_URL -c "EXPLAIN ANALYZE <slow_query>;"
 ```
 
 **If external service slow:**
+
 - Implement request timeouts
 - Add circuit breakers
 - Cache external responses
 
 **If high load:**
+
 ```bash
 # Scale API horizontally
 docker compose up -d --scale api=3
 ```
 
 ### Resolution
+
 1. Optimize slow queries
 2. Add database indexes
 3. Implement caching layer
@@ -271,6 +291,7 @@ docker compose up -d --scale api=3
 ## Scenario 5: Proposal System Failure
 
 ### Symptoms
+
 - AI entities not creating proposals
 - Proposals stuck in pending state
 - Global validator errors
@@ -283,8 +304,8 @@ docker compose logs jobs | grep global-validator
 
 # 2. Check proposals table
 psql $DATABASE_URL -c "
-  SELECT status, count(*) 
-  FROM proposals 
+  SELECT status, count(*)
+  FROM proposals
   GROUP BY status;
 "
 
@@ -294,8 +315,8 @@ psql $DATABASE_URL -c "
 
 # 4. Check workspace settings
 psql $DATABASE_URL -c "
-  SELECT id, settings->>'aiAutoApprove' 
-  FROM workspaces 
+  SELECT id, settings->>'aiAutoApprove'
+  FROM workspaces
   LIMIT 10;
 "
 ```
@@ -303,6 +324,7 @@ psql $DATABASE_URL -c "
 ### Mitigation
 
 **If validator not processing:**
+
 ```bash
 # Restart worker
 docker compose restart jobs
@@ -312,22 +334,24 @@ docker compose restart jobs
 ```
 
 **If proposals stuck:**
+
 ```bash
 # Check for database locks
 psql $DATABASE_URL -c "
-  SELECT * FROM pg_locks 
+  SELECT * FROM pg_locks
   WHERE NOT granted;
 "
 
 # Manually approve critical proposals
 psql $DATABASE_URL -c "
-  UPDATE proposals 
-  SET status = 'validated' 
+  UPDATE proposals
+  SET status = 'validated'
   WHERE id = '<proposal_id>';
 "
 ```
 
 ### Resolution
+
 1. Fix global validator logic
 2. Add proposal timeout handling
 3. Implement proposal retry mechanism
@@ -376,10 +400,10 @@ psql $DATABASE_URL -c "
 
 # Check table sizes
 psql $DATABASE_URL -c "
-  SELECT schemaname, tablename, 
-         pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) 
-  FROM pg_tables 
-  ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC 
+  SELECT schemaname, tablename,
+         pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename))
+  FROM pg_tables
+  ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
   LIMIT 10;
 "
 

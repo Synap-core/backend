@@ -68,6 +68,7 @@ Synap is built on a **composable architecture** where entities and documents are
 ### Assembly Mechanisms
 
 **Humans assemble via Views**:
+
 - `table` - Spreadsheet view of entities
 - `kanban` - Board columns (tasks by status)
 - `timeline` - Chronological view
@@ -76,6 +77,7 @@ Synap is built on a **composable architecture** where entities and documents are
 - `graph` - Network visualization
 
 **AI assembles via Hub Protocol**:
+
 - Reads entity graph
 - Creates proposals (pending entities)
 - Waits for human validation
@@ -93,6 +95,7 @@ Synap's unique advantage is the **proposals system** - AI suggestions pause as "
 **Proposal States**: `pending`, `validated`, `rejected`
 
 This is only possible because:
+
 - Events have lifecycle states
 - Proposals table is separate from entities
 - State transitions are events
@@ -156,17 +159,17 @@ Workers automatically deliver events to registered webhooks via `webhook-broker`
 
 ## Technology Stack
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Runtime** | Node.js 20+ | Server execution |
-| **Database** | PostgreSQL 16 + TimescaleDB + pgvector | Events, entities, vector search |
-| **Event Bus** | Inngest | Event routing and workers |
-| **API** | tRPC + Hono | Type-safe APIs |
-| **ORM** | Drizzle ORM | Database access |
-| **Auth** | Ory Kratos + Hydra (optional) | User auth + OAuth2 |
-| **Storage** | Cloudflare R2 / MinIO | File/blob storage |
-| **AI** | LangGraph + Vercel AI SDK | Agent orchestration |
-| **Package Manager** | pnpm | Workspace management |
+| Layer               | Technology                             | Purpose                         |
+| ------------------- | -------------------------------------- | ------------------------------- |
+| **Runtime**         | Node.js 20+                            | Server execution                |
+| **Database**        | PostgreSQL 16 + TimescaleDB + pgvector | Events, entities, vector search |
+| **Event Bus**       | Inngest                                | Event routing and workers       |
+| **API**             | tRPC + Hono                            | Type-safe APIs                  |
+| **ORM**             | Drizzle ORM                            | Database access                 |
+| **Auth**            | Ory Kratos + Hydra (optional)          | User auth + OAuth2              |
+| **Storage**         | Cloudflare R2 / MinIO                  | File/blob storage               |
+| **AI**              | LangGraph + Vercel AI SDK              | Agent orchestration             |
+| **Package Manager** | pnpm                                   | Workspace management            |
 
 ---
 
@@ -273,6 +276,7 @@ API for external services to access Data Pod:
 ### 1. Add New Entity Type
 
 **Files to modify**:
+
 - `packages/database/src/schema/entities.ts` (add table)
 - `packages/events/src/types.ts` (add event types)
 - `packages/api/src/routers/` (create router)
@@ -280,6 +284,7 @@ API for external services to access Data Pod:
 - `packages/client/` (export types)
 
 **Pattern**:
+
 ```typescript
 // 1. Schema
 export const myEntities = pgTable('my_entities', { ... });
@@ -316,30 +321,30 @@ Synap's "multi-agent" architecture is about **external Intelligence Services**, 
 
 ```typescript
 // Your separate service: my-ai-analyzer/
-import { Hono } from 'hono';
-import { HubProtocolClient } from '@synap/hub-protocol';
+import { Hono } from "hono";
+import { HubProtocolClient } from "@synap/hub-protocol";
 
 const app = new Hono();
 
-app.post('/analyze', async (c) => {
+app.post("/analyze", async (c) => {
   const { threadId, dataPodUrl, apiKey } = await c.req.json();
-  
+
   // 1. Connect to user's Data Pod
   const hub = new HubProtocolClient(dataPodUrl, apiKey);
-  
+
   // 2. Read data
   const context = await hub.getThreadContext({ threadId });
-  
+
   // 3. Process with YOUR AI
   const analysis = await yourCustomAI.analyze(context);
-  
+
   // 4. Submit insights
   await hub.createEntity({
-    type: 'task',
+    type: "task",
     title: analysis.suggestedTask,
-    metadata: { aiGenerated: true, confidence: 0.95 }
+    metadata: { aiGenerated: true, confidence: 0.95 },
   });
-  
+
   return c.json({ success: true });
 });
 ```
@@ -349,17 +354,21 @@ app.post('/analyze', async (c) => {
 If you want agents inside the Data Pod, use LangGraph. Place in `packages/ai/src/agents/`.
 
 ```typescript
-import { StateGraph } from '@langchain/langgraph';
+import { StateGraph } from "@langchain/langgraph";
 
 export function createMyAgent() {
   const graph = new StateGraph<MyState>();
-  
-  graph.addNode('step1', async (state) => { /* ... */ });
-  graph.addNode('step2', async (state) => { /* ... */ });
-  
-  graph.setEntryPoint('step1');
-  graph.addEdge('step1', 'step2');
-  
+
+  graph.addNode("step1", async (state) => {
+    /* ... */
+  });
+  graph.addNode("step2", async (state) => {
+    /* ... */
+  });
+
+  graph.setEntryPoint("step1");
+  graph.addEdge("step1", "step2");
+
   return graph.compile();
 }
 ```
@@ -391,6 +400,7 @@ User → Data Pod → Intelligence Service (YOUR AI)
 ```
 
 **Benefits**:
+
 - Run on separate infrastructure (GPU, serverless, etc.)
 - Use any AI provider
 - Keep proprietary logic private
@@ -422,11 +432,13 @@ User → Data Pod → Intelligence Service (YOUR AI)
 ## Environment Variables
 
 **Required**:
+
 - `DATABASE_URL`: PostgreSQL connection string
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`: Cloudflare R2
 - `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`: Inngest
 
 **Optional**:
+
 - `ENABLE_OAUTH2`: Enable OAuth2 flow
 - `HYDRA_PUBLIC_URL`, `HYDRA_ADMIN_URL`: Ory Hydra endpoints
 - `HUB_PROTOCOL_API_KEY`: Master key for Intelligence Service
@@ -616,6 +628,7 @@ See: `packages/events/src/types.ts` for complete list
 All endpoints follow pattern: `/trpc/[router].[method]`
 
 **Core Routers**:
+
 - `notes`, `tasks`, `projects`, `files`, `contacts`, `events`, `tags`, `relations`
 - `auth`, `workspaces`, `preferences`, `search`
 - `hubProtocol`, `intelligenceRegistry`

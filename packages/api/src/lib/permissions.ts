@@ -43,7 +43,7 @@ interface PermissionResult {
  * });
  */
 export async function checkPermission(
-  input: PermissionCheck,
+  input: PermissionCheck
 ): Promise<PermissionResult> {
   const { userId, action, resourceType, workspaceId } = input;
 
@@ -56,7 +56,7 @@ export async function checkPermission(
   const member = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId),
+      eq(workspaceMembers.userId, userId)
     ),
   });
 
@@ -92,7 +92,7 @@ export async function checkPermission(
  * TODO: Replace with database query once roles table exists
  */
 function getRolePermissions(
-  role: string,
+  role: string
 ): Record<string, Record<string, boolean>> {
   const ROLE_PERMISSIONS = {
     owner: {
@@ -138,7 +138,7 @@ function getRolePermissions(
  */
 export function matchesFilters(
   data: any,
-  filters: Record<string, any>,
+  filters: Record<string, any>
 ): boolean {
   for (const [path, allowedValues] of Object.entries(filters)) {
     const value = getNestedProperty(data, path);

@@ -57,7 +57,7 @@ async function runTests() {
 
     // Test 3: Optimistic locking (should fail)
     console.log(
-      "\nTest 3: Optimistic locking (should fail with version conflict)",
+      "\nTest 3: Optimistic locking (should fail with version conflict)"
     );
     try {
       await eventRepository.append({
@@ -158,10 +158,10 @@ async function runTests() {
     console.log("\nTest 10: Get events by type");
     const createdEvents = await eventRepository.getEventsByType(
       "entity.created",
-      5,
+      5
     );
     console.log(
-      `✅ Found ${createdEvents.length} entity.created events (limit 5)`,
+      `✅ Found ${createdEvents.length} entity.created events (limit 5)`
     );
 
     console.log("\n" + "=".repeat(60));
@@ -170,7 +170,7 @@ async function runTests() {
     console.log("\nEventRepository is working correctly! 🎉");
     console.log("\nNext steps:");
     console.log(
-      "1. Run event migration: tsx scripts/migrate-events-to-timescale.ts",
+      "1. Run event migration: tsx scripts/migrate-events-to-timescale.ts"
     );
     console.log("2. Verify migration");
     console.log("3. Switch API to use EventRepository");

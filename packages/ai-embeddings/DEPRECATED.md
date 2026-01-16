@@ -13,15 +13,16 @@ This package has been superseded by direct OpenAI SDK usage or the Intelligence 
 ## Migration Path
 
 ### If you're using `generateEmbedding`:
+
 ```typescript
 // OLD (deprecated)
-import { generateEmbedding } from '@synap/ai-embeddings';
+import { generateEmbedding } from "@synap/ai-embeddings";
 
 // NEW - Use utility in @synap/api
-import { generateEmbedding } from '@synap/api/utils/embeddings';
+import { generateEmbedding } from "@synap/api/utils/embeddings";
 
 // OR - Use OpenAI SDK directly
-import { OpenAIEmbeddings } from '@langchain/openai';
+import { OpenAIEmbeddings } from "@langchain/openai";
 const client = new OpenAIEmbeddings({ openAIApiKey: apiKey });
 const embedding = await client.embedQuery(text);
 ```
@@ -29,6 +30,7 @@ const embedding = await client.embedQuery(text);
 ## Current Usage
 
 This package is currently used in:
+
 - `packages/api/src/routers/hub.ts` - Dynamic import for embeddings
 - `packages/api/src/routers/n8n/actions.ts` - Dynamic import for embeddings
 

@@ -46,7 +46,7 @@ export function isFile(entity: Entity): entity is File {
  */
 export function isEntityOfType<T extends Entity["type"]>(
   entity: Entity,
-  type: T,
+  type: T
 ): entity is Extract<Entity, { type: T }> {
   return entity.type === type;
 }

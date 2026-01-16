@@ -64,7 +64,7 @@ export default function SearchFilters({
 
   const updateFilter = <K extends keyof SearchFiltersState>(
     key: K,
-    value: SearchFiltersState[K],
+    value: SearchFiltersState[K]
   ) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
@@ -130,7 +130,7 @@ export default function SearchFilters({
                   onChange={(e) =>
                     updateFilter(
                       "subjectType",
-                      e.currentTarget.value || undefined,
+                      e.currentTarget.value || undefined
                     )
                   }
                 />
@@ -143,7 +143,7 @@ export default function SearchFilters({
                   onChange={(e) =>
                     updateFilter(
                       "subjectId",
-                      e.currentTarget.value || undefined,
+                      e.currentTarget.value || undefined
                     )
                   }
                 />
@@ -157,7 +157,7 @@ export default function SearchFilters({
               onChange={(e) =>
                 updateFilter(
                   "correlationId",
-                  e.currentTarget.value || undefined,
+                  e.currentTarget.value || undefined
                 )
               }
             />
@@ -171,7 +171,7 @@ export default function SearchFilters({
                   onChange={(value) =>
                     updateFilter(
                       "fromDate",
-                      value as unknown as Date | undefined,
+                      value as unknown as Date | undefined
                     )
                   }
                   clearable

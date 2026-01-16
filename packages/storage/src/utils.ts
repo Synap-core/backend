@@ -43,7 +43,7 @@ export function buildEntityPath(
   userId: string,
   entityType: string,
   entityId: string,
-  extension: string = "md",
+  extension: string = "md"
 ): string {
   // Validate inputs
   if (!userId || !entityType || !entityId) {

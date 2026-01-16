@@ -65,7 +65,7 @@ export interface PublishEventOptions {
  */
 export async function publishEvent<T extends DomainEvent>(
   event: T,
-  options: PublishEventOptions,
+  options: PublishEventOptions
 ): Promise<{ eventId: string }> {
   logger.debug(
     {
@@ -73,7 +73,7 @@ export async function publishEvent<T extends DomainEvent>(
       subjectType: event.subjectType,
       subjectId: event.subjectId,
     },
-    "Publishing event (dual-write)",
+    "Publishing event (dual-write)"
   );
 
   // STEP 1: Save to TimescaleDB (source of truth)
@@ -110,12 +110,12 @@ export async function publishEvent<T extends DomainEvent>(
 
     logger.debug(
       { eventId: result.id, type: event.type },
-      "Event sent to Inngest",
+      "Event sent to Inngest"
     );
   } catch (error) {
     logger.error(
       { err: error, eventId: result.id, type: event.type },
-      "Failed to send event to Inngest - marking for retry",
+      "Failed to send event to Inngest - marking for retry"
     );
 
     // Mark event for retry (background job will pick this up)
@@ -133,7 +133,7 @@ export async function publishEvent<T extends DomainEvent>(
     // Don't throw - event is saved, retry will handle Inngest
     logger.warn(
       { eventId: result.id },
-      "Event will be retried by background job",
+      "Event will be retried by background job"
     );
   }
 
@@ -149,7 +149,7 @@ export async function publishEvent<T extends DomainEvent>(
  */
 export function createInboxItemReceivedEvent(
   itemId: string,
-  data: EventDataFor<"inbox.item.received">,
+  data: EventDataFor<"inbox.item.received">
 ) {
   return {
     type: "inbox.item.received" as const,
@@ -164,7 +164,7 @@ export function createInboxItemReceivedEvent(
  */
 export function createInboxItemAnalyzedEvent(
   itemId: string,
-  data: EventDataFor<"inbox.item.analyzed">,
+  data: EventDataFor<"inbox.item.analyzed">
 ) {
   return {
     type: "inbox.item.analyzed" as const,
@@ -179,7 +179,7 @@ export function createInboxItemAnalyzedEvent(
  */
 export function createInboxItemStatusUpdatedEvent(
   itemId: string,
-  data: EventDataFor<"inbox.item.status.updated">,
+  data: EventDataFor<"inbox.item.status.updated">
 ) {
   return {
     type: "inbox.item.status.updated" as const,
@@ -194,7 +194,7 @@ export function createInboxItemStatusUpdatedEvent(
  */
 export function createEntityCreateRequestedEvent(
   entityId: string,
-  data: EventDataFor<"entities.create.requested">,
+  data: EventDataFor<"entities.create.requested">
 ) {
   return {
     type: "entities.create.requested" as const,
@@ -209,7 +209,7 @@ export function createEntityCreateRequestedEvent(
  */
 export function createEntityCreateCompletedEvent(
   entityId: string,
-  data: EventDataFor<"entities.create.completed">,
+  data: EventDataFor<"entities.create.completed">
 ) {
   return {
     type: "entities.create.completed" as const,

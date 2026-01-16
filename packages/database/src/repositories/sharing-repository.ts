@@ -1,14 +1,14 @@
 /**
  * Sharing Repository
- * 
+ *
  * Handles all resource sharing CRUD operations with automatic event emission
  */
 
-import { eq } from 'drizzle-orm';
-import { resourceShares } from '../schema/sharing.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
-import type { ResourceShare, NewResourceShare } from '../schema/sharing.js';
+import { eq } from "drizzle-orm";
+import { resourceShares } from "../schema/sharing.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
+import type { ResourceShare, NewResourceShare } from "../schema/sharing.js";
 
 export interface CreateSharingInput {
   id?: string;
@@ -17,25 +17,32 @@ export interface CreateSharingInput {
   sharedByUserId: string;
   sharedWithUserId?: string;
   sharedWithEmail?: string;
-  permission: 'view' | 'edit' | 'admin';
+  permission: "view" | "edit" | "admin";
   metadata?: Record<string, unknown>;
 }
 
 export interface UpdateSharingInput {
-  permission?: 'view' | 'edit' | 'admin';
+  permission?: "view" | "edit" | "admin";
   metadata?: Record<string, unknown>;
 }
 
-export class SharingRepository extends BaseRepository<ResourceShare, CreateSharingInput, UpdateSharingInput> {
+export class SharingRepository extends BaseRepository<
+  ResourceShare,
+  CreateSharingInput,
+  UpdateSharingInput
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'sharing', pluralName: 'sharing' });
+    super(db, eventRepo, { subjectType: "sharing", pluralName: "sharing" });
   }
 
   /**
    * Create a new sharing record
    * Emits: sharing.create.completed
    */
-  async create(data: CreateSharingInput, userId: string): Promise<ResourceShare> {
+  async create(
+    data: CreateSharingInput,
+    userId: string
+  ): Promise<ResourceShare> {
     const [share] = await this.db
       .insert(resourceShares)
       .values({
@@ -54,7 +61,7 @@ export class SharingRepository extends BaseRepository<ResourceShare, CreateShari
       .returning();
 
     // Emit completed event
-    await this.emitCompleted('create', share, userId);
+    await this.emitCompleted("create", share, userId);
 
     return share;
   }
@@ -63,7 +70,11 @@ export class SharingRepository extends BaseRepository<ResourceShare, CreateShari
    * Update an existing sharing record
    * Emits: sharing.update.completed
    */
-  async update(id: string, data: UpdateSharingInput, userId: string): Promise<ResourceShare> {
+  async update(
+    id: string,
+    data: UpdateSharingInput,
+    userId: string
+  ): Promise<ResourceShare> {
     const [share] = await this.db
       .update(resourceShares)
       .set({
@@ -74,11 +85,11 @@ export class SharingRepository extends BaseRepository<ResourceShare, CreateShari
       .returning();
 
     if (!share) {
-      throw new Error('Sharing record not found');
+      throw new Error("Sharing record not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('update', share, userId);
+    await this.emitCompleted("update", share, userId);
 
     return share;
   }
@@ -94,10 +105,10 @@ export class SharingRepository extends BaseRepository<ResourceShare, CreateShari
       .returning({ id: resourceShares.id });
 
     if (result.length === 0) {
-      throw new Error('Sharing record not found');
+      throw new Error("Sharing record not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 }

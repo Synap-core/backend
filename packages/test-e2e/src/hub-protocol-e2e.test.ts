@@ -42,7 +42,7 @@ describe("E2E Hub Protocol", () => {
       type: "personal",
       ownerId: testEnv.users.userA.id,
     });
-    
+
     testWorkspaceId = workspace.id;
 
     // Wait for workspace creation to complete via Inngest
@@ -52,8 +52,6 @@ describe("E2E Hub Protocol", () => {
 
     logger.info("Hub Protocol tests starting");
   }, 300000);
-
-
 
   afterAll(async () => {
     if (testWorkspaceId) {
@@ -146,7 +144,7 @@ describe("E2E Hub Protocol", () => {
         token: result.token,
         scope: ["entities"],
         filters: {
-          entityTypes: ["note", "task"], 
+          entityTypes: ["note", "task"],
         },
       });
 
@@ -161,18 +159,19 @@ describe("E2E Hub Protocol", () => {
 
     it("should respect scope limitations", async () => {
       // Generate token with limited scope
-      const limitedToken = await testClient.client.hub.generateAccessToken.mutate({
-        requestId: randomUUID(),
-        scope: ["entities"], // No write permission distinct in basic enum yet
-        expiresIn: 300,
-      });
+      const limitedToken =
+        await testClient.client.hub.generateAccessToken.mutate({
+          requestId: randomUUID(),
+          scope: ["entities"], // No write permission distinct in basic enum yet
+          expiresIn: 300,
+        });
 
       // Try to create entity with read-only token
       try {
         await testClient.client.hub.submitInsight.mutate({
           token: limitedToken.token,
           // Valid payload but scope should block it?
-          // Actually submitInsight uses 'insight.submitted' or similar. 
+          // Actually submitInsight uses 'insight.submitted' or similar.
           // Does it check scope? Assuming 'entities' scope allows it?
           // If I want it to FAIL, I should use a token WTIHOUT 'entities' scope?
           // But here the test setup (Line 204) asks for 'entities'.
@@ -184,13 +183,19 @@ describe("E2E Hub Protocol", () => {
           // Is there a 'write' scope? No.
           // Maybe it expects to fail if I pass a mismatching token?
           // Or maybe the original test was assuming read-only behavior for "entities"?
-          
+
           // Let's assume for now I want to test invalid scope.
           // I will use a token WITHOUT 'entities' scope? No input array only has 'entities'.
           // If I want to test scope limitation, I should ask for Scope A and try to access Scope B.
-          
+
           // But for now, just Fixing the PROCEDURE CALL is enough to get past "Not Found".
-          insight: { type: "action_plan", correlationId: randomUUID(), title: "X", confidence: 1, source: "test" }, 
+          insight: {
+            type: "action_plan",
+            correlationId: randomUUID(),
+            title: "X",
+            confidence: 1,
+            source: "test",
+          },
         });
         expect.fail("Expected scope error");
       } catch (error: any) {
@@ -220,16 +225,16 @@ describe("E2E Hub Protocol", () => {
         confidence: 0.9,
         source: "test-runner",
         actions: [
-            {
-                type: "create_entity",
-                eventType: "entities.create.requested", // Required field
-                entityType: "note",
-                data: {
-                    title: "Created from Insight",
-                    content: "Content"
-                }
-            }
-        ]
+          {
+            type: "create_entity",
+            eventType: "entities.create.requested", // Required field
+            entityType: "note",
+            data: {
+              title: "Created from Insight",
+              content: "Content",
+            },
+          },
+        ],
       };
 
       const response = await testClient.client.hub.submitInsight.mutate({
@@ -239,7 +244,7 @@ describe("E2E Hub Protocol", () => {
 
       expect(response.success).toBe(true);
       expect(response.requestId).toBe(requestId);
-      
+
       // Note: Proposal creation depends on Inngest worker which might be flaky in this env.
       // We only verify submission acceptance here.
     });
@@ -301,7 +306,10 @@ describe("E2E Hub Protocol", () => {
       }
 
       const duration = Date.now() - startTime;
-      logger.info({ count: results.length, duration: `${duration}ms` }, "Batch creation completed");
+      logger.info(
+        { count: results.length, duration: `${duration}ms` },
+        "Batch creation completed"
+      );
 
       expect(duration).toBeLessThan(15000);
     }, 30000);
@@ -320,11 +328,12 @@ describe("E2E Hub Protocol", () => {
       const requestId = randomUUID();
 
       // Step 1: Generate token
-      const tokenResult = await testClient.client.hub.generateAccessToken.mutate({
-        requestId,
-        scope: ["entities"],
-        expiresIn: 300,
-      });
+      const tokenResult =
+        await testClient.client.hub.generateAccessToken.mutate({
+          requestId,
+          scope: ["entities"],
+          expiresIn: 300,
+        });
 
       logger.info("Intelligence service: Token generated");
 
@@ -337,12 +346,15 @@ describe("E2E Hub Protocol", () => {
 
       const contextEntities = contextResult.data.entities as any[];
 
-      logger.info({
-        count: contextEntities.length,
-      }, "Intelligence service: Context retrieved");
+      logger.info(
+        {
+          count: contextEntities.length,
+        },
+        "Intelligence service: Context retrieved"
+      );
 
       // Step 3: Simulate AI processing (skip for test)
-      
+
       // Step 4: Submit insights
       await testClient.client.workspaces.update.mutate({
         id: testWorkspaceId,
@@ -377,7 +389,10 @@ describe("E2E Hub Protocol", () => {
         insight: insightPayload,
       });
 
-      logger.info({ requestId: createResult.requestId }, "Intelligence service: Insight submitted");
+      logger.info(
+        { requestId: createResult.requestId },
+        "Intelligence service: Insight submitted"
+      );
 
       await wait(2000);
 

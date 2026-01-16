@@ -1,79 +1,79 @@
 /**
  * Preferences Utilities
- * 
+ *
  * Type-safe utilities for fetching user and workspace preferences
  * with proper defaults and validation.
- * 
+ *
  * Schema Structure:
  * - User: userPreferences.uiPreferences (JSONB)
  * - Workspace: workspaces.settings (JSONB)
  */
 
-import { db } from '../index.js';
-import { eq } from 'drizzle-orm';
-import { userPreferences, workspaces } from '../schema/index.js';
+import { db } from "../index.js";
+import { eq } from "drizzle-orm";
+import { userPreferences, workspaces } from "../schema/index.js";
 
 /**
  * User Preference Keys
  * These are stored in userPreferences.uiPreferences JSONB field
  */
 export type UserPreferenceKey =
-  | 'entity.deleteDocument'     // Whether to cascade delete documents when deleting entities
-  | 'editor.autosave'           // Boolean
-  | 'editor.autosaveInterval'   // Number (seconds)
-  | 'notifications.email'       // Boolean
-  | 'notifications.push'        // Boolean
-  | 'theme.mode'                // 'light' | 'dark' | 'system' (separate field, not in uiPreferences)
-  | 'ui.sidebarCollapsed'       // Boolean
-  | 'ui.compactMode'            // Boolean
-  | 'ui.defaultView';           // 'list' | 'grid' | 'timeline'
+  | "entity.deleteDocument" // Whether to cascade delete documents when deleting entities
+  | "editor.autosave" // Boolean
+  | "editor.autosaveInterval" // Number (seconds)
+  | "notifications.email" // Boolean
+  | "notifications.push" // Boolean
+  | "theme.mode" // 'light' | 'dark' | 'system' (separate field, not in uiPreferences)
+  | "ui.sidebarCollapsed" // Boolean
+  | "ui.compactMode" // Boolean
+  | "ui.defaultView"; // 'list' | 'grid' | 'timeline'
 
 /**
  * Workspace Preference Keys
  * These are stored in workspaces.settings JSONB field
  */
 export type WorkspacePreferenceKey =
-  | 'defaultEntityBehavior.deleteDocument'  // Workspace-wide default for entity deletion
-  | 'features.aiEnabled'                    // Boolean
-  | 'features.collaborativeEditing'         // Boolean
-  | 'retention.documentDays'                // Number
-  | 'security.requireStrongPasswords'       // Boolean
-  | 'defaultEntityTypes';                   // string[] (separate field in WorkspaceSettings)
+  | "defaultEntityBehavior.deleteDocument" // Workspace-wide default for entity deletion
+  | "features.aiEnabled" // Boolean
+  | "features.collaborativeEditing" // Boolean
+  | "retention.documentDays" // Number
+  | "security.requireStrongPasswords" // Boolean
+  | "defaultEntityTypes"; // string[] (separate field in WorkspaceSettings)
 
 /**
  * Default values for user preferences
  */
 const USER_PREFERENCE_DEFAULTS: Record<string, any> = {
-  'entity.deleteDocument': true,           // Default: cascade delete
-  'editor.autosave': true,
-  'editor.autosaveInterval': 30,
-  'notifications.email': true,
-  'notifications.push': false,
-  'theme.mode': 'system',
-  'ui.sidebarCollapsed': false,
-  'ui.compactMode': false,
-  'ui.defaultView': 'list',
+  "entity.deleteDocument": true, // Default: cascade delete
+  "editor.autosave": true,
+  "editor.autosaveInterval": 30,
+  "notifications.email": true,
+  "notifications.push": false,
+  "theme.mode": "system",
+  "ui.sidebarCollapsed": false,
+  "ui.compactMode": false,
+  "ui.defaultView": "list",
 };
 
 /**
  * Default values for workspace preferences
  */
 const WORKSPACE_PREFERENCE_DEFAULTS: Record<string, any> = {
-  'defaultEntityBehavior.deleteDocument': true,
-  'features.aiEnabled': true,
-  'features.collaborativeEditing': true,
-  'retention.documentDays': 90,
-  'security.requireStrongPasswords': false,
-  'defaultEntityTypes': ['note', 'task'],
+  "defaultEntityBehavior.deleteDocument": true,
+  "features.aiEnabled": true,
+  "features.collaborativeEditing": true,
+  "retention.documentDays": 90,
+  "security.requireStrongPasswords": false,
+  defaultEntityTypes: ["note", "task"],
 };
 
 /**
  * Get a single user preference with type safety
- * 
+ *
  * @param userId - User ID
  * @param key - Preference key
  * @returns Preference value or default
- * 
+ *
  * @example
  * const deleteDocOnEntityDelete = await getUserPreference(
  *   'user-123',
@@ -85,15 +85,15 @@ export async function getUserPreference(
   key: UserPreferenceKey
 ): Promise<any> {
   // Special case: theme.mode is a separate column
-  if (key === 'theme.mode') {
+  if (key === "theme.mode") {
     const prefs = await db.query.userPreferences.findFirst({
-      where: eq(userPreferences.userId, userId)
+      where: eq(userPreferences.userId, userId),
     });
     return prefs?.theme || USER_PREFERENCE_DEFAULTS[key];
   }
 
   const prefs = await db.query.userPreferences.findFirst({
-    where: eq(userPreferences.userId, userId)
+    where: eq(userPreferences.userId, userId),
   });
 
   if (!prefs?.uiPreferences) {
@@ -102,13 +102,13 @@ export async function getUserPreference(
 
   const uiPrefs = prefs.uiPreferences as Record<string, any>;
   const value = getNestedValue(uiPrefs, key);
-  
+
   return value !== undefined ? value : USER_PREFERENCE_DEFAULTS[key];
 }
 
 /**
  * Get multiple user preferences at once
- * 
+ *
  * @param userId - User ID
  * @param keys - Array of preference keys
  * @returns Object with preference values
@@ -118,14 +118,14 @@ export async function getUserPreferences<K extends UserPreferenceKey>(
   keys: K[]
 ): Promise<Record<K, any>> {
   const prefs = await db.query.userPreferences.findFirst({
-    where: eq(userPreferences.userId, userId)
+    where: eq(userPreferences.userId, userId),
   });
 
   const result = {} as Record<K, any>;
-  
+
   for (const key of keys) {
     // Special case: theme.mode
-    if (key === 'theme.mode') {
+    if (key === "theme.mode") {
       result[key] = prefs?.theme || USER_PREFERENCE_DEFAULTS[key];
       continue;
     }
@@ -138,13 +138,13 @@ export async function getUserPreferences<K extends UserPreferenceKey>(
       result[key] = value !== undefined ? value : USER_PREFERENCE_DEFAULTS[key];
     }
   }
-  
+
   return result;
 }
 
 /**
  * Set a user preference
- * 
+ *
  * @param userId - User ID
  * @param key - Preference key
  * @param value - Preference value
@@ -155,9 +155,9 @@ export async function setUserPreference<K extends UserPreferenceKey>(
   value: any
 ): Promise<void> {
   // Special case: theme.mode
-  if (key === 'theme.mode') {
+  if (key === "theme.mode") {
     const existing = await db.query.userPreferences.findFirst({
-      where: eq(userPreferences.userId, userId)
+      where: eq(userPreferences.userId, userId),
     });
 
     if (existing) {
@@ -166,15 +166,13 @@ export async function setUserPreference<K extends UserPreferenceKey>(
         .set({ theme: value })
         .where(eq(userPreferences.userId, userId));
     } else {
-      await db
-        .insert(userPreferences)
-        .values({ userId, theme: value });
+      await db.insert(userPreferences).values({ userId, theme: value });
     }
     return;
   }
 
   const existing = await db.query.userPreferences.findFirst({
-    where: eq(userPreferences.userId, userId)
+    where: eq(userPreferences.userId, userId),
   });
 
   const currentPrefs = (existing?.uiPreferences as Record<string, any>) || {};
@@ -186,18 +184,16 @@ export async function setUserPreference<K extends UserPreferenceKey>(
       .set({ uiPreferences: updatedPrefs })
       .where(eq(userPreferences.userId, userId));
   } else {
-    await db
-      .insert(userPreferences)
-      .values({
-        userId,
-        uiPreferences: updatedPrefs,
-      });
+    await db.insert(userPreferences).values({
+      userId,
+      uiPreferences: updatedPrefs,
+    });
   }
 }
 
 /**
  * Get a workspace preference with type safety
- * 
+ *
  * @param workspaceId - Workspace ID
  * @param key - Preference key
  * @returns Preference value or default
@@ -207,7 +203,7 @@ export async function getWorkspacePreference<K extends WorkspacePreferenceKey>(
   key: K
 ): Promise<any> {
   const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId)
+    where: eq(workspaces.id, workspaceId),
   });
 
   if (!workspace?.settings) {
@@ -216,13 +212,13 @@ export async function getWorkspacePreference<K extends WorkspacePreferenceKey>(
 
   const settings = workspace.settings as Record<string, any>;
   const value = getNestedValue(settings, key);
-  
+
   return value !== undefined ? value : WORKSPACE_PREFERENCE_DEFAULTS[key];
 }
 
 /**
  * Get multiple workspace preferences at once
- * 
+ *
  * @param workspaceId - Workspace ID
  * @param keys - Array of preference keys
  * @returns Object with preference values
@@ -232,27 +228,28 @@ export async function getWorkspacePreferences<K extends WorkspacePreferenceKey>(
   keys: K[]
 ): Promise<Record<K, any>> {
   const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId)
+    where: eq(workspaces.id, workspaceId),
   });
 
   const result = {} as Record<K, any>;
-  
+
   for (const key of keys) {
     if (!workspace?.settings) {
       result[key] = WORKSPACE_PREFERENCE_DEFAULTS[key];
     } else {
       const settings = workspace.settings as Record<string, any>;
       const value = getNestedValue(settings, key);
-      result[key] = value !== undefined ? value : WORKSPACE_PREFERENCE_DEFAULTS[key];
+      result[key] =
+        value !== undefined ? value : WORKSPACE_PREFERENCE_DEFAULTS[key];
     }
   }
-  
+
   return result;
 }
 
 /**
  * Set a workspace preference
- * 
+ *
  * @param workspaceId - Workspace ID
  * @param key - Preference key
  * @param value - Preference value
@@ -263,11 +260,11 @@ export async function setWorkspacePreference<K extends WorkspacePreferenceKey>(
   value: any
 ): Promise<void> {
   const existing = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId)
+    where: eq(workspaces.id, workspaceId),
   });
 
   if (!existing) {
-    throw new Error('Workspace not found');
+    throw new Error("Workspace not found");
   }
 
   const currentSettings = (existing.settings as Record<string, any>) || {};
@@ -282,32 +279,36 @@ export async function setWorkspacePreference<K extends WorkspacePreferenceKey>(
 // Helper functions for nested key access
 
 function getNestedValue(obj: Record<string, any>, key: string): any {
-  const keys = key.split('.');
+  const keys = key.split(".");
   let value = obj;
-  
+
   for (const k of keys) {
     if (value === undefined || value === null) return undefined;
     value = value[k];
   }
-  
+
   return value;
 }
 
-function setNestedValue(obj: Record<string, any>, key: string, value: any): Record<string, any> {
-  const keys = key.split('.');
+function setNestedValue(
+  obj: Record<string, any>,
+  key: string,
+  value: any
+): Record<string, any> {
+  const keys = key.split(".");
   const result = { ...obj };
   let current: any = result;
-  
+
   for (let i = 0; i < keys.length - 1; i++) {
     const k = keys[i];
-    if (!current[k] || typeof current[k] !== 'object') {
+    if (!current[k] || typeof current[k] !== "object") {
       current[k] = {};
     } else {
       current[k] = { ...current[k] };
     }
     current = current[k];
   }
-  
+
   current[keys[keys.length - 1]] = value;
   return result;
 }

@@ -89,7 +89,7 @@ export class MinIOStorageProvider implements IFileStorage {
       await this.client.send(
         new HeadBucketCommand({
           Bucket: this.bucketName,
-        }),
+        })
       );
       this.bucketInitialized = true;
       return;
@@ -101,17 +101,17 @@ export class MinIOStorageProvider implements IFileStorage {
           await this.client.send(
             new CreateBucketCommand({
               Bucket: this.bucketName,
-            }),
+            })
           );
           this.bucketInitialized = true;
         } catch (createError) {
           throw new Error(
-            `Failed to create MinIO bucket "${this.bucketName}": ${createError instanceof Error ? createError.message : "Unknown error"}`,
+            `Failed to create MinIO bucket "${this.bucketName}": ${createError instanceof Error ? createError.message : "Unknown error"}`
           );
         }
       } else {
         throw new Error(
-          `MinIO bucket "${this.bucketName}" does not exist. Set createBucketIfNotExists=true or create it manually.`,
+          `MinIO bucket "${this.bucketName}" does not exist. Set createBucketIfNotExists=true or create it manually.`
         );
       }
     }
@@ -120,7 +120,7 @@ export class MinIOStorageProvider implements IFileStorage {
   async upload(
     path: string,
     content: string | Buffer,
-    options?: UploadOptions,
+    options?: UploadOptions
   ): Promise<FileMetadata> {
     await this.ensureBucket();
 
@@ -135,7 +135,7 @@ export class MinIOStorageProvider implements IFileStorage {
         Body: body,
         ContentType: options?.contentType || "application/octet-stream",
         Metadata: options?.metadata,
-      }),
+      })
     );
 
     // For MinIO, public URL is endpoint + bucket + path
@@ -158,7 +158,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
 
     if (!response.Body) {
@@ -175,7 +175,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
 
     if (!response.Body) {
@@ -197,7 +197,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
   }
 
@@ -209,7 +209,7 @@ export class MinIOStorageProvider implements IFileStorage {
         new HeadObjectCommand({
           Bucket: this.bucketName,
           Key: path,
-        }),
+        })
       );
       return true;
     } catch (error) {
@@ -224,7 +224,7 @@ export class MinIOStorageProvider implements IFileStorage {
       new HeadObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
 
     return {
@@ -249,7 +249,7 @@ export class MinIOStorageProvider implements IFileStorage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension: string = "md",
+    extension: string = "md"
   ): string {
     return buildEntityPath(userId, entityType, entityId, extension);
   }

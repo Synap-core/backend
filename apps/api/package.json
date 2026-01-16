@@ -20,7 +20,7 @@
     "@trpc/server": "^11.0.0",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
-    "hono": "^4.0.0",
+    "hono": "^4.11.4",
     "hono-rate-limiter": "^0.4.2",
     "inngest": "3.22.12",
     "zod": "3.23.8"

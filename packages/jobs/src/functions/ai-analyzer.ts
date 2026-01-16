@@ -53,7 +53,7 @@ export const analyzeCapturedThought = inngest.createFunction(
     }
 
     console.log(
-      `🤖 Analyzing thought for user ${userId}: "${content.substring(0, 50)}..."`,
+      `🤖 Analyzing thought for user ${userId}: "${content.substring(0, 50)}..."`
     );
 
     // Step 1: AI Analysis
@@ -103,5 +103,5 @@ Instructions:
     });
 
     return { status: "analyzed", analysis };
-  },
+  }
 );

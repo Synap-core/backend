@@ -51,7 +51,7 @@ export const intelligenceRegistryRouter = router({
     .mutation(async ({ input }) => {
       logger.info(
         { serviceId: input.serviceId },
-        "Registering intelligence service",
+        "Registering intelligence service"
       );
 
       // Check if service ID already exists
@@ -61,7 +61,7 @@ export const intelligenceRegistryRouter = router({
 
       if (existing) {
         throw new Error(
-          `Service with ID "${input.serviceId}" already registered`,
+          `Service with ID "${input.serviceId}" already registered`
         );
       }
 
@@ -88,7 +88,7 @@ export const intelligenceRegistryRouter = router({
           serviceId: service.serviceId,
           capabilities: service.capabilities,
         },
-        "Intelligence service registered",
+        "Intelligence service registered"
       );
 
       return service;
@@ -104,7 +104,7 @@ export const intelligenceRegistryRouter = router({
           status: z.enum(["active", "inactive", "suspended"]).optional(),
           enabled: z.boolean().optional(),
         })
-        .optional(),
+        .optional()
     )
     .query(async ({ input }) => {
       const conditions = [];
@@ -179,7 +179,7 @@ export const intelligenceRegistryRouter = router({
 
       logger.info(
         { serviceId: updated.serviceId },
-        "Intelligence service updated",
+        "Intelligence service updated"
       );
 
       return updated;
@@ -210,13 +210,13 @@ export const intelligenceRegistryRouter = router({
       const services = await db.query.intelligenceServices.findMany({
         where: and(
           eq(intelligenceServices.status, "active"),
-          eq(intelligenceServices.enabled, true),
+          eq(intelligenceServices.enabled, true)
         ),
       });
 
       // Filter by capability (client-side for now)
       const filtered = services.filter((s) =>
-        s.capabilities.includes(input.capability),
+        s.capabilities.includes(input.capability)
       );
 
       return filtered.map((s) => ({

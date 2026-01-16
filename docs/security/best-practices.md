@@ -3,6 +3,7 @@
 ## Secrets Management
 
 ### Environment Variables
+
 Never commit secrets to git. Use environment variables or secret management services.
 
 ```bash
@@ -20,6 +21,7 @@ OPENAI_API_KEY=sk-actual-key
 ### Recommended Solutions
 
 **Option A: HashiCorp Vault**
+
 ```bash
 # Store secrets
 vault kv put secret/synap/production \
@@ -31,6 +33,7 @@ export DATABASE_URL=$(vault kv get -field=database_url secret/synap/production)
 ```
 
 **Option B: AWS Secrets Manager**
+
 ```bash
 # Store secret
 aws secretsmanager create-secret \
@@ -45,6 +48,7 @@ aws secretsmanager get-secret-value \
 ```
 
 **Option C: Docker Secrets** (for Docker Swarm/Compose)
+
 ```yaml
 # docker-compose.yml
 services:
@@ -66,10 +70,10 @@ secrets:
 
 ```typescript
 // Hash API keys before storing
-import { createHash } from 'crypto';
+import { createHash } from "crypto";
 
 function hashApiKey(key: string): string {
-  return createHash('sha256').update(key).digest('hex');
+  return createHash("sha256").update(key).digest("hex");
 }
 
 // Store only hashed version
@@ -84,15 +88,15 @@ await db.insert(apiKeys).values({
 ```typescript
 // Use short expiration times
 const token = jwt.sign(payload, secret, {
-  expiresIn: '15m', // 15 minutes
-  algorithm: 'HS256',
-  issuer: 'synap-api',
-  audience: 'synap-client'
+  expiresIn: "15m", // 15 minutes
+  algorithm: "HS256",
+  issuer: "synap-api",
+  audience: "synap-client",
 });
 
 // Implement token rotation
 const refreshToken = jwt.sign(payload, refreshSecret, {
-  expiresIn: '7d' // 7 days
+  expiresIn: "7d", // 7 days
 });
 ```
 
@@ -117,10 +121,7 @@ SET app.current_workspace = '<workspace_id>';
 
 ```typescript
 // ✅ GOOD: Use parameterized queries
-const result = await db
-  .select()
-  .from(entities)
-  .where(eq(entities.id, userId)); // Safe
+const result = await db.select().from(entities).where(eq(entities.id, userId)); // Safe
 
 // ❌ BAD: String concatenation
 const result = await db.execute(
@@ -132,11 +133,11 @@ const result = await db.execute(
 
 ```typescript
 // Sanitize user input before storing
-import DOMPurify from 'isomorphic-dompurify';
+import DOMPurify from "isomorphic-dompurify";
 
 const sanitized = DOMPurify.sanitize(userInput, {
-  ALLOWED_TAGS: ['p', 'br', 'strong', 'em'],
-  ALLOWED_ATTR: []
+  ALLOWED_TAGS: ["p", "br", "strong", "em"],
+  ALLOWED_ATTR: [],
 });
 ```
 
@@ -147,8 +148,8 @@ const sanitized = DOMPurify.sanitize(userInput, {
 ```typescript
 // Redirect HTTP to HTTPS
 app.use((req, res, next) => {
-  if (req.header('x-forwarded-proto') !== 'https') {
-    res.redirect(`https://${req.header('host')}${req.url}`);
+  if (req.header("x-forwarded-proto") !== "https") {
+    res.redirect(`https://${req.header("host")}${req.url}`);
   } else {
     next();
   }
@@ -158,28 +159,31 @@ app.use((req, res, next) => {
 ### CORS Configuration
 
 ```typescript
-import { cors } from 'hono/cors';
+import { cors } from "hono/cors";
 
-app.use('/*', cors({
-  origin: [
-    'https://app.synap.io',
-    'https://staging.synap.io'
-  ],
-  credentials: true,
-  maxAge: 86400
-}));
+app.use(
+  "/*",
+  cors({
+    origin: ["https://app.synap.io", "https://staging.synap.io"],
+    credentials: true,
+    maxAge: 86400,
+  })
+);
 ```
 
 ### Rate Limiting
 
 ```typescript
-import { rateLimiter } from 'hono-rate-limiter';
+import { rateLimiter } from "hono-rate-limiter";
 
-app.use('/*', rateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP'
-}));
+app.use(
+  "/*",
+  rateLimiter({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: "Too many requests from this IP",
+  })
+);
 ```
 
 ## Data Encryption
@@ -188,9 +192,9 @@ app.use('/*', rateLimiter({
 
 ```sql
 -- Enable PostgreSQL encryption
-ALTER TABLE entities 
-  ALTER COLUMN sensitive_data 
-  TYPE bytea 
+ALTER TABLE entities
+  ALTER COLUMN sensitive_data
+  TYPE bytea
   USING pgp_sym_encrypt(sensitive_data, 'encryption_key');
 ```
 
@@ -230,14 +234,14 @@ ssl_prefer_server_ciphers on;
 ### Sensitive Data Redaction
 
 ```typescript
-import { createLogger } from '@synap-core/core';
+import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({
-  redact: ['password', 'apiKey', 'token', 'secret']
+  redact: ["password", "apiKey", "token", "secret"],
 });
 
 // This will automatically redact sensitive fields
-logger.info({ user: { email: 'user@example.com', password: 'secret123' } });
+logger.info({ user: { email: "user@example.com", password: "secret123" } });
 // Output: { user: { email: 'user@example.com', password: '[REDACTED]' } }
 ```
 
@@ -247,13 +251,13 @@ logger.info({ user: { email: 'user@example.com', password: 'secret123' } });
 // Log all sensitive operations
 async function deleteEntity(id: string, userId: string) {
   await auditLog.create({
-    action: 'entity.delete',
+    action: "entity.delete",
     userId,
     entityId: id,
     timestamp: new Date(),
-    ipAddress: req.ip
+    ipAddress: req.ip,
   });
-  
+
   await db.delete(entities).where(eq(entities.id, id));
 }
 ```
@@ -286,6 +290,7 @@ find $BACKUP_DIR -name "db_*.sql.gz" -mtime +30 -delete
 **RTO (Recovery Time Objective)**: 4 hours
 
 **Recovery Steps**:
+
 1. Provision new infrastructure
 2. Restore latest database backup
 3. Replay WAL logs for point-in-time recovery
@@ -303,12 +308,13 @@ async function deleteUserData(userId: string) {
   await db.transaction(async (tx) => {
     // Delete user entities
     await tx.delete(entities).where(eq(entities.userId, userId));
-    
+
     // Anonymize audit logs (keep for compliance)
-    await tx.update(auditLogs)
-      .set({ userId: 'ANONYMIZED' })
+    await tx
+      .update(auditLogs)
+      .set({ userId: "ANONYMIZED" })
       .where(eq(auditLogs.userId, userId));
-    
+
     // Delete user account
     await tx.delete(users).where(eq(users.id, userId));
   });
@@ -318,10 +324,13 @@ async function deleteUserData(userId: string) {
 async function exportUserData(userId: string) {
   const data = {
     profile: await db.select().from(users).where(eq(users.id, userId)),
-    entities: await db.select().from(entities).where(eq(entities.userId, userId)),
+    entities: await db
+      .select()
+      .from(entities)
+      .where(eq(entities.userId, userId)),
     // ... other data
   };
-  
+
   return JSON.stringify(data, null, 2);
 }
 ```
@@ -333,7 +342,7 @@ async function exportUserData(userId: string) {
 CREATE OR REPLACE FUNCTION cleanup_old_events()
 RETURNS void AS $$
 BEGIN
-  DELETE FROM events 
+  DELETE FROM events
   WHERE created_at < NOW() - INTERVAL '90 days';
 END;
 $$ LANGUAGE plpgsql;
@@ -345,6 +354,7 @@ SELECT cron.schedule('cleanup-events', '0 2 * * *', 'SELECT cleanup_old_events()
 ## Security Checklist
 
 ### Pre-Production
+
 - [ ] All secrets in environment variables/vault
 - [ ] API keys hashed before storage
 - [ ] HTTPS enforced
@@ -357,6 +367,7 @@ SELECT cron.schedule('cleanup-events', '0 2 * * *', 'SELECT cleanup_old_events()
 - [ ] Audit logging implemented
 
 ### Production
+
 - [ ] Automated backups configured
 - [ ] Disaster recovery plan tested
 - [ ] Security monitoring alerts set up

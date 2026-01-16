@@ -65,7 +65,7 @@ export interface TableEventTypes<T extends string> {
  * V2.1: Include approved events for 3-phase flow
  */
 export function generateTableEventTypes<T extends string>(
-  tableName: T,
+  tableName: T
 ): TableEventTypes<T> {
   return {
     "create.requested": `${tableName}.create.requested` as const,
@@ -173,7 +173,7 @@ export function getAllGeneratedEventTypes(): GeneratedEventType[] {
       `${table}.update.validated`,
       `${table}.delete.requested`,
       `${table}.delete.approved`,
-      `${table}.delete.validated`,
+      `${table}.delete.validated`
     );
   }
 
@@ -184,7 +184,7 @@ export function getAllGeneratedEventTypes(): GeneratedEventType[] {
  * Check if a string is a valid generated event type
  */
 export function isGeneratedEventType(
-  event: string,
+  event: string
 ): event is GeneratedEventType {
   return getAllGeneratedEventTypes().includes(event as GeneratedEventType);
 }
@@ -193,7 +193,7 @@ export function isGeneratedEventType(
  * Parse event type into table and action
  */
 export function parseEventType(
-  eventType: string,
+  eventType: string
 ): { table: string; action: TableAction } | null {
   const parts = eventType.split(".");
   if (parts.length < 3) return null;

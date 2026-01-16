@@ -156,11 +156,11 @@ export class HubProtocolClient {
     requestId: string,
     scope: HubScope[],
     expiresIn: number = 300,
-    userId?: string,
+    userId?: string
   ): Promise<{ token: string; expiresAt: number; requestId: string }> {
     logger.debug(
       { requestId, scope, expiresIn, userId },
-      "Generating access token",
+      "Generating access token"
     );
 
     try {
@@ -173,13 +173,13 @@ export class HubProtocolClient {
 
       logger.info(
         { requestId, expiresAt: result.expiresAt },
-        "Access token generated",
+        "Access token generated"
       );
       return result;
     } catch (error) {
       logger.error(
         { err: error, requestId, scope },
-        "Failed to generate access token",
+        "Failed to generate access token"
       );
       throw this.handleError(error, "generateAccessToken");
     }
@@ -214,7 +214,7 @@ export class HubProtocolClient {
   async requestData(
     token: string,
     scope: HubScope[],
-    filters?: RequestDataFilters,
+    filters?: RequestDataFilters
   ): Promise<{
     userId: string;
     requestId: string;
@@ -227,7 +227,7 @@ export class HubProtocolClient {
   }> {
     logger.debug(
       { scope, hasFilters: !!filters },
-      "Requesting data from Data Pod",
+      "Requesting data from Data Pod"
     );
 
     try {
@@ -243,7 +243,7 @@ export class HubProtocolClient {
           requestId: result.requestId,
           recordCount: result.metadata.recordCount,
         },
-        "Data retrieved from Data Pod",
+        "Data retrieved from Data Pod"
       );
 
       return result;
@@ -284,7 +284,7 @@ export class HubProtocolClient {
    */
   async submitInsight(
     token: string,
-    insight: HubInsight,
+    insight: HubInsight
   ): Promise<{
     success: boolean;
     requestId: string;
@@ -297,7 +297,7 @@ export class HubProtocolClient {
         insightType: insight.type,
         correlationId: insight.correlationId,
       },
-      "Submitting insight to Data Pod",
+      "Submitting insight to Data Pod"
     );
 
     try {
@@ -313,14 +313,14 @@ export class HubProtocolClient {
           eventsCreated: result.eventsCreated,
           success: result.success,
         },
-        "Insight submitted to Data Pod",
+        "Insight submitted to Data Pod"
       );
 
       return result;
     } catch (error) {
       logger.error(
         { err: error, insightType: insight.type },
-        "Failed to submit insight",
+        "Failed to submit insight"
       );
       throw this.handleError(error, "submitInsight");
     }
@@ -342,7 +342,7 @@ export class HubProtocolClient {
           code: error.data?.code,
           message: error.message,
         },
-        "TRPC client error",
+        "TRPC client error"
       );
 
       throw new Error(`Hub Protocol ${operation} failed: ${error.message}`);

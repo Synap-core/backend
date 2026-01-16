@@ -35,7 +35,7 @@ export const entitiesRouter = router({
         .extend({
           type: EntityTypeSchema,
           description: z.string().optional(), // Maps to 'preview'
-        }),
+        })
     )
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
@@ -87,13 +87,13 @@ export const entitiesRouter = router({
         type: EntityTypeSchema.optional(),
         workspaceId: z.string().uuid().optional(),
         limit: z.number().min(1).max(100).default(50),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const results = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          input.type ? eq(entities.type, input.type) : undefined,
+          input.type ? eq(entities.type, input.type) : undefined
         ),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -111,7 +111,7 @@ export const entitiesRouter = router({
         query: z.string(),
         type: EntityTypeSchema.optional(),
         limit: z.number().min(1).max(50).default(10),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // Simple text search for now
@@ -119,7 +119,7 @@ export const entitiesRouter = router({
       const results = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          input.type ? eq(entities.type, input.type) : undefined,
+          input.type ? eq(entities.type, input.type) : undefined
         ),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -135,7 +135,7 @@ export const entitiesRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const entity = await db.query.entities.findFirst({
@@ -164,7 +164,7 @@ export const entitiesRouter = router({
         })
         .extend({
           id: z.string().uuid(),
-        }),
+        })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
@@ -194,7 +194,7 @@ export const entitiesRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({

@@ -35,7 +35,7 @@ export default function EventContextMenu({
   const handleViewTrace = () => {
     if (event.correlationId) {
       navigate(
-        `/investigate?correlationId=${encodeURIComponent(event.correlationId)}`,
+        `/investigate?correlationId=${encodeURIComponent(event.correlationId)}`
       );
     } else {
       navigate(`/investigate?eventId=${encodeURIComponent(event.eventId)}`);
@@ -49,7 +49,7 @@ export default function EventContextMenu({
       // Navigate to event publisher with pre-filled data
       const eventData = JSON.stringify(event.data || {}, null, 2);
       navigate(
-        `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`,
+        `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`
       );
     }
   };

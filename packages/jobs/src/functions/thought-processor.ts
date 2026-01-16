@@ -27,7 +27,7 @@ export const processAnalyzedThought = inngest.createFunction(
     }
 
     console.log(
-      `📝 Creating entity from analyzed thought for user ${userId}...`,
+      `📝 Creating entity from analyzed thought for user ${userId}...`
     );
 
     // Step 1: Create entity.created event
@@ -59,7 +59,7 @@ export const processAnalyzedThought = inngest.createFunction(
     // which will actually create the entity in the database
 
     console.log(
-      `✅ Entity creation event logged: ${entityId} for user ${userId}`,
+      `✅ Entity creation event logged: ${entityId} for user ${userId}`
     );
 
     return {
@@ -67,5 +67,5 @@ export const processAnalyzedThought = inngest.createFunction(
       entityId,
       analysis,
     };
-  },
+  }
 );

@@ -49,7 +49,7 @@ export const eventsRouter = router({
         source: EventSourceSchema.optional(),
         causationId: z.string().uuid().optional(),
         correlationId: z.string().uuid().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
@@ -95,7 +95,7 @@ export const eventsRouter = router({
           correlationId: eventRecord.correlationId,
           requestId: eventRecord.metadata?.requestId,
         },
-        userId,
+        userId
       );
 
       return eventRecord;
@@ -113,7 +113,7 @@ export const eventsRouter = router({
       z.object({
         limit: z.number().min(1).max(100).default(50),
         type: z.string().optional(),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);

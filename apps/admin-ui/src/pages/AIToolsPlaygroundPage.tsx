@@ -50,7 +50,7 @@ export default function AIToolsPlaygroundPage() {
   const { data: toolSchema, isLoading: schemaLoading } =
     trpc.system.getToolSchema.useQuery(
       { toolName: selectedTool },
-      { enabled: !!selectedTool },
+      { enabled: !!selectedTool }
     );
 
   const executeMutation = trpc.system.executeTool.useMutation({
@@ -73,7 +73,7 @@ export default function AIToolsPlaygroundPage() {
   });
 
   const addToHistory = (
-    item: Omit<ExecutionHistoryItem, "id" | "timestamp">,
+    item: Omit<ExecutionHistoryItem, "id" | "timestamp">
   ) => {
     setExecutionHistory((prev) => [
       {
@@ -284,7 +284,7 @@ export default function AIToolsPlaygroundPage() {
                         {JSON.stringify(
                           executionHistory[0].parameters,
                           null,
-                          2,
+                          2
                         )}
                       </Code>
                     </div>

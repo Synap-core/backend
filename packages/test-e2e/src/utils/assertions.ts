@@ -15,7 +15,10 @@ export function expectRequested(response: any) {
 /**
  * Assert that an event was validated
  */
-export function expectValidated(validationResult: { status: string; event: any }) {
+export function expectValidated(validationResult: {
+  status: string;
+  event: any;
+}) {
   expect(validationResult.status).toBe("validated");
   expect(validationResult.event).toBeDefined();
 }
@@ -31,10 +34,7 @@ export function expectDenied(validationResult: { status: string; event: any }) {
 /**
  * Assert that an array contains an object with specific properties
  */
-export function expectToContainObject<T>(
-  array: T[],
-  properties: Partial<T>
-) {
+export function expectToContainObject<T>(array: T[], properties: Partial<T>) {
   expect(array).toContainEqual(expect.objectContaining(properties));
 }
 

@@ -22,7 +22,7 @@ export interface VectorRepositoryDatabase {
 
 export async function searchEntityVectorsRaw(
   _database: VectorRepositoryDatabase,
-  params: VectorSearchParams,
+  params: VectorSearchParams
 ): Promise<VectorSearchRow[] | null> {
   // Use JSON.stringify with ::vector cast (proven pattern from repository tests)
   // This is the same approach used in all 10 passing repository tests

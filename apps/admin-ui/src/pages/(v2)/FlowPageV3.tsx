@@ -207,7 +207,7 @@ export default function FlowPageV3() {
     // n8n nodes (column 4)
     const n8nHooks = (webhooks || []).filter(
       (w: any) =>
-        w.url?.includes("n8n") || w.name?.toLowerCase().includes("n8n"),
+        w.url?.includes("n8n") || w.name?.toLowerCase().includes("n8n")
     );
     n8nHooks.slice(0, 3).forEach((wh: any, i: number) => {
       nodes.push({

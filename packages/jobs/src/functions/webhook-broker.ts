@@ -25,8 +25,8 @@ export const handleWebhookDelivery = inngest.createFunction(
         .where(
           and(
             eq(webhookSubscriptions.userId, userId),
-            eq(webhookSubscriptions.active, true),
-          ),
+            eq(webhookSubscriptions.active, true)
+          )
         )
         .execute();
 
@@ -102,7 +102,7 @@ export const handleWebhookDelivery = inngest.createFunction(
             error: errorMsg || undefined,
           };
         });
-      }),
+      })
     );
 
     return {
@@ -110,5 +110,5 @@ export const handleWebhookDelivery = inngest.createFunction(
       count: results.length,
       results,
     };
-  },
+  }
 );

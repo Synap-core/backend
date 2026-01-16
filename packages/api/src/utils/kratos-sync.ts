@@ -59,7 +59,7 @@ export async function syncUserFromKratos(identityId: string): Promise<void> {
  */
 export async function createDefaultWorkspace(
   userId: string,
-  traits: { name?: string; email: string },
+  traits: { name?: string; email: string }
 ): Promise<void> {
   const db = await getDb();
 
@@ -83,7 +83,7 @@ export async function createDefaultWorkspace(
 
     logger.info(
       { workspaceId: workspace.id, userId },
-      "Created default workspace",
+      "Created default workspace"
     );
 
     // Add user as workspace owner
@@ -95,7 +95,7 @@ export async function createDefaultWorkspace(
 
     logger.info(
       { workspaceId: workspace.id, userId },
-      "Added user as workspace owner",
+      "Added user as workspace owner"
     );
   } catch (error) {
     logger.error({ err: error, userId }, "Failed to create default workspace");

@@ -50,13 +50,13 @@ export default function EventTypeExplorer({
   // Fetch schema for this event type
   const { data: schemaData } = trpc.system.getEventTypeSchema.useQuery(
     { eventType },
-    { enabled: !!eventType },
+    { enabled: !!eventType }
   );
 
   // Fetch recent events of this type
   const { data: recentEvents } = trpc.system.getRecentEvents.useQuery(
     { limit: 5, eventType },
-    { enabled: !!eventType },
+    { enabled: !!eventType }
   );
 
   // Publish mutation
@@ -75,7 +75,7 @@ export default function EventTypeExplorer({
   // Find workers that listen to this event
   const subscribers =
     (capabilities as any)?.workers?.filter((w: any) =>
-      w.triggers?.includes(eventType),
+      w.triggers?.includes(eventType)
     ) || [];
 
   // Find webhooks subscribed to this event

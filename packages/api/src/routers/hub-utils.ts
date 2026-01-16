@@ -23,7 +23,7 @@ const HUB_JWT_SECRET =
 
 if (!process.env.HUB_JWT_SECRET && process.env.NODE_ENV === "production") {
   logger.warn(
-    "HUB_JWT_SECRET not set - using SYNAP_SECRET_TOKEN. This is not recommended for production.",
+    "HUB_JWT_SECRET not set - using SYNAP_SECRET_TOKEN. This is not recommended for production."
   );
 }
 
@@ -56,7 +56,7 @@ export function generateHubAccessToken(
   userId: string,
   requestId: string,
   scope: string[],
-  expiresIn: number = 300,
+  expiresIn: number = 300
 ): { token: string; expiresAt: number } {
   // Clamp expiresIn between 1 and 300 seconds
   const validExpiresIn = Math.max(1, Math.min(300, expiresIn));
@@ -79,7 +79,7 @@ export function generateHubAccessToken(
 
   logger.debug(
     { userId, requestId, scope, expiresIn: validExpiresIn },
-    "Hub access token generated",
+    "Hub access token generated"
   );
 
   return {
@@ -146,7 +146,7 @@ export async function logHubAccess(
   userId: string,
   requestId: string,
   action: HubAccessEventType,
-  metadata?: Record<string, unknown>,
+  metadata?: Record<string, unknown>
 ): Promise<void> {
   try {
     const eventRepo = getEventRepository();
@@ -171,7 +171,7 @@ export async function logHubAccess(
     // Don't fail the request if audit logging fails
     logger.error(
       { err: error, userId, requestId, action },
-      "Failed to log Hub access",
+      "Failed to log Hub access"
     );
   }
 }

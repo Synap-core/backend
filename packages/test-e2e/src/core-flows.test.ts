@@ -54,7 +54,7 @@ describe("E2E Core Flows", () => {
             content:
               "Rappelle-moi d'appeler Jean pour le projet X demain à 14h",
           }),
-        },
+        }
       );
 
       expect(sendMessageResponse.ok).toBe(true);
@@ -66,7 +66,7 @@ describe("E2E Core Flows", () => {
       const sendMessageDuration = Date.now() - sendMessageStart;
       logger.info(
         { duration: `${sendMessageDuration}ms` },
-        "Send message completed",
+        "Send message completed"
       );
 
       // Step 2: Wait for AI processing (simulate - in real flow, this would be async)
@@ -82,7 +82,7 @@ describe("E2E Core Flows", () => {
           headers: {
             Cookie: user.sessionCookie || "",
           },
-        },
+        }
       );
 
       expect(getThreadResponse.ok).toBe(true);
@@ -94,7 +94,7 @@ describe("E2E Core Flows", () => {
       const totalDuration = Date.now() - sendMessageStart;
       logger.info(
         { duration: `${totalDuration}ms` },
-        "Complete conversation flow completed",
+        "Complete conversation flow completed"
       );
 
       // Performance assertion
@@ -129,7 +129,7 @@ describe("E2E Core Flows", () => {
       const createNoteDuration = Date.now() - createNoteStart;
       logger.info(
         { duration: `${createNoteDuration}ms`, noteId },
-        "Note created",
+        "Note created"
       );
 
       // Step 2: Wait for worker to process event
@@ -145,7 +145,7 @@ describe("E2E Core Flows", () => {
           headers: {
             Cookie: user.sessionCookie || "",
           },
-        },
+        }
       );
 
       expect(getNoteResponse.ok).toBe(true);
@@ -156,7 +156,7 @@ describe("E2E Core Flows", () => {
       const totalDuration = Date.now() - createNoteStart;
       logger.info(
         { duration: `${totalDuration}ms` },
-        "Event-driven flow completed",
+        "Event-driven flow completed"
       );
 
       // Performance assertion
@@ -192,7 +192,7 @@ describe("E2E Core Flows", () => {
             scope: ["preferences", "notes", "tasks"],
             expiresIn: 300,
           }),
-        },
+        }
       );
 
       expect(generateTokenResponse.ok).toBe(true);
@@ -204,7 +204,7 @@ describe("E2E Core Flows", () => {
       const generateTokenDuration = Date.now() - generateTokenStart;
       logger.info(
         { duration: `${generateTokenDuration}ms` },
-        "Access token generated",
+        "Access token generated"
       );
 
       // Step 2: Request data
@@ -217,7 +217,7 @@ describe("E2E Core Flows", () => {
             Cookie: user.sessionCookie || "",
           },
           // Note: tRPC GET requests use query params
-        },
+        }
       );
 
       // For tRPC, we need to use POST for mutations/queries with body
@@ -234,7 +234,7 @@ describe("E2E Core Flows", () => {
             scope: ["notes"],
             filters: {},
           }),
-        },
+        }
       );
 
       expect(requestDataResponsePost.ok).toBe(true);
@@ -277,7 +277,7 @@ describe("E2E Core Flows", () => {
             requestId,
             insight,
           }),
-        },
+        }
       );
 
       expect(submitInsightResponse.ok).toBe(true);
@@ -289,13 +289,13 @@ describe("E2E Core Flows", () => {
       const submitInsightDuration = Date.now() - submitInsightStart;
       logger.info(
         { duration: `${submitInsightDuration}ms` },
-        "Insight submitted",
+        "Insight submitted"
       );
 
       const totalDuration = Date.now() - hubFlowStart;
       logger.info(
         { duration: `${totalDuration}ms` },
-        "Hub Protocol flow completed",
+        "Hub Protocol flow completed"
       );
 
       // Performance assertion
@@ -337,7 +337,7 @@ describe("E2E Core Flows", () => {
           headers: {
             Cookie: userB.sessionCookie || "",
           },
-        },
+        }
       );
 
       // Should fail with 403 Forbidden or return null/empty

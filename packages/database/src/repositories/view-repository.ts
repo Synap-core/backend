@@ -1,19 +1,19 @@
 /**
  * View Repository
- * 
+ *
  * Handles all view CRUD operations with automatic event emission
  * Views include whiteboards, timelines, kanban boards, etc.
  */
 
-import { eq, and } from 'drizzle-orm';
-import { views } from '../schema/views.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
-import type { View, NewView } from '../schema/views.js';
+import { eq, and } from "drizzle-orm";
+import { views } from "../schema/views.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
+import type { View, NewView } from "../schema/views.js";
 
 export interface CreateViewInput {
   id?: string;
-  type: 'whiteboard' | 'timeline' | 'kanban' | 'table' | 'calendar';
+  type: "whiteboard" | "timeline" | "kanban" | "table" | "calendar";
   name: string;
   documentId?: string;
   workspaceId: string;
@@ -26,9 +26,13 @@ export interface UpdateViewInput {
   config?: Record<string, unknown>;
 }
 
-export class ViewRepository extends BaseRepository<View, CreateViewInput, UpdateViewInput> {
+export class ViewRepository extends BaseRepository<
+  View,
+  CreateViewInput,
+  UpdateViewInput
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'view' });
+    super(db, eventRepo, { subjectType: "view" });
   }
 
   /**
@@ -37,7 +41,9 @@ export class ViewRepository extends BaseRepository<View, CreateViewInput, Update
    */
   async create(data: CreateViewInput, userId: string): Promise<View> {
     // Determine category from type
-    const category = ['whiteboard', 'mindmap'].includes(data.type) ? 'canvas' : 'structured';
+    const category = ["whiteboard", "mindmap"].includes(data.type)
+      ? "canvas"
+      : "structured";
 
     const [view] = await this.db
       .insert(views)
@@ -54,7 +60,7 @@ export class ViewRepository extends BaseRepository<View, CreateViewInput, Update
       .returning();
 
     // Emit completed event
-    await this.emitCompleted('create', view, userId);
+    await this.emitCompleted("create", view, userId);
 
     return view;
   }
@@ -63,7 +69,11 @@ export class ViewRepository extends BaseRepository<View, CreateViewInput, Update
    * Update an existing view
    * Emits: views.update.completed
    */
-  async update(id: string, data: UpdateViewInput, userId: string): Promise<View> {
+  async update(
+    id: string,
+    data: UpdateViewInput,
+    userId: string
+  ): Promise<View> {
     const [view] = await this.db
       .update(views)
       .set({
@@ -75,11 +85,11 @@ export class ViewRepository extends BaseRepository<View, CreateViewInput, Update
       .returning();
 
     if (!view) {
-      throw new Error('View not found');
+      throw new Error("View not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('update', view, userId);
+    await this.emitCompleted("update", view, userId);
 
     return view;
   }
@@ -95,10 +105,10 @@ export class ViewRepository extends BaseRepository<View, CreateViewInput, Update
       .returning({ id: views.id });
 
     if (result.length === 0) {
-      throw new Error('View not found');
+      throw new Error("View not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 }

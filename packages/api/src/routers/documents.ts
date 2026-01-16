@@ -50,7 +50,7 @@ const UpdateDocumentSchema = z.object({
       z.object({
         content: z.string(),
         // Add other OT fields as needed
-      }),
+      })
     )
     .optional(),
   version: z.number().int().positive(),
@@ -107,7 +107,7 @@ export const documentsRouter = router({
         .select()
         .from(documents)
         .where(
-          and(eq(documents.id, input.documentId), eq(documents.userId, userId)),
+          and(eq(documents.id, input.documentId), eq(documents.userId, userId))
         )
         .limit(1);
 
@@ -140,7 +140,7 @@ export const documentsRouter = router({
         .select()
         .from(documents)
         .where(
-          and(eq(documents.id, input.documentId), eq(documents.userId, userId)),
+          and(eq(documents.id, input.documentId), eq(documents.userId, userId))
         )
         .limit(1);
 
@@ -153,14 +153,14 @@ export const documentsRouter = router({
 
       // 2. Direct storage update (to handle large content without blocking)
       // Note: This bypasses strict governance for content, but governance will catch the metadata update
-      const newContent = input.delta?.[0]?.content || ""; 
+      const newContent = input.delta?.[0]?.content || "";
       const newVersion = document.currentVersion + 1;
 
       if (input.delta) {
         await storage.upload(
           document.storageKey,
           Buffer.from(newContent, "utf-8"),
-          { contentType: document.mimeType || "text/plain" },
+          { contentType: document.mimeType || "text/plain" }
         );
       }
 
@@ -193,7 +193,7 @@ export const documentsRouter = router({
     .input(
       z.object({
         documentId: z.string(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const userId = requireUserId(ctx.userId);
@@ -242,7 +242,7 @@ export const documentsRouter = router({
       z.object({
         documentId: z.string(),
         message: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const userId = requireUserId(ctx.userId);
@@ -273,7 +273,7 @@ export const documentsRouter = router({
       z.object({
         documentId: z.string(),
         limit: z.number().default(20),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const versions = await db.query.documentVersions.findMany({
@@ -314,7 +314,7 @@ export const documentsRouter = router({
       z.object({
         documentId: z.string(),
         versionId: z.string(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const userId = requireUserId(ctx.userId);
@@ -355,7 +355,7 @@ export const documentsRouter = router({
     .input(
       z.object({
         versionId: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const version = await db.query.documentVersions.findFirst({
@@ -381,7 +381,7 @@ export const documentsRouter = router({
         .select()
         .from(documents)
         .where(
-          and(eq(documents.id, input.documentId), eq(documents.userId, userId)),
+          and(eq(documents.id, input.documentId), eq(documents.userId, userId))
         )
         .limit(1);
 
@@ -417,7 +417,7 @@ export const documentsRouter = router({
         projectId: z.string().optional(),
         type: DocumentTypeSchema.optional(),
         limit: z.number().min(1).max(100).default(50),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);

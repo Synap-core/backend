@@ -21,11 +21,11 @@ export const inboxItems = pgTable(
   {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
-    
+
     // Context
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id").notNull(), // Every inbox item belongs to a workspace
-    projectIds: uuid("project_ids").array(),      // Optional: items can be related to projects
+    projectIds: uuid("project_ids").array(), // Optional: items can be related to projects
 
     // External source (direct columns for queryability)
     provider: varchar("provider", { length: 50 }).notNull(), // 'gmail', 'google_calendar', 'slack'
@@ -71,21 +71,21 @@ export const inboxItems = pgTable(
   (table) => ({
     userStatusIdx: index("idx_inbox_user_status").on(
       table.userId,
-      table.status,
+      table.status
     ),
     providerIdx: index("idx_inbox_provider").on(table.provider),
     timestampIdx: index("idx_inbox_timestamp").on(
       table.userId,
-      table.timestamp,
+      table.timestamp
     ),
     snoozedIdx: index("idx_inbox_snoozed").on(table.userId, table.snoozedUntil),
     priorityIdx: index("idx_inbox_priority").on(table.userId, table.priority),
     externalUnique: uniqueIndex("idx_inbox_external_unique").on(
       table.userId,
       table.provider,
-      table.externalId,
+      table.externalId
     ),
-  }),
+  })
 );
 
 /**

@@ -33,7 +33,7 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
   getSignedUrl: vi
     .fn()
     .mockResolvedValue(
-      "https://signed-url.example.com/file.md?signature=abc123",
+      "https://signed-url.example.com/file.md?signature=abc123"
     ),
 }));
 
@@ -75,7 +75,7 @@ describe("R2StorageProvider", () => {
         uploadedAt: expect.any(Date),
       });
       expect(result.url).toBe(
-        "https://test-bucket.r2.dev/users/123/notes/456.md",
+        "https://test-bucket.r2.dev/users/123/notes/456.md"
       );
       expect(result.size).toBeGreaterThan(0);
       expect(PutObjectCommand).toHaveBeenCalledWith(
@@ -84,7 +84,7 @@ describe("R2StorageProvider", () => {
           Key: path,
           Body: expect.any(Buffer),
           ContentType: "text/markdown",
-        }),
+        })
       );
     });
 
@@ -239,7 +239,7 @@ describe("R2StorageProvider", () => {
       const result = await provider.getSignedUrl(path, expiresIn);
 
       expect(result).toBe(
-        "https://signed-url.example.com/file.md?signature=abc123",
+        "https://signed-url.example.com/file.md?signature=abc123"
       );
       expect(getSignedUrl).toHaveBeenCalled();
     });

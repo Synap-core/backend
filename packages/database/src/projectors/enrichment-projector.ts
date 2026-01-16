@@ -28,7 +28,7 @@ const logger = createLogger({ module: "enrichment-projector" });
  * @returns true if the event was processed, false if skipped
  */
 export async function projectEnrichmentEvent(
-  event: SynapEvent,
+  event: SynapEvent
 ): Promise<boolean> {
   // Only process enrichment events
   if (!event.type.startsWith("enrichment.")) {
@@ -72,7 +72,7 @@ export async function projectEnrichmentEvent(
         eventType: event.type,
         userId: event.userId,
       },
-      "Enrichment event projected",
+      "Enrichment event projected"
     );
 
     return true;
@@ -83,7 +83,7 @@ export async function projectEnrichmentEvent(
         eventId: event.id,
         eventType: event.type,
       },
-      "Failed to project enrichment event",
+      "Failed to project enrichment event"
     );
     throw error;
   }
@@ -221,7 +221,7 @@ async function projectEntityClassified(event: SynapEvent): Promise<void> {
       sourceEventId: event.id,
       agentId: data.classifiedBy,
       confidence: String(
-        Math.max(...data.classifications.map((c) => c.confidence)),
+        Math.max(...data.classifications.map((c) => c.confidence))
       ),
       data: {
         classifications: data.classifications,
@@ -315,7 +315,7 @@ async function projectReasoningRecorded(event: SynapEvent): Promise<void> {
  * @param fromTimestamp - Optional start timestamp (for incremental rebuilds)
  */
 export async function rebuildEnrichmentProjections(
-  fromTimestamp?: Date,
+  fromTimestamp?: Date
 ): Promise<{ processed: number; errors: number }> {
   const { events } = await import("../schema/events.js");
   const { asc, like } = await import("drizzle-orm");

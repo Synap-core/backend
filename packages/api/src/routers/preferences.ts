@@ -100,7 +100,7 @@ export const preferencesRouter = router({
               .optional(),
           })
           .optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       await ctx.db
@@ -129,7 +129,7 @@ export const preferencesRouter = router({
       z.object({
         entityType: z.string(),
         templateId: z.string(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       // Get current preferences
@@ -168,7 +168,7 @@ export const preferencesRouter = router({
     .input(
       z.object({
         customEntityTypes: z.array(z.any()),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       await ctx.db
@@ -218,7 +218,7 @@ export const preferencesRouter = router({
       z.object({
         context: z.enum(["entities", "documents", "views"]),
         mode: z.enum(["grid", "list", "table"]),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       // Get current preferences
@@ -268,18 +268,18 @@ export const preferencesRouter = router({
     });
 
     const { intelligenceServices } = await import("@synap/database/schema");
-    
+
     return {
       preferences: prefs?.intelligenceServicePreferences || {},
       available: await ctx.db.query.intelligenceServices.findMany({
-        where: eq(intelligenceServices.status, 'active'),
+        where: eq(intelligenceServices.status, "active"),
         columns: {
           id: true,
           serviceId: true,
           name: true,
           capabilities: true,
           pricing: true,
-        }
+        },
       }),
     };
   }),
@@ -288,23 +288,25 @@ export const preferencesRouter = router({
    * Set intelligence service for a capability
    */
   setIntelligenceService: protectedProcedure
-    .input(z.object({
-      serviceId: z.string(),
-      capability: z.enum(['default', 'chat', 'analysis']).default('default'),
-    }))
+    .input(
+      z.object({
+        serviceId: z.string(),
+        capability: z.enum(["default", "chat", "analysis"]).default("default"),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const { intelligenceServices, and } = await import("@synap/database");
-      
+
       // Verify service exists and is active
       const service = await ctx.db.query.intelligenceServices.findFirst({
         where: and(
           eq(intelligenceServices.serviceId, input.serviceId),
-          eq(intelligenceServices.status, 'active')
-        )
+          eq(intelligenceServices.status, "active")
+        ),
       });
 
       if (!service) {
-        throw new Error('Intelligence service not found or inactive');
+        throw new Error("Intelligence service not found or inactive");
       }
 
       // Get current preferences
@@ -312,7 +314,8 @@ export const preferencesRouter = router({
         where: eq(userPreferences.userId, ctx.userId),
       });
 
-      const currentPrefs = (current?.intelligenceServicePreferences || {}) as any;
+      const currentPrefs = (current?.intelligenceServicePreferences ||
+        {}) as any;
 
       // Merge new preference
       const newPrefs = {

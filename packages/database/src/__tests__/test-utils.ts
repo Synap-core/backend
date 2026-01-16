@@ -38,7 +38,7 @@ export function createTestEvent(overrides: Partial<any> = {}) {
 export async function waitFor(
   condition: () => Promise<boolean>,
   maxWaitMs = 10000,
-  checkIntervalMs = 500,
+  checkIntervalMs = 500
 ): Promise<boolean> {
   const start = Date.now();
 

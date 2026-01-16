@@ -25,7 +25,7 @@ const logger = createLogger({ module: "hub-transform" });
 export async function transformInsightToEvents(
   insight: HubInsight,
   userId: string,
-  requestId: string,
+  requestId: string
 ): Promise<Array<ReturnType<typeof createSynapEvent>>> {
   const events: Array<ReturnType<typeof createSynapEvent>> = [];
 
@@ -33,7 +33,7 @@ export async function transformInsightToEvents(
   if (insight.type !== "action_plan" && insight.type !== "automation") {
     throw new ValidationError(
       `Insight type '${insight.type}' cannot be transformed into events. Only 'action_plan' and 'automation' are supported.`,
-      { insightType: insight.type },
+      { insightType: insight.type }
     );
   }
 
@@ -41,7 +41,7 @@ export async function transformInsightToEvents(
   if (!insight.actions || insight.actions.length === 0) {
     logger.warn(
       { insightType: insight.type },
-      "Insight has no actions to transform",
+      "Insight has no actions to transform"
     );
     return events;
   }
@@ -50,28 +50,35 @@ export async function transformInsightToEvents(
   for (const [index, action] of insight.actions.entries()) {
     // Validate that the event type is valid
     const isValid = isValidEventType(action.eventType);
-    
+
     if (!isValid) {
       // DEBUG: Double check using isGeneratedEventType directly and log available types
-      const { isGeneratedEventType, getAllGeneratedEventTypes } = await import("@synap/events");
+      const { isGeneratedEventType, getAllGeneratedEventTypes } =
+        await import("@synap/events");
       const isGenerated = isGeneratedEventType(action.eventType);
       const allEvents = getAllGeneratedEventTypes();
-      
-      logger.error({ 
-        eventType: action.eventType, 
-        isValidWrapper: isValid, 
-        isGeneratedDirect: isGenerated,
-        availableEventCount: allEvents.length,
-        sampleEvents: allEvents.slice(0, 5)
-      }, "Event type validation failed details");
+
+      logger.error(
+        {
+          eventType: action.eventType,
+          isValidWrapper: isValid,
+          isGeneratedDirect: isGenerated,
+          availableEventCount: allEvents.length,
+          sampleEvents: allEvents.slice(0, 5),
+        },
+        "Event type validation failed details"
+      );
 
       if (!isGenerated) {
         throw new ValidationError(
           `Invalid event type: '${action.eventType}'. Action index: ${index}`,
-          { eventType: action.eventType, actionIndex: index },
+          { eventType: action.eventType, actionIndex: index }
         );
       } else {
-        logger.warn({ eventType: action.eventType }, "isValidEventType returned false but isGeneratedEventType returned true. Proceeding.");
+        logger.warn(
+          { eventType: action.eventType },
+          "isValidEventType returned false but isGeneratedEventType returned true. Proceeding."
+        );
       }
     }
 
@@ -80,7 +87,10 @@ export async function transformInsightToEvents(
       type: action.eventType as EventType,
       data: action.data,
       userId,
-      subjectId: action.subjectId || (action.data as any).entityId || (action.data as any).id,
+      subjectId:
+        action.subjectId ||
+        (action.data as any).entityId ||
+        (action.data as any).id,
       source: "automation", // Hub insights are considered automations
       correlationId: insight.correlationId,
       requestId,
@@ -102,7 +112,7 @@ export async function transformInsightToEvents(
       insightType: insight.type,
       eventsCount: events.length,
     },
-    "Transformed insight to events",
+    "Transformed insight to events"
   );
 
   return events;

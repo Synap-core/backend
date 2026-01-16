@@ -55,7 +55,7 @@ export const entityTemplates = pgTable(
       targetTypeIdx: index("idx_templates_target_type").on(table.targetType),
       entityTypeIdx: index("idx_templates_entity_type").on(table.entityType),
       inboxItemTypeIdx: index("idx_templates_inbox_type").on(
-        table.inboxItemType,
+        table.inboxItemType
       ),
 
       // Constraints
@@ -64,14 +64,14 @@ export const entityTemplates = pgTable(
         sql`
       (user_id IS NOT NULL AND workspace_id IS NULL) OR
       (user_id IS NULL AND workspace_id IS NOT NULL)
-    `,
+    `
       ),
 
       targetTypeCheck: check(
         "target_type_check",
         sql`
       target_type IN ('entity', 'document', 'project', 'inbox_item')
-    `,
+    `
       ),
 
       uniqueDefault: unique("unique_default_per_scope").on(
@@ -80,10 +80,10 @@ export const entityTemplates = pgTable(
         table.targetType,
         table.entityType,
         table.inboxItemType,
-        table.isDefault,
+        table.isDefault
       ),
     };
-  },
+  }
 );
 
 export type EntityTemplate = typeof entityTemplates.$inferSelect;

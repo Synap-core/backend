@@ -22,11 +22,14 @@ export interface CreateMessageInput {
 export type Message = typeof conversationMessages.$inferSelect;
 
 export class MessageRepository {
-  constructor(private db: any, private eventRepo: EventRepository) {}
+  constructor(
+    private db: any,
+    private eventRepo: EventRepository
+  ) {}
 
   async create(input: CreateMessageInput, userId: string): Promise<Message> {
     const messageId = randomUUID();
-    
+
     // Compute hash
     const hashInput = JSON.stringify({
       threadId: input.threadId,

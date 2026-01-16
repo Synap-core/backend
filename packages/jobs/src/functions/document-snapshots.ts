@@ -90,7 +90,7 @@ export const documentSnapshotWorker = inngest.createFunction(
       versionId: version.id,
       version: newVersion,
     };
-  },
+  }
 );
 
 /**
@@ -142,7 +142,7 @@ export const documentRestoreWorker = inngest.createFunction(
       await storage.upload(
         document.storageKey,
         Buffer.from(version.content, "utf-8"),
-        { contentType: document.mimeType || "text/plain" },
+        { contentType: document.mimeType || "text/plain" }
       );
     });
 
@@ -186,7 +186,7 @@ export const documentRestoreWorker = inngest.createFunction(
       restoredFromVersion: version.version,
       currentVersion: newVersion,
     };
-  },
+  }
 );
 
 /**
@@ -257,12 +257,12 @@ export const documentAutoSaveWorker = inngest.createFunction(
             error: error instanceof Error ? error.message : "Unknown error",
           };
         }
-      }),
+      })
     );
 
     return {
       totalSessions: activeSessions.length,
       results,
     };
-  },
+  }
 );

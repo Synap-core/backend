@@ -62,7 +62,7 @@ export const filesRouter = router({
         bucket: z.string().default(defaultBucket),
         prefix: z.string().optional(),
         maxKeys: z.number().default(100),
-      }),
+      })
     )
     .query(async ({ input }) => {
       try {
@@ -73,7 +73,7 @@ export const filesRouter = router({
             Prefix: input.prefix || "",
             MaxKeys: input.maxKeys,
             Delimiter: "/", // For folder-like navigation
-          }),
+          })
         );
 
         // Get "folders" (common prefixes)
@@ -84,7 +84,7 @@ export const filesRouter = router({
               cp.Prefix?.replace(input.prefix || "", "").replace(/\/$/, "") ||
               "",
             path: cp.Prefix || "",
-          }),
+          })
         );
 
         // Get files
@@ -125,7 +125,7 @@ export const filesRouter = router({
     .input(
       z.object({
         path: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       try {
@@ -154,7 +154,7 @@ export const filesRouter = router({
       z.object({
         path: z.string(),
         expiresIn: z.number().default(3600), // 1 hour default
-      }),
+      })
     )
     .query(async ({ input }) => {
       try {
@@ -179,7 +179,7 @@ export const filesRouter = router({
     .input(
       z.object({
         path: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const exists = await storage.exists(input.path);
@@ -193,7 +193,7 @@ export const filesRouter = router({
     .input(
       z.object({
         path: z.string(),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       try {

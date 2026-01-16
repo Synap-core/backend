@@ -1,13 +1,13 @@
 /**
  * Proposal Repository
- * 
+ *
  * SPECIAL CASE: Proposals do NOT emit events.
  * Proposals ARE part of the event flow (requested → validated state),
  * so emitting events for proposals would be redundant.
  */
 
-import { eq, and, desc } from 'drizzle-orm';
-import { proposals, type Proposal } from '../schema/index.js';
+import { eq, and, desc } from "drizzle-orm";
+import { proposals, type Proposal } from "../schema/index.js";
 
 export interface CreateProposalInput {
   workspaceId: string;
@@ -36,7 +36,7 @@ export class ProposalRepository {
       .insert(proposals)
       .values({
         ...data,
-        status: data.status || 'pending',
+        status: data.status || "pending",
       })
       .returning();
 
@@ -48,7 +48,7 @@ export class ProposalRepository {
    */
   async update(
     id: string,
-    data: Partial<Omit<Proposal, "id" | "createdAt" | "updatedAt">>,
+    data: Partial<Omit<Proposal, "id" | "createdAt" | "updatedAt">>
   ): Promise<Proposal> {
     const [proposal] = await this.db
       .update(proposals)
@@ -70,7 +70,7 @@ export class ProposalRepository {
    */
   async updateStatus(
     id: string,
-    status: 'approved' | 'rejected',
+    status: "approved" | "rejected",
     reviewedBy: string,
     reviewNotes?: string
   ): Promise<any> {
@@ -93,17 +93,14 @@ export class ProposalRepository {
       .returning();
 
     if (result.length === 0) {
-      throw new Error('Proposal not found');
+      throw new Error("Proposal not found");
     }
   }
 
   /**
    * Find proposals by workspace
    */
-  async findByWorkspace(
-    workspaceId: string,
-    status?: string,
-  ): Promise<any[]> {
+  async findByWorkspace(workspaceId: string, status?: string): Promise<any[]> {
     const conditions = [eq(proposals.workspaceId, workspaceId)];
 
     if (status) {
@@ -123,7 +120,7 @@ export class ProposalRepository {
     return this.db.query.proposals.findMany({
       where: and(
         eq(proposals.targetType, targetType),
-        eq(proposals.targetId, targetId),
+        eq(proposals.targetId, targetId)
       ),
       orderBy: [desc(proposals.createdAt)],
     });
@@ -142,17 +139,13 @@ export class ProposalRepository {
    * Approve proposal (update status to validated)
    */
   async approve(id: string, reviewedBy: string): Promise<any> {
-    return this.updateStatus(id, 'approved', reviewedBy);
+    return this.updateStatus(id, "approved", reviewedBy);
   }
 
   /**
    * Reject proposal
    */
-  async reject(
-    id: string,
-    reviewedBy: string,
-    reason: string,
-  ): Promise<any> {
-    return this.updateStatus(id, 'rejected', reviewedBy, reason);
+  async reject(id: string, reviewedBy: string, reason: string): Promise<any> {
+    return this.updateStatus(id, "rejected", reviewedBy, reason);
   }
 }

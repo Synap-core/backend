@@ -36,6 +36,7 @@ pnpm codegen:table projects --dry-run
 ## Interactive Prompts
 
 The generator asks:
+
 1. Does this table belong to a workspace?
 2. Does this table have a userId field (owner)?
 3. Generate test files?
@@ -89,6 +90,7 @@ await db.insert(projects).values({
 ## Code Preservation
 
 Re-running the generator with `--force` preserves custom code between:
+
 - `// CUSTOM START` and `// CUSTOM END` markers
 - Or prompts for confirmation before overwriting
 

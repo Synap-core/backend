@@ -59,7 +59,7 @@ export async function configureN8NWebhook(): Promise<void> {
 
       logger.info(
         { id: existing[0].id },
-        "✅ Updated existing N8N webhook subscription",
+        "✅ Updated existing N8N webhook subscription"
       );
     } else {
       // Create new subscription
@@ -79,12 +79,12 @@ export async function configureN8NWebhook(): Promise<void> {
 
       logger.info(
         { id: result[0].id, eventTypes },
-        "✅ Created N8N webhook subscription",
+        "✅ Created N8N webhook subscription"
       );
     }
 
     logger.info(
-      "🎉 N8N integration ready - events will be delivered to " + n8nUrl,
+      "🎉 N8N integration ready - events will be delivered to " + n8nUrl
     );
   } catch (error) {
     logger.error({ error }, "❌ Failed to configure N8N webhook");

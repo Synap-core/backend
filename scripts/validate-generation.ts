@@ -38,7 +38,7 @@ interface RunOptions {
 function runCommand(
   command: string,
   args: string[],
-  options: RunOptions = {},
+  options: RunOptions = {}
 ): void {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? PROJECT_ROOT,
@@ -137,7 +137,7 @@ function walk(
   current: string,
   base: string,
   files: Set<string>,
-  prefix: string,
+  prefix: string
 ): void {
   const entries = readdirSync(current);
   for (const entry of entries) {
@@ -170,7 +170,7 @@ function resolveGeneratedProjectRoot(baseDir: string): string {
   }
 
   const entries = readdirSync(baseDir, { withFileTypes: true }).filter(
-    (entry) => entry.isDirectory(),
+    (entry) => entry.isDirectory()
   );
   if (entries.length === 1) {
     const childDir = join(baseDir, entries[0].name);
@@ -181,7 +181,7 @@ function resolveGeneratedProjectRoot(baseDir: string): string {
   }
 
   throw new Error(
-    `Unable to determine generated project root within ${baseDir}.`,
+    `Unable to determine generated project root within ${baseDir}.`
   );
 }
 
@@ -195,7 +195,7 @@ async function main(): Promise<void> {
     runCommand(
       cliExecutable,
       ["new", "--genome", GENOME_PATH, "synap-generated"],
-      { shell: true, cwd: OUTPUT_DIR },
+      { shell: true, cwd: OUTPUT_DIR }
     );
   } else {
     try {
@@ -208,11 +208,11 @@ async function main(): Promise<void> {
           GENOME_PATH,
           "synap-generated",
         ],
-        { cwd: OUTPUT_DIR },
+        { cwd: OUTPUT_DIR }
       );
     } catch (error) {
       console.error(
-        "\nUnable to download @thearchitech/cli via npx. Set ARCHITECH_CLI to a local CLI executable and re-run this script.",
+        "\nUnable to download @thearchitech/cli via npx. Set ARCHITECH_CLI to a local CLI executable and re-run this script."
       );
       throw error;
     }

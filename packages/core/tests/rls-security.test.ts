@@ -176,7 +176,7 @@ describeIf(isPostgres)("Row-Level Security (RLS) Tests", () => {
           userId: userB, // Wrong user_id!
           type: "note",
           title: "Hacked Note",
-        }),
+        })
       ).rejects.toThrow();
 
       await clearCurrentUser();

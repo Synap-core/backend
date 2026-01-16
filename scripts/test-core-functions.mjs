@@ -203,7 +203,7 @@ const tests = {
       const execAsync = promisify(exec);
 
       const { stdout, stderr } = await execAsync(
-        `docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events_timescale WHERE user_id = '${TEST_USER}' AND timestamp > NOW() - INTERVAL '5 minutes'"`,
+        `docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events_timescale WHERE user_id = '${TEST_USER}' AND timestamp > NOW() - INTERVAL '5 minutes'"`
       );
 
       if (stderr) {
@@ -218,7 +218,7 @@ const tests = {
         return { passed: true, count };
       } else {
         log.warn(
-          "No recent events found (may be normal if no tests created events)",
+          "No recent events found (may be normal if no tests created events)"
         );
         return { passed: true, count };
       }
@@ -277,12 +277,12 @@ async function runAllTests() {
 
   if (totalPassed === totalTests) {
     console.log(
-      `\n${colors.green}✅ All tests passed! System ready.${colors.reset}\n`,
+      `\n${colors.green}✅ All tests passed! System ready.${colors.reset}\n`
     );
     process.exit(0);
   } else {
     console.log(
-      `\n${colors.red}❌ Some tests failed. Review errors above.${colors.reset}\n`,
+      `\n${colors.red}❌ Some tests failed. Review errors above.${colors.reset}\n`
     );
     process.exit(1);
   }

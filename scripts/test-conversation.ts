@@ -54,11 +54,11 @@ async function runTests() {
     console.log("   Hash:", msg2.hash.substring(0, 16) + "...");
     console.log(
       "   Previous hash:",
-      msg2.previousHash?.substring(0, 16) + "...",
+      msg2.previousHash?.substring(0, 16) + "..."
     );
     console.log(
       "   Suggested actions:",
-      msg2.metadata?.suggestedActions?.length,
+      msg2.metadata?.suggestedActions?.length
     );
 
     // Test 3: User confirms
@@ -98,7 +98,7 @@ async function runTests() {
     console.log(`✅ Thread has ${history.length} messages`);
     history.forEach((msg, index) => {
       console.log(
-        `   ${index + 1}. [${msg.role}] ${msg.content.substring(0, 50)}...`,
+        `   ${index + 1}. [${msg.role}] ${msg.content.substring(0, 50)}...`
       );
     });
 
@@ -115,7 +115,7 @@ async function runTests() {
     console.log("\nTest 7: Create branch from message 2");
     const branchThreadId = await conversationService.createBranch(
       msg2.id,
-      testUserId,
+      testUserId
     );
     console.log("✅ Branch created:", branchThreadId);
 
@@ -136,7 +136,7 @@ async function runTests() {
     console.log(`   Messages: ${threadInfo.messageCount}`);
     console.log(`   Branches: ${threadInfo.branches}`);
     console.log(
-      `   Latest: ${threadInfo.latestMessage?.content.substring(0, 50)}...`,
+      `   Latest: ${threadInfo.latestMessage?.content.substring(0, 50)}...`
     );
 
     // Test 9: Get user's threads
@@ -145,10 +145,10 @@ async function runTests() {
     console.log(`✅ User has ${userThreads.length} threads`);
     userThreads.forEach((thread, index) => {
       console.log(
-        `   ${index + 1}. Thread ${thread.threadId.substring(0, 8)}... (${thread.messageCount} messages)`,
+        `   ${index + 1}. Thread ${thread.threadId.substring(0, 8)}... (${thread.messageCount} messages)`
       );
       console.log(
-        `      Latest: ${thread.latestMessage.content.substring(0, 40)}...`,
+        `      Latest: ${thread.latestMessage.content.substring(0, 40)}...`
       );
     });
 

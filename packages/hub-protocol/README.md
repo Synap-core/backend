@@ -15,21 +15,21 @@ npm install @synap/hub-protocol
 ### Basic Validation
 
 ```typescript
-import { validateHubInsight, type HubInsight } from '@synap/hub-protocol';
+import { validateHubInsight, type HubInsight } from "@synap/hub-protocol";
 
 const insight: HubInsight = {
-  version: '1.0',
-  type: 'action_plan',
-  correlationId: '123e4567-e89b-12d3-a456-426614174000',
+  version: "1.0",
+  type: "action_plan",
+  correlationId: "123e4567-e89b-12d3-a456-426614174000",
   actions: [
     {
-      eventType: 'project.creation.requested',
-      data: { title: 'My Project' },
+      eventType: "project.creation.requested",
+      data: { title: "My Project" },
       requiresConfirmation: false,
     },
   ],
   confidence: 0.95,
-  reasoning: 'Based on user preferences',
+  reasoning: "Based on user preferences",
 };
 
 // Validate the insight
@@ -39,11 +39,11 @@ const validated = validateHubInsight(insight);
 ### Type Guards
 
 ```typescript
-import { isActionPlan, isAnalysis } from '@synap/hub-protocol';
+import { isActionPlan, isAnalysis } from "@synap/hub-protocol";
 
 if (isActionPlan(insight)) {
   // TypeScript knows actions is defined
-  insight.actions.forEach(action => {
+  insight.actions.forEach((action) => {
     console.log(action.eventType);
   });
 }
@@ -57,7 +57,11 @@ if (isAnalysis(insight)) {
 ### Schemas
 
 ```typescript
-import { HubInsightSchema, ActionSchema, AnalysisSchema } from '@synap/hub-protocol';
+import {
+  HubInsightSchema,
+  ActionSchema,
+  AnalysisSchema,
+} from "@synap/hub-protocol";
 
 // Use with Zod for custom validation
 const result = HubInsightSchema.safeParse(data);
@@ -110,4 +114,3 @@ See [Hub Protocol V1.0 Specification](../../docs/architecture/PRDs/HUB_PROTOCOL_
 ## License
 
 MIT
-

@@ -51,7 +51,7 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
   if (!keyRecord) {
     logger.warn(
       { path, keyPrefix: apiKey.substring(0, 15) },
-      "Invalid or expired API key",
+      "Invalid or expired API key"
     );
     throw new TRPCError({
       code: "UNAUTHORIZED",
@@ -68,7 +68,7 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
         keyName: keyRecord.keyName,
         path,
       },
-      "Rate limit exceeded",
+      "Rate limit exceeded"
     );
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
@@ -83,7 +83,7 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
       scopes: keyRecord.scope,
       path,
     },
-    "API key validated successfully",
+    "API key validated successfully"
   );
 
   // Add authentication context
@@ -116,7 +116,7 @@ export function createScopedProcedure(requiredScopes: string[]) {
 
     // Check all required scopes
     const missingScopes = requiredScopes.filter(
-      (scope) => !hasScope(scopes, scope),
+      (scope) => !hasScope(scopes, scope)
     );
 
     if (missingScopes.length > 0) {
@@ -129,7 +129,7 @@ export function createScopedProcedure(requiredScopes: string[]) {
           missingScopes,
           path,
         },
-        "Insufficient scopes",
+        "Insufficient scopes"
       );
 
       throw new TRPCError({

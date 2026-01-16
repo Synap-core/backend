@@ -42,7 +42,7 @@ async function runE2ETest() {
     console.log("✅ User message saved:", userMessage.id);
 
     divider(
-      "🧠 STEP 2: Synap Agent orchestrates intent → context → plan → execution",
+      "🧠 STEP 2: Synap Agent orchestrates intent → context → plan → execution"
     );
 
     const agentState = await runSynapAgent({
@@ -111,7 +111,7 @@ async function runE2ETest() {
     console.log("✅ Assistant message saved:", assistantMessage.id);
 
     divider(
-      "📦 STEP 4: Verify that tools executed side-effects (events, storage, etc.)",
+      "📦 STEP 4: Verify that tools executed side-effects (events, storage, etc.)"
     );
 
     const executed = agentState.execution ?? [];
@@ -124,13 +124,13 @@ async function runE2ETest() {
           const result = log.result as { eventId?: string; entityId?: string };
           if (result.eventId && result.entityId) {
             const events = await eventService.getAggregateStream(
-              result.entityId,
+              result.entityId
             );
             const event = events.find((evt) => evt.id === result.eventId);
 
             if (event) {
               console.log(
-                `   Event recorded: ${event.eventType} (${event.id})`,
+                `   Event recorded: ${event.eventType} (${event.id})`
               );
             } else {
               console.warn("   ⚠️ Unable to locate event for:", result.eventId);
@@ -148,7 +148,7 @@ async function runE2ETest() {
     const integrity = await conversationService.verifyHashChain(threadId);
     console.log(
       "✅ Hash chain:",
-      integrity.isValid ? "VALID ✅" : "INVALID ❌",
+      integrity.isValid ? "VALID ✅" : "INVALID ❌"
     );
 
     console.log("\n" + "=".repeat(60));

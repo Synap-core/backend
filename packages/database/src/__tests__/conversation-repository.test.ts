@@ -246,7 +246,7 @@ describe("ConversationRepository", () => {
       `;
 
       expect(
-        history.map((h) => ({ role: h.role, content: h.content })),
+        history.map((h) => ({ role: h.role, content: h.content }))
       ).toEqual(messages);
     });
 

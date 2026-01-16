@@ -26,20 +26,24 @@
 **File**: `packages/database/src/schema/your-table.ts`
 
 ```typescript
-import { pgTable, uuid, text, timestamp, jsonb } from 'drizzle-orm/pg-core';
-import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-export const yourTable = pgTable('your_table', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  userId: text('user_id').notNull(),
-  workspaceId: uuid('workspace_id').notNull(),
-  
+export const yourTable = pgTable("your_table", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id").notNull(),
+  workspaceId: uuid("workspace_id").notNull(),
+
   // Your fields here
-  name: text('name').notNull(),
-  metadata: jsonb('metadata').default({}).notNull(),
-  
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  name: text("name").notNull(),
+  metadata: jsonb("metadata").default({}).notNull(),
+
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
 });
 
 export type YourTable = typeof yourTable.$inferSelect;
@@ -50,6 +54,7 @@ export const selectYourTableSchema = createSelectSchema(yourTable);
 ```
 
 **Then**:
+
 1. Add to `packages/database/src/schema/index.ts`
 2. Run `pnpm --filter @synap/database db:generate`
 3. Run `pnpm --filter @synap/database db:push`
@@ -61,9 +66,9 @@ export const selectYourTableSchema = createSelectSchema(yourTable);
 **File**: `packages/database/src/repositories/your-table-repository.ts`
 
 ```typescript
-import { eq, and } from 'drizzle-orm';
-import { yourTable } from '../schema/index.js';
-import { BaseRepository } from './base-repository.js';
+import { eq, and } from "drizzle-orm";
+import { yourTable } from "../schema/index.js";
+import { BaseRepository } from "./base-repository.js";
 
 export interface CreateYourTableInput {
   name: string;
@@ -73,7 +78,10 @@ export interface CreateYourTableInput {
 
 export class YourTableRepository extends BaseRepository {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'yourTable', pluralName: 'yourTables' });
+    super(db, eventRepo, {
+      subjectType: "yourTable",
+      pluralName: "yourTables",
+    });
   }
 
   async create(data: CreateYourTableInput, userId: string) {
@@ -82,7 +90,7 @@ export class YourTableRepository extends BaseRepository {
       .values({ ...data })
       .returning();
 
-    await this.emitCompleted('create', record, userId);
+    await this.emitCompleted("create", record, userId);
     return record;
   }
 
@@ -93,8 +101,8 @@ export class YourTableRepository extends BaseRepository {
       .where(and(eq(yourTable.id, id), eq(yourTable.userId, userId)))
       .returning();
 
-    if (!record) throw new Error('Not found');
-    await this.emitCompleted('update', record, userId);
+    if (!record) throw new Error("Not found");
+    await this.emitCompleted("update", record, userId);
     return record;
   }
 
@@ -102,8 +110,8 @@ export class YourTableRepository extends BaseRepository {
     await this.db
       .delete(yourTable)
       .where(and(eq(yourTable.id, id), eq(yourTable.userId, userId)));
-    
-    await this.emitCompleted('delete', { id }, userId);
+
+    await this.emitCompleted("delete", { id }, userId);
   }
 }
 ```
@@ -117,37 +125,42 @@ export class YourTableRepository extends BaseRepository {
 **File**: `packages/jobs/src/executors/your-table-executor.ts`
 
 ```typescript
-import { inngest } from '../client.js';
-import { getDb, EventRepository, YourTableRepository } from '@synap/database';
+import { inngest } from "../client.js";
+import { getDb, EventRepository, YourTableRepository } from "@synap/database";
 
 export const yourTableHandler = async ({ event, step }) => {
-  const action = event.name.split('.')[1];
+  const action = event.name.split(".")[1];
   const { userId } = event.user;
   const data = event.data;
-  
+
   const db = await getDb();
   const eventRepo = new EventRepository(db);
   const repo = new YourTableRepository(db, eventRepo);
-  
-  if (action === 'create') {
-    await step.run('create', () => repo.create(data, userId));
-  } else if (action === 'update') {
-    await step.run('update', () => repo.update(data.id, data, userId));
-  } else if (action === 'delete') {
-    await step.run('delete', () => repo.delete(data.id, userId));
+
+  if (action === "create") {
+    await step.run("create", () => repo.create(data, userId));
+  } else if (action === "update") {
+    await step.run("update", () => repo.update(data.id, data, userId));
+  } else if (action === "delete") {
+    await step.run("delete", () => repo.delete(data.id, userId));
   }
-  
+
   return { success: true };
 };
 
 export const yourTableExecutor = inngest.createFunction(
-  { id: 'your-table-executor', name: 'YourTable Operations', concurrency: { limit: 20 } },
-  { event: 'yourTable.*.validated' },
+  {
+    id: "your-table-executor",
+    name: "YourTable Operations",
+    concurrency: { limit: 20 },
+  },
+  { event: "yourTable.*.validated" },
   yourTableHandler
 );
 ```
 
 **Register**:
+
 1. Export from `packages/jobs/src/executors/index.ts`
 2. Add to functions array in `packages/jobs/src/index.ts`
 
@@ -158,34 +171,33 @@ export const yourTableExecutor = inngest.createFunction(
 **File**: `packages/api/src/routers/your-table.ts`
 
 ```typescript
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { emitRequestEvent } from '../utils/emit-event.js';
-import { randomUUID } from 'crypto';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import { emitRequestEvent } from "../utils/emit-event.js";
+import { randomUUID } from "crypto";
 
 export const yourTableRouter = router({
   create: protectedProcedure
     .input(z.object({ name: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
-      
+
       await emitRequestEvent({
-        type: 'yourTable.create.requested',
+        type: "yourTable.create.requested",
         subjectId: id,
-        subjectType: 'yourTable',
+        subjectType: "yourTable",
         data: { id, ...input, userId: ctx.userId },
         userId: ctx.userId,
       });
-      
-      return { id, status: 'requested' };
+
+      return { id, status: "requested" };
     }),
 
-  list: protectedProcedure
-    .query(async ({ ctx }) => {
-      return db.query.yourTable.findMany({
-        where: eq(yourTable.userId, ctx.userId),
-      });
-    }),
+  list: protectedProcedure.query(async ({ ctx }) => {
+    return db.query.yourTable.findMany({
+      where: eq(yourTable.userId, ctx.userId),
+    });
+  }),
 });
 ```
 
@@ -221,6 +233,7 @@ User
 ### Roles
 
 **Workspace & Project Roles**:
+
 - `owner`: Full control
 - `admin`: Manage members, settings
 - `editor`: Create/edit content
@@ -229,16 +242,17 @@ User
 ### User Preferences
 
 ```typescript
-import { getUserPreference, setUserPreference } from '@synap/database';
+import { getUserPreference, setUserPreference } from "@synap/database";
 
 // Get
-const pref = await getUserPreference(userId, 'entity.deleteDocument');
+const pref = await getUserPreference(userId, "entity.deleteDocument");
 
 // Set
-await setUserPreference(userId, 'entity.deleteDocument', false);
+await setUserPreference(userId, "entity.deleteDocument", false);
 ```
 
 **Available Keys**:
+
 - `entity.deleteDocument` - Cascade delete (default: true)
 - `editor.autosave` - Auto-save enabled (default: true)
 - `editor.autosaveInterval` - Seconds (default: 30)
@@ -247,12 +261,19 @@ await setUserPreference(userId, 'entity.deleteDocument', false);
 ### Workspace Preferences
 
 ```typescript
-import { getWorkspacePreference, setWorkspacePreference } from '@synap/database';
+import {
+  getWorkspacePreference,
+  setWorkspacePreference,
+} from "@synap/database";
 
-const aiEnabled = await getWorkspacePreference(workspaceId, 'features.aiEnabled');
+const aiEnabled = await getWorkspacePreference(
+  workspaceId,
+  "features.aiEnabled"
+);
 ```
 
 **Available Keys**:
+
 - `features.aiEnabled` - AI toggle (default: true)
 - `features.collaborativeEditing` - Collab (default: true)
 - `retention.documentDays` - Retention (default: 90)
@@ -275,19 +296,23 @@ Examples:
 ### Emitting Events
 
 **Router**:
+
 ```typescript
 await emitRequestEvent({
-  type: 'yourTable.create.requested',
+  type: "yourTable.create.requested",
   subjectId: id,
-  subjectType: 'yourTable',
-  data: { /* data */ },
+  subjectType: "yourTable",
+  data: {
+    /* data */
+  },
   userId: ctx.userId,
 });
 ```
 
 **Repository** (automatic via BaseRepository):
+
 ```typescript
-await this.emitCompleted('create', record, userId);
+await this.emitCompleted("create", record, userId);
 ```
 
 ---
@@ -303,8 +328,8 @@ await this.emitCompleted('create', record, userId);
 
 ```typescript
 // In executor
-const { getUserPreference } = await import('@synap/database');
-const userPref = await getUserPreference(userId, 'entity.deleteDocument');
+const { getUserPreference } = await import("@synap/database");
+const userPref = await getUserPreference(userId, "entity.deleteDocument");
 
 // Allow override
 const finalValue = data.deleteDocument ?? userPref;
@@ -313,6 +338,7 @@ const finalValue = data.deleteDocument ?? userPref;
 ### Default Values
 
 **Application-level** (in code, not DB):
+
 - Easy to update (no migration)
 - Sparse storage (only changes saved)
 - Always returns a value
@@ -324,14 +350,14 @@ const finalValue = data.deleteDocument ?? userPref;
 ### Upload Pattern
 
 ```typescript
-const uploadResult = await step.run('upload', async () => {
-  const { storage } = await import('@synap/storage');
-  
-  const key = storage.buildPath(userId, 'documents', id, 'md');
+const uploadResult = await step.run("upload", async () => {
+  const { storage } = await import("@synap/storage");
+
+  const key = storage.buildPath(userId, "documents", id, "md");
   const metadata = await storage.upload(key, content, {
-    contentType: 'text/markdown'
+    contentType: "text/markdown",
   });
-  
+
   return { url: metadata.url, key: metadata.path, size: metadata.size };
 });
 ```
@@ -342,13 +368,13 @@ const uploadResult = await step.run('upload', async () => {
 
 ```typescript
 // 1. Delete from storage
-await step.run('delete-storage', async () => {
-  const { storage } = await import('@synap/storage');
+await step.run("delete-storage", async () => {
+  const { storage } = await import("@synap/storage");
   await storage.delete(record.storageKey);
 });
 
 // 2. Delete from DB
-await step.run('delete-record', () => repo.delete(id, userId));
+await step.run("delete-record", () => repo.delete(id, userId));
 ```
 
 ---
@@ -378,6 +404,7 @@ await step.run('delete-record', () => repo.delete(id, userId));
 ## Quick Checklist
 
 Adding a new table:
+
 - [ ] Schema created (`schema/your-table.ts`)
 - [ ] Repository created (`repositories/your-repo.ts`)
 - [ ] Executor created (`executors/your-executor.ts`)

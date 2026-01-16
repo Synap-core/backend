@@ -31,7 +31,10 @@ export class EventStreamListener extends EventEmitter {
   private eventSource: EventSource | null = null;
   private connected = false;
 
-  constructor(private apiUrl: string, private sessionCookie: string) {
+  constructor(
+    private apiUrl: string,
+    private sessionCookie: string
+  ) {
     super();
   }
 
@@ -39,7 +42,7 @@ export class EventStreamListener extends EventEmitter {
     return new Promise((resolve, reject) => {
       // SSE endpoint for admin events
       const url = `${this.apiUrl}/admin/events/stream`;
-      
+
       this.eventSource = new EventSource(url, {
         headers: {
           Cookie: this.sessionCookie,
@@ -63,7 +66,7 @@ export class EventStreamListener extends EventEmitter {
         try {
           const data = JSON.parse(event.data);
           this.emit("event", data);
-          
+
           // Emit specific event type
           if (data.type) {
             this.emit(data.type, data);
@@ -182,12 +185,9 @@ export class InngestEventSpy {
   /**
    * Wait for a specific event to be processed by Inngest
    */
-  async waitForEvent(
-    eventName: string,
-    timeout = 10000
-  ): Promise<any> {
+  async waitForEvent(eventName: string, timeout = 10000): Promise<any> {
     const startTime = Date.now();
-    
+
     while (Date.now() - startTime < timeout) {
       const events = await this.getEvents({ name: eventName });
       if (events.length > 0) {
@@ -298,21 +298,24 @@ export class DatabaseTestHelpers {
    */
   async cleanup(workspaceId: string): Promise<void> {
     const { entities, proposals, eq } = await import("@synap/database");
-    
+
     logger.info({ workspaceId }, "Cleaning up test data");
-    
+
     // Delete test entities
     await this.db.delete(entities).where(eq(entities.workspaceId, workspaceId));
-    
+
     // Delete test proposals
-    await this.db.delete(proposals).where(eq(proposals.workspaceId, workspaceId));
+    await this.db
+      .delete(proposals)
+      .where(eq(proposals.workspaceId, workspaceId));
   }
 }
 
 /**
  * Wait helper
  */
-export const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+export const wait = (ms: number) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Retry helper for eventually consistent operations

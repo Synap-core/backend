@@ -20,14 +20,14 @@ export async function handleInboxItemReceived(
     id: string;
     userId: string;
     timestamp: Date;
-  },
+  }
 ) {
   logger.info(
     {
       itemId: event.subjectId,
       provider: event.data.provider,
     },
-    "Storing inbox item",
+    "Storing inbox item"
   );
 
   try {
@@ -54,7 +54,7 @@ export async function handleInboxItemReceived(
         err: error,
         itemId: event.subjectId,
       },
-      "Failed to store inbox item",
+      "Failed to store inbox item"
     );
     throw error;
   }

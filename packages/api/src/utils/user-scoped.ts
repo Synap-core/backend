@@ -75,7 +75,7 @@ export function requireEventUserId(data: any): EventDataWithUser {
   if (!data.userId) {
     throw new ValidationError(
       "Event data must include userId for multi-user isolation",
-      { data },
+      { data }
     );
   }
   return data as EventDataWithUser;

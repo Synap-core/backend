@@ -96,7 +96,7 @@ export class KnowledgeRepository {
   }
 
   async searchFacts(
-    input: SearchKnowledgeFactsInput,
+    input: SearchKnowledgeFactsInput
   ): Promise<KnowledgeFactRecord[]> {
     const { userId, query, limit = 10 } = input;
 
@@ -123,7 +123,7 @@ export class KnowledgeRepository {
 
   private async fetchFacts(
     userId: string,
-    limit: number,
+    limit: number
   ): Promise<KnowledgeFactRecord[]> {
     if (this.useDatabase) {
       const dbResult = await sql`
@@ -147,7 +147,7 @@ export class KnowledgeRepository {
   private ensureEmbeddingDimensions(embedding: number[]) {
     if (embedding.length !== 1536) {
       throw new Error(
-        `Knowledge embeddings must have 1536 dimensions. Received ${embedding.length}.`,
+        `Knowledge embeddings must have 1536 dimensions. Received ${embedding.length}.`
       );
     }
   }
@@ -179,12 +179,12 @@ export class KnowledgeRepository {
       text
         .toLowerCase()
         .split(/[^a-z0-9àâçéèêëîïôûùüÿñæœ]+/u)
-        .filter(Boolean),
+        .filter(Boolean)
     );
   }
 
   private mapRow(
-    row: KnowledgeFactRow | Record<string, unknown>,
+    row: KnowledgeFactRow | Record<string, unknown>
   ): KnowledgeFactRecord {
     const raw = row as Record<string, unknown>;
 

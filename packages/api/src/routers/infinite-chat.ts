@@ -43,7 +43,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
         createdAt: true, // Auto-generated timestamp
         updatedAt: true, // Auto-generated timestamp
         mergedAt: true, // Only set when merged
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const threadId = randomUUID();
@@ -75,7 +75,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
       z.object({
         threadId: z.string().uuid(),
         content: z.string().min(1),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const { threadId, content } = input;
@@ -109,7 +109,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
       const resolvedService = await resolveIntelligenceService({
         userId: ctx.userId,
         workspaceId: thread.projectId ?? undefined,
-        capability: 'chat'
+        capability: "chat",
       });
 
       // Stream from Intelligence Service (now dynamic)
@@ -156,7 +156,10 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
           } else if (chunk.type === "complete") {
             // ✅ FIXED: Extract data from complete event
             if (chunk.data) {
-              hubResponse = { ...hubResponse, ...(chunk.data as Partial<HubResponse>) };
+              hubResponse = {
+                ...hubResponse,
+                ...(chunk.data as Partial<HubResponse>),
+              };
             }
 
             // Final emission
@@ -170,7 +173,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
       } catch (streamError) {
         console.error(
           "Streaming error, falling back to non-streaming:",
-          streamError,
+          streamError
         );
 
         // ✅ ADDED: Notify frontend of streaming failure (Issue #9)
@@ -211,8 +214,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
         previousHash: userMessageHash,
         hash: assistantMessageHash,
         metadata: {
-          aiSteps:
-            aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
+          aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
           tokens: hubResponse?.usage?.totalTokens,
         } as any, // Drizzle JSONB type is flexible
       });
@@ -258,7 +260,8 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
             projectId: thread.projectId,
             parentThreadId: threadId,
             branchedFromMessageId: assistantMessageId,
-            branchPurpose: branchDecision.suggestedPurpose || branchDecision.reason,
+            branchPurpose:
+              branchDecision.suggestedPurpose || branchDecision.reason,
             agentId: branchDecision.suggestedAgentType || "research-agent",
             threadType: "branch",
             status: "active",
@@ -291,7 +294,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
       z.object({
         threadId: z.string().uuid(),
         limit: z.number().min(1).max(100).default(50),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const messages = await db.query.conversationMessages.findMany({
@@ -317,7 +320,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
         projectId: z.string().uuid().optional(),
         threadType: z.enum(["main", "branch"]).optional(),
         limit: z.number().min(1).max(100).default(20),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const threads = await db.query.chatThreads.findMany({
@@ -329,7 +332,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
           input.threadType
             ? eq(chatThreads.threadType, input.threadType)
             : undefined,
-          eq(chatThreads.status, "active"),
+          eq(chatThreads.status, "active")
         ),
         orderBy: [desc(chatThreads.updatedAt)],
         limit: input.limit,
@@ -345,7 +348,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
     .input(
       z.object({
         parentThreadId: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const branches = await db.query.chatThreads.findMany({
@@ -363,7 +366,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
     .input(
       z.object({
         branchId: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const branch = await db.query.chatThreads.findFirst({

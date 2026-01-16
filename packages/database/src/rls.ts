@@ -18,7 +18,7 @@ import { sql } from "drizzle-orm";
  */
 export async function withRLSContext<T>(
   userId: string,
-  callback: () => Promise<T>,
+  callback: () => Promise<T>
 ): Promise<T> {
   return await db.transaction(async (tx) => {
     // Set session variable for RLS policies
@@ -34,7 +34,7 @@ export async function withRLSContext<T>(
  * Used for public link access
  */
 export async function withPublicContext<T>(
-  callback: () => Promise<T>,
+  callback: () => Promise<T>
 ): Promise<T> {
   return await db.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL app.user_id = 'public'`);
@@ -49,7 +49,7 @@ export async function withPublicContext<T>(
  * IMPORTANT: Only use this in event handlers after permission validation!
  */
 export async function withoutRLSContext<T>(
-  callback: () => Promise<T>,
+  callback: () => Promise<T>
 ): Promise<T> {
   // Event handlers bypass RLS because:
   // 1. They validate permissions before persisting

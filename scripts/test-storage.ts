@@ -101,7 +101,7 @@ async function testStorage() {
       console.log(`   Built: ${builtPath}\n`);
     } else {
       console.error(
-        `❌ Path building failed: Expected "${expectedPath}", got "${builtPath}"`,
+        `❌ Path building failed: Expected "${expectedPath}", got "${builtPath}"`
       );
       process.exit(1);
     }
@@ -145,7 +145,7 @@ async function testStorage() {
   } catch (error) {
     console.warn(
       "⚠️  Signed URL test skipped (may not be supported):",
-      error instanceof Error ? error.message : "Unknown error",
+      error instanceof Error ? error.message : "Unknown error"
     );
     console.log("");
   }

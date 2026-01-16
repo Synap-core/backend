@@ -41,7 +41,7 @@ export const webhooksRouter = router({
         url: z.string().url(),
         eventTypes: z.array(z.string()).min(1),
         secret: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -49,7 +49,7 @@ export const webhooksRouter = router({
 
       logger.info(
         { userId, name: input.name, url: input.url },
-        "Creating webhook subscription",
+        "Creating webhook subscription"
       );
 
       try {
@@ -72,7 +72,7 @@ export const webhooksRouter = router({
       } catch (error) {
         logger.error(
           { err: error, userId },
-          "Failed to create webhook subscription",
+          "Failed to create webhook subscription"
         );
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -98,7 +98,7 @@ export const webhooksRouter = router({
     } catch (error) {
       logger.error(
         { err: error, userId },
-        "Failed to list webhook subscriptions",
+        "Failed to list webhook subscriptions"
       );
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
@@ -123,7 +123,7 @@ export const webhooksRouter = router({
         const existing = await db.query.webhookSubscriptions.findFirst({
           where: and(
             eq(webhookSubscriptions.id, id),
-            eq(webhookSubscriptions.userId, userId),
+            eq(webhookSubscriptions.userId, userId)
           ),
         });
 
@@ -147,7 +147,7 @@ export const webhooksRouter = router({
 
         logger.error(
           { err: error, userId, webhookId: id },
-          "Failed to update webhook subscription",
+          "Failed to update webhook subscription"
         );
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -166,7 +166,7 @@ export const webhooksRouter = router({
 
       logger.info(
         { userId, webhookId: input.id },
-        "Deleting webhook subscription",
+        "Deleting webhook subscription"
       );
 
       try {
@@ -175,8 +175,8 @@ export const webhooksRouter = router({
           .where(
             and(
               eq(webhookSubscriptions.id, input.id),
-              eq(webhookSubscriptions.userId, userId),
-            ),
+              eq(webhookSubscriptions.userId, userId)
+            )
           )
           .returning();
 
@@ -193,7 +193,7 @@ export const webhooksRouter = router({
 
         logger.error(
           { err: error, userId, webhookId: input.id },
-          "Failed to delete webhook subscription",
+          "Failed to delete webhook subscription"
         );
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",

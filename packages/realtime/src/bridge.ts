@@ -43,7 +43,7 @@ export function setupBridge(io: SocketIOServer, httpServer: any) {
       for (const listener of originalListeners) {
         listener(req, res);
       }
-    },
+    }
   );
 
   console.log("[Bridge] ✅ HTTP endpoint ready at /bridge/emit");
@@ -55,7 +55,7 @@ export function setupBridge(io: SocketIOServer, httpServer: any) {
 async function handleBridgeRequest(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse,
+  res: ServerResponse
 ) {
   const url = req.url || "";
 
@@ -103,7 +103,7 @@ async function handleBridgeRequest(
 async function handleEmit(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse,
+  res: ServerResponse
 ) {
   try {
     // Parse request body
@@ -123,7 +123,7 @@ async function handleEmit(
       res.end(
         JSON.stringify({
           error: "Must provide at least one of: workspaceId, viewId, userId",
-        }),
+        })
       );
       return;
     }
@@ -162,7 +162,7 @@ async function handleEmit(
         success: true,
         emitCount,
         event,
-      }),
+      })
     );
   } catch (error) {
     console.error("[Bridge] Error handling emit:", error);
@@ -171,7 +171,7 @@ async function handleEmit(
       JSON.stringify({
         error: "Internal server error",
         message: error instanceof Error ? error.message : String(error),
-      }),
+      })
     );
   }
 }
@@ -207,7 +207,7 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
 async function handleYjsGetState(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse,
+  res: ServerResponse
 ) {
   try {
     // Extract roomId from URL
@@ -227,7 +227,7 @@ async function handleYjsGetState(
       JSON.stringify({
         error: "Not implemented - requires y-socket.io document access",
         roomId,
-      }),
+      })
     );
   } catch (error) {
     console.error("[Bridge] Error getting Yjs state:", error);
@@ -243,7 +243,7 @@ async function handleYjsGetState(
 async function handleYjsRestore(
   io: SocketIOServer,
   req: IncomingMessage,
-  res: ServerResponse,
+  res: ServerResponse
 ) {
   try {
     // Extract roomId from URL
@@ -271,7 +271,7 @@ async function handleYjsRestore(
       JSON.stringify({
         error: "Not implemented - requires y-socket.io document access",
         roomId,
-      }),
+      })
     );
   } catch (error) {
     console.error("[Bridge] Error restoring Yjs state:", error);

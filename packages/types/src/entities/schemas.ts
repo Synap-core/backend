@@ -96,7 +96,7 @@ export type EntityMetadata = {
  */
 export function validateEntityMetadata<T extends EntityType>(
   type: T,
-  metadata: unknown,
+  metadata: unknown
 ): z.infer<(typeof ENTITY_SCHEMAS)[T]> {
   return ENTITY_SCHEMAS[type].parse(metadata) as z.infer<
     (typeof ENTITY_SCHEMAS)[T]
@@ -108,7 +108,7 @@ export function validateEntityMetadata<T extends EntityType>(
  */
 export function safeValidateEntityMetadata<T extends EntityType>(
   type: T,
-  metadata: unknown,
+  metadata: unknown
 ) {
   return ENTITY_SCHEMAS[type].safeParse(metadata);
 }

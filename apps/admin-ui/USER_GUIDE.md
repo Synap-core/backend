@@ -34,6 +34,7 @@ The Dashboard is your command center.
 ### System Health Metrics
 
 View real-time metrics:
+
 - **Total Events**: Number of events in the system
 - **Active Users**: Currently active users
 - **System Health**: Overall system status (Healthy/Warning/Critical)
@@ -63,6 +64,7 @@ Fast access to common tasks:
 ### Live Event Stream
 
 Watch events as they happen:
+
 - **Auto-refresh**: Enabled by default (every 5 seconds)
 - **Manual Refresh**: Click the refresh icon
 - **Pause/Resume**: Toggle auto-refresh
@@ -70,6 +72,7 @@ Watch events as they happen:
 - **Right-Click Event**: Open context menu
 
 **Context Menu Options:**
+
 - **Inspect in Detail**: Full event view
 - **View Full Trace**: See correlated events
 - **Publish Similar Event**: Clone for testing
@@ -96,11 +99,13 @@ The Investigate page helps you debug and trace issues.
 ### Viewing Results
 
 **Event List:**
+
 - Click any event to see details
 - Selected event is highlighted
 - Related events shown in timeline
 
 **Event Details Panel:**
+
 - Full event data
 - Metadata
 - Correlation IDs
@@ -109,6 +114,7 @@ The Investigate page helps you debug and trace issues.
 ### Event Timeline
 
 When viewing an event, you'll see:
+
 - **Related Events**: Events with same correlation ID
 - **Chronological Order**: Events sorted by timestamp
 - **Quick Actions**: Click "View details" to inspect related events
@@ -208,6 +214,7 @@ The Explore page shows your system architecture.
 ### Architecture View
 
 See all system components:
+
 - **Event Store**: Where events are stored
 - **AI Tools**: Available AI capabilities
 - **Handlers**: Event processors
@@ -216,6 +223,7 @@ See all system components:
 ### Tool Registry
 
 Browse all available AI tools:
+
 - Tool name and description
 - Version and source
 - Click to test in Testing page
@@ -223,6 +231,7 @@ Browse all available AI tools:
 ### Recent Events
 
 See examples of recent system activity:
+
 - Event types
 - Timestamps
 - Sample data
@@ -252,6 +261,7 @@ See examples of recent system activity:
 ### 1. Use Templates
 
 Instead of manually creating events:
+
 - Use templates for common event types
 - Modify as needed
 - Save time!
@@ -259,6 +269,7 @@ Instead of manually creating events:
 ### 2. Search History
 
 The search modal remembers:
+
 - Last 10 searches per type
 - Click to reuse
 - Clear history if needed
@@ -266,6 +277,7 @@ The search modal remembers:
 ### 3. Smart Defaults
 
 The app remembers:
+
 - Last user ID used
 - Your preferences
 - Recent searches
@@ -273,6 +285,7 @@ The app remembers:
 ### 4. Contextual Actions
 
 Right-click (or click "...") on any event for:
+
 - Quick navigation
 - Event cloning
 - Copy operations
@@ -280,6 +293,7 @@ Right-click (or click "...") on any event for:
 ### 5. Command Palette
 
 Use ⌘K for:
+
 - Quick navigation
 - Fast actions
 - System utilities
@@ -293,6 +307,7 @@ Use ⌘K for:
 ### 7. Event Tracing
 
 To trace a user journey:
+
 1. Search by user ID
 2. Click any event
 3. View timeline
@@ -378,4 +393,3 @@ To trace a user journey:
 ---
 
 **Need Help?** Check the main [README](./README.md) or contact the development team.
-

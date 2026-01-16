@@ -1,14 +1,14 @@
 /**
  * Relation Repository
- * 
+ *
  * Handles all entity relation CRUD operations with automatic event emission
  */
 
-import { eq, and } from 'drizzle-orm';
-import { relations } from '../schema/relations.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
-import type { Relation, NewRelation } from '../schema/relations.js';
+import { eq, and } from "drizzle-orm";
+import { relations } from "../schema/relations.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
+import type { Relation, NewRelation } from "../schema/relations.js";
 
 export interface CreateRelationInput {
   id?: string;
@@ -22,9 +22,13 @@ export interface UpdateRelationInput {
   type?: string;
 }
 
-export class RelationRepository extends BaseRepository<Relation, CreateRelationInput, UpdateRelationInput> {
+export class RelationRepository extends BaseRepository<
+  Relation,
+  CreateRelationInput,
+  UpdateRelationInput
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'relation', pluralName: 'relations' });
+    super(db, eventRepo, { subjectType: "relation", pluralName: "relations" });
   }
 
   /**
@@ -44,7 +48,7 @@ export class RelationRepository extends BaseRepository<Relation, CreateRelationI
       .returning();
 
     // Emit completed event
-    await this.emitCompleted('create', relation, userId);
+    await this.emitCompleted("create", relation, userId);
 
     return relation;
   }
@@ -53,7 +57,11 @@ export class RelationRepository extends BaseRepository<Relation, CreateRelationI
    * Update an existing relation
    * Emits: relations.update.completed
    */
-  async update(id: string, data: UpdateRelationInput, userId: string): Promise<Relation> {
+  async update(
+    id: string,
+    data: UpdateRelationInput,
+    userId: string
+  ): Promise<Relation> {
     const [relation] = await this.db
       .update(relations)
       .set({
@@ -63,11 +71,11 @@ export class RelationRepository extends BaseRepository<Relation, CreateRelationI
       .returning();
 
     if (!relation) {
-      throw new Error('Relation not found');
+      throw new Error("Relation not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('update', relation, userId);
+    await this.emitCompleted("update", relation, userId);
 
     return relation;
   }
@@ -83,10 +91,10 @@ export class RelationRepository extends BaseRepository<Relation, CreateRelationI
       .returning({ id: relations.id });
 
     if (result.length === 0) {
-      throw new Error('Relation not found');
+      throw new Error("Relation not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 }

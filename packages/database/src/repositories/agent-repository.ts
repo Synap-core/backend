@@ -1,6 +1,6 @@
 /**
  * Agent Repository
- * 
+ *
  * Manages AI agent configurations (system and user-created).
  * Standalone implementation for agent CRUD operations.
  */
@@ -85,7 +85,11 @@ export class AgentRepository {
   /**
    * Update an agent
    */
-  async update(id: string, data: UpdateAgentData, userId: string): Promise<Agent> {
+  async update(
+    id: string,
+    data: UpdateAgentData,
+    userId: string
+  ): Promise<Agent> {
     const [agent] = await this.db
       .update(agents)
       .set({
@@ -132,14 +136,11 @@ export class AgentRepository {
    */
   async listActive(userId?: string): Promise<Agent[]> {
     const conditions = [eq(agents.active, true)];
-    
+
     if (userId) {
       // Include system agents and user's custom agents
       conditions.push(
-        or(
-          eq(agents.createdBy, "system"),
-          eq(agents.userId, userId)
-        )!
+        or(eq(agents.createdBy, "system"), eq(agents.userId, userId))!
       );
     } else {
       // Only system agents

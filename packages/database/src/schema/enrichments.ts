@@ -79,9 +79,9 @@ export const entityEnrichments = pgTable(
     // Composite index for common query pattern
     entityUserIdx: index("entity_enrichments_entity_user_idx").on(
       table.entityId,
-      table.userId,
+      table.userId
     ),
-  }),
+  })
 );
 
 export type EntityEnrichment = typeof entityEnrichments.$inferSelect;
@@ -146,10 +146,10 @@ export const entityRelationships = pgTable(
   (table) => ({
     // Graph traversal indexes
     sourceIdx: index("entity_relationships_source_idx").on(
-      table.sourceEntityId,
+      table.sourceEntityId
     ),
     targetIdx: index("entity_relationships_target_idx").on(
-      table.targetEntityId,
+      table.targetEntityId
     ),
 
     // User filtering (RLS)
@@ -159,9 +159,9 @@ export const entityRelationships = pgTable(
     uniqueRelationship: unique("entity_relationships_unique").on(
       table.sourceEntityId,
       table.targetEntityId,
-      table.relationshipType,
+      table.relationshipType
     ),
-  }),
+  })
 );
 
 export type EntityRelationship = typeof entityRelationships.$inferSelect;
@@ -214,7 +214,7 @@ export const reasoningTraces = pgTable(
     // Subject lookup
     subjectIdx: index("reasoning_traces_subject_idx").on(
       table.subjectType,
-      table.subjectId,
+      table.subjectId
     ),
 
     // User filtering (RLS)
@@ -222,7 +222,7 @@ export const reasoningTraces = pgTable(
 
     // Agent analytics
     agentIdx: index("reasoning_traces_agent_idx").on(table.agentId),
-  }),
+  })
 );
 
 export type ReasoningTrace = typeof reasoningTraces.$inferSelect;

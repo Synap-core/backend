@@ -20,14 +20,14 @@ export async function handleInboxItemAnalyzed(
     id: string;
     userId: string;
     timestamp: Date;
-  },
+  }
 ) {
   logger.info(
     {
       itemId: event.subjectId,
       requestId: event.data.requestId,
     },
-    "Updating inbox item with analysis",
+    "Updating inbox item with analysis"
   );
 
   try {
@@ -41,7 +41,7 @@ export async function handleInboxItemAnalyzed(
     if (!item) {
       logger.warn(
         { itemId: event.subjectId },
-        "Inbox item not found for analysis",
+        "Inbox item not found for analysis"
       );
       return;
     }
@@ -68,7 +68,7 @@ export async function handleInboxItemAnalyzed(
         itemId: event.subjectId,
         priority: event.data.analysis.priority,
       },
-      "Inbox item updated with analysis",
+      "Inbox item updated with analysis"
     );
   } catch (error) {
     logger.error(
@@ -76,7 +76,7 @@ export async function handleInboxItemAnalyzed(
         err: error,
         itemId: event.subjectId,
       },
-      "Failed to update inbox item with analysis",
+      "Failed to update inbox item with analysis"
     );
     throw error;
   }

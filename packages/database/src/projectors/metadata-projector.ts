@@ -29,7 +29,7 @@ const logger = createLogger({ module: "metadata-projector" });
  * Check if metadata has AI context
  */
 function hasAIMetadata(
-  metadata: unknown,
+  metadata: unknown
 ): metadata is EventMetadata & { ai: NonNullable<EventMetadata["ai"]> } {
   return (
     typeof metadata === "object" &&
@@ -50,7 +50,7 @@ function hasAIMetadata(
  * @returns true if AI metadata was projected, false otherwise
  */
 export async function projectEventMetadata(
-  event: SynapEvent,
+  event: SynapEvent
 ): Promise<boolean> {
   // Only process events with AI metadata
   if (!event.metadata || !hasAIMetadata(event.metadata)) {
@@ -64,7 +64,7 @@ export async function projectEventMetadata(
   if (!entityId) {
     logger.debug(
       { eventId: event.id, eventType: event.type },
-      "Event has AI metadata but no subjectId",
+      "Event has AI metadata but no subjectId"
     );
     return false;
   }
@@ -102,9 +102,9 @@ export async function projectEventMetadata(
           agentId: ai.agent,
           confidence: String(
             Math.max(
-              ...ai.classification.categories.map((c: any ) => c.confidence), //TODO
-              0,
-            ),
+              ...ai.classification.categories.map((c: any) => c.confidence), //TODO
+              0
+            )
           ),
           data: {
             categories: ai.classification.categories,
@@ -194,7 +194,7 @@ export async function projectEventMetadata(
         entityId,
         agent: ai.agent,
       },
-      "AI metadata projected",
+      "AI metadata projected"
     );
 
     return true;
@@ -205,7 +205,7 @@ export async function projectEventMetadata(
         eventId: event.id,
         eventType: event.type,
       },
-      "Failed to project AI metadata",
+      "Failed to project AI metadata"
     );
     throw error;
   }
@@ -219,7 +219,7 @@ export async function projectEventMetadata(
  * @param fromTimestamp - Optional start timestamp (for incremental rebuilds)
  */
 export async function rebuildMetadataProjections(
-  fromTimestamp?: Date,
+  fromTimestamp?: Date
 ): Promise<{ processed: number; projected: number; errors: number }> {
   const { events } = await import("../schema/events.js");
   const { asc, isNotNull } = await import("drizzle-orm");
@@ -269,7 +269,7 @@ export async function rebuildMetadataProjections(
 
   logger.info(
     { processed, projected, errors },
-    "Metadata projection rebuild complete",
+    "Metadata projection rebuild complete"
   );
 
   return { processed, projected, errors };

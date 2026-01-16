@@ -37,7 +37,7 @@ class EventStreamManager {
    */
   registerClient(
     clientId: string,
-    controller: ReadableStreamDefaultController,
+    controller: ReadableStreamDefaultController
   ): void {
     this.clients.set(clientId, {
       id: clientId,
@@ -47,7 +47,7 @@ class EventStreamManager {
 
     logger.info(
       { clientId, totalClients: this.clients.size },
-      "SSE client connected",
+      "SSE client connected"
     );
   }
 
@@ -58,7 +58,7 @@ class EventStreamManager {
     this.clients.delete(clientId);
     logger.info(
       { clientId, totalClients: this.clients.size },
-      "SSE client disconnected",
+      "SSE client disconnected"
     );
   }
 
@@ -100,7 +100,7 @@ class EventStreamManager {
       } catch (error) {
         logger.warn(
           { clientId, err: error },
-          "Failed to send event to client, marking for cleanup",
+          "Failed to send event to client, marking for cleanup"
         );
         deadClients.push(clientId);
       }
@@ -117,7 +117,7 @@ class EventStreamManager {
         clientsSent: this.clients.size - deadClients.length,
         clientsFailed: deadClients.length,
       },
-      "Event broadcasted",
+      "Event broadcasted"
     );
   }
 

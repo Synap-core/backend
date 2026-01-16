@@ -55,7 +55,7 @@ export const UIPreferencesSchema = z
         z.object({
           x: z.number(),
           y: z.number(),
-        }),
+        })
       )
       .optional(),
     lastActiveView: z.string().optional(),

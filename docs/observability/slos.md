@@ -4,35 +4,35 @@
 
 ### API Service
 
-| SLI | Target | Measurement Window |
-|-----|--------|-------------------|
-| **Availability** | 99.9% | 30 days |
-| **Request Latency (p95)** | < 500ms | 5 minutes |
-| **Request Latency (p99)** | < 1000ms | 5 minutes |
-| **Error Rate** | < 1% | 5 minutes |
+| SLI                       | Target   | Measurement Window |
+| ------------------------- | -------- | ------------------ |
+| **Availability**          | 99.9%    | 30 days            |
+| **Request Latency (p95)** | < 500ms  | 5 minutes          |
+| **Request Latency (p99)** | < 1000ms | 5 minutes          |
+| **Error Rate**            | < 1%     | 5 minutes          |
 
 ### Worker Service (Inngest)
 
-| SLI | Target | Measurement Window |
-|-----|--------|-------------------|
-| **Job Success Rate** | > 99% | 1 hour |
-| **Job Processing Time (p95)** | < 5s | 5 minutes |
-| **Queue Depth** | < 100 | 1 minute |
+| SLI                           | Target | Measurement Window |
+| ----------------------------- | ------ | ------------------ |
+| **Job Success Rate**          | > 99%  | 1 hour             |
+| **Job Processing Time (p95)** | < 5s   | 5 minutes          |
+| **Queue Depth**               | < 100  | 1 minute           |
 
 ### Database
 
-| SLI | Target | Measurement Window |
-|-----|--------|-------------------|
-| **Query Latency (p95)** | < 100ms | 5 minutes |
-| **Connection Pool Utilization** | < 80% | 1 minute |
-| **Replication Lag** | < 1s | 1 minute |
+| SLI                             | Target  | Measurement Window |
+| ------------------------------- | ------- | ------------------ |
+| **Query Latency (p95)**         | < 100ms | 5 minutes          |
+| **Connection Pool Utilization** | < 80%   | 1 minute           |
+| **Replication Lag**             | < 1s    | 1 minute           |
 
 ### Hub Protocol
 
-| SLI | Target | Measurement Window |
-|-----|--------|-------------------|
-| **Token Generation** | < 200ms | 5 minutes |
-| **Data Query Latency (p95)** | < 1s | 5 minutes |
+| SLI                          | Target  | Measurement Window |
+| ---------------------------- | ------- | ------------------ |
+| **Token Generation**         | < 200ms | 5 minutes          |
+| **Data Query Latency (p95)** | < 1s    | 5 minutes          |
 
 ## Alert Definitions
 
@@ -91,6 +91,7 @@
 ### Main Overview Dashboard
 
 **Panels:**
+
 1. **Request Rate** (requests/sec)
 2. **Error Rate** (%)
 3. **Latency Distribution** (p50, p95, p99)
@@ -101,6 +102,7 @@
 ### Validation Flow Dashboard
 
 **Panels:**
+
 1. **Validation Results** (approved/denied/proposal)
 2. **Validation Duration**
 3. **Proposal Approval Rate**
@@ -109,6 +111,7 @@
 ### Hub Protocol Dashboard
 
 **Panels:**
+
 1. **Token Generation Rate**
 2. **External Service Requests**
 3. **Hub Protocol Latency**
@@ -120,42 +123,42 @@
 
 ```typescript
 // In tRPC middleware
-import { metrics, MetricNames } from '@synap-core/core';
+import { metrics, MetricNames } from "@synap-core/core";
 
 export const metricsMiddleware = t.middleware(async ({ path, type, next }) => {
   const start = Date.now();
-  
+
   try {
     const result = await next();
     const duration = Date.now() - start;
-    
+
     metrics.histogram(MetricNames.API_REQUEST_DURATION, duration, {
       path,
       type,
-      status: 'success'
+      status: "success",
     });
-    
+
     metrics.increment(MetricNames.API_REQUEST_COUNT, 1, {
       path,
       type,
-      status: 'success'
+      status: "success",
     });
-    
+
     return result;
   } catch (error) {
     const duration = Date.now() - start;
-    
+
     metrics.histogram(MetricNames.API_REQUEST_DURATION, duration, {
       path,
       type,
-      status: 'error'
+      status: "error",
     });
-    
+
     metrics.increment(MetricNames.API_ERROR_COUNT, 1, {
       path,
-      type
+      type,
     });
-    
+
     throw error;
   }
 });
@@ -165,27 +168,27 @@ export const metricsMiddleware = t.middleware(async ({ path, type, next }) => {
 
 ```typescript
 // In Inngest functions
-import { metrics, MetricNames } from '@synap-core/core';
+import { metrics, MetricNames } from "@synap-core/core";
 
 export const globalValidator = inngest.createFunction(
-  { id: 'global-validator' },
-  { event: '*.*.requested' },
+  { id: "global-validator" },
+  { event: "*.*.requested" },
   async ({ event, step }) => {
     const start = Date.now();
-    
+
     try {
       // ... validation logic
-      
+
       const duration = Date.now() - start;
       metrics.histogram(MetricNames.VALIDATION_DURATION, duration);
       metrics.increment(MetricNames.VALIDATION_RESULT, 1, {
-        result: 'approved' // or 'denied', 'proposal'
+        result: "approved", // or 'denied', 'proposal'
       });
-      
+
       return result;
     } catch (error) {
       metrics.increment(MetricNames.WORKER_ERROR_RATE, 1, {
-        function: 'global-validator'
+        function: "global-validator",
       });
       throw error;
     }

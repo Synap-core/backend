@@ -29,7 +29,7 @@ const results: TestResult[] = [];
 
 async function runTest(
   name: string,
-  testFn: () => Promise<void>,
+  testFn: () => Promise<void>
 ): Promise<void> {
   const start = Date.now();
   try {
@@ -61,7 +61,7 @@ async function main() {
   } catch (error) {
     logger?.warn(
       { err: error },
-      "Database module could not be loaded - database tests will be skipped",
+      "Database module could not be loaded - database tests will be skipped"
     );
     createDatabaseClient = null;
   }
@@ -73,7 +73,7 @@ async function main() {
   } catch (error) {
     logger?.warn(
       { err: error },
-      "Storage module could not be loaded - storage tests will be skipped",
+      "Storage module could not be loaded - storage tests will be skipped"
     );
     storage = null;
   }
@@ -86,7 +86,7 @@ async function main() {
         storage: config.storage.provider,
       },
     },
-    "Configuration",
+    "Configuration"
   );
 
   // Test 1: Configuration Loading
@@ -185,7 +185,7 @@ async function main() {
         buildPathMethod.constructor.name === "AsyncFunction"
           ? buildPathMethod("test-user", "note", "test-id", "md")
           : Promise.resolve(
-              buildPathMethod("test-user", "note", "test-id", "md"),
+              buildPathMethod("test-user", "note", "test-id", "md")
             ));
         if (
           !testPath ||
@@ -201,7 +201,7 @@ async function main() {
           error.message.includes("R2_")
         ) {
           throw new Error(
-            "Storage provider initialized but R2 credentials missing (expected in local dev)",
+            "Storage provider initialized but R2 credentials missing (expected in local dev)"
           );
         }
         throw error;
@@ -294,7 +294,7 @@ async function main() {
     const icon = result.passed ? "✅" : "❌";
     const status = result.passed ? "PASS" : "FAIL";
     console.log(
-      `${icon} ${status.padEnd(6)} ${result.name.padEnd(40)} (${result.duration}ms)`,
+      `${icon} ${status.padEnd(6)} ${result.name.padEnd(40)} (${result.duration}ms)`
     );
     if (!result.passed && result.error) {
       console.log(`   Error: ${result.error}`);
@@ -303,7 +303,7 @@ async function main() {
 
   console.log("═".repeat(60));
   console.log(
-    `Total: ${results.length} tests | Passed: ${passed} | Failed: ${failed} | Duration: ${totalDuration}ms`,
+    `Total: ${results.length} tests | Passed: ${passed} | Failed: ${failed} | Duration: ${totalDuration}ms`
   );
 
   if (failed > 0) {

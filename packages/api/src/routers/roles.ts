@@ -17,9 +17,11 @@ export const rolesRouter = router({
    */
   list: protectedProcedure
     .input(
-      z.object({
-        workspaceId: z.string().uuid().optional(),
-      }).optional(),
+      z
+        .object({
+          workspaceId: z.string().uuid().optional(),
+        })
+        .optional()
     )
     .query(async ({ input }) => {
       if (input?.workspaceId) {
@@ -64,7 +66,7 @@ export const rolesRouter = router({
         workspaceId: z.string().uuid().optional(),
         permissions: z.record(z.any()),
         filters: z.record(z.any()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
@@ -104,7 +106,7 @@ export const rolesRouter = router({
         description: z.string().optional(),
         permissions: z.record(z.any()).optional(),
         filters: z.record(z.any()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({

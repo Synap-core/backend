@@ -41,7 +41,7 @@ function getConfig(): (typeof import("@synap-core/core"))["config"] {
   // If config isn't loaded yet, we need to load it synchronously
   // This is a fallback - in practice config should be loaded before this is called
   throw new InternalServerError(
-    "Config not loaded. Please ensure @synap-core/core is imported before using storage.",
+    "Config not loaded. Please ensure @synap-core/core is imported before using storage."
   );
 }
 
@@ -71,7 +71,7 @@ export function createFileStorageProvider(): IFileStorage {
       ) {
         throw new ValidationError(
           "R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables",
-          { provider: "r2" },
+          { provider: "r2" }
         );
       }
 
@@ -103,7 +103,7 @@ export function createFileStorageProvider(): IFileStorage {
     default:
       throw new ValidationError(
         `Unknown storage provider: ${provider}. Supported providers: "r2", "minio"`,
-        { provider },
+        { provider }
       );
   }
 }

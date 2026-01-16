@@ -231,12 +231,8 @@
           "name": "entity_vectors_entity_id_entities_id_fk",
           "tableFrom": "entity_vectors",
           "tableTo": "entities",
-          "columnsFrom": [
-            "entity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["entity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -293,12 +289,8 @@
           "name": "relations_source_entity_id_entities_id_fk",
           "tableFrom": "relations",
           "tableTo": "entities",
-          "columnsFrom": [
-            "source_entity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_entity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -306,12 +298,8 @@
           "name": "relations_target_entity_id_entities_id_fk",
           "tableFrom": "relations",
           "tableTo": "entities",
-          "columnsFrom": [
-            "target_entity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["target_entity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -362,12 +350,8 @@
           "name": "task_details_entity_id_entities_id_fk",
           "tableFrom": "task_details",
           "tableTo": "entities",
-          "columnsFrom": [
-            "entity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["entity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -460,12 +444,8 @@
           "name": "entity_tags_entity_id_entities_id_fk",
           "tableFrom": "entity_tags",
           "tableTo": "entities",
-          "columnsFrom": [
-            "entity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["entity_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -473,12 +453,8 @@
           "name": "entity_tags_tag_id_tags_id_fk",
           "tableFrom": "entity_tags",
           "tableTo": "tags",
-          "columnsFrom": [
-            "tag_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["tag_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -825,9 +801,7 @@
         "api_keys_key_hash_unique": {
           "name": "api_keys_key_hash_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "key_hash"
-          ]
+          "columns": ["key_hash"]
         }
       }
     }

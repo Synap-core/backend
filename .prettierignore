@@ -1,0 +1,32 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+build
+*.tsbuildinfo
+
+# Coverage
+coverage
+.nyc_output
+
+# Lock files
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# Generated files
+.turbo
+.next
+.docusaurus
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+
+# Documentation
+CHANGELOG.md

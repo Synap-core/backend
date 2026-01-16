@@ -27,7 +27,7 @@ export default function ToolFormGenerator({
 }: ToolFormGeneratorProps) {
   const { data: toolSchema, isLoading } = trpc.system.getToolSchema.useQuery(
     { toolName },
-    { enabled: !!toolName },
+    { enabled: !!toolName }
   );
 
   const handleFieldChange = (fieldName: string, fieldValue: unknown) => {

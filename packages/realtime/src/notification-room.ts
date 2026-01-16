@@ -72,7 +72,7 @@ export class NotificationRoom {
         }),
         {
           headers: { "Content-Type": "application/json" },
-        },
+        }
       );
     }
 
@@ -142,7 +142,7 @@ export class NotificationRoom {
           JSON.stringify({
             error: "Invalid message format. Required: type, data",
           }),
-          { status: 400, headers: { "Content-Type": "application/json" } },
+          { status: 400, headers: { "Content-Type": "application/json" } }
         );
       }
 
@@ -163,7 +163,7 @@ export class NotificationRoom {
         {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        },
+        }
       );
     } catch (error) {
       console.error("Broadcast error:", error);
@@ -172,7 +172,7 @@ export class NotificationRoom {
           error: "Failed to broadcast message",
           details: error instanceof Error ? error.message : String(error),
         }),
-        { status: 500, headers: { "Content-Type": "application/json" } },
+        { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
   }

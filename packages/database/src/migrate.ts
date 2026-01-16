@@ -24,12 +24,12 @@ if (!databaseUrl) {
   console.error("❌ ERROR: DATABASE_URL environment variable is required");
   console.log("\nPlease set DATABASE_URL:");
   console.log(
-    "  export DATABASE_URL=postgresql://user:password@host:5432/dbname",
+    "  export DATABASE_URL=postgresql://user:password@host:5432/dbname"
   );
   console.log("\nOr use docker-compose:");
   console.log("  docker compose up -d");
   console.log(
-    "  export DATABASE_URL=postgresql://postgres:synap_dev_password@localhost:5432/synap",
+    "  export DATABASE_URL=postgresql://postgres:synap_dev_password@localhost:5432/synap"
   );
   process.exit(1);
 }
@@ -83,7 +83,7 @@ async function getAppliedMigrations(): Promise<Map<string, Set<string>>> {
 async function applyMigration(
   type: "drizzle" | "custom",
   filename: string,
-  filePath: string,
+  filePath: string
 ): Promise<void> {
   console.log(`⏳ Applying [${type}]: ${filename}`);
 
@@ -103,7 +103,7 @@ async function applyMigration(
     console.error(`❌ ERROR applying [${type}] ${filename}:`);
     console.error(error);
     console.error(
-      "\n⚠️  Migration failed. Manual intervention may be required.\n",
+      "\n⚠️  Migration failed. Manual intervention may be required.\n"
     );
     throw error;
   }
@@ -115,7 +115,7 @@ async function applyMigration(
 async function applyMigrationsFromDir(
   type: "drizzle" | "custom",
   dirPath: string,
-  appliedSet: Set<string>,
+  appliedSet: Set<string>
 ): Promise<number> {
   if (!existsSync(dirPath)) {
     console.log(`⏭️  No ${type} migrations directory found, skipping...\n`);
@@ -146,7 +146,7 @@ async function applyMigrationsFromDir(
   }
 
   console.log(
-    `🚀 Applying ${pending.length} pending ${type} migration(s)...\n`,
+    `🚀 Applying ${pending.length} pending ${type} migration(s)...\n`
   );
 
   for (const filename of pending) {
@@ -185,7 +185,7 @@ async function runMigrations() {
     const customApplied = appliedMigrations.get("custom")!;
 
     console.log(
-      `📊 Already applied: ${drizzleApplied.size} drizzle + ${customApplied.size} custom\n`,
+      `📊 Already applied: ${drizzleApplied.size} drizzle + ${customApplied.size} custom\n`
     );
 
     // 3. Apply Drizzle migrations first
@@ -197,7 +197,7 @@ async function runMigrations() {
     const drizzleCount = await applyMigrationsFromDir(
       "drizzle",
       drizzleDir,
-      drizzleApplied,
+      drizzleApplied
     );
 
     // 4. Apply custom migrations second
@@ -209,7 +209,7 @@ async function runMigrations() {
     const customCount = await applyMigrationsFromDir(
       "custom",
       customDir,
-      customApplied,
+      customApplied
     );
 
     // 5. Summary
@@ -221,7 +221,7 @@ async function runMigrations() {
       console.log("✅ All migrations were already applied. Nothing to do!\n");
     } else {
       console.log(
-        `✅ Applied ${drizzleCount} drizzle + ${customCount} custom migration(s)\n`,
+        `✅ Applied ${drizzleCount} drizzle + ${customCount} custom migration(s)\n`
       );
     }
 

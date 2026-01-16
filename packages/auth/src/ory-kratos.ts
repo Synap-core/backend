@@ -18,14 +18,14 @@ const kratosAdminUrl = process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
 export const kratosPublic = new FrontendApi(
   new Configuration({
     basePath: kratosPublicUrl,
-  }),
+  })
 );
 
 // Admin API (for management)
 export const kratosAdmin = new IdentityApi(
   new Configuration({
     basePath: kratosAdminUrl,
-  }),
+  })
 );
 
 /**
@@ -60,7 +60,7 @@ export async function getKratosSession(cookie: string): Promise<any | null> {
       cookie,
     });
     console.log(
-      `[getKratosSession] Successfully validated session with Kratos at ${kratosPublicUrl}`,
+      `[getKratosSession] Successfully validated session with Kratos at ${kratosPublicUrl}`
     );
     return session;
   } catch (error: any) {

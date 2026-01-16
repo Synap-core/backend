@@ -296,7 +296,7 @@ describe("E2E Validation Flows", () => {
 
         // If we get here, check that entity wasn't created
         await wait(2000);
-        
+
         // The entity ID would be in the result, but we need to track it
         // For now, we verify no entities exist from user B
         fail("Expected permission error");
@@ -310,7 +310,7 @@ describe("E2E Validation Flows", () => {
     it("should emit denied event when permission check fails", async () => {
       // This test assumes we can listen to events
       // For now, we verify via database that no entity/proposal was created
-      
+
       const entityData = testDataFactory.entity("note", {
         title: "Denied Note",
       });
@@ -326,7 +326,7 @@ describe("E2E Validation Flows", () => {
         // If creation succeeded (shouldn't), verify nothing persisted
         const hasEntity = await dbHelpers.hasEntity(result.id);
         const hasProposal = await dbHelpers.hasProposal(result.id);
-        
+
         expect(hasEntity).toBe(false);
         expect(hasProposal).toBe(false);
       } catch (error) {

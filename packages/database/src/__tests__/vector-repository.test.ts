@@ -102,19 +102,19 @@ describe("VectorRepository", () => {
 
       // Create reference vector
       const refEmbedding = Array.from({ length: 1536 }, (_, i) =>
-        i < 100 ? 1.0 : 0.0,
+        i < 100 ? 1.0 : 0.0
       );
 
       // Create similar vector (same pattern)
       const similarId = crypto.randomUUID();
       const similarEmbedding = Array.from({ length: 1536 }, (_, i) =>
-        i < 100 ? 0.9 : 0.1,
+        i < 100 ? 0.9 : 0.1
       );
 
       // Create dissimilar vector (opposite pattern)
       const dissimilarId = crypto.randomUUID();
       const dissimilarEmbedding = Array.from({ length: 1536 }, (_, i) =>
-        i < 100 ? 0.0 : 1.0,
+        i < 100 ? 0.0 : 1.0
       );
 
       // Create parent entities
@@ -151,7 +151,7 @@ describe("VectorRepository", () => {
       expect(results[1].entity_id).toBe(dissimilarId);
       // Similarity should be higher for similar vector
       expect(parseFloat(results[0].similarity)).toBeGreaterThan(
-        parseFloat(results[1].similarity),
+        parseFloat(results[1].similarity)
       );
     });
 

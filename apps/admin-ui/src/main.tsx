@@ -40,5 +40,5 @@ createRoot(document.getElementById("root")!).render(
         </MantineProvider>
       </QueryClientProvider>
     </TRPCProvider>
-  </StrictMode>,
+  </StrictMode>
 );

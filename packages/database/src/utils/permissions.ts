@@ -1,6 +1,6 @@
 /**
  * Permission System - Dynamic Multi-Level Access Control
- * 
+ *
  * Works for both workspaces AND projects with same code.
  * Implements 3-level permission checking:
  * 1. Membership check (is user in workspace/project?)
@@ -12,9 +12,9 @@
 // Types
 // ============================================================================
 
-export type UserRole = 'owner' | 'admin' | 'editor' | 'viewer';
-export type PermissionType = 'read' | 'write' | 'delete' | 'manage' | 'invite';
-export type ContextType = 'workspace' | 'project';
+export type UserRole = "owner" | "admin" | "editor" | "viewer";
+export type PermissionType = "read" | "write" | "delete" | "manage" | "invite";
+export type ContextType = "workspace" | "project";
 
 export interface MembershipContext {
   type: ContextType;
@@ -38,7 +38,7 @@ export interface PermissionResult {
   allowed: boolean;
   reason?: string;
   role?: UserRole;
-  context?: 'workspace' | 'project';
+  context?: "workspace" | "project";
 }
 
 // ============================================================================
@@ -46,10 +46,10 @@ export interface PermissionResult {
 // ============================================================================
 
 const ROLE_PERMISSIONS: Record<UserRole, PermissionType[]> = {
-  owner: ['read', 'write', 'delete', 'manage', 'invite'],
-  admin: ['read', 'write', 'manage', 'invite'],  // Can manage but not delete
-  editor: ['read', 'write'],
-  viewer: ['read'],
+  owner: ["read", "write", "delete", "manage", "invite"],
+  admin: ["read", "write", "manage", "invite"], // Can manage but not delete
+  editor: ["read", "write"],
+  viewer: ["read"],
 };
 
 /**
@@ -74,31 +74,32 @@ export async function getMembership(
   db: any,
   context: MembershipContext
 ): Promise<{ role: UserRole } | null> {
-  
-  if (context.type === 'workspace') {
+  if (context.type === "workspace") {
     // Check workspace_members table
     const member = await db.query.workspaceMembers.findFirst({
-      where: (members: any, { eq, and }: any) => and(
-        eq(members.workspaceId, context.id),
-        eq(members.userId, context.userId)
-      ),
+      where: (members: any, { eq, and }: any) =>
+        and(
+          eq(members.workspaceId, context.id),
+          eq(members.userId, context.userId)
+        ),
     });
-    
-    return member ? { role: member.role as UserRole } : null;
-  } 
-  
-  if (context.type === 'project') {
-    // Check project_members table
-    const member = await db.query.projectMembers.findFirst({
-      where: (members: any, { eq, and }: any) => and(
-        eq(members.projectId, context.id),
-        eq(members.userId, context.userId)
-      ),
-    });
-    
+
     return member ? { role: member.role as UserRole } : null;
   }
-  
+
+  if (context.type === "project") {
+    // Check project_members table
+    const member = await db.query.projectMembers.findFirst({
+      where: (members: any, { eq, and }: any) =>
+        and(
+          eq(members.projectId, context.id),
+          eq(members.userId, context.userId)
+        ),
+    });
+
+    return member ? { role: member.role as UserRole } : null;
+  }
+
   return null;
 }
 
@@ -111,7 +112,7 @@ export async function getWorkspaceMembership(
   userId: string
 ): Promise<{ role: UserRole } | null> {
   return getMembership(db, {
-    type: 'workspace',
+    type: "workspace",
     id: workspaceId,
     userId,
   });
@@ -128,16 +129,16 @@ export async function getProjectMembership(
   if (!projectIds || projectIds.length === 0) {
     return null;
   }
-  
+
   // Check if user is member of ANY of the projects
   const member = await db.query.projectMembers.findFirst({
-    where: (members: any, { eq, and, inArray }: any) => and(
-      inArray(members.projectId, projectIds),
-      eq(members.userId, userId)
-    ),
+    where: (members: any, { eq, and, inArray }: any) =>
+      and(inArray(members.projectId, projectIds), eq(members.userId, userId)),
   });
-  
-  return member ? { role: member.role as UserRole, projectId: member.projectId } : null;
+
+  return member
+    ? { role: member.role as UserRole, projectId: member.projectId }
+    : null;
 }
 
 // ============================================================================
@@ -146,12 +147,12 @@ export async function getProjectMembership(
 
 /**
  * Check permissions with project-first hierarchy:
- * 
+ *
  * When projectId is provided:
  * 1. Check workspace membership (required for all)
  * 2. Check project membership and role (takes precedence)
  * 3. Workspace owners bypass project membership requirement
- * 
+ *
  * When no projectId:
  * 1. Check workspace membership
  * 2. Check workspace role permissions
@@ -159,119 +160,113 @@ export async function getProjectMembership(
 export async function verifyPermission(
   params: PermissionCheckParams
 ): Promise<PermissionResult> {
-  
   const { db, userId, workspace, project, requiredPermission } = params;
-  
+
   // ========================================================================
   // Level 1: Workspace Membership Check (ALWAYS REQUIRED)
   // ========================================================================
-  
+
   if (!workspace?.id) {
-    return { 
-      allowed: false, 
-      reason: "No workspace context provided" 
+    return {
+      allowed: false,
+      reason: "No workspace context provided",
     };
   }
-  
+
   const workspaceMember = await getWorkspaceMembership(
     db,
     workspace.id,
     userId
   );
-  
+
   if (!workspaceMember) {
-    return { 
-      allowed: false, 
+    return {
+      allowed: false,
       reason: "User is not a member of this workspace",
-      context: 'workspace'
+      context: "workspace",
     };
   }
-  
+
   // ========================================================================
   // Level 2: Project-First Logic (when resource has projectId)
   // ========================================================================
-  
+
   if (project?.ids && project.ids.length > 0) {
-    const projectMember = await getProjectMembership(
-      db,
-      project.ids,
-      userId
-    );
-    
+    const projectMember = await getProjectMembership(db, project.ids, userId);
+
     // User is a member of the project - use project role (takes precedence)
     if (projectMember) {
       const hasProjectPermission = hasRolePermission(
         projectMember.role,
         requiredPermission
       );
-      
+
       if (hasProjectPermission) {
         return {
           allowed: true,
           role: projectMember.role,
-          context: 'project'
+          context: "project",
         };
       } else {
         return {
           allowed: false,
           reason: `Insufficient project permissions (role: ${projectMember.role})`,
           role: projectMember.role,
-          context: 'project'
+          context: "project",
         };
       }
     }
-    
+
     // User is NOT a project member
     // Special case: Workspace owners can access all projects
-    if (workspaceMember.role === 'owner') {
+    if (workspaceMember.role === "owner") {
       const hasOwnerPermission = hasRolePermission(
         workspaceMember.role,
         requiredPermission
       );
-      
+
       if (hasOwnerPermission) {
         return {
           allowed: true,
           role: workspaceMember.role,
-          context: 'workspace'  // Owner bypass
+          context: "workspace", // Owner bypass
         };
       }
     }
-    
+
     // Not in project and not workspace owner
     return {
       allowed: false,
       reason: "User is not a member of any of the resource's projects",
       role: workspaceMember.role,
-      context: 'project'
+      context: "project",
     };
   }
-  
+
   // ========================================================================
   // Level 3: Workspace-Only (no project context)
   // ========================================================================
-  
+
   const hasWorkspacePermission = hasRolePermission(
     workspaceMember.role,
     requiredPermission
   );
-  
+
   if (!hasWorkspacePermission) {
     return {
       allowed: false,
       reason: `Insufficient workspace permissions (role: ${workspaceMember.role})`,
       role: workspaceMember.role,
-      context: 'workspace'
+      context: "workspace",
     };
   }
-  
+
   return {
     allowed: true,
     role: workspaceMember.role,
-    context: 'workspace'
+    context: "workspace",
   };
 }
-
 
 // ============================================================================
 // Convenience Wrappers (for backward compatibility with existing code)
@@ -291,9 +286,9 @@ export async function canEdit(
     userId,
     workspace: { id: workspaceId },
     project: projectIds ? { ids: projectIds } : undefined,
-    requiredPermission: 'write',
+    requiredPermission: "write",
   });
-  
+
   return result.allowed;
 }
 
@@ -309,9 +304,8 @@ export async function canManage(
     db,
     userId,
     workspace: { id: workspaceId },
-    requiredPermission: 'manage',
+    requiredPermission: "manage",
   });
-  
+
   return result.allowed;
 }
-

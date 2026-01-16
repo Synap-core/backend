@@ -1,6 +1,6 @@
 /**
  * Agents Executor
- * 
+ *
  * Handles validated agent events.
  */
 
@@ -28,24 +28,27 @@ export const agentsExecutor = inngest.createFunction(
       const repo = new AgentRepository(db as any);
 
       if (eventType === "agents.create.validated") {
-        const agent = await repo.create({
-          id: data.id,
-          name: data.name,
-          description: data.description,
-          createdBy: data.createdBy,
-          userId: data.userId,
-          llmProvider: data.llmProvider,
-          llmModel: data.llmModel,
-          capabilities: data.capabilities,
-          systemPrompt: data.systemPrompt,
-          toolsConfig: data.toolsConfig,
-          executionMode: data.executionMode,
-          maxIterations: data.maxIterations,
-          timeoutSeconds: data.timeoutSeconds,
-          weight: data.weight,
-          performanceMetrics: data.performanceMetrics,
-          active: data.active,
-        }, data.userId);
+        const agent = await repo.create(
+          {
+            id: data.id,
+            name: data.name,
+            description: data.description,
+            createdBy: data.createdBy,
+            userId: data.userId,
+            llmProvider: data.llmProvider,
+            llmModel: data.llmModel,
+            capabilities: data.capabilities,
+            systemPrompt: data.systemPrompt,
+            toolsConfig: data.toolsConfig,
+            executionMode: data.executionMode,
+            maxIterations: data.maxIterations,
+            timeoutSeconds: data.timeoutSeconds,
+            weight: data.weight,
+            performanceMetrics: data.performanceMetrics,
+            active: data.active,
+          },
+          data.userId
+        );
 
         return {
           status: "completed",
@@ -55,21 +58,25 @@ export const agentsExecutor = inngest.createFunction(
       }
 
       if (eventType === "agents.update.validated") {
-        const agent = await repo.update(data.id, {
-          name: data.name,
-          description: data.description,
-          llmProvider: data.llmProvider,
-          llmModel: data.llmModel,
-          capabilities: data.capabilities,
-          systemPrompt: data.systemPrompt,
-          toolsConfig: data.toolsConfig,
-          executionMode: data.executionMode,
-          maxIterations: data.maxIterations,
-          timeoutSeconds: data.timeoutSeconds,
-          weight: data.weight,
-          performanceMetrics: data.performanceMetrics,
-          active: data.active,
-        }, data.userId);
+        const agent = await repo.update(
+          data.id,
+          {
+            name: data.name,
+            description: data.description,
+            llmProvider: data.llmProvider,
+            llmModel: data.llmModel,
+            capabilities: data.capabilities,
+            systemPrompt: data.systemPrompt,
+            toolsConfig: data.toolsConfig,
+            executionMode: data.executionMode,
+            maxIterations: data.maxIterations,
+            timeoutSeconds: data.timeoutSeconds,
+            weight: data.weight,
+            performanceMetrics: data.performanceMetrics,
+            active: data.active,
+          },
+          data.userId
+        );
 
         return {
           status: "completed",

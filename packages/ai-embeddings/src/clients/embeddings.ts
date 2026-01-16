@@ -46,7 +46,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
           expectedDimensions,
           textLength: text.length,
         },
-        "Embedding dimensions mismatch",
+        "Embedding dimensions mismatch"
       );
     }
 
@@ -56,14 +56,14 @@ export async function generateEmbedding(text: string): Promise<number[]> {
         textLength: text.length,
         textPreview: text.substring(0, 50),
       },
-      "Generated embedding",
+      "Generated embedding"
     );
 
     return embedding;
   } catch (error) {
     logger.error(
       { err: error, textLength: text.length },
-      "Failed to generate embedding",
+      "Failed to generate embedding"
     );
     throw error;
   }
@@ -100,14 +100,14 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
         count: embeddings.length,
         dimensions: embeddings[0]?.length || 0,
       },
-      "Generated embeddings batch",
+      "Generated embeddings batch"
     );
 
     return embeddings;
   } catch (error) {
     logger.error(
       { err: error, count: texts.length },
-      "Failed to generate embeddings batch",
+      "Failed to generate embeddings batch"
     );
     throw error;
   }

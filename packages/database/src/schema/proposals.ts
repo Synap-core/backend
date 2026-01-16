@@ -50,15 +50,15 @@ export const proposals = pgTable(
     // Index for "My Pending Inbox"
     workspaceStatusIdx: index("idx_proposals_workspace_status").on(
       table.workspaceId,
-      table.status,
+      table.status
     ),
 
     // Index for "History of this Item"
     targetIdx: index("idx_proposals_target").on(
       table.targetType,
-      table.targetId,
+      table.targetId
     ),
-  }),
+  })
 );
 
 export type Proposal = typeof proposals.$inferSelect;

@@ -13,6 +13,7 @@ Ce document valide que le `docker compose.yml` installe et configure tous les sy
 **Service :** `postgres`
 
 **Configuration :**
+
 - Image : `timescale/timescaledb:latest-pg16`
 - Port : `5432`
 - Database : `synap`
@@ -22,12 +23,14 @@ Ce document valide que le `docker compose.yml` installe et configure tous les sy
 - Healthcheck : ✅ Vérifie que PostgreSQL est prêt
 
 **Validation :**
+
 - ✅ Base de données créée automatiquement
 - ✅ TimescaleDB extension disponible
 - ✅ Données persistantes via volume
 - ✅ Healthcheck fonctionnel
 
 **Test :**
+
 ```bash
 docker compose exec postgres psql -U postgres -d synap -c "SELECT version();"
 ```
@@ -39,6 +42,7 @@ docker compose exec postgres psql -U postgres -d synap -c "SELECT version();"
 **Service :** `minio`
 
 **Configuration :**
+
 - Image : `minio/minio:latest`
 - Ports : `9000` (API S3), `9001` (Console web)
 - Credentials : Configurables via `MINIO_ROOT_USER` et `MINIO_ROOT_PASSWORD`
@@ -46,12 +50,14 @@ docker compose exec postgres psql -U postgres -d synap -c "SELECT version();"
 - Healthcheck : ✅ Vérifie que MinIO répond
 
 **Validation :**
+
 - ✅ API S3 disponible sur port 9000
 - ✅ Console web sur port 9001
 - ✅ Données persistantes via volume
 - ✅ Healthcheck fonctionnel
 
 **Test :**
+
 ```bash
 # Vérifier l'API
 curl http://localhost:9000/minio/health/live
@@ -67,6 +73,7 @@ open http://localhost:9001
 **Service :** `minio-client`
 
 **Configuration :**
+
 - Image : `minio/mc:latest`
 - Dépendances : `minio` (attend que MinIO soit prêt)
 - Actions :
@@ -75,11 +82,13 @@ open http://localhost:9001
 - Restart : `no` (s'exécute une seule fois)
 
 **Validation :**
+
 - ✅ Bucket créé automatiquement
 - ✅ Permissions configurées
 - ✅ S'exécute après MinIO
 
 **Test :**
+
 ```bash
 # Vérifier que le bucket existe
 docker compose exec minio-client /usr/bin/mc ls local/
@@ -92,6 +101,7 @@ docker compose exec minio-client /usr/bin/mc ls local/
 **Service :** `api`
 
 **Configuration :**
+
 - Build : Dockerfile multi-stage
 - Port : `3000`
 - Dépendances : `postgres` (healthy), `minio` (healthy)
@@ -104,6 +114,7 @@ docker compose exec minio-client /usr/bin/mc ls local/
 - Restart : `unless-stopped`
 
 **Validation :**
+
 - ✅ Build multi-stage optimisé
 - ✅ Dépendances résolues automatiquement
 - ✅ Configuration automatique (DB + Storage)
@@ -111,6 +122,7 @@ docker compose exec minio-client /usr/bin/mc ls local/
 - ✅ Variables d'environnement documentées
 
 **Test :**
+
 ```bash
 # Vérifier la santé
 curl http://localhost:3000/health
@@ -126,6 +138,7 @@ curl http://localhost:3000/trpc/system.health
 ### Database Connection
 
 Le service `api` se connecte automatiquement à PostgreSQL via :
+
 ```
 DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/synap
 ```
@@ -135,6 +148,7 @@ DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/synap
 ### Storage Connection
 
 Le service `api` se connecte automatiquement à MinIO via :
+
 ```
 MINIO_ENDPOINT=http://minio:9000
 MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
@@ -239,6 +253,7 @@ docker compose exec api pnpm --filter database db:push
 **Problème :** Le service `api` crash au démarrage.
 
 **Solutions :**
+
 1. Vérifier les logs : `docker compose logs api`
 2. Vérifier que PostgreSQL est healthy : `docker compose ps postgres`
 3. Vérifier que MinIO est healthy : `docker compose ps minio`
@@ -249,6 +264,7 @@ docker compose exec api pnpm --filter database db:push
 **Problème :** Les tables n'existent pas.
 
 **Solution :**
+
 ```bash
 docker compose exec api pnpm --filter database db:push
 ```
@@ -258,6 +274,7 @@ docker compose exec api pnpm --filter database db:push
 **Problème :** Le bucket `synap-storage` n'existe pas.
 
 **Solution :**
+
 ```bash
 # Vérifier les logs du minio-client
 docker compose logs minio-client
@@ -284,8 +301,8 @@ Le `docker compose.yml` est **complet** et **validé** pour un déploiement self
 ---
 
 **Note :** Pour un déploiement production, ajouter :
+
 - Reverse proxy (nginx/traefik)
 - SSL/TLS (Let's Encrypt)
 - Backup automatique
 - Monitoring (Prometheus/Grafana)
-

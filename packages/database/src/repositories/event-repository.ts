@@ -97,7 +97,7 @@ export class EventRepository {
    */
   private async query(
     sqlString: string,
-    params?: any[],
+    params?: any[]
   ): Promise<{ rows: any[] }> {
     // Convert to safe postgres.js query
     const rows = await this.sql.unsafe(sqlString, params || []);
@@ -133,7 +133,7 @@ export class EventRepository {
   private async notifyHooks(event: EventRecord): Promise<void> {
     // Fire all hooks in parallel
     await Promise.allSettled(
-      this.eventHooks.map((hook) => Promise.resolve(hook(event))),
+      this.eventHooks.map((hook) => Promise.resolve(hook(event)))
     );
   }
 
@@ -146,7 +146,7 @@ export class EventRepository {
       SELECT * FROM events
       WHERE id = $1
     `,
-      [id],
+      [id]
     );
 
     if (result.rows.length === 0) {
@@ -175,7 +175,8 @@ export class EventRepository {
 
     // Map SynapEvent to database structure
     // Use provided subjectType or infer from event type pattern
-    const subjectType = validated.subjectType || this.infersubjectType(validated.type);
+    const subjectType =
+      validated.subjectType || this.infersubjectType(validated.type);
 
     // Store version and requestId in metadata
     const metadata = {
@@ -213,7 +214,7 @@ export class EventRepository {
           validated.timestamp instanceof Date
             ? validated.timestamp.toISOString()
             : validated.timestamp,
-        ],
+        ]
       );
 
       const eventRecord = this.mapRow(result.rows[0]);
@@ -307,10 +308,11 @@ export class EventRepository {
       valuePlaceholders.push(
         `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, ` +
           `$${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, ` +
-          `$${baseIndex + 9}, $${baseIndex + 10})`,
+          `$${baseIndex + 9}, $${baseIndex + 10})`
       );
 
-      const subjectType = event.subjectType || this.infersubjectType(event.type);
+      const subjectType =
+        event.subjectType || this.infersubjectType(event.type);
       const metadata = {
         version: event.version,
         requestId: event.requestId,
@@ -326,7 +328,7 @@ export class EventRepository {
         JSON.stringify(metadata),
         event.source,
         event.correlationId || null,
-        event.timestamp,
+        event.timestamp
       );
     });
 
@@ -338,7 +340,7 @@ export class EventRepository {
       ) VALUES ${valuePlaceholders.join(", ")}
       RETURNING *
     `,
-      values,
+      values
     );
 
     return result.rows.map((row) => this.mapRow(row));
@@ -349,10 +351,13 @@ export class EventRepository {
    */
   async getAggregateStream(
     subjectId: string,
-    options: EventStreamOptions = {},
+    options: EventStreamOptions = {}
   ): Promise<EventRecord[]> {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { fromVersion: _fromVersion, toVersion: _toVersion, eventTypes } = options;
+    const {
+      fromVersion: _fromVersion,
+      toVersion: _toVersion,
+      eventTypes,
+    } = options;
 
     let query = `
       SELECT * FROM events
@@ -393,7 +398,7 @@ export class EventRepository {
       FROM events
       WHERE subject_id = $1
     `,
-      [subjectId],
+      [subjectId]
     );
 
     return parseInt(result.rows[0]?.version) || null;
@@ -404,7 +409,7 @@ export class EventRepository {
    */
   async getUserStream(
     userId: string,
-    options: UserStreamOptions = {},
+    options: UserStreamOptions = {}
   ): Promise<EventRecord[]> {
     const { days = 7, limit = 1000, eventTypes, subjectTypes } = options;
 
@@ -446,7 +451,7 @@ export class EventRepository {
       WHERE correlation_id = $1
       ORDER BY timestamp ASC
     `,
-      [correlationId],
+      [correlationId]
     );
 
     return result.rows.map((row) => this.mapRow(row));
@@ -457,7 +462,7 @@ export class EventRepository {
    */
   async getEventsByType(
     eventType: string,
-    limit: number = 100,
+    limit: number = 100
   ): Promise<EventRecord[]> {
     const result = await this.query(
       `
@@ -466,7 +471,7 @@ export class EventRepository {
       ORDER BY timestamp DESC
       LIMIT $2
     `,
-      [eventType, limit],
+      [eventType, limit]
     );
 
     return result.rows.map((row) => this.mapRow(row));
@@ -486,7 +491,7 @@ export class EventRepository {
       toDate?: Date;
       limit?: number;
       offset?: number;
-    } = {},
+    } = {}
   ): Promise<EventRecord[]> {
     let query = "SELECT * FROM events WHERE 1=1";
     const params: unknown[] = [];
@@ -562,7 +567,7 @@ export class EventRepository {
       subjectType?: subjectType;
       fromDate?: Date;
       toDate?: Date;
-    } = {},
+    } = {}
   ): Promise<number> {
     let query = "SELECT COUNT(*) as count FROM events WHERE 1=1";
     const params: unknown[] = [];

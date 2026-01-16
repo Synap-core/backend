@@ -65,7 +65,7 @@ export class R2StorageProvider implements IFileStorage {
   async upload(
     path: string,
     content: string | Buffer,
-    options?: UploadOptions,
+    options?: UploadOptions
   ): Promise<FileMetadata> {
     const body =
       typeof content === "string" ? Buffer.from(content, "utf-8") : content;
@@ -78,7 +78,7 @@ export class R2StorageProvider implements IFileStorage {
         Body: body,
         ContentType: options?.contentType || "application/octet-stream",
         Metadata: options?.metadata,
-      }),
+      })
     );
 
     return {
@@ -95,7 +95,7 @@ export class R2StorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
 
     if (!response.Body) {
@@ -110,7 +110,7 @@ export class R2StorageProvider implements IFileStorage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
 
     if (!response.Body) {
@@ -130,7 +130,7 @@ export class R2StorageProvider implements IFileStorage {
       new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
   }
 
@@ -140,7 +140,7 @@ export class R2StorageProvider implements IFileStorage {
         new HeadObjectCommand({
           Bucket: this.bucketName,
           Key: path,
-        }),
+        })
       );
       return true;
     } catch (error) {
@@ -153,7 +153,7 @@ export class R2StorageProvider implements IFileStorage {
       new HeadObjectCommand({
         Bucket: this.bucketName,
         Key: path,
-      }),
+      })
     );
 
     return {
@@ -176,7 +176,7 @@ export class R2StorageProvider implements IFileStorage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension: string = "md",
+    extension: string = "md"
   ): string {
     return buildEntityPath(userId, entityType, entityId, extension);
   }

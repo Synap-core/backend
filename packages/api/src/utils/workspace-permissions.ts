@@ -54,13 +54,13 @@ export async function requireWorkspaceRole(
   db: any,
   workspaceId: string,
   userId: string,
-  minimumRole: WorkspaceRole,
+  minimumRole: WorkspaceRole
 ): Promise<WorkspaceMember> {
   // Find user's membership in workspace
   const membership = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId),
+      eq(workspaceMembers.userId, userId)
     ),
   });
 
@@ -97,7 +97,7 @@ export async function checkWorkspaceMembership(
   const membership = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId),
+      eq(workspaceMembers.userId, userId)
     ),
   });
   return !!membership;
@@ -115,7 +115,7 @@ export async function checkWorkspaceMembership(
 export async function requireViewer(
   db: DatabaseClient,
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMember> {
   return requireWorkspaceRole(db, workspaceId, userId, "viewer");
 }
@@ -134,7 +134,7 @@ export async function requireViewer(
 export async function requireEditor(
   db: DatabaseClient,
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMember> {
   return requireWorkspaceRole(db, workspaceId, userId, "editor");
 }
@@ -153,7 +153,7 @@ export async function requireEditor(
 export async function requireAdmin(
   db: any,
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMember> {
   return requireWorkspaceRole(db, workspaceId, userId, "admin");
 }
@@ -172,7 +172,7 @@ export async function requireAdmin(
 export async function requireOwner(
   db: any,
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMember> {
   return requireWorkspaceRole(db, workspaceId, userId, "owner");
 }
@@ -196,7 +196,7 @@ export async function requireOwner(
  */
 export function requireResourceOwner(
   resource: { userId: string },
-  userId: string,
+  userId: string
 ): void {
   if (resource.userId !== userId) {
     throw new TRPCError({
@@ -225,7 +225,7 @@ export async function hasWorkspaceRole(
   db: any,
   workspaceId: string,
   userId: string,
-  minimumRole: WorkspaceRole,
+  minimumRole: WorkspaceRole
 ): Promise<boolean> {
   try {
     await requireWorkspaceRole(db, workspaceId, userId, minimumRole);

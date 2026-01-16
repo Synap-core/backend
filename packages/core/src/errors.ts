@@ -35,7 +35,7 @@ export class SynapError extends Error {
     message: string,
     code: string,
     statusCode: number = 500,
-    context?: Record<string, unknown>,
+    context?: Record<string, unknown>
   ) {
     super(message);
     this.name = "SynapError";
@@ -52,7 +52,7 @@ export class SynapError extends Error {
         context,
         ...(statusCode >= 500 && { stack: this.stack }), // Only log stack for server errors
       },
-      "Synap error occurred",
+      "Synap error occurred"
     );
   }
 
@@ -110,7 +110,7 @@ export class NotFoundError extends SynapError {
   constructor(
     resource: string,
     id?: string,
-    context?: Record<string, unknown>,
+    context?: Record<string, unknown>
   ) {
     const message = id
       ? `${resource} with id "${id}" not found`
@@ -135,7 +135,7 @@ export class NotFoundError extends SynapError {
 export class UnauthorizedError extends SynapError {
   constructor(
     message: string = "Authentication required",
-    context?: Record<string, unknown>,
+    context?: Record<string, unknown>
   ) {
     super(message, "UNAUTHORIZED", 401, context);
     this.name = "UnauthorizedError";
@@ -157,7 +157,7 @@ export class UnauthorizedError extends SynapError {
 export class ForbiddenError extends SynapError {
   constructor(
     message: string = "Insufficient permissions",
-    context?: Record<string, unknown>,
+    context?: Record<string, unknown>
   ) {
     super(message, "FORBIDDEN", 403, context);
     this.name = "ForbiddenError";
@@ -199,7 +199,7 @@ export class RateLimitError extends SynapError {
   constructor(
     message: string = "Rate limit exceeded",
     retryAfter?: number,
-    context?: Record<string, unknown>,
+    context?: Record<string, unknown>
   ) {
     super(message, "RATE_LIMIT_EXCEEDED", 429, { retryAfter, ...context });
     this.name = "RateLimitError";
@@ -270,7 +270,7 @@ export function isSynapError(error: unknown): error is SynapError {
  */
 export function toSynapError(
   error: unknown,
-  defaultMessage: string = "An error occurred",
+  defaultMessage: string = "An error occurred"
 ): SynapError {
   if (isSynapError(error)) {
     return error;

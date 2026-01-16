@@ -31,7 +31,7 @@ export default function SchemaFormGenerator({
   const { data: schemaData, isLoading } =
     trpc.system.getEventTypeSchema.useQuery(
       { eventType },
-      { enabled: !!eventType },
+      { enabled: !!eventType }
     );
 
   const handleFieldChange = (fieldName: string, fieldValue: unknown) => {
@@ -50,14 +50,14 @@ export default function SchemaFormGenerator({
     const currentArray = (value[fieldName] as unknown[]) || [];
     handleFieldChange(
       fieldName,
-      currentArray.filter((_, i) => i !== index),
+      currentArray.filter((_, i) => i !== index)
     );
   };
 
   const handleArrayItemChange = (
     fieldName: string,
     index: number,
-    itemValue: unknown,
+    itemValue: unknown
   ) => {
     const currentArray = (value[fieldName] as unknown[]) || [];
     const newArray = [...currentArray];
@@ -299,7 +299,7 @@ export default function SchemaFormGenerator({
                           handleArrayItemChange(
                             field.name,
                             index,
-                            e.currentTarget.value,
+                            e.currentTarget.value
                           )
                         }
                         error={fieldError}

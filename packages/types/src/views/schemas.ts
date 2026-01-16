@@ -166,7 +166,7 @@ export const ViewContentSchema = z.discriminatedUnion("category", [
  * @returns Validated view content
  */
 export function parseViewContent(
-  raw: unknown,
+  raw: unknown
 ): z.infer<typeof ViewContentSchema> {
   return ViewContentSchema.parse(raw);
 }
@@ -191,7 +191,7 @@ export function safeParseViewContent(raw: unknown) {
  */
 export function validateContentCategoryForViewType(
   viewType: string,
-  content: z.infer<typeof ViewContentSchema>,
+  content: z.infer<typeof ViewContentSchema>
 ): boolean {
   // Map view types to expected categories
   const canvasTypes = ["whiteboard", "mindmap"];

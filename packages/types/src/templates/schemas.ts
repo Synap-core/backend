@@ -167,7 +167,7 @@ export const EntityTemplateSchema = z
     },
     {
       message: "Invalid template configuration",
-    },
+    }
   );
 
 // =============================================================================

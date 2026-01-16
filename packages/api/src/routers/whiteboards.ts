@@ -21,7 +21,7 @@ export const whiteboardsRouter = router({
       z.object({
         viewId: z.string().uuid(),
         message: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Get view
@@ -72,7 +72,7 @@ export const whiteboardsRouter = router({
       z.object({
         viewId: z.string().uuid(),
         limit: z.number().min(1).max(50).default(20),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // Get view
@@ -105,7 +105,7 @@ export const whiteboardsRouter = router({
       z.object({
         viewId: z.string().uuid(),
         versionId: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Get view
@@ -160,7 +160,7 @@ export const whiteboardsRouter = router({
     .input(
       z.object({
         versionId: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const version = await db.query.documentVersions.findFirst({
@@ -195,7 +195,7 @@ export const whiteboardsRouter = router({
       z.object({
         viewId: z.string().uuid(),
         versionId: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Get view

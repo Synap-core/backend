@@ -217,7 +217,7 @@ export const systemRouter = router({
           .optional(),
         correlationId: z.string().uuid().optional(),
         causationId: z.string().uuid().optional(),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       // Create the event
@@ -264,7 +264,7 @@ export const systemRouter = router({
         eventType: z.string().optional(),
         userId: z.string().optional(),
         since: z.string().datetime().optional(), // Get events since this time
-      }),
+      })
     )
     .query(async ({ input }) => {
       const events = await eventRepository.searchEvents({
@@ -300,11 +300,11 @@ export const systemRouter = router({
     .input(
       z.object({
         correlationId: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const events = await eventRepository.getCorrelatedEvents(
-        input.correlationId,
+        input.correlationId
       );
 
       return {
@@ -342,7 +342,7 @@ export const systemRouter = router({
       let relatedEvents: (typeof event)[] = [];
       if (event.correlationId) {
         relatedEvents = await eventRepository.getCorrelatedEvents(
-          event.correlationId,
+          event.correlationId
         );
         // Exclude the main event from related list
         relatedEvents = relatedEvents.filter((e) => e.id !== event.id);
@@ -387,7 +387,7 @@ export const systemRouter = router({
         toDate: z.string().datetime().optional(),
         limit: z.number().min(1).max(1000).default(100),
         offset: z.number().min(0).default(0),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const filters = {
@@ -443,14 +443,14 @@ export const systemRouter = router({
     .input(
       z.object({
         toolName: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const tool = dynamicToolRegistry.getTool(input.toolName);
 
       if (!tool) {
         throw new Error(
-          `Tool "${input.toolName}" not found. Available tools: ${dynamicToolRegistry.getToolNames().join(", ")}`,
+          `Tool "${input.toolName}" not found. Available tools: ${dynamicToolRegistry.getToolNames().join(", ")}`
         );
       }
 
@@ -490,7 +490,7 @@ export const systemRouter = router({
         parameters: z.record(z.any()),
         userId: z.string(),
         threadId: z.string().default("playground"),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       const tool = dynamicToolRegistry.getTool(input.toolName);
@@ -541,7 +541,7 @@ export const systemRouter = router({
     const errorEvents = recentEvents.filter(
       (e) =>
         e.eventType.toLowerCase().includes("error") ||
-        e.eventType.toLowerCase().includes("failed"),
+        e.eventType.toLowerCase().includes("failed")
     );
     const errorRate =
       recentEvents.length > 0
@@ -624,7 +624,7 @@ export const systemRouter = router({
         tableName: z.string(),
         limit: z.number().min(1).max(100).default(50),
         offset: z.number().min(0).default(0),
-      }),
+      })
     )
     .query(async ({ input }) => {
       // Validate table name to prevent SQL injection (whitelisting)
@@ -633,7 +633,7 @@ export const systemRouter = router({
       `);
 
       const isValid = validTables.some(
-        (t: any) => t.table_name === input.tableName,
+        (t: any) => t.table_name === input.tableName
       );
       if (!isValid) {
         throw new Error(`Invalid table name: ${input.tableName}`);
@@ -643,7 +643,7 @@ export const systemRouter = router({
       // However, parameters cannot be used for identifiers.
       // Since we validated input.tableName exists in information_schema, it is safe to interpolate.
       const query = sqlDrizzle.raw(
-        `SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`,
+        `SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`
       );
       const rows = await db.execute(query);
       return rows;

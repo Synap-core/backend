@@ -71,18 +71,18 @@ export const apiKeys = pgTable(
     // Constraints
     userIdCheck: check(
       "api_keys_user_id_check",
-      sql`${table.userId} IS NOT NULL AND LENGTH(TRIM(${table.userId})) > 0`,
+      sql`${table.userId} IS NOT NULL AND LENGTH(TRIM(${table.userId})) > 0`
     ),
     keyNameCheck: check(
       "api_keys_key_name_check",
-      sql`LENGTH(TRIM(${table.keyName})) > 0`,
+      sql`LENGTH(TRIM(${table.keyName})) > 0`
     ),
     keyPrefixCheck: check(
       "api_keys_key_prefix_check",
-      sql`${table.keyPrefix} IN ('synap_hub_live_', 'synap_hub_test_', 'synap_user_')`,
+      sql`${table.keyPrefix} IN ('synap_hub_live_', 'synap_hub_test_', 'synap_user_')`
     ),
     keyHashUnique: unique("api_keys_key_hash_unique").on(table.keyHash),
-  }),
+  })
 );
 
 /**

@@ -1,14 +1,14 @@
 /**
  * Tag Repository
- * 
+ *
  * Handles all tag CRUD operations with automatic event emission
  */
 
-import { eq, and } from 'drizzle-orm';
-import { tags } from '../schema/tags.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
-import type { Tag, NewTag } from '../schema/tags.js';
+import { eq, and } from "drizzle-orm";
+import { tags } from "../schema/tags.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
+import type { Tag, NewTag } from "../schema/tags.js";
 
 export interface CreateTagInput {
   name: string;
@@ -21,9 +21,13 @@ export interface UpdateTagInput {
   color?: string;
 }
 
-export class TagRepository extends BaseRepository<Tag, CreateTagInput, UpdateTagInput> {
+export class TagRepository extends BaseRepository<
+  Tag,
+  CreateTagInput,
+  UpdateTagInput
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'tag' });
+    super(db, eventRepo, { subjectType: "tag" });
   }
 
   /**
@@ -33,10 +37,7 @@ export class TagRepository extends BaseRepository<Tag, CreateTagInput, UpdateTag
   async create(data: CreateTagInput, userId: string): Promise<Tag> {
     // Check for duplicate name
     const existing = await this.db.query.tags.findFirst({
-      where: and(
-        eq(tags.userId, userId),
-        eq(tags.name, data.name),
-      ),
+      where: and(eq(tags.userId, userId), eq(tags.name, data.name)),
     });
 
     if (existing) {
@@ -48,12 +49,12 @@ export class TagRepository extends BaseRepository<Tag, CreateTagInput, UpdateTag
       .values({
         userId,
         name: data.name,
-        color: data.color || '#gray',
+        color: data.color || "#gray",
       } as NewTag)
       .returning();
 
     // Emit completed event
-    await this.emitCompleted('create', tag, userId);
+    await this.emitCompleted("create", tag, userId);
 
     return tag;
   }
@@ -73,11 +74,11 @@ export class TagRepository extends BaseRepository<Tag, CreateTagInput, UpdateTag
       .returning();
 
     if (!tag) {
-      throw new Error('Tag not found');
+      throw new Error("Tag not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('update', tag, userId);
+    await this.emitCompleted("update", tag, userId);
 
     return tag;
   }
@@ -93,10 +94,10 @@ export class TagRepository extends BaseRepository<Tag, CreateTagInput, UpdateTag
       .returning({ id: tags.id });
 
     if (result.length === 0) {
-      throw new Error('Tag not found');
+      throw new Error("Tag not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 }

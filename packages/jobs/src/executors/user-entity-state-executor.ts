@@ -1,6 +1,6 @@
 /**
  * User Entity State Executor
- * 
+ *
  * Handles validated user entity state events.
  */
 

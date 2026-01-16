@@ -58,7 +58,7 @@ export const documentPersistenceWorker = inngest.createFunction(
                 "X-Internal-Request": "true",
                 "Content-Type": "application/json",
               },
-            },
+            }
           );
 
           if (!response.ok) {
@@ -85,16 +85,16 @@ export const documentPersistenceWorker = inngest.createFunction(
         } catch (e) {
           logger.error(
             { error: e, documentId: session.documentId },
-            "Failed to persist document state",
+            "Failed to persist document state"
           );
           return {
             id: session.documentId,
             error: e instanceof Error ? e.message : "Unknown error",
           };
         }
-      }),
+      })
     );
 
     return { results };
-  },
+  }
 );

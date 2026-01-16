@@ -106,14 +106,14 @@ export const hubTokenProcedure = publicProcedure
   .use(hubTokenMiddleware);
 
 async function getPreferences(
-  userId: string,
+  userId: string
 ): Promise<Record<string, unknown>> {
   logger.debug({ userId }, "Retrieving preferences (placeholder)");
   return {};
 }
 
 async function getCalendar(
-  userId: string,
+  userId: string
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId }, "Retrieving calendar (placeholder)");
   return [];
@@ -125,7 +125,7 @@ async function getNotes(
     dateRange?: { start: string; end: string };
     limit?: number;
     offset?: number;
-  },
+  }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving notes");
   let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
@@ -136,7 +136,7 @@ async function getNotes(
     whereCondition = and(
       whereCondition,
       gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any,
+      lte(entities.createdAt, endDate) as any
     ) as any;
   }
   const query = db
@@ -176,7 +176,7 @@ async function getTasks(
     dateRange?: { start: string; end: string };
     limit?: number;
     offset?: number;
-  },
+  }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving tasks");
   let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
@@ -187,7 +187,7 @@ async function getTasks(
     whereCondition = and(
       whereCondition,
       gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any,
+      lte(entities.createdAt, endDate) as any
     ) as any;
   }
   const query = db
@@ -227,13 +227,13 @@ async function getProjects(
     dateRange?: { start: string; end: string };
     limit?: number;
     offset?: number;
-  },
+  }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving projects");
   let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
   whereCondition = and(
     whereCondition,
-    eq(entities.type, "project") as any,
+    eq(entities.type, "project") as any
   ) as any;
   if (filters?.dateRange) {
     const startDate = new Date(filters.dateRange.start);
@@ -241,7 +241,7 @@ async function getProjects(
     whereCondition = and(
       whereCondition,
       gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any,
+      lte(entities.createdAt, endDate) as any
     ) as any;
   }
   const query = db
@@ -276,7 +276,7 @@ async function getProjects(
 }
 
 async function getConversations(
-  userId: string,
+  userId: string
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId }, "Retrieving conversations (placeholder)");
   return [];
@@ -289,14 +289,14 @@ async function getAllEntities(
     entityTypes?: string[];
     limit?: number;
     offset?: number;
-  },
+  }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving all entities");
   let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
   if (filters?.entityTypes && filters.entityTypes.length > 0) {
     whereCondition = and(
       whereCondition,
-      eq(entities.type, filters.entityTypes[0]) as any,
+      eq(entities.type, filters.entityTypes[0]) as any
     ) as any;
   }
   if (filters?.dateRange) {
@@ -305,7 +305,7 @@ async function getAllEntities(
     whereCondition = and(
       whereCondition,
       gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any,
+      lte(entities.createdAt, endDate) as any
     ) as any;
   }
   const query = db
@@ -340,14 +340,14 @@ async function getAllEntities(
 }
 
 async function getRelations(
-  userId: string,
+  userId: string
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId }, "Retrieving relations (placeholder)");
   return [];
 }
 
 async function getKnowledgeFacts(
-  userId: string,
+  userId: string
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId }, "Retrieving knowledge facts (placeholder)");
   return [];
@@ -361,13 +361,13 @@ export const hubRouter = router({
       const { requestId, scope, expiresIn } = input;
       logger.info(
         { userId, requestId, scope, expiresIn },
-        "Generating Hub access token",
+        "Generating Hub access token"
       );
       const { token, expiresAt } = generateHubAccessToken(
         userId,
         requestId,
         scope,
-        expiresIn,
+        expiresIn
       );
       await logHubAccess(userId, requestId, "token.generated", {
         scope,
@@ -385,7 +385,7 @@ export const hubRouter = router({
       const { scope: requestedScope, filters } = input;
       logger.info({ userId, requestId, requestedScope }, "Hub requesting data");
       const invalidScopes = requestedScope.filter(
-        (s) => !tokenScope.includes(s),
+        (s) => !tokenScope.includes(s)
       );
       if (invalidScopes.length > 0) {
         throw new TRPCError({
@@ -477,7 +477,11 @@ export const hubRouter = router({
       const errors: Array<{ actionIndex: number; error: string }> = [];
       if (insight.type === "action_plan" || insight.type === "automation") {
         try {
-          const events = await transformInsightToEvents(insight, userId, requestId);
+          const events = await transformInsightToEvents(
+            insight,
+            userId,
+            requestId
+          );
           const eventRepo = getEventRepository();
           for (const event of events) {
             try {
@@ -499,7 +503,7 @@ export const hubRouter = router({
       } else {
         logger.debug(
           { userId, requestId, insightType: insight.type },
-          "Insight type does not create events",
+          "Insight type does not create events"
         );
       }
       await logHubAccess(userId, requestId, "insight.submitted", {

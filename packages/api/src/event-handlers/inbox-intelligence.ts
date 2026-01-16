@@ -23,14 +23,14 @@ export async function handleInboxItemIntelligence(
     id: string;
     userId: string;
     timestamp: Date;
-  },
+  }
 ) {
   logger.info(
     {
       itemId: event.subjectId,
       provider: event.data.provider,
     },
-    "Requesting intelligence analysis",
+    "Requesting intelligence analysis"
   );
 
   try {
@@ -42,7 +42,7 @@ export async function handleInboxItemIntelligence(
 
     // Filter for services with 'lifefeed-analysis' capability
     const lifefeedServices = services.filter((s) =>
-      s.capabilities.includes("lifefeed-analysis"),
+      s.capabilities.includes("lifefeed-analysis")
     );
 
     if (lifefeedServices.length === 0) {
@@ -58,7 +58,7 @@ export async function handleInboxItemIntelligence(
         serviceId: service.serviceId,
         itemId: event.subjectId,
       },
-      "Calling intelligence service",
+      "Calling intelligence service"
     );
 
     // Call the service webhook
@@ -87,7 +87,7 @@ export async function handleInboxItemIntelligence(
 
     if (!response.ok) {
       throw new Error(
-        `Intelligence service returned ${response.status}: ${await response.text()}`,
+        `Intelligence service returned ${response.status}: ${await response.text()}`
       );
     }
 
@@ -97,7 +97,7 @@ export async function handleInboxItemIntelligence(
         itemId: event.subjectId,
         status: response.status,
       },
-      "Intelligence service called successfully",
+      "Intelligence service called successfully"
     );
   } catch (error) {
     logger.error(
@@ -105,7 +105,7 @@ export async function handleInboxItemIntelligence(
         err: error,
         itemId: event.subjectId,
       },
-      "Failed to call intelligence service",
+      "Failed to call intelligence service"
     );
     // Don't throw - we don't want to block inbox storage if intelligence fails
   }

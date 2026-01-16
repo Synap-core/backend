@@ -21,7 +21,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
-    },
+    }
   );
 
   if (!response.ok) {
@@ -40,7 +40,7 @@ async function generateAndStoreEmbedding(
   userId: string,
   entityType: string,
   title: string,
-  description?: string,
+  description?: string
 ): Promise<void> {
   const textToEmbed = `${title} ${description || ""}`.trim();
 
@@ -82,7 +82,7 @@ export const entityEmbeddingWorker = inngest.createFunction(
           userId,
           entityType,
           title,
-          preview,
+          preview
         );
 
         console.log(`✅ Generated embedding for entity ${entityId}`);
@@ -91,10 +91,10 @@ export const entityEmbeddingWorker = inngest.createFunction(
       } catch (error) {
         console.error(
           `❌ Failed to generate embedding for ${entityId}:`,
-          error,
+          error
         );
         throw error; // Inngest will retry
       }
     });
-  },
+  }
 );

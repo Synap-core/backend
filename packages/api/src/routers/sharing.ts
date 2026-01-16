@@ -34,7 +34,7 @@ export const sharingRouter = router({
         })
         .extend({
           expiresInDays: z.number().min(1).max(365).optional(),
-        }),
+        })
     )
     .mutation(async ({ ctx, input }) => {
       // Check user owns resource or has editor permission
@@ -50,18 +50,22 @@ export const sharingRouter = router({
           });
 
         if (!resource.workspaceId) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Resource must belong to a workspace' });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Resource must belong to a workspace",
+          });
         }
-        const permResult = await verifyPermission({ 
-          db, 
-          userId: ctx.userId, 
-          workspace: { id: resource.workspaceId }, 
-          requiredPermission: 'write'
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: resource.workspaceId },
+          requiredPermission: "write",
         });
-        if (!permResult.allowed) throw new TRPCError({ 
-          code: 'FORBIDDEN', 
-          message: permResult.reason || 'Insufficient permissions' 
-        });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
       } else if ((input.resourceType as string) === "entity") {
         resource = await db.query.entities.findFirst({
           where: eq(entities.id, input.resourceId as string),
@@ -73,18 +77,22 @@ export const sharingRouter = router({
           });
 
         if (!resource.workspaceId) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Resource must belong to a workspace' });
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Resource must belong to a workspace",
+          });
         }
-        const permResult = await verifyPermission({ 
-          db, 
-          userId: ctx.userId, 
-          workspace: { id: resource.workspaceId }, 
-          requiredPermission: 'write'
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: resource.workspaceId },
+          requiredPermission: "write",
         });
-        if (!permResult.allowed) throw new TRPCError({ 
-          code: 'FORBIDDEN', 
-          message: permResult.reason || 'Insufficient permissions' 
-        });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
       }
 
       // Generate secure token
@@ -107,7 +115,7 @@ export const sharingRouter = router({
           expiresAt: input.expiresInDays
             ? new Date(
                 Date.now() +
-                  (input.expiresInDays as number) * 24 * 60 * 60 * 1000,
+                  (input.expiresInDays as number) * 24 * 60 * 60 * 1000
               )
             : null,
           createdBy: ctx.userId,
@@ -135,7 +143,7 @@ export const sharingRouter = router({
         })
         .extend({
           userEmail: z.string().email(),
-        }),
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { randomUUID } = await import("crypto");
@@ -166,7 +174,7 @@ export const sharingRouter = router({
     .input(
       z.object({
         shareId: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       await db
@@ -187,14 +195,14 @@ export const sharingRouter = router({
     .input(
       z.object({
         token: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       // Find share
       const share = await db.query.resourceShares.findFirst({
         where: and(
           eq(resourceShares.publicToken, input.token),
-          eq(resourceShares.visibility, "public"),
+          eq(resourceShares.visibility, "public")
         ),
       });
 
@@ -252,7 +260,7 @@ export const sharingRouter = router({
         resourceId: true,
         visibility: true,
         expiresAt: true,
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // Check user owns resource or has viewer permission
@@ -274,23 +282,27 @@ export const sharingRouter = router({
         });
 
       if (!resource.workspaceId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Resource must belong to a workspace' });
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Resource must belong to a workspace",
+        });
       }
-      const permResult = await verifyPermission({ 
-        db, 
-        userId: ctx.userId, 
-        workspace: { id: resource.workspaceId }, 
-        requiredPermission: 'read'
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: resource.workspaceId },
+        requiredPermission: "read",
       });
-      if (!permResult.allowed) throw new TRPCError({ 
-        code: 'FORBIDDEN', 
-        message: permResult.reason || 'Insufficient permissions' 
-      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason || "Insufficient permissions",
+        });
 
       return await db.query.resourceShares.findMany({
         where: and(
           eq(resourceShares.resourceType, input.resourceType as string),
-          eq(resourceShares.resourceId, input.resourceId as string),
+          eq(resourceShares.resourceId, input.resourceId as string)
         ),
       });
     }),
@@ -302,7 +314,7 @@ export const sharingRouter = router({
     .input(
       z.object({
         shareId: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Check user owns the shared resource
@@ -331,18 +343,22 @@ export const sharingRouter = router({
         });
 
       if (!resource.workspaceId) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Resource must belong to a workspace' });
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Resource must belong to a workspace",
+        });
       }
-      const permResult = await verifyPermission({ 
-        db, 
-        userId: ctx.userId, 
-        workspace: { id: resource.workspaceId }, 
-        requiredPermission: 'write'
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: resource.workspaceId },
+        requiredPermission: "write",
       });
-      if (!permResult.allowed) throw new TRPCError({ 
-        code: 'FORBIDDEN', 
-        message: permResult.reason || 'Insufficient permissions' 
-      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason || "Insufficient permissions",
+        });
 
       // Emit event for share revocation
       await emitRequestEvent({

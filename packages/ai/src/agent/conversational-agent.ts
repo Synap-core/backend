@@ -45,7 +45,7 @@ export abstract class ConversationalAgent {
    */
   abstract processMessage(
     message: string,
-    context: ConversationContext,
+    context: ConversationContext
   ): Promise<ConversationResponse>;
 
   /**

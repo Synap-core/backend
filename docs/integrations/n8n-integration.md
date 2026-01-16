@@ -57,6 +57,7 @@ curl -X POST 'http://localhost:3000/trpc/notes.create' \
 ## Manual Setup (Admin UI)
 
 Use this if:
+
 - You want multiple N8N instances
 - Different webhooks for different events
 - Dynamic webhook management
@@ -133,6 +134,7 @@ HTTP Request (Update entity via Synap API)
 ```
 
 **HTTP Request**:
+
 - Method: POST
 - URL: `http://localhost:3000/trpc/entities.update`
 - Body:
@@ -154,6 +156,7 @@ HTTP Request (Create entity)
 ```
 
 **HTTP Request**:
+
 - Method: POST
 - URL: `http://localhost:3000/trpc/notes.create`
 - Headers:
@@ -188,24 +191,24 @@ X-Synap-Signature: sha256=abc123...
 Add **Code Node** after webhook to verify:
 
 ```javascript
-const crypto = require('crypto');
+const crypto = require("crypto");
 
 // Get secret from N8N credentials store
-const secret = '{{$credentials.synapWebhookSecret}}';
+const secret = "{{$credentials.synapWebhookSecret}}";
 
 // Get signature from headers
-const signature = $request.headers['x-synap-signature']?.replace('sha256=', '');
+const signature = $request.headers["x-synap-signature"]?.replace("sha256=", "");
 
 // Compute expected signature
 const payload = JSON.stringify($input.item.json);
 const expected = crypto
-  .createHmac('sha256', secret)
+  .createHmac("sha256", secret)
   .update(payload)
-  .digest('hex');
+  .digest("hex");
 
 // Verify
 if (signature !== expected) {
-  throw new Error('Invalid signature - webhook rejected');
+  throw new Error("Invalid signature - webhook rejected");
 }
 
 // Signature valid - pass through
@@ -219,12 +222,14 @@ return $input.item.json;
 ### Webhook not auto-subscribing?
 
 Check logs on server start:
+
 ```bash
 pnpm dev
 # Look for: "✅ Created N8N webhook subscription"
 ```
 
 If missing:
+
 1. Check `N8N_WEBHOOK_URL` in `.env`
 2. Verify it's a valid URL
 3. Check server logs for errors
@@ -260,15 +265,18 @@ If missing:
 ## Available Events
 
 ### Entity Events
+
 - `entities.create.validated` - Entity created
 - `entities.update.validated` - Entity updated
 - `entities.delete.validated` - Entity deleted
 
 ### Message Events
+
 - `conversationMessages.create.validated` - Message sent
 - `conversationMessages.update.validated` - Message edited
 
 ### Document Events
+
 - `documents.create.validated` - Document uploaded
 - `documents.update.validated` - Document modified
 

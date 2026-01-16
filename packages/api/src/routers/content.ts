@@ -65,7 +65,7 @@ export const contentRouter = router({
 
       logger.info(
         { userId, requestId, targetType: input.targetType },
-        "Creating content from text",
+        "Creating content from text"
       );
 
       // Create event
@@ -105,7 +105,7 @@ export const contentRouter = router({
           correlationId: event.correlationId,
           requestId: event.requestId,
         },
-        userId,
+        userId
       );
 
       return {
@@ -135,7 +135,7 @@ export const contentRouter = router({
           filename: input.filename,
           targetType: input.targetType,
         },
-        "Creating content from file",
+        "Creating content from file"
       );
 
       try {
@@ -155,7 +155,7 @@ export const contentRouter = router({
 
         logger.debug(
           { stagingKey, size: buffer.length },
-          "File uploaded to staging",
+          "File uploaded to staging"
         );
 
         // PHASE 2: Publish event
@@ -196,7 +196,7 @@ export const contentRouter = router({
             correlationId: event.correlationId,
             requestId: event.requestId,
           },
-          userId,
+          userId
         );
 
         const result: any = {
@@ -215,7 +215,7 @@ export const contentRouter = router({
       } catch (error) {
         logger.error(
           { err: error, userId, filename: input.filename },
-          "File upload failed",
+          "File upload failed"
         );
         throw error;
       }

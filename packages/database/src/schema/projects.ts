@@ -18,7 +18,7 @@ export const projects = pgTable(
   {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
-    
+
     // Context
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id").notNull(), // Every project belongs to a workspace
@@ -49,7 +49,7 @@ export const projects = pgTable(
   (table) => ({
     userIdIdx: index("projects_user_id_idx").on(table.userId),
     statusIdx: index("projects_status_idx").on(table.status),
-  }),
+  })
 );
 
 export type Project = typeof projects.$inferSelect;

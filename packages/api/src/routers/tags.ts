@@ -45,7 +45,7 @@ export const tagsRouter = router({
       insertTagSchema.pick({
         name: true,
         color: true,
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -54,7 +54,7 @@ export const tagsRouter = router({
       const existing = await db.query.tags.findFirst({
         where: and(
           eq(tags.userId, userId),
-          eq(tags.name, input.name as string),
+          eq(tags.name, input.name as string)
         ),
       });
 
@@ -85,7 +85,10 @@ export const tagsRouter = router({
         userId,
       });
 
-      logger.info({ userId, tagId: id, name: optimisticTag.name }, "Requested tag creation");
+      logger.info(
+        { userId, tagId: id, name: optimisticTag.name },
+        "Requested tag creation"
+      );
 
       return { tag: optimisticTag };
     }),
@@ -104,7 +107,7 @@ export const tagsRouter = router({
         .partial({
           name: true,
           color: true,
-        }),
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -149,7 +152,7 @@ export const tagsRouter = router({
     .input(
       insertTagSchema.pick({
         id: true,
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -187,11 +190,10 @@ export const tagsRouter = router({
       insertEntityTagSchema.pick({
         tagId: true,
         entityId: true,
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       await emitRequestEvent({
-              
         type: "tags.attach.requested",
         subjectId: input.tagId as string,
         subjectType: "tag",
@@ -205,7 +207,7 @@ export const tagsRouter = router({
 
       logger.debug(
         { userId: ctx.userId, tagId: input.tagId, entityId: input.entityId },
-        "Requested tag attach",
+        "Requested tag attach"
       );
 
       return { status: "requested" };
@@ -219,27 +221,26 @@ export const tagsRouter = router({
       insertEntityTagSchema.pick({
         tagId: true,
         entityId: true,
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
-    await emitRequestEvent({
-          
-      type: "tags.detach.requested",
-      subjectId: input.tagId as string,
-      subjectType: "tag",
-      data: {
-        tagId: input.tagId,
-        entityId: input.entityId,
+      await emitRequestEvent({
+        type: "tags.detach.requested",
+        subjectId: input.tagId as string,
+        subjectType: "tag",
+        data: {
+          tagId: input.tagId,
+          entityId: input.entityId,
+          userId: ctx.userId,
+        },
         userId: ctx.userId,
-      },
-      userId: ctx.userId,
-    });
-    logger.debug(
-      { tagId: input.tagId, entityId: input.entityId },
-      "Requested tag detach",
-    );
-    return { status: "requested" };
-  }),
+      });
+      logger.debug(
+        { tagId: input.tagId, entityId: input.entityId },
+        "Requested tag detach"
+      );
+      return { status: "requested" };
+    }),
 
   /**
    * Get all tags for an entity
@@ -248,7 +249,7 @@ export const tagsRouter = router({
     .input(
       insertEntityTagSchema.pick({
         entityId: true,
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;
@@ -280,7 +281,7 @@ export const tagsRouter = router({
         })
         .extend({
           limit: z.number().min(1).max(100).default(50),
-        }),
+        })
     )
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;

@@ -11,8 +11,8 @@ import { createLogger } from "@synap-core/core";
 const logger = createLogger({ module: "inngest-client" });
 
 // Determine if we're in dev mode
-const isDev = 
-  process.env.INNGEST_DEV === "true" || 
+const isDev =
+  process.env.INNGEST_DEV === "true" ||
   process.env.NODE_ENV === "test" ||
   process.env.NODE_ENV === "development";
 
@@ -24,15 +24,22 @@ export const inngest = new Inngest({
   isDev,
   // In dev/test mode, connect to local dev server
   // In production, connects to Inngest Cloud
-  ...(isDev && process.env.INNGEST_BASE_URL ? { baseUrl: process.env.INNGEST_BASE_URL } : {}),
+  ...(isDev && process.env.INNGEST_BASE_URL
+    ? { baseUrl: process.env.INNGEST_BASE_URL }
+    : {}),
 });
 
 // Log initialization
-logger.info({
-  isDev,
-  hasEventKey: !!process.env.INNGEST_EVENT_KEY,
-  baseUrl: isDev ? process.env.INNGEST_BASE_URL || "http://localhost:8288" : "cloud",
-}, "Inngest client initialized");
+logger.info(
+  {
+    isDev,
+    hasEventKey: !!process.env.INNGEST_EVENT_KEY,
+    baseUrl: isDev
+      ? process.env.INNGEST_BASE_URL || "http://localhost:8288"
+      : "cloud",
+  },
+  "Inngest client initialized"
+);
 
 // Event types for type safety
 export type Events = {

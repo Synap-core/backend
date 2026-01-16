@@ -83,7 +83,7 @@ export class R2Storage {
   async upload(
     key: string,
     content: string | Buffer,
-    options?: UploadOptions,
+    options?: UploadOptions
   ): Promise<FileMetadata> {
     const body =
       typeof content === "string" ? Buffer.from(content, "utf-8") : content;
@@ -96,7 +96,7 @@ export class R2Storage {
         Body: body,
         ContentType: options?.contentType || "application/octet-stream",
         Metadata: options?.metadata,
-      }),
+      })
     );
 
     return {
@@ -126,7 +126,7 @@ export class R2Storage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-      }),
+      })
     );
 
     if (!response.Body) {
@@ -144,7 +144,7 @@ export class R2Storage {
       new GetObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-      }),
+      })
     );
 
     if (!response.Body) {
@@ -171,7 +171,7 @@ export class R2Storage {
       new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-      }),
+      })
     );
   }
 
@@ -188,7 +188,7 @@ export class R2Storage {
         new HeadObjectCommand({
           Bucket: this.bucketName,
           Key: key,
-        }),
+        })
       );
       return true;
     } catch (error) {
@@ -208,7 +208,7 @@ export class R2Storage {
       new HeadObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-      }),
+      })
     );
 
     return {
@@ -266,7 +266,7 @@ export class R2Storage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension: string = "md",
+    extension: string = "md"
   ): string {
     return `users/${userId}/${entityType}s/${entityId}.${extension}`;
   }

@@ -39,7 +39,7 @@ export const hubProtocolRouter = router({
     .input(
       z.object({
         threadId: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       // Get thread
@@ -94,7 +94,7 @@ export const hubProtocolRouter = router({
     .input(
       z.object({
         userId: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       // Get recent entities
@@ -141,13 +141,13 @@ export const hubProtocolRouter = router({
         userId: z.string(),
         type: z.string().optional(),
         limit: z.number().optional(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const results = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, input.userId),
-          input.type ? eq(entities.type, input.type) : undefined,
+          input.type ? eq(entities.type, input.type) : undefined
         ),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit || 50,
@@ -168,13 +168,15 @@ export const hubProtocolRouter = router({
         title: z.string(),
         description: z.string().optional(),
         // AI metadata for tracking AI-generated proposals
-        aiMetadata: z.object({
-          messageId: z.string().optional(),
-          confidence: z.number().min(0).max(1).optional(),
-          model: z.string().optional(),
-          reasoning: z.string().optional(),
-        }).optional(),
-      }),
+        aiMetadata: z
+          .object({
+            messageId: z.string().optional(),
+            confidence: z.number().min(0).max(1).optional(),
+            model: z.string().optional(),
+            reasoning: z.string().optional(),
+          })
+          .optional(),
+      })
     )
     .mutation(async ({ input }) => {
       // \u2705 Publish .requested event
@@ -208,7 +210,7 @@ export const hubProtocolRouter = router({
       z.object({
         threadId: z.string().uuid(),
         contextSummary: z.string(),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       await db
@@ -247,7 +249,7 @@ export const hubProtocolRouter = router({
           ])
           .optional(),
         limit: z.number().min(1).max(100).default(20),
-      }),
+      })
     )
     .query(async ({ input }) => {
       // Call search.entities with proper context
@@ -258,7 +260,7 @@ export const hubProtocolRouter = router({
           input.query
             ? // Simple ILIKE search on title and preview
               sqlTemplate`(${entities.title} ILIKE ${`%${input.query}%`} OR ${entities.preview} ILIKE ${`%${input.query}%`})`
-            : undefined,
+            : undefined
         ),
         orderBy: [desc(entities.updatedAt)],
         limit: input.limit,
@@ -278,7 +280,7 @@ export const hubProtocolRouter = router({
         query: z.string(),
         type: z.enum(["text", "markdown", "code", "pdf", "docx"]).optional(),
         limit: z.number().min(1).max(50).default(10),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const { documents } = await import("@synap/database/schema");
@@ -289,7 +291,7 @@ export const hubProtocolRouter = router({
         where: and(
           eq(documents.userId, input.userId),
           input.type ? eq(documents.type, input.type) : undefined,
-          sql`${documents.title} ILIKE ${`%${input.query}%`}`,
+          sql`${documents.title} ILIKE ${`%${input.query}%`}`
         ),
         orderBy: [desc(documents.updatedAt)],
         limit: input.limit,
@@ -319,7 +321,7 @@ export const hubProtocolRouter = router({
         query: z.string(),
         types: z.array(z.string()).optional(),
         limit: z.number().min(1).max(50).default(10),
-      }),
+      })
     )
     .query(async ({ input }) => {
       // 1. Generate embedding for query
@@ -378,7 +380,7 @@ export const hubProtocolRouter = router({
       z.object({
         documentId: z.string().uuid(),
         userId: z.string(),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const { documents } = await import("@synap/database/schema");
@@ -388,7 +390,7 @@ export const hubProtocolRouter = router({
       const document = await db.query.documents.findFirst({
         where: and(
           eq(documents.id, input.documentId),
-          eq(documents.userId, input.userId),
+          eq(documents.userId, input.userId)
         ),
       });
 
@@ -428,7 +430,7 @@ export const hubProtocolRouter = router({
         title: z.string().optional(),
         preview: z.string().optional(),
         metadata: z.record(z.any()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       // Publish .requested event (handled by existing Inngest worker)
@@ -469,11 +471,11 @@ export const hubProtocolRouter = router({
             position: z.number().optional(),
             range: z.tuple([z.number(), z.number()]).optional(),
             text: z.string().optional(),
-          }),
+          })
         ),
         proposedContent: z.string(),
         originalContent: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ input }) => {
       const { proposals } = await import("@synap/database/schema");

@@ -17,14 +17,14 @@ const hydraAdminUrl = process.env.HYDRA_ADMIN_URL || "http://localhost:4445";
 export const hydraPublic = new OAuth2Api(
   new Configuration({
     basePath: hydraPublicUrl,
-  }),
+  })
 );
 
 // Admin API (for management) - OAuth2Api with admin URL
 export const hydraAdmin = new OAuth2Api(
   new Configuration({
     basePath: hydraAdminUrl,
-  }),
+  })
 );
 
 /**
@@ -102,7 +102,7 @@ export async function exchangeToken(_params: {
     // This would need to be implemented via the Admin API or a custom endpoint
     // For now, this is a placeholder
     throw new Error(
-      "Token Exchange not yet fully implemented - needs custom endpoint",
+      "Token Exchange not yet fully implemented - needs custom endpoint"
     );
   } catch (error) {
     return null;

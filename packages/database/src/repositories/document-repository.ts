@@ -1,18 +1,18 @@
 /**
  * Document Repository
- * 
+ *
  * Handles all document CRUD operations with automatic event emission
  */
 
-import { eq, and } from 'drizzle-orm';
-import { documents } from '../schema/documents.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
-import type { Document, NewDocument } from '../schema/documents.js';
+import { eq, and } from "drizzle-orm";
+import { documents } from "../schema/documents.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
+import type { Document, NewDocument } from "../schema/documents.js";
 
 export interface CreateDocumentInput {
   title: string;
-  type: 'text' | 'markdown' | 'code' | 'pdf' | 'docx';
+  type: "text" | "markdown" | "code" | "pdf" | "docx";
   language?: string;
   storageUrl: string;
   storageKey: string;
@@ -30,9 +30,13 @@ export interface UpdateDocumentInput {
   metadata?: Record<string, unknown>;
 }
 
-export class DocumentRepository extends BaseRepository<Document, CreateDocumentInput, UpdateDocumentInput> {
+export class DocumentRepository extends BaseRepository<
+  Document,
+  CreateDocumentInput,
+  UpdateDocumentInput
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'document' });
+    super(db, eventRepo, { subjectType: "document" });
   }
 
   /**
@@ -58,7 +62,7 @@ export class DocumentRepository extends BaseRepository<Document, CreateDocumentI
       .returning();
 
     // Emit completed event
-    await this.emitCompleted('create', document, userId);
+    await this.emitCompleted("create", document, userId);
 
     return document;
   }
@@ -67,7 +71,11 @@ export class DocumentRepository extends BaseRepository<Document, CreateDocumentI
    * Update an existing document
    * Emits: documents.update.completed
    */
-  async update(id: string, data: UpdateDocumentInput, userId: string): Promise<Document> {
+  async update(
+    id: string,
+    data: UpdateDocumentInput,
+    userId: string
+  ): Promise<Document> {
     const [document] = await this.db
       .update(documents)
       .set({
@@ -81,11 +89,11 @@ export class DocumentRepository extends BaseRepository<Document, CreateDocumentI
       .returning();
 
     if (!document) {
-      throw new Error('Document not found');
+      throw new Error("Document not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('update', document, userId);
+    await this.emitCompleted("update", document, userId);
 
     return document;
   }
@@ -93,7 +101,7 @@ export class DocumentRepository extends BaseRepository<Document, CreateDocumentI
   /**
    * Delete a document
    * Emits: documents.delete.completed
-   * 
+   *
    * NOTE: Storage cleanup is handled by the executor, not here
    */
   async delete(id: string, userId: string): Promise<void> {
@@ -103,10 +111,10 @@ export class DocumentRepository extends BaseRepository<Document, CreateDocumentI
       .returning({ id: documents.id });
 
     if (result.length === 0) {
-      throw new Error('Document not found');
+      throw new Error("Document not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 }

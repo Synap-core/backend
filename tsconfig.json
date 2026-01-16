@@ -3,15 +3,12 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "Node16",
-    "lib": [
-      "ES2022"
-    ],
+    "lib": ["ES2022"],
     "moduleResolution": "node16",
     // Composite project defaults (inherited by all packages)
     "composite": true,
     "declaration": true,
     "declarationMap": true,
-    "incremental": true,
     // DO NOT set outDir/rootDir here - each package has different structure
     // Packages define: outDir: "./dist", rootDir: "./src"
     "sourceMap": true,
@@ -80,10 +77,5 @@
       "path": "./packages/types"
     }
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "scripts",
-    "tests"
-  ]
+  "exclude": ["node_modules", "dist", "scripts", "tests"]
 }

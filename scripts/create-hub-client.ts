@@ -19,7 +19,7 @@ async function createHubClient() {
   const hydraAdmin = new OAuth2Api(
     new Configuration({
       basePath: hydraAdminUrl,
-    }),
+    })
   );
 
   const clientId = "synap-hub";

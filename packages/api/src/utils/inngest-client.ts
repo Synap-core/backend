@@ -19,7 +19,7 @@ export const inngest = new Inngest({
 });
 
 const canPublish = Boolean(
-  config.inngest.eventKey || config.server.nodeEnv !== "production",
+  config.inngest.eventKey || config.server.nodeEnv !== "production"
 );
 
 /**
@@ -34,7 +34,7 @@ const canPublish = Boolean(
 export async function publishEvent(
   eventName: string,
   data: Record<string, unknown>,
-  userId: string,
+  userId: string
 ): Promise<void> {
   if (!canPublish) {
     logger.warn("INNGEST_EVENT_KEY is not set. Event will not be published.");
@@ -53,7 +53,7 @@ export async function publishEvent(
   } catch (error) {
     logger.error(
       { err: error, eventName, userId },
-      "Failed to publish event to Inngest",
+      "Failed to publish event to Inngest"
     );
     throw error;
   }

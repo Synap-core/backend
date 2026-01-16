@@ -34,7 +34,7 @@ export interface TokenExchangeResult {
  */
 async function validateExternalToken(
   _token: string,
-  tokenType: string,
+  tokenType: string
 ): Promise<any | null> {
   // TODO: Implement validation for different providers
   // For now, this is a placeholder
@@ -59,12 +59,12 @@ async function validateExternalToken(
  * @returns New access token from Hydra
  */
 export async function exchangeToken(
-  params: TokenExchangeParams,
+  params: TokenExchangeParams
 ): Promise<TokenExchangeResult | null> {
   // 1. Validate external token
   const subjectTokenInfo = await validateExternalToken(
     params.subject_token,
-    params.subject_token_type,
+    params.subject_token_type
   );
 
   if (!subjectTokenInfo) {
@@ -82,7 +82,7 @@ export async function exchangeToken(
   // 3. Hydra issues a new token
 
   throw new Error(
-    "Token Exchange implementation requires custom Hydra endpoint",
+    "Token Exchange implementation requires custom Hydra endpoint"
   );
 }
 
@@ -95,7 +95,7 @@ export async function exchangeBetterAuthToken(
   betterAuthToken: string,
   clientId: string,
   clientSecret: string,
-  requestedScopes: string[] = [],
+  requestedScopes: string[] = []
 ): Promise<TokenExchangeResult | null> {
   return exchangeToken({
     subject_token: betterAuthToken,

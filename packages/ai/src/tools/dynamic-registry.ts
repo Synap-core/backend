@@ -28,12 +28,12 @@ class DynamicToolRegistry {
    */
   register<TInputSchema extends z.ZodTypeAny, TOutput>(
     tool: AgentToolDefinition<TInputSchema, TOutput>,
-    metadata?: { version?: string; source?: string },
+    metadata?: { version?: string; source?: string }
   ): void {
     if (this.tools.has(tool.name)) {
       logger.warn(
         { toolName: tool.name },
-        "Tool already registered, overwriting",
+        "Tool already registered, overwriting"
       );
     }
 
@@ -48,7 +48,7 @@ class DynamicToolRegistry {
         version: metadata?.version,
         source: metadata?.source,
       },
-      "Tool registered",
+      "Tool registered"
     );
   }
 
@@ -77,7 +77,7 @@ class DynamicToolRegistry {
    * Get tool metadata
    */
   getToolMetadata(
-    name: string,
+    name: string
   ): { version?: string; source?: string; registeredAt: Date } | undefined {
     return this.metadata.get(name);
   }

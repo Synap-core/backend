@@ -1,13 +1,12 @@
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { entitiesHandler } from '../entities-executor.js';
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { entitiesHandler } from "../entities-executor.js";
 
 // Mock dependencies
 const mockCreate = vi.fn();
 const mockUpdate = vi.fn();
 const mockDelete = vi.fn();
 
-vi.mock('@synap/database', () => {
+vi.mock("@synap/database", () => {
   return {
     getDb: vi.fn(),
     EventRepository: vi.fn(),
@@ -19,7 +18,7 @@ vi.mock('@synap/database', () => {
   };
 });
 
-describe('EntitiesExecutor', () => {
+describe("EntitiesExecutor", () => {
   let mockStep: any;
 
   beforeEach(() => {
@@ -29,60 +28,69 @@ describe('EntitiesExecutor', () => {
     };
   });
 
-  it('should handle create action', async () => {
+  it("should handle create action", async () => {
     const event = {
-      name: 'entities.create.validated',
+      name: "entities.create.validated",
       data: {
-        entityType: 'note',
-        title: 'Test Entity',
-        fileUrl: 's3://',
-        filePath: '/path',
-        fileSize: 100
+        entityType: "note",
+        title: "Test Entity",
+        fileUrl: "s3://",
+        filePath: "/path",
+        fileSize: 100,
       },
-      user: { userId: 'user-1' },
+      user: { userId: "user-1" },
     };
 
     const result = await entitiesHandler({ event, step: mockStep } as any);
 
-    expect(mockStep.run).toHaveBeenCalledWith("process-entity", expect.any(Function));
+    expect(mockStep.run).toHaveBeenCalledWith(
+      "process-entity",
+      expect.any(Function)
+    );
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        entityType: 'note',
-        title: 'Test Entity',
-        userId: 'user-1',
+        entityType: "note",
+        title: "Test Entity",
+        userId: "user-1",
       }),
-      'user-1'
+      "user-1"
     );
-    expect(result).toEqual({ success: true, action: 'create' });
+    expect(result).toEqual({ success: true, action: "create" });
   });
 
-  it('should handle update action', async () => {
+  it("should handle update action", async () => {
     const event = {
-      name: 'entities.update.validated',
-      data: { id: 'entity-1', title: 'Updated' },
-      user: { userId: 'user-1' },
+      name: "entities.update.validated",
+      data: { id: "entity-1", title: "Updated" },
+      user: { userId: "user-1" },
     };
 
     await entitiesHandler({ event, step: mockStep } as any);
 
-    expect(mockStep.run).toHaveBeenCalledWith("process-entity", expect.any(Function));
+    expect(mockStep.run).toHaveBeenCalledWith(
+      "process-entity",
+      expect.any(Function)
+    );
     expect(mockUpdate).toHaveBeenCalledWith(
-      'entity-1',
-      expect.objectContaining({ title: 'Updated' }),
-      'user-1'
+      "entity-1",
+      expect.objectContaining({ title: "Updated" }),
+      "user-1"
     );
   });
 
-  it('should handle delete action', async () => {
+  it("should handle delete action", async () => {
     const event = {
-      name: 'entities.delete.validated',
-      data: { id: 'entity-1' },
-      user: { userId: 'user-1' },
+      name: "entities.delete.validated",
+      data: { id: "entity-1" },
+      user: { userId: "user-1" },
     };
 
     await entitiesHandler({ event, step: mockStep } as any);
 
-    expect(mockStep.run).toHaveBeenCalledWith("process-entity", expect.any(Function));
-    expect(mockDelete).toHaveBeenCalledWith('entity-1', 'user-1');
+    expect(mockStep.run).toHaveBeenCalledWith(
+      "process-entity",
+      expect.any(Function)
+    );
+    expect(mockDelete).toHaveBeenCalledWith("entity-1", "user-1");
   });
 });

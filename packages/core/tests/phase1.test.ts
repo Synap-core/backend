@@ -40,7 +40,7 @@ async function runTests() {
     logTest(
       "Test 1: Health Check",
       response.status === 200 && data.status === "ok",
-      response.status !== 200 ? `Status: ${response.status}` : undefined,
+      response.status !== 200 ? `Status: ${response.status}` : undefined
     );
   } catch (error) {
     logTest("Test 1: Health Check", false, (error as Error).message);
@@ -70,13 +70,13 @@ async function runTests() {
     logTest(
       "Test 3: Unauthenticated Request Blocked",
       response.status === 401,
-      `Expected 401, got ${response.status}`,
+      `Expected 401, got ${response.status}`
     );
   } catch (error) {
     logTest(
       "Test 3: Unauthenticated Request Blocked",
       false,
-      (error as Error).message,
+      (error as Error).message
     );
   }
 
@@ -89,13 +89,13 @@ async function runTests() {
     logTest(
       "Test 4: Row-Level Security (RLS)",
       true,
-      `RLS active - ${result.length} events visible`,
+      `RLS active - ${result.length} events visible`
     );
   } catch (error) {
     logTest(
       "Test 4: Row-Level Security (RLS)",
       false,
-      (error as Error).message,
+      (error as Error).message
     );
   }
 
@@ -131,7 +131,7 @@ async function runTests() {
   try {
     // Test that tRPC is properly configured
     const response = await fetch(
-      `${API_URL}/api/trpc/events.list?input=${encodeURIComponent(JSON.stringify({ limit: 10 }))}`,
+      `${API_URL}/api/trpc/events.list?input=${encodeURIComponent(JSON.stringify({ limit: 10 }))}`
     );
 
     // Even if unauthorized, we should get a proper tRPC error response
@@ -152,7 +152,7 @@ async function runTests() {
     // Should return 200 (even if no session)
     logTest(
       "Test 7: Better Auth Routes",
-      response.status === 200 || response.status === 401,
+      response.status === 200 || response.status === 401
     );
   } catch (error) {
     logTest("Test 7: Better Auth Routes", false, (error as Error).message);

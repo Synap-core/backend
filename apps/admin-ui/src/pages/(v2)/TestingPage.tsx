@@ -66,7 +66,7 @@ export default function TestingPage() {
     Record<string, unknown>
   >({});
   const [toolOutput, setToolOutput] = useState<ToolExecutionOutput | null>(
-    null,
+    null
   );
   const [isExecutingTool, setIsExecutingTool] = useState(false);
 
@@ -77,7 +77,7 @@ export default function TestingPage() {
   >({});
   const [userId, setUserId] = useState("test-user");
   const [publishResult, setPublishResult] = useState<PublishEventResult | null>(
-    null,
+    null
   );
   const [inputMode, setInputMode] = useState<"form" | "json">("form");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -95,7 +95,7 @@ export default function TestingPage() {
   // Fetch event schema
   const { data: schemaData } = trpc.system.getEventTypeSchema.useQuery(
     { eventType: selectedEventType },
-    { enabled: !!selectedEventType },
+    { enabled: !!selectedEventType }
   );
   const hasSchema = schemaData?.hasSchema ?? false;
 
@@ -171,7 +171,7 @@ export default function TestingPage() {
   });
 
   const addToHistory = (
-    item: Omit<ExecutionHistoryItemInternal, "id" | "timestamp">,
+    item: Omit<ExecutionHistoryItemInternal, "id" | "timestamp">
   ) => {
     setExecutionHistory((prev) => [
       {
@@ -356,7 +356,7 @@ export default function TestingPage() {
                       <Alert icon={<IconAlertCircle size={16} />} color="blue">
                         <Text size="xs">
                           {capabilities?.tools.find(
-                            (t) => t.name === selectedTool,
+                            (t) => t.name === selectedTool
                           )?.description || "No description available"}
                         </Text>
                       </Alert>

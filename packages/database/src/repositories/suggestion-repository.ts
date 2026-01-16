@@ -58,7 +58,7 @@ export class SuggestionRepository {
   }
 
   async createSuggestion(
-    input: CreateSuggestionInput,
+    input: CreateSuggestionInput
   ): Promise<SuggestionRecord> {
     if (this.useDatabase) {
       const result = await sql`
@@ -111,7 +111,7 @@ export class SuggestionRepository {
 
   async listSuggestions(
     userId: string,
-    status: AISuggestionStatus = "pending",
+    status: AISuggestionStatus = "pending"
   ): Promise<SuggestionRecord[]> {
     const records = await this.fetchSuggestions(userId);
     return records.filter((suggestion) => suggestion.status === status);
@@ -121,7 +121,7 @@ export class SuggestionRepository {
     userId: string,
     type: string,
     payloadKey: string,
-    payloadValue: string,
+    payloadValue: string
   ): Promise<SuggestionRecord | null> {
     if (this.useDatabase) {
       const result = await sql`
@@ -147,7 +147,7 @@ export class SuggestionRepository {
         (suggestion) =>
           suggestion.status === "pending" &&
           suggestion.type === type &&
-          suggestion.payload?.[payloadKey] === payloadValue,
+          suggestion.payload?.[payloadKey] === payloadValue
       ) ?? null
     );
   }
@@ -155,7 +155,7 @@ export class SuggestionRepository {
   async updateStatus(
     userId: string,
     suggestionId: string,
-    status: AISuggestionStatus,
+    status: AISuggestionStatus
   ): Promise<SuggestionRecord | null> {
     if (this.useDatabase) {
       const result = await sql`
@@ -187,7 +187,7 @@ export class SuggestionRepository {
 
   async getRecentTagUsage(
     hours: number,
-    minUsage: number,
+    minUsage: number
   ): Promise<TagUsageCandidate[]> {
     if (!this.useDatabase) {
       return [];
@@ -229,7 +229,7 @@ export class SuggestionRepository {
 
   async getRelatedEntitiesForTag(
     tagId: string,
-    limit: number,
+    limit: number
   ): Promise<RelatedEntitySummary[]> {
     if (!this.useDatabase) {
       return [];
@@ -269,7 +269,7 @@ export class SuggestionRepository {
   }
 
   private mapRow(
-    row: AISuggestionRow | Record<string, unknown>,
+    row: AISuggestionRow | Record<string, unknown>
   ): SuggestionRecord {
     const raw = row as Record<string, unknown>;
 

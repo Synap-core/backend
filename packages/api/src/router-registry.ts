@@ -57,12 +57,12 @@ class DynamicRouterRegistry {
   register(
     name: string,
     routerInstance: AnyRouter,
-    metadata?: { version?: string; source?: string; description?: string },
+    metadata?: { version?: string; source?: string; description?: string }
   ): void {
     if (this.routers.has(name)) {
       throw new ConflictError(
         `Router "${name}" is already registered. Use unregister() first to replace it.`,
-        { routerName: name },
+        { routerName: name }
       );
     }
 
@@ -81,7 +81,7 @@ class DynamicRouterRegistry {
 
     logger.info(
       { routerName: name, source: metadata?.source },
-      "Router registered",
+      "Router registered"
     );
   }
 
@@ -217,7 +217,7 @@ export const dynamicRouterRegistry = new DynamicRouterRegistry();
 export const registerRouter = (
   name: string,
   routerInstance: AnyRouter,
-  metadata?: { version?: string; source?: string; description?: string },
+  metadata?: { version?: string; source?: string; description?: string }
 ) => dynamicRouterRegistry.register(name, routerInstance, metadata);
 
 export const unregisterRouter = (name: string) =>

@@ -62,7 +62,7 @@ describe("API Key Middleware", () => {
     const caller = router.createCaller(mockCtx);
 
     await expect(caller.testProtected()).rejects.toThrow(
-      "Invalid or expired API key",
+      "Invalid or expired API key"
     );
   });
 
@@ -139,7 +139,7 @@ describe("API Key Middleware", () => {
     const caller = router.createCaller(mockCtx);
 
     await expect(caller.testScoped()).rejects.toThrow(
-      "Insufficient permissions",
+      "Insufficient permissions"
     );
   });
 });

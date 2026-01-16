@@ -181,7 +181,7 @@ export type ViewContent = StructuredViewContent | CanvasViewContent;
  * Type guard: Check if content is structured
  */
 export function isStructuredContent(
-  content: ViewContent,
+  content: ViewContent
 ): content is StructuredViewContent {
   return content.category === "structured";
 }
@@ -190,7 +190,7 @@ export function isStructuredContent(
  * Type guard: Check if content is canvas
  */
 export function isCanvasContent(
-  content: ViewContent,
+  content: ViewContent
 ): content is CanvasViewContent {
   return content.category === "canvas";
 }

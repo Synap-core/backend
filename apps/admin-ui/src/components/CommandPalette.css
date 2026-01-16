@@ -1,19 +1,25 @@
 /* cmdk styles for Command Palette */
 
 [cmdk-root] {
-  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
 }
 
 [cmdk-item] {
   transition: background-color 0.1s ease;
 }
 
-[cmdk-item][data-selected='true'] {
-  background-color: #F3F4F6 !important; /* colors.background.hover */
+[cmdk-item][data-selected="true"] {
+  background-color: #f3f4f6 !important; /* colors.background.hover */
 }
 
 [cmdk-item]:active {
-  background-color: #E5E7EB !important; /* colors.background.active */
+  background-color: #e5e7eb !important; /* colors.background.active */
 }
 
 [cmdk-group-heading] {
@@ -26,7 +32,7 @@
 
 [cmdk-list] {
   scrollbar-width: thin;
-  scrollbar-color: #D1D5DB #F9FAFB;
+  scrollbar-color: #d1d5db #f9fafb;
 }
 
 [cmdk-list]::-webkit-scrollbar {
@@ -34,14 +40,14 @@
 }
 
 [cmdk-list]::-webkit-scrollbar-track {
-  background: #F9FAFB;
+  background: #f9fafb;
 }
 
 [cmdk-list]::-webkit-scrollbar-thumb {
-  background-color: #D1D5DB;
+  background-color: #d1d5db;
   border-radius: 4px;
 }
 
 [cmdk-list]::-webkit-scrollbar-thumb:hover {
-  background-color: #9CA3AF;
+  background-color: #9ca3af;
 }

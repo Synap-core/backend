@@ -35,7 +35,7 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
   getSignedUrl: vi
     .fn()
     .mockResolvedValue(
-      "https://localhost:9000/bucket/file.md?signature=abc123",
+      "https://localhost:9000/bucket/file.md?signature=abc123"
     ),
 }));
 

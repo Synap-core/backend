@@ -28,9 +28,15 @@ export interface UpdateProjectRoleInput {
 export type ProjectMemberRow = typeof projectMembers.$inferSelect;
 
 export class ProjectMemberRepository {
-  constructor(private db: any, private eventRepo: EventRepository) {}
+  constructor(
+    private db: any,
+    private eventRepo: EventRepository
+  ) {}
 
-  async add(input: AddProjectMemberInput, actingUserId: string): Promise<ProjectMemberRow> {
+  async add(
+    input: AddProjectMemberInput,
+    actingUserId: string
+  ): Promise<ProjectMemberRow> {
     const [member] = await this.db
       .insert(projectMembers)
       .values({
@@ -49,11 +55,11 @@ export class ProjectMemberRepository {
       userId: actingUserId,
       source: "api",
       timestamp: new Date(),
-      data: { 
-        projectId: input.projectId, 
+      data: {
+        projectId: input.projectId,
         userId: input.userId,
         role: input.role,
-        memberId: member.id 
+        memberId: member.id,
       },
       metadata: {},
     });
@@ -61,7 +67,10 @@ export class ProjectMemberRepository {
     return member;
   }
 
-  async remove(input: RemoveProjectMemberInput, actingUserId: string): Promise<void> {
+  async remove(
+    input: RemoveProjectMemberInput,
+    actingUserId: string
+  ): Promise<void> {
     await this.db
       .delete(projectMembers)
       .where(
@@ -88,7 +97,10 @@ export class ProjectMemberRepository {
     });
   }
 
-  async updateRole(input: UpdateProjectRoleInput, actingUserId: string): Promise<ProjectMemberRow> {
+  async updateRole(
+    input: UpdateProjectRoleInput,
+    actingUserId: string
+  ): Promise<ProjectMemberRow> {
     const [member] = await this.db
       .update(projectMembers)
       .set({ role: input.newRole })
@@ -109,11 +121,11 @@ export class ProjectMemberRepository {
       userId: actingUserId,
       source: "api",
       timestamp: new Date(),
-      data: { 
-        projectId: input.projectId, 
+      data: {
+        projectId: input.projectId,
         userId: input.userId,
         newRole: input.newRole,
-        memberId: member.id 
+        memberId: member.id,
       },
       metadata: {},
     });

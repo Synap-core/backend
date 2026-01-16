@@ -79,13 +79,13 @@ try {
     } else {
       // This shouldn't happen if auto-detection works, but log a warning
       apiLogger.warn(
-        "R2 provider selected but credentials missing - should auto-switch to MinIO",
+        "R2 provider selected but credentials missing - should auto-switch to MinIO"
       );
     }
   } else {
     apiLogger.info(
       { provider: config.storage.provider },
-      "Storage provider configured",
+      "Storage provider configured"
     );
   }
 
@@ -104,7 +104,7 @@ try {
   apiLogger.error({ err: error }, "Configuration validation failed");
   console.error(
     "❌ Configuration Error:",
-    error instanceof Error ? error.message : String(error),
+    error instanceof Error ? error.message : String(error)
   );
   console.error("Please check your environment variables and configuration.");
   process.exit(1);
@@ -149,7 +149,7 @@ app.use(
     allowHeaders: ["Content-Type", "Authorization", "Cookie"],
     exposeHeaders: ["Content-Length", "X-Request-Id", "Set-Cookie"],
     maxAge: 86400, // 24 hours
-  }),
+  })
 );
 
 // Health check (public, no auth)
@@ -188,7 +188,7 @@ if (isPostgres) {
           headers: {
             Cookie: c.req.header("cookie") || "",
           },
-        },
+        }
       );
 
       return new Response(response.body, {
@@ -349,7 +349,7 @@ app.use(
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "tRPC error");
     },
-  }),
+  })
 );
 
 console.log("🔍 DEBUG: About to register Inngest serve handler...");
@@ -361,7 +361,7 @@ app.use(
   inngestServe({
     client: inngest,
     functions,
-  }),
+  })
 );
 
 console.log("✅ DEBUG: Inngest serve handler registered successfully!");
@@ -394,7 +394,7 @@ app.onError((err, c) => {
       statusCode: synapError.statusCode,
       ...(shouldLogStack && { stack: synapError.stack }),
     },
-    synapError.statusCode >= 500 ? "Server error" : "Client error",
+    synapError.statusCode >= 500 ? "Server error" : "Client error"
   );
 
   const isDev = config.server.nodeEnv === "development";
@@ -421,7 +421,7 @@ app.onError((err, c) => {
         ...(shouldLogStack && { stack: synapError.stack }),
       }),
     },
-    statusCode,
+    statusCode
   );
 });
 
@@ -442,7 +442,7 @@ try {
           host: "0.0.0.0",
           nodeEnv: config.server.nodeEnv,
         },
-        "API server started",
+        "API server started"
       );
 
       // ✨ Start event processor (Delayed to allow server to bind port first)
@@ -451,7 +451,7 @@ try {
         startEventProcessor();
         apiLogger.info("Event processor started (delayed)");
       }, 5000);
-    },
+    }
   );
 } catch (err) {
   console.error("❌ CRITICAL: serve() threw an error:", err);

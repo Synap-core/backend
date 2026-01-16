@@ -182,7 +182,7 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
 
       // Verify user B cannot see user A's notes
       const userANotesInBQuery = userBQuery.filter(
-        (note: any) => note.userId === userAId,
+        (note: any) => note.userId === userAId
       );
       expect(userANotesInBQuery.length).toBe(0); // ✅ RLS prevents cross-user access
 
@@ -194,7 +194,7 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
         .limit(10);
 
       const userANotesInAQuery = userAQuery.filter(
-        (note: any) => note.userId === userAId,
+        (note: any) => note.userId === userAId
       );
       // User A should see their own notes (if processing completed)
       // This validates that RLS allows users to see their own data

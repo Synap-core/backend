@@ -1,14 +1,14 @@
 /**
  * Role Repository
- * 
+ *
  * Handles custom role CRUD with event emission for audit trail.
  * Supports workspace-scoped and global roles.
  */
 
-import { eq } from 'drizzle-orm';
-import { roles } from '../schema/index.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
+import { eq } from "drizzle-orm";
+import { roles } from "../schema/index.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
 
 export interface CreateRoleInput {
   name: string;
@@ -26,9 +26,13 @@ export interface UpdateRoleData {
   filters?: Record<string, unknown>;
 }
 
-export class RoleRepository extends BaseRepository<any, CreateRoleInput, UpdateRoleData> {
+export class RoleRepository extends BaseRepository<
+  any,
+  CreateRoleInput,
+  UpdateRoleData
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'role', pluralName: 'roles' });
+    super(db, eventRepo, { subjectType: "role", pluralName: "roles" });
   }
 
   /**
@@ -48,7 +52,7 @@ export class RoleRepository extends BaseRepository<any, CreateRoleInput, UpdateR
       })
       .returning();
 
-    await this.emitCompleted('create', role, userId);
+    await this.emitCompleted("create", role, userId);
     return role;
   }
 
@@ -67,10 +71,10 @@ export class RoleRepository extends BaseRepository<any, CreateRoleInput, UpdateR
       .returning();
 
     if (!role) {
-      throw new Error('Role not found');
+      throw new Error("Role not found");
     }
 
-    await this.emitCompleted('update', role, userId);
+    await this.emitCompleted("update", role, userId);
     return role;
   }
 
@@ -85,10 +89,10 @@ export class RoleRepository extends BaseRepository<any, CreateRoleInput, UpdateR
       .returning();
 
     if (result.length === 0) {
-      throw new Error('Role not found');
+      throw new Error("Role not found");
     }
 
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 
   /**
@@ -104,7 +108,7 @@ export class RoleRepository extends BaseRepository<any, CreateRoleInput, UpdateR
    * Find global roles (workspaceId is NULL)
    */
   async findGlobalRoles(): Promise<any[]> {
-    const { isNull } = await import('drizzle-orm');
+    const { isNull } = await import("drizzle-orm");
     return this.db.query.roles.findMany({
       where: isNull(roles.workspaceId),
     });

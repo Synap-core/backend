@@ -79,11 +79,11 @@ export const chatThreads = pgTable(
   (table) => ({
     userIdIdx: index("chat_threads_user_id_idx").on(table.userId),
     parentThreadIdx: index("chat_threads_parent_thread_id_idx").on(
-      table.parentThreadId,
+      table.parentThreadId
     ),
     projectIdIdx: index("chat_threads_project_id_idx").on(table.projectId),
     statusIdx: index("chat_threads_status_idx").on(table.status),
-  }),
+  })
 );
 
 export type ChatThread = typeof chatThreads.$inferSelect;

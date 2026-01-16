@@ -1,6 +1,6 @@
 /**
  * E2E Tests - Executor Flows
- * 
+ *
  * Tests the Unified Execution Layer:
  * - Verifies that the 3-event flow works (Requested -> Validated -> Completed)
  * - Verifies that both Fast and Slow executors function correctly
@@ -34,7 +34,11 @@ describe("E2E Executor Flows", () => {
   /**
    * Helper to wait for a specific event type on a subject
    */
-  async function waitForEvent(eventType: string, subjectId: string, timeoutMs = 5000) {
+  async function waitForEvent(
+    eventType: string,
+    subjectId: string,
+    timeoutMs = 5000
+  ) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       // Accessing private query method via cast for testing
@@ -54,15 +58,18 @@ describe("E2E Executor Flows", () => {
       const tagName = `E2E Tag ${randomUUID().slice(0, 8)}`;
 
       // 1. Emit Request (via API simulation or direct DB if API not updated yet)
-      // Since API might not be updated to use .requested yet in the codebase, 
-      // we'll check what the current API does. 
+      // Since API might not be updated to use .requested yet in the codebase,
+      // we'll check what the current API does.
       // Ideally, we hit the API. If the API is not yet refactored to emit .requested,
       // this test will fail on the first step.
-      // Based on the plan, the router refactoring is NEXT. 
+      // Based on the plan, the router refactoring is NEXT.
       // So for this test to pass NOW, we should simulate the Router's job: emitting .requested manually.
-      
+
       const tagId = randomUUID();
-      logger.info({ tagId }, "Simulating Router: Emitting tags.create.requested");
+      logger.info(
+        { tagId },
+        "Simulating Router: Emitting tags.create.requested"
+      );
 
       await eventRepo.append({
         id: randomUUID(),
@@ -103,18 +110,21 @@ describe("E2E Executor Flows", () => {
       const title = `E2E Entity ${randomUUID().slice(0, 8)}`;
 
       // 1. Simulate Router
-      logger.info({ entityId }, "Simulating Router: Emitting entities.create.requested");
+      logger.info(
+        { entityId },
+        "Simulating Router: Emitting entities.create.requested"
+      );
       await eventRepo.append({
         id: randomUUID(),
         version: "v1",
         type: "entities.create.requested",
         subjectId: entityId,
         subjectType: "entity",
-        data: { 
-          entityType: "note", 
-          title, 
-          content: "Test Content", 
-          id: entityId 
+        data: {
+          entityType: "note",
+          title,
+          content: "Test Content",
+          id: entityId,
         },
         userId: user.id,
         source: "api",

@@ -45,7 +45,7 @@ async function runTests() {
     logTest(
       "Test 1: Health Check",
       response.status === 200 && data.status === "ok",
-      response.status !== 200 ? `Status: ${response.status}` : undefined,
+      response.status !== 200 ? `Status: ${response.status}` : undefined
     );
   } catch (error) {
     logTest("Test 1: Health Check", false, (error as Error).message);
@@ -59,7 +59,7 @@ async function runTests() {
     logTest(
       "Test 2: Database Connection (PostgreSQL)",
       false,
-      (error as Error).message,
+      (error as Error).message
     );
   }
 
@@ -76,13 +76,13 @@ async function runTests() {
     logTest(
       "Test 3: Unauthenticated Request Blocked",
       response.status === 401 || response.status === 403,
-      `Expected 401/403, got ${response.status}`,
+      `Expected 401/403, got ${response.status}`
     );
   } catch (error) {
     logTest(
       "Test 3: Unauthenticated Request Blocked",
       false,
-      (error as Error).message,
+      (error as Error).message
     );
   }
 
@@ -91,7 +91,7 @@ async function runTests() {
   logTest(
     "Test 4: Authenticated Request Works",
     true,
-    "Skipped - requires Ory Kratos session (see Ory setup docs)",
+    "Skipped - requires Ory Kratos session (see Ory setup docs)"
   );
 
   // Test 5: End-to-End Thought Capture
@@ -107,7 +107,7 @@ async function runTests() {
     logTest(
       "Test 5: End-to-End Thought Capture",
       true,
-      "Skipped - requires Ory Kratos session (see Ory setup docs)",
+      "Skipped - requires Ory Kratos session (see Ory setup docs)"
     );
     return;
 
@@ -115,7 +115,7 @@ async function runTests() {
       logTest(
         "Test 5: End-to-End Thought Capture",
         false,
-        `Capture failed with ${captureResponse.status}`,
+        `Capture failed with ${captureResponse.status}`
       );
     } else {
       // Wait for Inngest to process (AI analysis + entity creation)
@@ -132,13 +132,13 @@ async function runTests() {
         logTest(
           "Test 5: End-to-End Thought Capture",
           Boolean(newEntity.filePath),
-          !newEntity.filePath ? "File path not stored" : undefined,
+          !newEntity.filePath ? "File path not stored" : undefined
         );
       } else {
         logTest(
           "Test 5: End-to-End Thought Capture",
           false,
-          "Entity not created",
+          "Entity not created"
         );
       }
     }
@@ -146,7 +146,7 @@ async function runTests() {
     logTest(
       "Test 5: End-to-End Thought Capture",
       false,
-      (error as Error).message,
+      (error as Error).message
     );
   }
 
@@ -155,13 +155,13 @@ async function runTests() {
     const allEvents = await db.select().from(events);
     const hasCapturedEvent = allEvents.some(
       (e: any) =>
-        e.type === "api/thought.captured" || e.type === "entity.created",
+        e.type === "api/thought.captured" || e.type === "entity.created"
     );
 
     logTest(
       "Test 6: Event Log Verification",
       hasCapturedEvent,
-      !hasCapturedEvent ? "No capture events found" : undefined,
+      !hasCapturedEvent ? "No capture events found" : undefined
     );
   } catch (error) {
     logTest("Test 6: Event Log Verification", false, (error as Error).message);

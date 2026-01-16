@@ -28,7 +28,7 @@ export const proposalsRouter = router({
           .enum(["pending", "validated", "rejected", "all"])
           .default("pending"),
         limit: z.number().default(50),
-      }),
+      })
     )
     .query(async ({ input }) => {
       const conditions = [];
@@ -71,7 +71,7 @@ export const proposalsRouter = router({
       z.object({
         proposalId: z.string(),
         comment: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
@@ -130,7 +130,7 @@ export const proposalsRouter = router({
       z.object({
         proposalId: z.string(),
         reason: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
@@ -169,7 +169,7 @@ export const proposalsRouter = router({
         changeType: z.enum(["create", "update", "delete"]),
         data: z.record(z.any()),
         reasoning: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);

@@ -51,7 +51,7 @@ async function runTests() {
     });
 
     console.log(
-      `  ✓ User 1 can see workspace: ${user1Workspaces.length === 1}`,
+      `  ✓ User 1 can see workspace: ${user1Workspaces.length === 1}`
     );
 
     // User 2 cannot see user 1's workspace
@@ -62,7 +62,7 @@ async function runTests() {
     });
 
     console.log(
-      `  ✓ User 2 cannot see workspace: ${user2Workspaces.length === 0}`,
+      `  ✓ User 2 cannot see workspace: ${user2Workspaces.length === 0}`
     );
 
     // ========================================================================

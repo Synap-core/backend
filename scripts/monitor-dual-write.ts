@@ -6,5 +6,5 @@
  */
 
 console.log(
-  "This helper is no longer required. All note content is stored via @synap/storage.",
+  "This helper is no longer required. All note content is stored via @synap/storage."
 );

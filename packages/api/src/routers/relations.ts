@@ -56,7 +56,7 @@ export const relationsRouter = router({
         type: RelationTypeSchema.optional(),
         direction: DirectionSchema,
         limit: z.number().min(1).max(100).default(50),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // Build where clause based on direction
@@ -67,21 +67,21 @@ export const relationsRouter = router({
           eq(relations.userId, ctx.userId),
           or(
             eq(relations.sourceEntityId, input.entityId),
-            eq(relations.targetEntityId, input.entityId),
+            eq(relations.targetEntityId, input.entityId)
           ),
-          input.type ? eq(relations.type, input.type) : undefined,
+          input.type ? eq(relations.type, input.type) : undefined
         );
       } else if (input.direction === "source") {
         whereClause = and(
           eq(relations.userId, ctx.userId),
           eq(relations.sourceEntityId, input.entityId),
-          input.type ? eq(relations.type, input.type) : undefined,
+          input.type ? eq(relations.type, input.type) : undefined
         );
       } else {
         whereClause = and(
           eq(relations.userId, ctx.userId),
           eq(relations.targetEntityId, input.entityId),
-          input.type ? eq(relations.type, input.type) : undefined,
+          input.type ? eq(relations.type, input.type) : undefined
         );
       }
 
@@ -107,7 +107,7 @@ export const relationsRouter = router({
         type: RelationTypeSchema.optional(),
         direction: DirectionSchema,
         limit: z.number().min(1).max(100).default(50),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       // Get relations first
@@ -119,9 +119,9 @@ export const relationsRouter = router({
             eq(relations.userId, ctx.userId),
             or(
               eq(relations.sourceEntityId, input.entityId),
-              eq(relations.targetEntityId, input.entityId),
+              eq(relations.targetEntityId, input.entityId)
             ),
-            input.type ? eq(relations.type, input.type) : undefined,
+            input.type ? eq(relations.type, input.type) : undefined
           ),
           orderBy: [desc(relations.createdAt)],
           limit: input.limit,
@@ -131,7 +131,7 @@ export const relationsRouter = router({
           where: and(
             eq(relations.userId, ctx.userId),
             eq(relations.sourceEntityId, input.entityId),
-            input.type ? eq(relations.type, input.type) : undefined,
+            input.type ? eq(relations.type, input.type) : undefined
           ),
           orderBy: [desc(relations.createdAt)],
           limit: input.limit,
@@ -141,7 +141,7 @@ export const relationsRouter = router({
           where: and(
             eq(relations.userId, ctx.userId),
             eq(relations.targetEntityId, input.entityId),
-            input.type ? eq(relations.type, input.type) : undefined,
+            input.type ? eq(relations.type, input.type) : undefined
           ),
           orderBy: [desc(relations.createdAt)],
           limit: input.limit,
@@ -163,13 +163,13 @@ export const relationsRouter = router({
       const relatedEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          or(...relatedEntityIds.map((id) => eq(entities.id, id))),
+          or(...relatedEntityIds.map((id) => eq(entities.id, id)))
         ),
       });
 
       return { entities: relatedEntities };
     }),
-/**
+  /**
   /**
    * Get relation statistics for an entity
    */
@@ -177,7 +177,7 @@ export const relationsRouter = router({
     .input(
       z.object({
         entityId: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       const allRelations = await db.query.relations.findMany({
@@ -185,8 +185,8 @@ export const relationsRouter = router({
           eq(relations.userId, ctx.userId),
           or(
             eq(relations.sourceEntityId, input.entityId),
-            eq(relations.targetEntityId, input.entityId),
-          ),
+            eq(relations.targetEntityId, input.entityId)
+          )
         ),
       });
 
@@ -199,10 +199,10 @@ export const relationsRouter = router({
       return {
         total: allRelations.length,
         outgoing: allRelations.filter(
-          (r) => r.sourceEntityId === input.entityId,
+          (r) => r.sourceEntityId === input.entityId
         ).length,
         incoming: allRelations.filter(
-          (r) => r.targetEntityId === input.entityId,
+          (r) => r.targetEntityId === input.entityId
         ).length,
         byType,
       };
@@ -218,7 +218,7 @@ export const relationsRouter = router({
         targetEntityId: z.string().uuid(),
         type: RelationTypeSchema,
         metadata: z.record(z.any()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
@@ -252,7 +252,7 @@ export const relationsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({

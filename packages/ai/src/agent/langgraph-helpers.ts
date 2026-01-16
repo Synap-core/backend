@@ -28,26 +28,22 @@
  * ```
  */
 
-import { Annotation } from "@langchain/langgraph";
-
 /**
  * Export LangGraph primitives for agent building
  */
 export { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 
 /**
- * Common agent state fields
+ * @deprecated This package is deprecated. Use Intelligence Service instead.
  *
- * Use these as a starting point for your agent state
+ * Common agent state fields were removed due to LangGraph API changes.
+ * Define your own state using Annotation.Root() directly.
+ *
+ * @example
+ * ```typescript
+ * const MyState = Annotation.Root({
+ *   messages: Annotation<Array<{ role: string; content: string }>>(),
+ *   userId: Annotation<string>(),
+ * });
+ * ```
  */
-export const CommonStateFields = {
-  messages: Annotation<Array<{ role: string; content: string }>>({
-    reducer: (current: any, update: any) => [...(current || []), ...update],
-    default: () => [],
-  }),
-  userId: Annotation<string>(),
-  metadata: Annotation<Record<string, unknown>>({
-    reducer: (current: any, update: any) => ({ ...(current || {}), ...update }),
-    default: () => ({}),
-  }),
-};

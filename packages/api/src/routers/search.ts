@@ -30,14 +30,14 @@ export const searchRouter = router({
         query: z.string().min(1),
         type: z.enum(["note", "task", "document", "project"]).optional(),
         limit: z.number().min(1).max(100).default(20),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
       logger.debug(
         { userId, query: input.query, type: input.type },
-        "Searching entities",
+        "Searching entities"
       );
 
       // Simple text search using ILIKE for now
@@ -54,7 +54,7 @@ export const searchRouter = router({
       // Search in title and preview
       const searchPattern = `%${input.query}%`;
       conditions.push(
-        sql`(${entities.title} ILIKE ${searchPattern} OR ${entities.preview} ILIKE ${searchPattern})`,
+        sql`(${entities.title} ILIKE ${searchPattern} OR ${entities.preview} ILIKE ${searchPattern})`
       );
 
       const results = await db.query.entities.findMany({
@@ -79,7 +79,7 @@ export const searchRouter = router({
         type: z.enum(["note", "task", "document", "project"]).optional(),
         limit: z.number().min(1).max(50).default(10),
         threshold: z.number().min(0).max(1).default(0.7),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -94,7 +94,7 @@ export const searchRouter = router({
 
       // For now, return empty results with a note
       logger.warn(
-        "Semantic search not yet implemented - requires embedding service",
+        "Semantic search not yet implemented - requires embedding service"
       );
 
       return {
@@ -112,7 +112,7 @@ export const searchRouter = router({
       z.object({
         entityId: z.string().uuid(),
         limit: z.number().min(1).max(50).default(10),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -121,7 +121,7 @@ export const searchRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.entityId),
-          eq(entities.userId, userId),
+          eq(entities.userId, userId)
         ),
       });
 
@@ -131,7 +131,7 @@ export const searchRouter = router({
 
       logger.debug(
         { userId, entityId: input.entityId },
-        "Finding related entities",
+        "Finding related entities"
       );
 
       // TODO: Implement vector similarity search
@@ -146,7 +146,7 @@ export const searchRouter = router({
           eq(entities.userId, userId),
           eq(entities.type, entity.type),
           sql`${entities.id} != ${input.entityId}`,
-          sql`${entities.deletedAt} IS NULL`,
+          sql`${entities.deletedAt} IS NULL`
         ),
         orderBy: [desc(entities.updatedAt)],
         limit: input.limit,
@@ -154,7 +154,7 @@ export const searchRouter = router({
 
       logger.debug(
         { userId, resultCount: results.length },
-        "Related entities found",
+        "Related entities found"
       );
 
       return { entities: results };
@@ -169,7 +169,7 @@ export const searchRouter = router({
       z.object({
         tagIds: z.array(z.string().uuid()).min(1),
         limit: z.number().min(1).max(100).default(20),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -195,7 +195,7 @@ export const searchRouter = router({
 
       logger.debug(
         { userId, resultCount: results.length },
-        "Tag search complete",
+        "Tag search complete"
       );
 
       return { entities: results as any[] };

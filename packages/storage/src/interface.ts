@@ -74,7 +74,7 @@ export interface IFileStorage {
   upload(
     path: string,
     content: string | Buffer,
-    options?: UploadOptions,
+    options?: UploadOptions
   ): Promise<FileMetadata>;
 
   /**
@@ -182,6 +182,6 @@ export interface IFileStorage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension?: string,
+    extension?: string
   ): string;
 }

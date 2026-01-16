@@ -82,14 +82,16 @@ export const EntitiesCreateRequestedPayload = z.object({
 
   // Request context
   ...RequestContextSchema.shape,
-  
+
   // AI-specific metadata for tracking AI-generated proposals
-  aiMetadata: z.object({
-    messageId: z.string().optional(),
-    confidence: z.number().min(0).max(1).optional(),
-    model: z.string().optional(),
-    reasoning: z.string().optional(),
-  }).optional(),
+  aiMetadata: z
+    .object({
+      messageId: z.string().optional(),
+      confidence: z.number().min(0).max(1).optional(),
+      model: z.string().optional(),
+      reasoning: z.string().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -265,7 +267,7 @@ export function getPayloadSchema(eventType: string): z.ZodSchema | null {
  */
 export function validatePayload<T extends GeneratedPayloadSchemaType>(
   eventType: T,
-  payload: unknown,
+  payload: unknown
 ): z.infer<(typeof GeneratedPayloadSchemas)[T]> {
   const schema = GeneratedPayloadSchemas[eventType];
   return schema.parse(payload);

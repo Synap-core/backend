@@ -47,4 +47,3 @@ For these, use custom migrations in `../migrations-custom/`:
 4. **Apply migration**: `pnpm db:migrate`
 
 If you need custom SQL (extensions, functions), create a file in `../migrations-custom/`.
-

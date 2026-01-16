@@ -1,12 +1,12 @@
 /**
  * Context Types
- * 
+ *
  * Proper type definitions for tRPC context to avoid `any` types.
  */
 
 /**
  * Database client type
- * 
+ *
  * Note: Using `any` here to preserve Drizzle's schema inference.
  * Attempting to use PostgresJsDatabase<any> loses the schema generic
  * and breaks db.query.tableName access patterns.

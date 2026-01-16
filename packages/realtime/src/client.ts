@@ -26,7 +26,7 @@ export interface BroadcastOptions {
  * @returns Promise resolving to broadcast result
  */
 export async function broadcastNotification(
-  options: BroadcastOptions,
+  options: BroadcastOptions
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   const {
     roomId,
@@ -70,7 +70,7 @@ export async function broadcastNotification(
 export async function broadcastToUser(
   userId: string,
   message: NotificationMessage,
-  realtimeUrl?: string,
+  realtimeUrl?: string
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     roomId: `user_${userId}`,
@@ -87,7 +87,7 @@ export async function broadcastToUser(
 export async function broadcastToRequest(
   requestId: string,
   message: NotificationMessage,
-  realtimeUrl?: string,
+  realtimeUrl?: string
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     roomId: `request_${requestId}`,

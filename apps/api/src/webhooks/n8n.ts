@@ -27,7 +27,7 @@ const webhookAuth = async (c: any, next: () => Promise<void>) => {
   if (secret !== expectedSecret) {
     logger.warn(
       { receivedSecret: secret?.substring(0, 10) },
-      "Invalid webhook secret",
+      "Invalid webhook secret"
     );
     return c.json({ error: "Unauthorized" }, 401);
   }
@@ -72,7 +72,7 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
 
     logger.info(
       { userId, count: items.length },
-      "Processing N8N inbox webhook",
+      "Processing N8N inbox webhook"
     );
 
     const results = { published: 0, failed: 0, errors: [] as string[] };
@@ -121,7 +121,7 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
     logger.error({ error }, "N8N webhook handler error");
     return c.json(
       { error: "Internal server error", message: error.message },
-      500,
+      500
     );
   }
 });

@@ -31,7 +31,7 @@ export const SynapEventSchema = z.object({
 
   // Event Classification
   type: z.string().min(1).max(128), // e.g., 'note.creation.requested', 'task.completed'
-  
+
   // Event Sourcing: What is this event about?
   subjectId: z.string().uuid().optional(), // Optional for system events
   subjectType: z.string().optional(), // e.g., 'tag', 'entity', 'document'
@@ -127,13 +127,13 @@ export type EventTypeWithSchema = keyof typeof EventTypeSchemas;
  */
 export function validateEventData<T extends EventTypeWithSchema>(
   eventType: T,
-  data: unknown,
+  data: unknown
 ): z.infer<(typeof EventTypeSchemas)[T]> {
   const schema = EventTypeSchemas[eventType];
   if (!schema) {
     throw new ValidationError(
       `Unknown event type: ${eventType}. Add it to EventTypeSchemas.`,
-      { eventType },
+      { eventType }
     );
   }
   return schema.parse(data);
@@ -174,7 +174,7 @@ export function createSynapEvent(input: {
     try {
       validatedData = validateEventData(
         input.type as EventTypeWithSchema,
-        input.data,
+        input.data
       );
     } catch (error) {
       // If validation fails, log warning but continue (for backward compatibility)

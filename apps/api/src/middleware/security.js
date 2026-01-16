@@ -43,7 +43,7 @@ export const rateLimitMiddleware = rateLimiter({
         message: "Rate limit exceeded. Please try again later.",
         retryAfter: "15 minutes",
       },
-      429,
+      429
     );
   },
 });
@@ -97,7 +97,7 @@ export const aiRateLimitMiddleware = rateLimiter({
         limit: 20,
         window: "5 minutes",
       },
-      429,
+      429
     );
   },
 });
@@ -118,7 +118,7 @@ export const requestSizeLimit = async (c, next) => {
           message: `Request body must be less than ${maxSize / 1024 / 1024}MB`,
           received: `${(size / 1024 / 1024).toFixed(2)}MB`,
         },
-        413,
+        413
       );
     }
   }
@@ -142,13 +142,13 @@ export const securityHeadersMiddleware = async (c, next) => {
   // Content Security Policy (adjust for your needs)
   c.header(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.openai.com;",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.openai.com;"
   );
   // HSTS (only in production)
   if (process.env.NODE_ENV === "production") {
     c.header(
       "Strict-Transport-Security",
-      "max-age=31536000; includeSubDomains",
+      "max-age=31536000; includeSubDomains"
     );
   }
   // Permissions Policy (restrict features)

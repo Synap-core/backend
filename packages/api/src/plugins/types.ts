@@ -52,9 +52,7 @@ export interface DataPodPlugin {
   /**
    * For Agent plugins: register a LangGraph agent
    */
-  registerAgent?(
-    graph: StateGraph<any, any, any, any, any, any>,
-  ): void;
+  registerAgent?(graph: StateGraph<any, any, any, any, any, any>): void;
 
   /** For API plugins: register a tRPC router */
   registerRouter?(): AnyRouter;

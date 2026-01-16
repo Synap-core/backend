@@ -17,7 +17,7 @@ export const relations = pgTable("relations", {
   // Context
   userId: text("user_id").notNull(),
   workspaceId: uuid("workspace_id").notNull(), // Every relation belongs to a workspace
-  projectIds: uuid("project_ids").array(),      // Optional: relations can be scoped to projects
+  projectIds: uuid("project_ids").array(), // Optional: relations can be scoped to projects
 
   // The two entities being linked
   sourceEntityId: uuid("source_entity_id")

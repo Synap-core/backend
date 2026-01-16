@@ -188,7 +188,7 @@ export const createLogger = (bindings: Bindings): Logger =>
  */
 export function createLoggerWithCorrelation(
   correlationId: string,
-  additionalBindings?: Bindings,
+  additionalBindings?: Bindings
 ): Logger {
   return logger.child({
     correlationId,

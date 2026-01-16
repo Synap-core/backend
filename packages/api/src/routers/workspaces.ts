@@ -37,7 +37,7 @@ export const workspacesRouter = router({
         description: z.string().optional(),
         settings: z.record(z.unknown()).optional(),
         type: z.enum(["personal", "team", "enterprise"]).default("personal"),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
@@ -107,7 +107,7 @@ export const workspacesRouter = router({
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.id),
-          eq(workspaceMembers.userId, ctx.userId),
+          eq(workspaceMembers.userId, ctx.userId)
         ),
       });
 
@@ -128,7 +128,7 @@ export const workspacesRouter = router({
         name: z.string().min(1).max(100).optional(),
         description: z.string().optional(),
         settings: z.record(z.unknown()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
@@ -186,8 +186,8 @@ export const workspacesRouter = router({
       z.object({
         workspaceId: z.string().uuid(),
         userId: z.string(),
-        role: z.enum(['owner', 'editor', 'viewer']),
-      }),
+        role: z.enum(["owner", "editor", "viewer"]),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
@@ -363,7 +363,7 @@ export const workspacesRouter = router({
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId),
+          eq(workspaceMembers.userId, ctx.userId)
         ),
       });
 
@@ -385,7 +385,7 @@ export const workspacesRouter = router({
       z.object({
         workspaceId: z.string().uuid(),
         userId: z.string(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
@@ -414,7 +414,7 @@ export const workspacesRouter = router({
         workspaceId: z.string().uuid(),
         userId: z.string(),
         role: z.enum(["admin", "editor", "viewer"]),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
@@ -444,14 +444,14 @@ export const workspacesRouter = router({
         workspaceId: z.string().uuid(),
         email: z.string().email(),
         role: z.enum(["admin", "editor", "viewer"]),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Check user is owner/admin
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId),
+          eq(workspaceMembers.userId, ctx.userId)
         ),
       });
 
@@ -508,7 +508,7 @@ export const workspacesRouter = router({
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId),
+          eq(workspaceMembers.userId, ctx.userId)
         ),
       });
 
@@ -580,7 +580,7 @@ export const workspacesRouter = router({
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, invite.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId),
+          eq(workspaceMembers.userId, ctx.userId)
         ),
       });
 

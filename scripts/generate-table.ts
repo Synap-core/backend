@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * Table Generator Script
- * 
+ *
  * Generates boilerplate code for a new database table:
  * - Schema definition
  * - Repository
@@ -9,26 +9,29 @@
  * - Router (optional)
  * - Index exports
  * - ValidationPolicy defaults
- * 
+ *
  * Usage:
  *   pnpm generate:table --name knowledge_facts
  *   pnpm generate:table --name enrichments --skip-router
  */
 
-import { program } from 'commander';
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { program } from "commander";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 program
-  .name('generate-table')
-  .description('Generate boilerplate for a new database table')
-  .requiredOption('-n, --name <name>', 'Table name (e.g., knowledge_facts)')
-  .option('-s, --skip-router', 'Skip router generation')
-  .option('-d, --dry-run', 'Show what would be generated without creating files')
+  .name("generate-table")
+  .description("Generate boilerplate for a new database table")
+  .requiredOption("-n, --name <name>", "Table name (e.g., knowledge_facts)")
+  .option("-s, --skip-router", "Skip router generation")
+  .option(
+    "-d, --dry-run",
+    "Show what would be generated without creating files"
+  )
   .parse();
 
 const options = program.opts();
@@ -37,8 +40,8 @@ const options = program.opts();
 function toPascalCase(str: string): string {
   return str
     .split(/[_-]/)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('');
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("");
 }
 
 function toCamelCase(str: string): string {
@@ -47,7 +50,7 @@ function toCamelCase(str: string): string {
 }
 
 function toKebabCase(str: string): string {
-  return str.replace(/_/g, '-');
+  return str.replace(/_/g, "-");
 }
 
 // Template generators
@@ -105,7 +108,10 @@ export type New${pascalCase} = typeof ${tableName}.$inferInsert;
 `;
 }
 
-function generateRepositoryTemplate(tableName: string, pascalCase: string): string {
+function generateRepositoryTemplate(
+  tableName: string,
+  pascalCase: string
+): string {
   return `/**
  * ${pascalCase} Repository
  * 
@@ -142,7 +148,7 @@ export class ${pascalCase}Repository {
   }
 
   /**
-   * Create ${tableName.replace(/_/g, ' ')}
+   * Create ${tableName.replace(/_/g, " ")}
    */
   async create(data: Create${pascalCase}Data, userId: string): Promise<${pascalCase}> {
     const { randomUUID } = await import("crypto");
@@ -166,7 +172,7 @@ export class ${pascalCase}Repository {
   }
 
   /**
-   * Update ${tableName.replace(/_/g, ' ')}
+   * Update ${tableName.replace(/_/g, " ")}
    */
   async update(id: string, data: Update${pascalCase}Data, userId: string): Promise<${pascalCase}> {
     const [item] = await this.db
@@ -187,7 +193,7 @@ export class ${pascalCase}Repository {
   }
 
   /**
-   * Delete ${tableName.replace(/_/g, ' ')}
+   * Delete ${tableName.replace(/_/g, " ")}
    */
   async delete(id: string, userId: string): Promise<void> {
     await this.db
@@ -239,7 +245,7 @@ export class ${pascalCase}Repository {
       version: "v1",
       type: \`${tableName}.\${action}.completed\`,
       subjectId: id,
-      subjectType: "${tableName.replace(/_/g, '_')}",
+      subjectType: "${tableName.replace(/_/g, "_")}",
       data: { id },
       userId,
       source: "api",
@@ -251,7 +257,10 @@ export class ${pascalCase}Repository {
 `;
 }
 
-function generateExecutorTemplate(tableName: string, pascalCase: string): string {
+function generateExecutorTemplate(
+  tableName: string,
+  pascalCase: string
+): string {
   return `/**
  * ${pascalCase} Executor
  * 
@@ -330,7 +339,11 @@ export const ${toCamelCase(tableName)}Executor = inngest.createFunction(
 `;
 }
 
-function generateRouterTemplate(tableName: string, pascalCase: string, camelCase: string): string {
+function generateRouterTemplate(
+  tableName: string,
+  pascalCase: string,
+  camelCase: string
+): string {
   return `/**
  * ${pascalCase} Router
  * 
@@ -360,7 +373,7 @@ const update${pascalCase}Schema = z.object({
 
 export const ${camelCase}Router = router({
   /**
-   * Create ${tableName.replace(/_/g, ' ')}
+   * Create ${tableName.replace(/_/g, " ")}
    */
   create: protectedProcedure
     .input(create${pascalCase}Schema)
@@ -406,7 +419,7 @@ export const ${camelCase}Router = router({
     }),
 
   /**
-   * Update ${tableName.replace(/_/g, ' ')}
+   * Update ${tableName.replace(/_/g, " ")}
    */
   update: protectedProcedure
     .input(update${pascalCase}Schema)
@@ -419,7 +432,7 @@ export const ${camelCase}Router = router({
     }),
 
   /**
-   * Delete ${tableName.replace(/_/g, ' ')}
+   * Delete ${tableName.replace(/_/g, " ")}
    */
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
@@ -435,7 +448,11 @@ export const ${camelCase}Router = router({
 }
 
 // File generation functions
-async function generateFiles(tableName: string, skipRouter: boolean, dryRun: boolean) {
+async function generateFiles(
+  tableName: string,
+  skipRouter: boolean,
+  dryRun: boolean
+) {
   const pascalCase = toPascalCase(tableName);
   const camelCase = toCamelCase(tableName);
   const kebabCase = toKebabCase(tableName);
@@ -463,37 +480,45 @@ async function generateFiles(tableName: string, skipRouter: boolean, dryRun: boo
   }
 
   if (dryRun) {
-    console.log('\n📋 Dry run - would generate the following files:\n');
+    console.log("\n📋 Dry run - would generate the following files:\n");
     for (const file of files) {
       console.log(`  ✓ ${file.path}`);
     }
-    console.log('\n📄 Preview of schema file:\n');
+    console.log("\n📄 Preview of schema file:\n");
     console.log(files[0].content);
     return;
   }
 
   // Create files
-  const rootDir = path.join(__dirname, '..');
-  
+  const rootDir = path.join(__dirname, "..");
+
   for (const file of files) {
     const fullPath = path.join(rootDir, file.path);
     const dir = path.dirname(fullPath);
-    
+
     // Create directory if it doesn't exist
     await fs.mkdir(dir, { recursive: true });
-    
+
     // Write file
-    await fs.writeFile(fullPath, file.content, 'utf-8');
+    await fs.writeFile(fullPath, file.content, "utf-8");
     console.log(`✓ Created ${file.path}`);
   }
 
   // Update index exports
-  await updateIndexExports(tableName, pascalCase, camelCase, kebabCase, rootDir);
+  await updateIndexExports(
+    tableName,
+    pascalCase,
+    camelCase,
+    kebabCase,
+    rootDir
+  );
 
   console.log(`\n✅ Generated boilerplate for ${tableName}\n`);
-  console.log('Next steps:');
+  console.log("Next steps:");
   console.log(`1. Edit packages/database/src/schema/${kebabCase}.ts`);
-  console.log(`2. Edit packages/database/src/repositories/${kebabCase}-repository.ts`);
+  console.log(
+    `2. Edit packages/database/src/repositories/${kebabCase}-repository.ts`
+  );
   console.log(`3. Add ValidationPolicy defaults for ${tableName}`);
   console.log(`4. Run: pnpm build`);
   console.log(`5. Test the new endpoints\n`);
@@ -507,8 +532,11 @@ async function updateIndexExports(
   rootDir: string
 ) {
   // Update database/src/schema/index.ts
-  const schemaIndexPath = path.join(rootDir, 'packages/database/src/schema/index.ts');
-  const schemaIndex = await fs.readFile(schemaIndexPath, 'utf-8');
+  const schemaIndexPath = path.join(
+    rootDir,
+    "packages/database/src/schema/index.ts"
+  );
+  const schemaIndex = await fs.readFile(schemaIndexPath, "utf-8");
   if (!schemaIndex.includes(`${kebabCase}.js`)) {
     const newExport = `export * from "./${kebabCase}.js";\n`;
     await fs.appendFile(schemaIndexPath, newExport);
@@ -516,8 +544,11 @@ async function updateIndexExports(
   }
 
   // Update database/src/repositories/index.ts
-  const repoIndexPath = path.join(rootDir, 'packages/database/src/repositories/index.ts');
-  const repoIndex = await fs.readFile(repoIndexPath, 'utf-8');
+  const repoIndexPath = path.join(
+    rootDir,
+    "packages/database/src/repositories/index.ts"
+  );
+  const repoIndex = await fs.readFile(repoIndexPath, "utf-8");
   if (!repoIndex.includes(`${kebabCase}-repository.js`)) {
     const newExport = `export * from "./${kebabCase}-repository.js";\n`;
     await fs.appendFile(repoIndexPath, newExport);
@@ -525,8 +556,11 @@ async function updateIndexExports(
   }
 
   // Update jobs/src/executors/index.ts
-  const executorIndexPath = path.join(rootDir, 'packages/jobs/src/executors/index.ts');
-  const executorIndex = await fs.readFile(executorIndexPath, 'utf-8');
+  const executorIndexPath = path.join(
+    rootDir,
+    "packages/jobs/src/executors/index.ts"
+  );
+  const executorIndex = await fs.readFile(executorIndexPath, "utf-8");
   if (!executorIndex.includes(`${kebabCase}-executor.js`)) {
     const newExport = `export * from "./${kebabCase}-executor.js";\n`;
     await fs.appendFile(executorIndexPath, newExport);
@@ -542,6 +576,6 @@ const dryRun = options.dryRun || false;
 console.log(`\n🚀 Generating table: ${tableName}\n`);
 
 generateFiles(tableName, skipRouter, dryRun).catch((error) => {
-  console.error('❌ Error:', error.message);
+  console.error("❌ Error:", error.message);
   process.exit(1);
 });

@@ -69,7 +69,7 @@ logger.info(
     poolSize: connectionConfig.max,
     url: process.env.DATABASE_URL?.substring(0, 30) + "...",
   },
-  "PostgreSQL connection pool initialized (postgres.js + Drizzle)",
+  "PostgreSQL connection pool initialized (postgres.js + Drizzle)"
 );
 
 /**
@@ -94,7 +94,7 @@ export async function setCurrentUser(userId: string): Promise<void> {
       {
         userId,
         originalError: error instanceof Error ? error.message : String(error),
-      },
+      }
     );
   }
 }
@@ -110,7 +110,7 @@ export async function clearCurrentUser(): Promise<void> {
     logger.error({ err: error }, "Failed to clear RLS current user");
     throw new InternalServerError(
       `Failed to clear current user: ${error instanceof Error ? error.message : "Unknown error"}`,
-      { originalError: error instanceof Error ? error.message : String(error) },
+      { originalError: error instanceof Error ? error.message : String(error) }
     );
   }
 }

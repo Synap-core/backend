@@ -109,7 +109,7 @@ async function main() {
           `${pc.green("✓")} Event Helpers: packages/events/src/helpers/${tableName}.ts\n` +
           `${pc.yellow("⚠")} Updated: permission-validator.ts (review changes)\n` +
           `${pc.yellow("⚠")} Updated: index.ts (review changes)`,
-        "Generated Files",
+        "Generated Files"
       );
 
       note(
@@ -117,7 +117,7 @@ async function main() {
           `2. Customize TODO sections as needed\n` +
           `3. Run: ${pc.cyan(`pnpm --filter @synap/jobs test ${tableName}`)}\n` +
           `4. Commit changes`,
-        "Next Steps",
+        "Next Steps"
       );
     }
 
@@ -509,7 +509,7 @@ async function writeFiles(config: TableConfig, files: GeneratedFiles) {
   const workerPath = path.join(
     BACKEND_ROOT,
     "packages/jobs/src/functions",
-    `${tableName}.ts`,
+    `${tableName}.ts`
   );
   await fs.writeFile(workerPath, files.worker, "utf-8");
 
@@ -518,7 +518,7 @@ async function writeFiles(config: TableConfig, files: GeneratedFiles) {
     const testsPath = path.join(
       BACKEND_ROOT,
       "packages/jobs/src/functions",
-      `${tableName}.test.ts`,
+      `${tableName}.test.ts`
     );
     await fs.writeFile(testsPath, files.tests, "utf-8");
   }
@@ -527,14 +527,14 @@ async function writeFiles(config: TableConfig, files: GeneratedFiles) {
   const helpersPath = path.join(
     BACKEND_ROOT,
     "packages/events/src/helpers",
-    `${tableName}.ts`,
+    `${tableName}.ts`
   );
   await fs.writeFile(helpersPath, files.helpers, "utf-8");
 
   // Update permission-validator.ts (append)
   const permValidatorPath = path.join(
     BACKEND_ROOT,
-    "packages/jobs/src/functions/permission-validator.ts",
+    "packages/jobs/src/functions/permission-validator.ts"
   );
   const permContent = await fs.readFile(permValidatorPath, "utf-8");
 
@@ -542,7 +542,7 @@ async function writeFiles(config: TableConfig, files: GeneratedFiles) {
   const insertMarker = "  // END OF AUTO-GENERATED PERMISSIONS";
   const updatedPerm = permContent.replace(
     insertMarker,
-    files.permissions + "\n    " + insertMarker,
+    files.permissions + "\n    " + insertMarker
   );
   await fs.writeFile(permValidatorPath, updatedPerm, "utf-8");
 
@@ -554,14 +554,14 @@ async function writeFiles(config: TableConfig, files: GeneratedFiles) {
   const importLine = `import { ${tableName}Worker } from './functions/${tableName}.js';\n`;
   const updatedIndex = indexContent.replace(
     "import { permissionValidator }",
-    importLine + "import { permissionValidator }",
+    importLine + "import { permissionValidator }"
   );
 
   // Add to functions array
   const functionLine = `  ${tableName}Worker,\n`;
   const finalIndex = updatedIndex.replace(
     "  permissionValidator, // Phase 2",
-    `  permissionValidator, // Phase 2\n${functionLine}`,
+    `  permissionValidator, // Phase 2\n${functionLine}`
   );
 
   await fs.writeFile(indexPath, finalIndex, "utf-8");

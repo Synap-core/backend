@@ -22,7 +22,7 @@ export const projectsRouter = router({
           limit: z.number().min(1).max(100).default(50),
           offset: z.number().min(0).default(0),
         })
-        .optional(),
+        .optional()
     )
     .query(async ({ ctx, input }) => {
       const conditions = [eq(projects.userId, ctx.userId)];
@@ -48,14 +48,11 @@ export const projectsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .query(async ({ ctx, input }) => {
       const project = await ctx.db.query.projects.findFirst({
-        where: and(
-          eq(projects.id, input.id),
-          eq(projects.userId, ctx.userId)
-        ),
+        where: and(eq(projects.id, input.id), eq(projects.userId, ctx.userId)),
       });
 
       if (!project) {
@@ -77,14 +74,13 @@ export const projectsRouter = router({
         status: z.enum(["active", "archived", "completed"]).default("active"),
         settings: z.record(z.unknown()).optional(),
         metadata: z.record(z.unknown()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
       const projectId = randomUUID();
 
       await emitRequestEvent({
-              
         type: "projects.create.requested",
         subjectId: projectId,
         subjectType: "project",
@@ -116,11 +112,10 @@ export const projectsRouter = router({
         status: z.enum(["active", "archived", "completed"]).optional(),
         settings: z.record(z.unknown()).optional(),
         metadata: z.record(z.unknown()).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-              
         type: "projects.update.requested",
         subjectId: input.id,
         subjectType: "project",
@@ -147,7 +142,7 @@ export const projectsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({

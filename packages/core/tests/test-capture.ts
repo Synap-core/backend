@@ -42,10 +42,10 @@ async function testCapture() {
     console.log("   1. Start Inngest dev server: pnpm --filter jobs dev");
     console.log("   2. Inngest will pick up the event and process it");
     console.log(
-      '   3. After ~5 seconds, check PostgreSQL: psql $DATABASE_URL -c "SELECT * FROM entities;"',
+      '   3. After ~5 seconds, check PostgreSQL: psql $DATABASE_URL -c "SELECT * FROM entities;"'
     );
     console.log(
-      "\n💡 The AI will analyze and create a task entity automatically!",
+      "\n💡 The AI will analyze and create a task entity automatically!"
     );
   } catch (error) {
     console.error("❌ Error:", (error as Error).message);

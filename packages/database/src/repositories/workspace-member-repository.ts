@@ -29,9 +29,15 @@ export interface UpdateRoleInput {
 export type WorkspaceMemberRow = typeof workspaceMembers.$inferSelect;
 
 export class WorkspaceMemberRepository {
-  constructor(private db: any, private eventRepo: EventRepository) {}
+  constructor(
+    private db: any,
+    private eventRepo: EventRepository
+  ) {}
 
-  async add(input: AddMemberInput, actingUserId: string): Promise<WorkspaceMemberRow> {
+  async add(
+    input: AddMemberInput,
+    actingUserId: string
+  ): Promise<WorkspaceMemberRow> {
     const [member] = await this.db
       .insert(workspaceMembers)
       .values({
@@ -57,11 +63,11 @@ export class WorkspaceMemberRepository {
       userId: actingUserId,
       source: "api",
       timestamp: new Date(),
-      data: { 
-        workspaceId: input.workspaceId, 
+      data: {
+        workspaceId: input.workspaceId,
         userId: input.userId,
         role: input.role,
-        memberId: member.id 
+        memberId: member.id,
       },
       metadata: {},
     });
@@ -96,7 +102,10 @@ export class WorkspaceMemberRepository {
     });
   }
 
-  async updateRole(input: UpdateRoleInput, actingUserId: string): Promise<WorkspaceMemberRow> {
+  async updateRole(
+    input: UpdateRoleInput,
+    actingUserId: string
+  ): Promise<WorkspaceMemberRow> {
     const [member] = await this.db
       .update(workspaceMembers)
       .set({ role: input.newRole })
@@ -117,11 +126,11 @@ export class WorkspaceMemberRepository {
       userId: actingUserId,
       source: "api",
       timestamp: new Date(),
-      data: { 
-        workspaceId: input.workspaceId, 
+      data: {
+        workspaceId: input.workspaceId,
         userId: input.userId,
         newRole: input.newRole,
-        memberId: member.id 
+        memberId: member.id,
       },
       metadata: {},
     });

@@ -1,6 +1,6 @@
 /**
  * Event Waiter Utility
- * 
+ *
  * Polls the events table to wait for specific events to be emitted.
  * Used for testing async validation flows.
  */
@@ -40,18 +40,13 @@ export async function waitForEvent(
       .select()
       .from(events)
       .where(
-        and(
-          eq(events.type, eventType),
-          gte(events.timestamp, sinceTimestamp)
-        )
+        and(eq(events.type, eventType), gte(events.timestamp, sinceTimestamp))
       )
       .orderBy(desc(events.timestamp))
       .limit(10);
 
     // Apply custom filter if provided
-    const matchingEvent = filter
-      ? foundEvents.find(filter)
-      : foundEvents[0];
+    const matchingEvent = filter ? foundEvents.find(filter) : foundEvents[0];
 
     if (matchingEvent) {
       return matchingEvent;
@@ -158,8 +153,12 @@ export async function waitForValidation(
 /**
  * Clear old test events (cleanup utility)
  */
-export async function clearTestEvents(olderThan: Date = new Date(Date.now() - 60000)) {
+export async function clearTestEvents(
+  olderThan: Date = new Date(Date.now() - 60000)
+) {
   // Note: In production, events are immutable. This is ONLY for tests.
   // Consider using a separate test database or marking test events differently.
-  console.warn("clearTestEvents is for testing only - events should be immutable in production");
+  console.warn(
+    "clearTestEvents is for testing only - events should be immutable in production"
+  );
 }

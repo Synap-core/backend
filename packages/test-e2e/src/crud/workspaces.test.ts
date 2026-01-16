@@ -1,6 +1,6 @@
 /**
  * Workspaces CRUD Tests
- * 
+ *
  * Tests workspace operations through the event-driven flow:
  * - Create (async: .requested → validator → .validated)
  * - Read/List (sync: direct query)
@@ -11,7 +11,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { setupTestEnvironment, type TestEnvironment } from "../setup.js";
 import { waitForValidation, waitForEvent } from "../utils/event-waiter.js";
-import { expectRequested, expectValidated, expectValidUUID } from "../utils/assertions.js";
+import {
+  expectRequested,
+  expectValidated,
+  expectValidUUID,
+} from "../utils/assertions.js";
 import { randomUUID } from "crypto";
 
 describe("Workspaces CRUD", () => {
@@ -88,9 +92,7 @@ describe("Workspaces CRUD", () => {
       // Verify all exist
       const workspaces = await userA.trpc.workspaces.list.query();
       for (const name of workspaceNames) {
-        expect(workspaces).toContainEqual(
-          expect.objectContaining({ name })
-        );
+        expect(workspaces).toContainEqual(expect.objectContaining({ name }));
       }
     });
   });
@@ -142,9 +144,7 @@ describe("Workspaces CRUD", () => {
 
       // Get workspace ID
       const workspaces = await userA.trpc.workspaces.list.query();
-      const workspace = workspaces.find(
-        (w) => w.name === "Get Test Workspace"
-      );
+      const workspace = workspaces.find((w) => w.name === "Get Test Workspace");
       expect(workspace).toBeDefined();
 
       // Get by ID

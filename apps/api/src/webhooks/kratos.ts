@@ -25,11 +25,11 @@ kratosWebhookRouter.post("/", async (c) => {
 
     console.log(
       "[Webhook Debug] Received:",
-      secret ? "${secret.substring(0,4)}..." : "undefined",
+      secret ? "${secret.substring(0,4)}..." : "undefined"
     );
     console.log(
       "[Webhook Debug] Expected:",
-      expectedSecret ? "${expectedSecret.substring(0,4)}..." : "undefined",
+      expectedSecret ? "${expectedSecret.substring(0,4)}..." : "undefined"
     );
 
     if (!expectedSecret) {
@@ -43,7 +43,7 @@ kratosWebhookRouter.post("/", async (c) => {
           receivedLength: secret?.length,
           expectedLength: expectedSecret?.length,
         },
-        "Invalid webhook secret received",
+        "Invalid webhook secret received"
       );
       return c.json({ error: "Unauthorized" }, 401);
     }
@@ -53,7 +53,7 @@ kratosWebhookRouter.post("/", async (c) => {
 
     logger.info(
       { type: event.type, identityId: event.identity?.id },
-      "Received Kratos webhook",
+      "Received Kratos webhook"
     );
 
     // Handle identity.created event
@@ -69,7 +69,7 @@ kratosWebhookRouter.post("/", async (c) => {
 
       logger.info(
         { identityId },
-        "Successfully processed identity.created event",
+        "Successfully processed identity.created event"
       );
     }
 
@@ -82,7 +82,7 @@ kratosWebhookRouter.post("/", async (c) => {
 
       logger.info(
         { identityId },
-        "Successfully processed identity.updated event",
+        "Successfully processed identity.updated event"
       );
     }
 
@@ -94,7 +94,7 @@ kratosWebhookRouter.post("/", async (c) => {
         error: "Internal server error",
         message: error.message,
       },
-      500,
+      500
     );
   }
 });

@@ -33,7 +33,7 @@ const stepRunner = {
         error instanceof Error ? error : new Error(String(error)),
         {
           step: name,
-        },
+        }
       );
     }
   },
@@ -69,7 +69,7 @@ describe("entity embedding worker", () => {
         entityId: payload.entityId,
         userId: payload.userId,
         embedding: expect.any(Array),
-      }),
+      })
     );
     expect(result).toEqual({ status: "indexed", entityId: payload.entityId });
   });

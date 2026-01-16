@@ -59,7 +59,7 @@ export default function DashboardPage() {
     {
       refetchInterval: isAutoRefreshEnabled ? 5000 : false,
       refetchOnWindowFocus: true,
-    },
+    }
   );
 
   const events = recentEventsData?.events;
@@ -409,7 +409,7 @@ export default function DashboardPage() {
                 // Navigate to event publisher with pre-filled data
                 const eventData = JSON.stringify(event.data || {}, null, 2);
                 navigate(
-                  `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`,
+                  `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`
                 );
               }}
             />

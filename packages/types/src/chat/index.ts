@@ -124,7 +124,7 @@ export interface UseChatThreadResult {
   sendMessage: (content: string) => Promise<void>;
   createBranch: (
     messageId: string,
-    agentType: AgentTypeString,
+    agentType: AgentTypeString
   ) => Promise<string>;
 }
 

@@ -86,7 +86,7 @@ async function validateAgent() {
   } catch (error) {
     log(
       `❌ Agent test failed: ${error instanceof Error ? error.message : String(error)}`,
-      "red",
+      "red"
     );
     return false;
   }
@@ -99,7 +99,7 @@ async function validateNoteExtraction() {
   if (!process.env.ANTHROPIC_API_KEY) {
     log(
       "⚠️  ANTHROPIC_API_KEY not set - skipping note extraction test",
-      "yellow",
+      "yellow"
     );
     return false;
   }
@@ -131,7 +131,7 @@ async function validateNoteExtraction() {
   } catch (error) {
     log(
       `❌ Note extraction test failed: ${error instanceof Error ? error.message : String(error)}`,
-      "red",
+      "red"
     );
     return false;
   }
@@ -171,7 +171,7 @@ async function validateInsightSchema() {
   } catch (error) {
     log(
       `❌ Schema validation failed: ${error instanceof Error ? error.message : String(error)}`,
-      "red",
+      "red"
     );
     return false;
   }
@@ -217,7 +217,7 @@ async function main() {
 main().catch((error) => {
   log(
     `\n❌ Fatal error: ${error instanceof Error ? error.message : String(error)}`,
-    "red",
+    "red"
   );
   process.exit(1);
 });

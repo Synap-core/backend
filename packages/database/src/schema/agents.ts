@@ -69,7 +69,7 @@ export const agents = pgTable(
     createdByIdx: index("agents_created_by_idx").on(table.createdBy),
     userIdIdx: index("agents_user_id_idx").on(table.userId),
     activeIdx: index("agents_active_idx").on(table.active),
-  }),
+  })
 );
 
 export type Agent = typeof agents.$inferSelect;

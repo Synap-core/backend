@@ -26,7 +26,7 @@ describe("ApiKeyService", () => {
         testUserId,
         "Test Hub Key",
         ["preferences", "notes"],
-        testHubId,
+        testHubId
       );
 
       expect(key).toBeDefined();
@@ -56,7 +56,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test User Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       expect(key).toContain("synap_user_");
@@ -76,7 +76,7 @@ describe("ApiKeyService", () => {
         "Expiring Key",
         ["preferences"],
         undefined,
-        30, // 30 days
+        30 // 30 days
       );
 
       const [storedKey] = await db
@@ -90,7 +90,7 @@ describe("ApiKeyService", () => {
       const now = new Date();
       const expected = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       const diff = Math.abs(
-        storedKey.expiresAt!.getTime() - expected.getTime(),
+        storedKey.expiresAt!.getTime() - expected.getTime()
       );
       expect(diff).toBeLessThan(1000); // Within 1 second
     });
@@ -99,7 +99,7 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       const [storedKey] = await db
@@ -113,7 +113,7 @@ describe("ApiKeyService", () => {
       const now = new Date();
       const expected = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
       const diff = Math.abs(
-        storedKey.rotationScheduledAt!.getTime() - expected.getTime(),
+        storedKey.rotationScheduledAt!.getTime() - expected.getTime()
       );
       expect(diff).toBeLessThan(1000); // Within 1 second
     });
@@ -125,7 +125,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       // Validate
@@ -149,7 +149,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       await apiKeyService.revokeApiKey(keyId, testUserId);
@@ -165,7 +165,7 @@ describe("ApiKeyService", () => {
       const { key, keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       // Get initial values
@@ -207,7 +207,7 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       // Revoke
@@ -234,13 +234,13 @@ describe("ApiKeyService", () => {
           testUserId,
           "Original Key",
           ["preferences", "notes"],
-          testHubId,
+          testHubId
         );
 
       // Rotate
       const { newKey, newKeyId } = await apiKeyService.rotateApiKey(
         oldKeyId,
-        testUserId,
+        testUserId
       );
 
       // Verify new key
@@ -272,8 +272,8 @@ describe("ApiKeyService", () => {
       await expect(
         apiKeyService.rotateApiKey(
           "00000000-0000-0000-0000-000000000000",
-          testUserId,
-        ),
+          testUserId
+        )
       ).rejects.toThrow("API key not found");
     });
 
@@ -282,14 +282,14 @@ describe("ApiKeyService", () => {
       const { keyId } = await apiKeyService.generateApiKey(
         testUserId,
         "Test Key",
-        ["preferences"],
+        ["preferences"]
       );
 
       await apiKeyService.revokeApiKey(keyId, testUserId);
 
       // Try to rotate
       await expect(
-        apiKeyService.rotateApiKey(keyId, testUserId),
+        apiKeyService.rotateApiKey(keyId, testUserId)
       ).rejects.toThrow("Cannot rotate an inactive key");
     });
   });

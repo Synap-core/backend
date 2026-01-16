@@ -18,7 +18,7 @@ import { randomUUID, randomBytes } from "crypto";
  * Generate API key with proper prefix
  */
 function generateApiKey(prefix: string): string {
-  const randomPart = randomBytes(32).toString('hex');
+  const randomPart = randomBytes(32).toString("hex");
   return `${prefix}${randomPart}`;
 }
 
@@ -52,29 +52,33 @@ export const apiKeysRouter = router({
   /**
    * Create a new API key
    * Event-driven: emits api_keys.create.requested
-   * 
+   *
    * ⚠️ SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
   create: protectedProcedure
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
-        scope: z.array(z.enum([...API_KEY_SCOPES] as [string, ...string[]])).min(1),
+        scope: z
+          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+          .min(1),
         hubId: z.string().optional(),
         expiresInDays: z.number().int().min(1).max(365).optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
-      
+
       // Determine key prefix
-      const keyPrefix = input.hubId 
-        ? (process.env.NODE_ENV === 'production' ? 'synap_hub_live_' : 'synap_hub_test_')
-        : 'synap_user_';
-      
+      const keyPrefix = input.hubId
+        ? process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_"
+        : "synap_user_";
+
       // Generate key (plaintext - will be hashed in executor)
       const key = generateApiKey(keyPrefix);
-      
+
       // Calculate expiration
       const expiresAt = input.expiresInDays
         ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
@@ -116,7 +120,7 @@ export const apiKeysRouter = router({
       z.object({
         keyId: z.string().uuid(),
         reason: z.string().optional(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Verify ownership
@@ -153,7 +157,7 @@ export const apiKeysRouter = router({
     .input(
       z.object({
         keyId: z.string().uuid(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Verify ownership

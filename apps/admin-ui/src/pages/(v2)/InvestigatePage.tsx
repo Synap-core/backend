@@ -51,14 +51,14 @@ export default function InvestigatePage() {
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<string | null>("search");
   const [searchTerm, setSearchTerm] = useState(
-    searchParams.get("userId") || searchParams.get("eventId") || "",
+    searchParams.get("userId") || searchParams.get("eventId") || ""
   );
   const [eventTypeFilter, setEventTypeFilter] = useState<string | null>(
-    searchParams.get("eventType"),
+    searchParams.get("eventType")
   );
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedEventType, setSelectedEventType] = useState<string | null>(
-    null,
+    null
   );
 
   // Publish state
@@ -72,7 +72,7 @@ export default function InvestigatePage() {
   // Fetch schema for publish form
   const { data: publishSchema } = trpc.system.getEventTypeSchema.useQuery(
     { eventType: publishEventType },
-    { enabled: !!publishEventType },
+    { enabled: !!publishEventType }
   );
 
   // Fetch events via AdminSDK
@@ -368,7 +368,7 @@ export default function InvestigatePage() {
                       });
                       return acc;
                     },
-                    {},
+                    {}
                   );
 
                   // Sort tables and render
@@ -383,7 +383,7 @@ export default function InvestigatePage() {
                           acc[action].push(e);
                           return acc;
                         },
-                        {},
+                        {}
                       );
 
                       return (
@@ -532,7 +532,7 @@ export default function InvestigatePage() {
                                           }}
                                           onClick={() =>
                                             setSelectedEventType(
-                                              actionEvents[0]?.type,
+                                              actionEvents[0]?.type
                                             )
                                           }
                                         >
@@ -543,7 +543,7 @@ export default function InvestigatePage() {
                                       )}
                                     </Card>
                                   );
-                                },
+                                }
                               )}
                           </SimpleGrid>
                         </Card>

@@ -1,14 +1,14 @@
 /**
  * Workspace Repository
- * 
+ *
  * Handles all workspace CRUD operations with automatic event emission
  */
 
-import { eq } from 'drizzle-orm';
-import { workspaces } from '../schema/workspaces.js';
-import { BaseRepository } from './base-repository.js';
-import type { EventRepository } from './event-repository.js';
-import type { Workspace, NewWorkspace } from '../schema/workspaces.js';
+import { eq } from "drizzle-orm";
+import { workspaces } from "../schema/workspaces.js";
+import { BaseRepository } from "./base-repository.js";
+import type { EventRepository } from "./event-repository.js";
+import type { Workspace, NewWorkspace } from "../schema/workspaces.js";
 
 export interface CreateWorkspaceInput {
   id?: string;
@@ -24,9 +24,13 @@ export interface UpdateWorkspaceInput {
   settings?: Record<string, unknown>;
 }
 
-export class WorkspaceRepository extends BaseRepository<Workspace, CreateWorkspaceInput, UpdateWorkspaceInput> {
+export class WorkspaceRepository extends BaseRepository<
+  Workspace,
+  CreateWorkspaceInput,
+  UpdateWorkspaceInput
+> {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: 'workspace' });
+    super(db, eventRepo, { subjectType: "workspace" });
   }
 
   /**
@@ -46,7 +50,7 @@ export class WorkspaceRepository extends BaseRepository<Workspace, CreateWorkspa
       .returning();
 
     // Emit completed event
-    await this.emitCompleted('create', workspace, userId);
+    await this.emitCompleted("create", workspace, userId);
 
     return workspace;
   }
@@ -55,7 +59,11 @@ export class WorkspaceRepository extends BaseRepository<Workspace, CreateWorkspa
    * Update an existing workspace
    * Emits: workspaces.update.completed
    */
-  async update(id: string, data: UpdateWorkspaceInput, userId: string): Promise<Workspace> {
+  async update(
+    id: string,
+    data: UpdateWorkspaceInput,
+    userId: string
+  ): Promise<Workspace> {
     const [workspace] = await this.db
       .update(workspaces)
       .set({
@@ -68,11 +76,11 @@ export class WorkspaceRepository extends BaseRepository<Workspace, CreateWorkspa
       .returning();
 
     if (!workspace) {
-      throw new Error('Workspace not found');
+      throw new Error("Workspace not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('update', workspace, userId);
+    await this.emitCompleted("update", workspace, userId);
 
     return workspace;
   }
@@ -88,10 +96,10 @@ export class WorkspaceRepository extends BaseRepository<Workspace, CreateWorkspa
       .returning({ id: workspaces.id });
 
     if (result.length === 0) {
-      throw new Error('Workspace not found');
+      throw new Error("Workspace not found");
     }
 
     // Emit completed event
-    await this.emitCompleted('delete', { id }, userId);
+    await this.emitCompleted("delete", { id }, userId);
   }
 }

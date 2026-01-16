@@ -23,7 +23,7 @@ export const entities = pgTable("entities", {
   // Context
   userId: text("user_id").notNull(),
   workspaceId: uuid("workspace_id").notNull(), // Every entity belongs to a workspace
-  projectIds: uuid("project_ids").array(),      // Optional: entities can be in multiple projects
+  projectIds: uuid("project_ids").array(), // Optional: entities can be in multiple projects
 
   // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event', 'person', 'file'
   type: text("type").notNull(),

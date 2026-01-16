@@ -30,7 +30,7 @@ export interface BroadcastOptions {
  * @returns Promise resolving to broadcast results
  */
 export async function broadcastNotification(
-  options: BroadcastOptions,
+  options: BroadcastOptions
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   const {
     userId,
@@ -50,12 +50,14 @@ export async function broadcastNotification(
           "Content-Type": "application/json",
         },
         body: JSON.stringify(message),
-      },
+      }
     );
 
     let userBroadcastCount = 0;
     if (userResponse.ok) {
-      const userResult = await userResponse.json() as { broadcastCount?: number };
+      const userResult = (await userResponse.json()) as {
+        broadcastCount?: number;
+      };
       userBroadcastCount = userResult.broadcastCount || 0;
     }
 
@@ -71,11 +73,13 @@ export async function broadcastNotification(
             "Content-Type": "application/json",
           },
           body: JSON.stringify(message),
-        },
+        }
       );
 
       if (requestResponse.ok) {
-        const requestResult = await requestResponse.json() as { broadcastCount?: number };
+        const requestResult = (await requestResponse.json()) as {
+          broadcastCount?: number;
+        };
         requestBroadcastCount = requestResult.broadcastCount || 0;
       }
     }
@@ -104,7 +108,7 @@ export async function broadcastSuccess(
   userId: string,
   type: string,
   data: Record<string, unknown>,
-  options?: { requestId?: string; realtimeUrl?: string },
+  options?: { requestId?: string; realtimeUrl?: string }
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     userId,
@@ -129,7 +133,7 @@ export async function broadcastError(
   userId: string,
   type: string,
   error: string,
-  options?: { requestId?: string; realtimeUrl?: string },
+  options?: { requestId?: string; realtimeUrl?: string }
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
   return broadcastNotification({
     userId,

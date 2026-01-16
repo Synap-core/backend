@@ -14,7 +14,7 @@ export const tags = pgTable("tags", {
   // Context (workspace & project organization)
   userId: text("user_id").notNull(),
   workspaceId: uuid("workspace_id").notNull(), // Every tag belongs to a workspace
-  projectIds: uuid("project_ids").array(),      // Optional: tags can be scoped to projects
+  projectIds: uuid("project_ids").array(), // Optional: tags can be scoped to projects
 
   // Tag name (unique per user)
   name: text("name").notNull(),

@@ -70,7 +70,7 @@ export const capabilitiesRouter = router({
         pluginCount: plugins.length,
         serviceCount: services.length,
       },
-      "Capabilities retrieved",
+      "Capabilities retrieved"
     );
 
     return response;
@@ -87,7 +87,7 @@ export const capabilitiesRouter = router({
       });
 
       const available = services.some((s) =>
-        s.capabilities.includes(input.capability),
+        s.capabilities.includes(input.capability)
       );
 
       return { available };

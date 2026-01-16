@@ -143,7 +143,7 @@ export class PresenceManager {
    */
   getSessionsByUserId(userId: string): UserSession[] {
     return Array.from(this.sessions.values()).filter(
-      (session) => session.userId === userId,
+      (session) => session.userId === userId
     );
   }
 

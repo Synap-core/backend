@@ -124,7 +124,7 @@ export class ConversationRepository {
    */
   async getThreadHistory(
     threadId: string,
-    limit: number = 100,
+    limit: number = 100
   ): Promise<ConversationMessage[]> {
     const result = await sql`
       SELECT * FROM conversation_messages
@@ -141,7 +141,7 @@ export class ConversationRepository {
    * Get latest message in thread
    */
   async getLatestMessage(
-    threadId: string,
+    threadId: string
   ): Promise<ConversationMessage | null> {
     const result = await sql`
       SELECT * FROM conversation_messages
@@ -172,7 +172,7 @@ export class ConversationRepository {
     // Verify user owns the conversation
     if (parent.userId !== userId) {
       throw new Error(
-        "Unauthorized: Cannot branch another user's conversation",
+        "Unauthorized: Cannot branch another user's conversation"
       );
     }
 
@@ -285,7 +285,7 @@ export class ConversationRepository {
    */
   async getUserThreads(
     userId: string,
-    limit: number = 20,
+    limit: number = 20
   ): Promise<
     Array<{
       threadId: string;

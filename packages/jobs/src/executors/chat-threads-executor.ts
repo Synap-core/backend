@@ -1,6 +1,6 @@
 /**
  * Chat Threads Executor
- * 
+ *
  * Handles validated chat thread events.
  */
 
@@ -51,13 +51,17 @@ export const chatThreadsExecutor = inngest.createFunction(
       }
 
       if (eventType === "chat_threads.update.validated") {
-        const thread = await repo.update(data.id, {
-          title: data.title,
-          status: data.status,
-          contextSummary: data.contextSummary,
-          metadata: data.metadata,
-          mergedAt: data.mergedAt,
-        }, data.userId);
+        const thread = await repo.update(
+          data.id,
+          {
+            title: data.title,
+            status: data.status,
+            contextSummary: data.contextSummary,
+            metadata: data.metadata,
+            mergedAt: data.mergedAt,
+          },
+          data.userId
+        );
 
         return {
           status: "completed",

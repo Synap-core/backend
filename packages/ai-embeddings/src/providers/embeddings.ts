@@ -31,7 +31,7 @@ export function getEmbeddingsClient(): BaseEmbeddings | SimpleEmbeddings {
     const apiKey = config.ai.openai.apiKey;
     if (!apiKey) {
       throw new Error(
-        "OpenAI embeddings require OPENAI_API_KEY environment variable",
+        "OpenAI embeddings require OPENAI_API_KEY environment variable"
       );
     }
 
@@ -95,7 +95,7 @@ class DeterministicEmbeddings implements SimpleEmbeddings {
 
     // Normalize
     const magnitude = Math.sqrt(
-      embedding.reduce((sum, val) => sum + val * val, 0),
+      embedding.reduce((sum, val) => sum + val * val, 0)
     );
     return embedding.map((val) => val / magnitude);
   }

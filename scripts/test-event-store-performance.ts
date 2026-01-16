@@ -49,7 +49,7 @@ const eventRepo = getEventRepository();
  */
 function generateEvents(
   count: number,
-  userId: string,
+  userId: string
 ): ReturnType<typeof createSynapEvent>[] {
   const events: ReturnType<typeof createSynapEvent>[] = [];
 
@@ -78,7 +78,7 @@ function generateEvents(
  * Test serial insertion (one by one)
  */
 async function testSerialInsertion(
-  events: ReturnType<typeof createSynapEvent>[],
+  events: ReturnType<typeof createSynapEvent>[]
 ): Promise<{
   duration: number;
   eventsPerSecond: number;
@@ -101,13 +101,13 @@ async function testSerialInsertion(
  * Test batch insertion
  */
 async function testBatchInsertion(
-  events: ReturnType<typeof createSynapEvent>[],
+  events: ReturnType<typeof createSynapEvent>[]
 ): Promise<{
   duration: number;
   eventsPerSecond: number;
 }> {
   console.log(
-    `\n📦 Testing batch insertion (${events.length} events in batches of ${BATCH_SIZE})...`,
+    `\n📦 Testing batch insertion (${events.length} events in batches of ${BATCH_SIZE})...`
   );
 
   const startTime = Date.now();
@@ -173,32 +173,32 @@ async function main() {
     const sampleEvents = events.slice(0, sampleSize);
     const serialResult = await testSerialInsertion(sampleEvents);
     console.log(
-      `✅ Serial: ${serialResult.duration}ms (${serialResult.eventsPerSecond.toFixed(0)} events/sec)`,
+      `✅ Serial: ${serialResult.duration}ms (${serialResult.eventsPerSecond.toFixed(0)} events/sec)`
     );
 
     // Test 2: Batch insertion (full set)
     const batchResult = await testBatchInsertion(events);
     console.log(
-      `✅ Batch: ${batchResult.duration}ms (${batchResult.eventsPerSecond.toFixed(0)} events/sec)`,
+      `✅ Batch: ${batchResult.duration}ms (${batchResult.eventsPerSecond.toFixed(0)} events/sec)`
     );
 
     // Test 3: Time-range query
     const queryResult = await testTimeRangeQuery(userId);
     console.log(
-      `✅ Query: ${queryResult.duration}ms (found ${queryResult.eventCount} events)`,
+      `✅ Query: ${queryResult.duration}ms (found ${queryResult.eventCount} events)`
     );
 
     // Summary
     console.log("\n📊 Performance Summary");
     console.log("════════════════════════════════════════════════════════════");
     console.log(
-      `Serial Insertion:     ${serialResult.eventsPerSecond.toFixed(0)} events/sec`,
+      `Serial Insertion:     ${serialResult.eventsPerSecond.toFixed(0)} events/sec`
     );
     console.log(
-      `Batch Insertion:      ${batchResult.eventsPerSecond.toFixed(0)} events/sec`,
+      `Batch Insertion:      ${batchResult.eventsPerSecond.toFixed(0)} events/sec`
     );
     console.log(
-      `Time-Range Query:     ${queryResult.duration}ms (${queryResult.eventCount} events)`,
+      `Time-Range Query:     ${queryResult.duration}ms (${queryResult.eventCount} events)`
     );
     console.log("════════════════════════════════════════════════════════════");
 
@@ -206,11 +206,11 @@ async function main() {
     const targetEventsPerSecond = 10_000;
     if (batchResult.eventsPerSecond >= targetEventsPerSecond) {
       console.log(
-        `\n✅ SUCCESS: Exceeded target of ${targetEventsPerSecond.toLocaleString()} events/sec`,
+        `\n✅ SUCCESS: Exceeded target of ${targetEventsPerSecond.toLocaleString()} events/sec`
       );
     } else {
       console.log(
-        `\n⚠️  WARNING: Below target of ${targetEventsPerSecond.toLocaleString()} events/sec`,
+        `\n⚠️  WARNING: Below target of ${targetEventsPerSecond.toLocaleString()} events/sec`
       );
     }
 

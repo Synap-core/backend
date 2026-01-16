@@ -121,7 +121,7 @@ export function getAllWorkers(): WorkerMetadata[] {
  * Get workers by category
  */
 export function getWorkersByCategory(
-  category: WorkerMetadata["category"],
+  category: WorkerMetadata["category"]
 ): WorkerMetadata[] {
   return workerRegistry.filter((w) => w.category === category);
 }
@@ -131,7 +131,7 @@ export function getWorkersByCategory(
  */
 export function getWorkersForEvent(eventType: string): WorkerMetadata[] {
   return workerRegistry.filter(
-    (w) => w.triggers.includes(eventType) || w.triggers.includes("*"),
+    (w) => w.triggers.includes(eventType) || w.triggers.includes("*")
   );
 }
 

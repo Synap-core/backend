@@ -53,7 +53,7 @@ describe("n8n Actions Router", () => {
         caller.createEntity({
           type: "note",
           content: "Test",
-        }),
+        })
       ).rejects.toThrow("Insufficient permissions");
     });
   });

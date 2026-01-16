@@ -42,7 +42,7 @@ export async function createContext(req: Request): Promise<Context> {
         hasCookie: !!cookieHeader,
         cookieLength: cookieHeader?.length || 0,
       },
-      "Attempting to get session from request",
+      "Attempting to get session from request"
     );
 
     const session = await authModule.getSession(req.headers);
@@ -80,7 +80,7 @@ export async function createContext(req: Request): Promise<Context> {
         cookiePresent: !!req.headers.get("cookie"),
         cookieLength: req.headers.get("cookie")?.length || 0,
       },
-      "Error getting session (detailed debug)",
+      "Error getting session (detailed debug)"
     );
     return {
       db,

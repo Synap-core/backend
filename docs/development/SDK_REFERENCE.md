@@ -14,44 +14,44 @@ Ce document décrit l'API publique de chaque package du backend Synap, formant l
 
 ```typescript
 // Configuration
-export { config } from './config.js';
-export type { SynapConfig } from './config.js';
+export { config } from "./config.js";
+export type { SynapConfig } from "./config.js";
 
 // Logging
-export { createLogger } from './logger.js';
-export type { Logger } from './logger.js';
+export { createLogger } from "./logger.js";
+export type { Logger } from "./logger.js";
 
 // Errors
-export { 
+export {
   SynapError,
   ValidationError,
   NotFoundError,
   ConflictError,
   UnauthorizedError,
-} from './errors.js';
+} from "./errors.js";
 
 // Tracing
-export { initializeTracing } from './tracing.js';
+export { initializeTracing } from "./tracing.js";
 
 // Metrics
-export { recordMetric, incrementCounter } from './metrics.js';
+export { recordMetric, incrementCounter } from "./metrics.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { config, createLogger, ValidationError } from '@synap/core';
+import { config, createLogger, ValidationError } from "@synap/core";
 
 // Configuration
 const dbUrl = config.database.url;
 const aiModel = config.ai.anthropic.model;
 
 // Logging
-const logger = createLogger({ module: 'my-handler' });
-logger.info({ userId }, 'Processing request');
+const logger = createLogger({ module: "my-handler" });
+logger.info({ userId }, "Processing request");
 
 // Errors
-throw new ValidationError('Invalid input', { field: 'email' });
+throw new ValidationError("Invalid input", { field: "email" });
 ```
 
 ---
@@ -62,37 +62,39 @@ throw new ValidationError('Invalid input', { field: 'email' });
 
 ```typescript
 // Event Types
-export { EventTypes } from './event-types.js';
-export type { EventType } from './event-types.js';
+export { EventTypes } from "./event-types.js";
+export type { EventType } from "./event-types.js";
 
 // SynapEvent
-export { 
+export {
   createSynapEvent,
   parseSynapEvent,
   validateEventData,
   SynapEventSchema,
   EventTypeSchemas,
-} from './synap-event.js';
-export type { SynapEvent } from './synap-event.js';
+} from "./synap-event.js";
+export type { SynapEvent } from "./synap-event.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { createSynapEvent, EventTypes, type SynapEvent } from '@synap/types';
+import { createSynapEvent, EventTypes, type SynapEvent } from "@synap/types";
 
 // Créer un événement
 const event = createSynapEvent({
   type: EventTypes.NOTE_CREATION_REQUESTED,
-  userId: 'user-123',
-  subjectId: 'entity-456',
-  data: { content: 'Hello' },
-  source: 'api',
+  userId: "user-123",
+  subjectId: "entity-456",
+  data: { content: "Hello" },
+  source: "api",
 });
 
 // Valider les données d'un événement
-import { validateEventData } from '@synap/types';
-const isValid = validateEventData('note.creation.requested', { content: 'Hello' });
+import { validateEventData } from "@synap/types";
+const isValid = validateEventData("note.creation.requested", {
+  content: "Hello",
+});
 ```
 
 ---
@@ -103,10 +105,10 @@ const isValid = validateEventData('note.creation.requested', { content: 'Hello' 
 
 ```typescript
 // Database Client
-export { db } from './client.js';
+export { db } from "./client.js";
 
 // Schema & Entities
-export { 
+export {
   entities,
   relations,
   tags,
@@ -116,41 +118,43 @@ export {
   conversations,
   conversationMessages,
   // ... autres tables
-} from './schema/index.js';
+} from "./schema/index.js";
 
 // Repositories
-export { getEventRepository } from './repositories/event-repository.js';
-export { getEntityRepository } from './repositories/entity-repository.js';
-export { getConversationRepository } from './repositories/conversation-repository.js';
+export { getEventRepository } from "./repositories/event-repository.js";
+export { getEntityRepository } from "./repositories/entity-repository.js";
+export { getConversationRepository } from "./repositories/conversation-repository.js";
 
 // Types
-export type { Entity, Relation, Tag, TaskDetail } from './schema/index.js';
+export type { Entity, Relation, Tag, TaskDetail } from "./schema/index.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { db, entities, getEventRepository, eq } from '@synap/database';
+import { db, entities, getEventRepository, eq } from "@synap/database";
 
 // Requête
 const userNotes = await db
   .select()
   .from(entities)
   .where(eq(entities.userId, userId))
-  .where(eq(entities.type, 'note'));
+  .where(eq(entities.type, "note"));
 
 // Insert
 await db.insert(entities).values({
   id: randomUUID(),
   userId,
-  type: 'note',
-  title: 'My Note',
+  type: "note",
+  title: "My Note",
 });
 
 // Event Repository
 const eventRepo = getEventRepository();
 await eventRepo.append(event);
-const events = await eventRepo.findByType('note.creation.requested', { userId });
+const events = await eventRepo.findByType("note.creation.requested", {
+  userId,
+});
 ```
 
 ---
@@ -160,34 +164,34 @@ const events = await eventRepo.findByType('note.creation.requested', { userId })
 **Exports principaux :**
 
 ```typescript
-export { storage } from './index.js';
-export type { 
+export { storage } from "./index.js";
+export type {
   StorageProvider,
   StorageMetadata,
   UploadOptions,
-} from './types.js';
+} from "./types.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { storage } from '@synap/storage';
+import { storage } from "@synap/storage";
 
 // Upload
 const metadata = await storage.upload(
-  'user-123/note-456.md',
-  '# My Note\n\nContent here',
-  { contentType: 'text/markdown' }
+  "user-123/note-456.md",
+  "# My Note\n\nContent here",
+  { contentType: "text/markdown" }
 );
 
 // Download
-const content = await storage.download('user-123/note-456.md');
+const content = await storage.download("user-123/note-456.md");
 
 // Delete
-await storage.delete('user-123/note-456.md');
+await storage.delete("user-123/note-456.md");
 
 // Build path
-const path = storage.buildPath(userId, 'note', entityId, 'md');
+const path = storage.buildPath(userId, "note", entityId, "md");
 ```
 
 ---
@@ -198,44 +202,52 @@ const path = storage.buildPath(userId, 'note', entityId, 'md');
 
 ```typescript
 // Inngest Client
-export { inngest } from './client.js';
+export { inngest } from "./client.js";
 
 // Event Publishing
-export { publishEvent } from './utils/inngest-client.js';
+export { publishEvent } from "./utils/inngest-client.js";
 
 // Handler Interface
-export type { IEventHandler, HandlerResult, InngestStep } from './handlers/interface.js';
+export type {
+  IEventHandler,
+  HandlerResult,
+  InngestStep,
+} from "./handlers/interface.js";
 
 // Handler Registry
-export { handlerRegistry } from './handlers/registry.js';
+export { handlerRegistry } from "./handlers/registry.js";
 
 // Realtime Broadcasting
-export { broadcastRealtimeMessage } from './utils/realtime-broadcast.js';
+export { broadcastRealtimeMessage } from "./utils/realtime-broadcast.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { 
-  inngest, 
-  publishEvent, 
+import {
+  inngest,
+  publishEvent,
   handlerRegistry,
   broadcastRealtimeMessage,
-} from '@synap/jobs';
-import type { IEventHandler } from '@synap/jobs';
+} from "@synap/jobs";
+import type { IEventHandler } from "@synap/jobs";
 
 // Publier un événement Inngest
-await publishEvent('api/event.logged', {
-  id: event.id,
-  type: event.type,
-  data: event.data,
-  userId: event.userId,
-}, userId);
+await publishEvent(
+  "api/event.logged",
+  {
+    id: event.id,
+    type: event.type,
+    data: event.data,
+    userId: event.userId,
+  },
+  userId
+);
 
 // Créer un handler
 export class MyHandler implements IEventHandler {
-  eventType = 'my.event.type';
-  
+  eventType = "my.event.type";
+
   async handle(event: SynapEvent, step: InngestStep): Promise<HandlerResult> {
     // ... logique
     return { success: true };
@@ -247,8 +259,8 @@ handlerRegistry.register(new MyHandler());
 
 // Broadcast real-time
 await broadcastRealtimeMessage(userId, {
-  type: 'my.event.completed',
-  data: { result: 'success' },
+  type: "my.event.completed",
+  data: { result: "success" },
   requestId: event.requestId,
 });
 ```
@@ -261,31 +273,31 @@ await broadcastRealtimeMessage(userId, {
 
 ```typescript
 // Router Registry
-export { 
+export {
   dynamicRouterRegistry,
   registerRouter,
   unregisterRouter,
-} from './router-registry.js';
+} from "./router-registry.js";
 
 // tRPC Utilities
-export { router, protectedProcedure } from './trpc.js';
+export { router, protectedProcedure } from "./trpc.js";
 
 // Context
-export { createContext } from './context.js';
+export { createContext } from "./context.js";
 
 // App Router
-export { appRouter } from './index.js';
-export type { AppRouter } from './index.js';
+export { appRouter } from "./index.js";
+export type { AppRouter } from "./index.js";
 
 // Event Publishing
-export { publishEvent } from './utils/inngest-client.js';
+export { publishEvent } from "./utils/inngest-client.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { router, protectedProcedure, registerRouter } from '@synap/api';
-import { z } from 'zod';
+import { router, protectedProcedure, registerRouter } from "@synap/api";
+import { z } from "zod";
 
 // Créer un router
 export const myRouter = router({
@@ -299,10 +311,10 @@ export const myRouter = router({
 });
 
 // Enregistrer le router
-registerRouter('my-capability', myRouter, {
-  version: '1.0.0',
-  source: 'my-plugin',
-  description: 'My capability router',
+registerRouter("my-capability", myRouter, {
+  version: "1.0.0",
+  source: "my-plugin",
+  description: "My capability router",
 });
 ```
 
@@ -314,59 +326,59 @@ registerRouter('my-capability', myRouter, {
 
 ```typescript
 // Agent
-export { runSynapAgent } from './agent/graph.js';
-export type { SynapAgentResult } from './agent/graph.js';
+export { runSynapAgent } from "./agent/graph.js";
+export type { SynapAgentResult } from "./agent/graph.js";
 
 // Tools
-export { 
+export {
   dynamicToolRegistry,
   registerTool,
   unregisterTool,
   getTool,
   getAllTools,
   executeTool,
-} from './tools/dynamic-registry.js';
+} from "./tools/dynamic-registry.js";
 
 // Tool Types
-export type { 
+export type {
   AgentToolDefinition,
   AgentToolContext,
   ToolExecutionResult,
-} from './tools/types.js';
+} from "./tools/types.js";
 ```
 
 **Utilisation :**
 
 ```typescript
-import { 
+import {
   runSynapAgent,
   registerTool,
   type AgentToolDefinition,
-} from '@synap/ai';
-import { z } from 'zod';
+} from "@synap/ai";
+import { z } from "zod";
 
 // Exécuter l'agent
 const result = await runSynapAgent({
-  userId: 'user-123',
-  threadId: 'thread-456',
-  message: 'Create a note about AI',
+  userId: "user-123",
+  threadId: "thread-456",
+  message: "Create a note about AI",
 });
 
 // Créer un tool
 const myTool: AgentToolDefinition<typeof mySchema, MyResult> = {
-  name: 'my_tool',
-  description: 'My custom tool',
+  name: "my_tool",
+  description: "My custom tool",
   schema: mySchema,
   execute: async (params, context) => {
     // ... logique
-    return { result: 'success' };
+    return { result: "success" };
   },
 };
 
 // Enregistrer le tool
 registerTool(myTool, {
-  version: '1.0.0',
-  source: 'my-plugin',
+  version: "1.0.0",
+  source: "my-plugin",
 });
 ```
 
@@ -378,62 +390,66 @@ registerTool(myTool, {
 
 ```typescript
 // 1. API Router (packages/api/src/routers/notes.ts)
-import { createSynapEvent, EventTypes } from '@synap/types';
-import { getEventRepository } from '@synap/database';
-import { publishEvent } from '@synap/api/utils/inngest-client.js';
+import { createSynapEvent, EventTypes } from "@synap/types";
+import { getEventRepository } from "@synap/database";
+import { publishEvent } from "@synap/api/utils/inngest-client.js";
 
 export const notesRouter = router({
   create: protectedProcedure
     .input(z.object({ content: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId as string;
-      
+
       // 2. Créer l'événement
       const event = createSynapEvent({
         type: EventTypes.NOTE_CREATION_REQUESTED,
         userId,
         data: input,
       });
-      
+
       // 3. Sauvegarder dans Event Store
       const eventRepo = getEventRepository();
       await eventRepo.append(event);
-      
+
       // 4. Publier vers Inngest
-      await publishEvent('api/event.logged', eventData, userId);
-      
-      return { success: true, status: 'pending' };
+      await publishEvent("api/event.logged", eventData, userId);
+
+      return { success: true, status: "pending" };
     }),
 });
 ```
 
 ```typescript
 // 5. Event Handler (packages/jobs/src/handlers/note-creation-handler.ts)
-import { IEventHandler } from '@synap/jobs';
-import { storage } from '@synap/storage';
-import { db, entities } from '@synap/database';
-import { broadcastRealtimeMessage } from '@synap/jobs';
+import { IEventHandler } from "@synap/jobs";
+import { storage } from "@synap/storage";
+import { db, entities } from "@synap/database";
+import { broadcastRealtimeMessage } from "@synap/jobs";
 
 export class NoteCreationHandler implements IEventHandler {
   eventType = EventTypes.NOTE_CREATION_REQUESTED;
-  
+
   async handle(event: SynapEvent, step: InngestStep): Promise<HandlerResult> {
     // 6. Upload vers storage
-    const metadata = await step.run('upload', async () => {
-      return await storage.upload(path, content, { contentType: 'text/markdown' });
+    const metadata = await step.run("upload", async () => {
+      return await storage.upload(path, content, {
+        contentType: "text/markdown",
+      });
     });
-    
+
     // 7. Créer l'entité dans la DB
-    await step.run('create-entity', async () => {
-      await db.insert(entities).values({ /* ... */ });
+    await step.run("create-entity", async () => {
+      await db.insert(entities).values({
+        /* ... */
+      });
     });
-    
+
     // 8. Broadcast real-time
     await broadcastRealtimeMessage(userId, {
-      type: 'note.creation.completed',
+      type: "note.creation.completed",
       data: { entityId },
     });
-    
+
     return { success: true };
   }
 }
@@ -446,28 +462,32 @@ export class NoteCreationHandler implements IEventHandler {
 ### 1. Créer un Handler
 
 ```typescript
-import { IEventHandler, type HandlerResult, type InngestStep } from '@synap/jobs';
-import { createSynapEvent, EventTypes, type SynapEvent } from '@synap/types';
-import { createLogger } from '@synap/core';
+import {
+  IEventHandler,
+  type HandlerResult,
+  type InngestStep,
+} from "@synap/jobs";
+import { createSynapEvent, EventTypes, type SynapEvent } from "@synap/types";
+import { createLogger } from "@synap/core";
 
-const logger = createLogger({ module: 'my-handler' });
+const logger = createLogger({ module: "my-handler" });
 
 export class MyHandler implements IEventHandler {
-  eventType = 'my.event.type';
-  
+  eventType = "my.event.type";
+
   async handle(event: SynapEvent, step: InngestStep): Promise<HandlerResult> {
     try {
       // Logique métier avec step.run() pour retry
-      await step.run('my-step', async () => {
+      await step.run("my-step", async () => {
         // ... logique
       });
-      
-      return { success: true, message: 'Done' };
+
+      return { success: true, message: "Done" };
     } catch (error) {
-      logger.error({ err: error }, 'Handler failed');
-      return { 
-        success: false, 
-        message: error instanceof Error ? error.message : 'Unknown error',
+      logger.error({ err: error }, "Handler failed");
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "Unknown error",
       };
     }
   }
@@ -477,30 +497,30 @@ export class MyHandler implements IEventHandler {
 ### 2. Créer un Router
 
 ```typescript
-import { router, protectedProcedure } from '@synap/api';
-import { z } from 'zod';
-import { createSynapEvent, EventTypes } from '@synap/types';
-import { getEventRepository } from '@synap/database';
-import { publishEvent } from '@synap/api/utils/inngest-client.js';
+import { router, protectedProcedure } from "@synap/api";
+import { z } from "zod";
+import { createSynapEvent, EventTypes } from "@synap/types";
+import { getEventRepository } from "@synap/database";
+import { publishEvent } from "@synap/api/utils/inngest-client.js";
 
 export const myRouter = router({
   create: protectedProcedure
     .input(z.object({ name: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId as string;
-      
+
       // CQRS: Publier événement, pas de logique métier
       const event = createSynapEvent({
         type: EventTypes.MY_CREATION_REQUESTED,
         userId,
         data: input,
       });
-      
+
       const eventRepo = getEventRepository();
       await eventRepo.append(event);
-      await publishEvent('api/event.logged', eventData, userId);
-      
-      return { success: true, status: 'pending' };
+      await publishEvent("api/event.logged", eventData, userId);
+
+      return { success: true, status: "pending" };
     }),
 });
 ```
@@ -508,38 +528,39 @@ export const myRouter = router({
 ### 3. Créer un Tool
 
 ```typescript
-import { z } from 'zod';
-import type { AgentToolDefinition, AgentToolContext } from '@synap/ai';
-import { createSynapEvent, EventTypes } from '@synap/types';
-import { getEventRepository } from '@synap/database';
-import { publishEvent } from '@synap/api/utils/inngest-client.js';
+import { z } from "zod";
+import type { AgentToolDefinition, AgentToolContext } from "@synap/ai";
+import { createSynapEvent, EventTypes } from "@synap/types";
+import { getEventRepository } from "@synap/database";
+import { publishEvent } from "@synap/api/utils/inngest-client.js";
 
 const myToolSchema = z.object({
-  name: z.string().describe('Name of the item'),
+  name: z.string().describe("Name of the item"),
 });
 
-export const myTool: AgentToolDefinition<typeof myToolSchema, { id: string }> = {
-  name: 'create_my_item',
-  description: 'Create a new item',
-  schema: myToolSchema,
-  execute: async (params, context) => {
-    const { userId } = context;
-    
-    // Publier événement
-    const event = createSynapEvent({
-      type: EventTypes.MY_CREATION_REQUESTED,
-      userId,
-      data: params,
-      source: 'automation',
-    });
-    
-    const eventRepo = getEventRepository();
-    await eventRepo.append(event);
-    await publishEvent('api/event.logged', eventData, userId);
-    
-    return { id: randomUUID() };
-  },
-};
+export const myTool: AgentToolDefinition<typeof myToolSchema, { id: string }> =
+  {
+    name: "create_my_item",
+    description: "Create a new item",
+    schema: myToolSchema,
+    execute: async (params, context) => {
+      const { userId } = context;
+
+      // Publier événement
+      const event = createSynapEvent({
+        type: EventTypes.MY_CREATION_REQUESTED,
+        userId,
+        data: params,
+        source: "automation",
+      });
+
+      const eventRepo = getEventRepository();
+      await eventRepo.append(event);
+      await publishEvent("api/event.logged", eventData, userId);
+
+      return { id: randomUUID() };
+    },
+  };
 ```
 
 ---
@@ -560,4 +581,3 @@ export const myTool: AgentToolDefinition<typeof myToolSchema, { id: string }> = 
 ---
 
 **Note :** Ce SDK est utilisé par The Architech pour générer automatiquement le code des capacités.
-
