@@ -3,13 +3,24 @@
  * 
  * Type definitions for API router responses and internal data structures.
  * These types improve type safety in routers that currently use 'any'.
+ * 
+ * Note: Hub Protocol types (HubResponse, AIStep, etc.) are imported from hub-protocol/index.ts
  */
 
-// Note: Entity and Tag types are defined in database schema
-// These are runtime types for router responses
+// Re-export Hub Protocol types for convenience
+export type {
+  HubResponse,
+  HubStreamEvent,
+  ExtractedEntity,
+  BranchDecision,
+  TokenUsage,
+  AIStep,
+  HubContext,
+  HubRequest,
+} from './hub-protocol/index.js';
 
 /**
- * Hub Protocol Types
+ * Database Row Types (for Hub Protocol transforms)
  */
 
 export interface HubEntityRow {
