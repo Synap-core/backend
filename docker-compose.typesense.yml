@@ -1,0 +1,28 @@
+# Typesense Search - Docker Compose Configuration
+
+version: "3.8"
+
+services:
+  typesense:
+    image: typesense/typesense:28.0
+    container_name: synap-typesense
+    ports:
+      - "8108:8108"
+    environment:
+      - TYPESENSE_DATA_DIR=/data
+      - TYPESENSE_API_KEY=${TYPESENSE_API_KEY}
+      - TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_API_KEY}
+    volumes:
+      - typesense-data:/data
+    command: "--enable-cors --enable-search-analytics"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  typesense-data:
+    driver: local
