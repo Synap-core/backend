@@ -55,9 +55,3 @@ export * from "./chat/index.js";
 
 // Universal Proposals
 export * from "./proposals/index.js";
-
-// Router types (for API layer type safety)
-export * from "./router-types.js";
-
-// Events
-export * from "./events/index.js";

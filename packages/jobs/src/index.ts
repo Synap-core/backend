@@ -50,6 +50,13 @@ export { globalValidator } from "./functions/global-validator.js";
 export * from "./executors/index.js";
 
 // ============================================================================
+// Search Functions (Typesense Integration)
+// ============================================================================
+export { searchIndexer } from "./search/search-indexer.js";
+export { bulkIndexer } from "./search/bulk-indexer.js";
+export { reindexWorker } from "./search/reindex-worker.js";
+
+// ============================================================================
 // INNGEST FUNCTION REGISTRY
 // ============================================================================
 

@@ -7,7 +7,7 @@
  */
 
 import { eq, and, desc } from "drizzle-orm";
-import { proposals, type Proposal } from "../schema/index.js";
+import { proposals } from "../schema/index.js";
 
 export interface CreateProposalInput {
   workspaceId: string;
@@ -44,20 +44,21 @@ export class ProposalRepository {
   }
 
   /**
-   * Update a proposal
+   * Update proposal status
+   * NO EVENT EMISSION
    */
-  async update(
-    id: string,
-    data: Partial<Omit<Proposal, "id" | "createdAt" | "updatedAt">>
-  ): Promise<Proposal> {
+  async update(id: string, data: UpdateProposalInput): Promise<any> {
     const [proposal] = await this.db
       .update(proposals)
-      .set({ ...data, updatedAt: new Date() })
+      .set({
+        ...data,
+        updatedAt: new Date(),
+      })
       .where(eq(proposals.id, id))
       .returning();
 
     if (!proposal) {
-      throw new Error(`Proposal ${id} not found`);
+      throw new Error("Proposal not found");
     }
 
     return proposal;
