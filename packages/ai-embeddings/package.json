@@ -1,6 +1,7 @@
 {
   "name": "@synap/ai-embeddings",
   "version": "1.0.0",
+  "deprecated": "⚠️ DEPRECATED: Use OpenAI SDK directly or @synap/api/utils. See DEPRECATED.md",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -23,7 +24,7 @@
   "dependencies": {
     "@langchain/core": "^1.0.3",
     "@langchain/openai": "^1.0.0",
-    "@synap-core/core": "file:../core",
+    "@synap-core/core": "workspace:*",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3"
   },

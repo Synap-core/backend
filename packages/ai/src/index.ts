@@ -1,9 +1,9 @@
 /**
  * @synap/ai - AI Integration Package (Data Pod)
- * 
+ *
  * Framework package for tool registry, conversational agents, and LangGraph architecture.
  * Enables plugin extensibility without proprietary Intelligence Hub code.
- * 
+ *
  * Provides:
  * - dynamicToolRegistry: Register and execute tools
  * - ConversationalAgent: Base class for conversational agents
@@ -13,25 +13,24 @@
  */
 
 // Tool Registry
-export { dynamicToolRegistry } from './tools/dynamic-registry.js';
-export type { AgentToolDefinition } from './tools/types.js';
+export { dynamicToolRegistry } from "./tools/dynamic-registry.js";
+export type { AgentToolDefinition } from "./tools/types.js";
 
 // Conversational Agent
-export { ConversationalAgent } from './agent/conversational-agent.js';
-export type { 
+export { ConversationalAgent } from "./agent/conversational-agent.js";
+export type {
   ConversationMessage,
   ConversationContext,
   ConversationResponse,
-} from './agent/conversational-agent.js';
+} from "./agent/conversational-agent.js";
 
 // LangGraph Helpers
 export {
-  CommonStateFields,
   StateGraph,
   START,
   END,
   Annotation,
-} from './agent/langgraph-helpers.js';
+} from "./agent/langgraph-helpers.js";
 
 // Agent Types (for advanced use)
 export type {
@@ -44,6 +43,6 @@ export type {
   PlannedAction,
   AgentActionPlan,
   AgentPlanSummary,
- ActionExecutionStatus,
+  ActionExecutionStatus,
   ActionExecutionLog,
-} from './agent/types.js';
+} from "./agent/types.js";

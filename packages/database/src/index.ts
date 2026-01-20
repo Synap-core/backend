@@ -4,30 +4,40 @@
  */
 
 // Export PostgreSQL clients
-export { sql, db, getDb } from './client-pg.js';
+export { sql, db, getDb } from "./client-pg.js";
 
 // Export RLS functions
-export { setCurrentUser, clearCurrentUser, closeDatabase } from './client-pg.js';
+export {
+  setCurrentUser,
+  clearCurrentUser,
+  closeDatabase,
+} from "./client-pg.js";
 
 // Export all schemas
-export * from './schema/index.js';
+export * from "./schema/index.js";
 
 // Export all repositories
-export * from './repositories/index.js';
-export type { EventHook } from './repositories/event-repository.js';
-export type { 
+export * from "./repositories/index.js";
+
+// Utilities
+export * from "./utils/preferences.js";
+
+// Database client
+export * from "./client.js";
+export type { EventHook } from "./repositories/event-repository.js";
+export type {
   VectorSearchParams,
   VectorSearchRow,
-  VectorRepositoryDatabase 
-} from './repositories/vector-repository.js';
-export { searchEntityVectorsRaw } from './repositories/vector-repository.js';
+  VectorRepositoryDatabase,
+} from "./repositories/vector-repository.js";
+export { searchEntityVectorsRaw } from "./repositories/vector-repository.js";
 
 // Export projectors (event handlers for materialized views)
-export * from './projectors/index.js';
+export * from "./projectors/index.js";
 
-// Export workspace permissions utilities
-export * from './utils/workspace-permissions.js';
-export { PermissionError } from './utils/workspace-permissions.js';
+// Export new multi-level permission system
+export * from "./utils/permissions.js";
+export * from "./utils/preferences.js";
 
 // Re-export commonly used drizzle-orm functions
 export {
@@ -36,7 +46,7 @@ export {
   and,
   or,
   not,
-  sql as sqlTemplate,        // Drizzle sql template tag
+  sql as sqlTemplate, // Drizzle sql template tag
   // Comparison operators
   isNull,
   isNotNull,
@@ -64,13 +74,13 @@ export {
   type SQL,
   type Column,
   getTableColumns,
-} from 'drizzle-orm';
+} from "drizzle-orm";
 
 // Also export sql from drizzle-orm as drizzleSql for clarity (for SQL template literals)
-export { sql as drizzleSql } from 'drizzle-orm';
+export { sql as drizzleSql } from "drizzle-orm";
 
 // Also export as sqlDrizzle for even more clarity
-export { sql as sqlDrizzle } from 'drizzle-orm';
+export { sql as sqlDrizzle } from "drizzle-orm";
 
 // Export postgres type for repositories that need raw SQL
-export { type Sql } from 'postgres';
+export { type Sql } from "postgres";

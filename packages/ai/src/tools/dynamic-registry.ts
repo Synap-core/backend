@@ -1,24 +1,27 @@
 /**
  * Dynamic Tool Registry
- * 
+ *
  * Registry for managing LangGraph tools dynamically.
  * Tools can be registered at runtime by plugins or other modules.
  */
 
-import { z } from 'zod';
-import { createLogger } from '@synap-core/core';
-import type { AgentToolDefinition } from './types.js';
+import { type z } from "zod";
+import { createLogger } from "@synap-core/core";
+import type { AgentToolDefinition } from "./types.js";
 
-const logger = createLogger({ module: 'dynamic-tool-registry' });
+const logger = createLogger({ module: "dynamic-tool-registry" });
 
 /**
  * Dynamic Tool Registry
- * 
+ *
  * Singleton registry for managing tools used by LangGraph agents.
  */
 class DynamicToolRegistry {
   private tools: Map<string, AgentToolDefinition<any, any>> = new Map();
-  private metadata: Map<string, { version?: string; source?: string; registeredAt: Date }> = new Map();
+  private metadata: Map<
+    string,
+    { version?: string; source?: string; registeredAt: Date }
+  > = new Map();
 
   /**
    * Register a tool
@@ -28,7 +31,10 @@ class DynamicToolRegistry {
     metadata?: { version?: string; source?: string }
   ): void {
     if (this.tools.has(tool.name)) {
-      logger.warn({ toolName: tool.name }, 'Tool already registered, overwriting');
+      logger.warn(
+        { toolName: tool.name },
+        "Tool already registered, overwriting"
+      );
     }
 
     this.tools.set(tool.name, tool);
@@ -36,7 +42,14 @@ class DynamicToolRegistry {
       ...metadata,
       registeredAt: new Date(),
     });
-    logger.info({ toolName: tool.name, version: metadata?.version, source: metadata?.source }, 'Tool registered');
+    logger.info(
+      {
+        toolName: tool.name,
+        version: metadata?.version,
+        source: metadata?.source,
+      },
+      "Tool registered"
+    );
   }
 
   /**
@@ -63,7 +76,9 @@ class DynamicToolRegistry {
   /**
    * Get tool metadata
    */
-  getToolMetadata(name: string): { version?: string; source?: string; registeredAt: Date } | undefined {
+  getToolMetadata(
+    name: string
+  ): { version?: string; source?: string; registeredAt: Date } | undefined {
     return this.metadata.get(name);
   }
 
@@ -73,7 +88,7 @@ class DynamicToolRegistry {
   getStats(): { totalTools: number; toolsBySource: Record<string, number> } {
     const toolsBySource: Record<string, number> = {};
     for (const metadata of this.metadata.values()) {
-      const source = metadata.source || 'unknown';
+      const source = metadata.source || "unknown";
       toolsBySource[source] = (toolsBySource[source] || 0) + 1;
     }
 
@@ -85,4 +100,3 @@ class DynamicToolRegistry {
 }
 
 export const dynamicToolRegistry = new DynamicToolRegistry();
-

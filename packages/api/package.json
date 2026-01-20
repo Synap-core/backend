@@ -1,13 +1,14 @@
 {
   "name": "@synap/api",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "description": "Synap API Router - tRPC types and router for Data Pod",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
+      "import": "./src/index.ts",
       "default": "./dist/index.js"
     }
   },
@@ -18,14 +19,14 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "tsup",
+    "build": "tsc --noEmit && tsup",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",
     "@hono/trpc-server": "^0.3.2",
     "@synap-core/core": "workspace:*",
-    "@synap-core/types": "workspace:^",
+    "@synap-core/types": "workspace:*",
     "@synap/ai": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/auth": "workspace:*",
@@ -34,23 +35,39 @@
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/storage": "workspace:*",
-    "@trpc/server": "^11.0.0",
+    "@trpc/server": "^11.8.1",
     "@types/ws": "^8.18.1",
     "drizzle-orm": "^0.45.1",
-    "drizzle-zod": "0.8.3",
-    "inngest": "^3.15.0",
+    "drizzle-zod": "0.7.0",
+    "inngest": "3.22.12",
     "jsonwebtoken": "^9.0.2",
     "ws": "^8.18.3",
-    "zod": "^3.25.0"
+    "zod": "3.23.8"
   },
   "devDependencies": {
+    "@trpc/react-query": "^11.8.1",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/react": "^19.2.8",
     "bcrypt": "^6.0.0",
+    "postgres": "^3.4.8",
+    "react": "^19.2.3",
     "tsup": "^8.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synap/synap.git",
+    "directory": "packages/api"
+  },
+  "keywords": [
+    "synap",
+    "api",
+    "trpc",
+    "router"
+  ],
+  "license": "MIT"
 }

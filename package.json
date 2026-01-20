@@ -1,36 +1,65 @@
 {
   "name": "synap-backend",
   "version": "1.0.0",
+  "type": "module",
   "private": true,
   "description": "Synap - Event-Sourced Knowledge Backend",
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
+    "clean": "rm -rf node_modules/.cache .turbo dist */dist */*/dist",
     "test": "turbo run test",
-    "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
-    "test:e2e:watch": "vitest watch --config tests/e2e/vitest.config.ts",
+    "test:coverage": "turbo run test -- --coverage",
+    "test:e2e": "pnpm --filter @synap/test-e2e test",
+    "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
     "test:system": "pnpm build && tsx scripts/test-system.ts",
-    "db:migrate": "tsx packages/database/src/migrate.ts",
-    "db:studio": "cd packages/database && pnpm drizzle-kit studio",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint . --cache",
+    "lint:fix": "eslint . --fix --cache",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "audit": "pnpm audit --prod --audit-level=moderate",
+    "ci": "run-s lint format typecheck test build audit",
+    "db:migrate": "tsx packages/database/scripts/migrate.ts",
+    "db:studio": "cd packages/database && pnpm db:studio",
+    "generate:table": "tsx scripts/generate-table.ts",
     "create:hub-client": "tsx scripts/create-hub-client.ts",
     "publish:packages": "./scripts/publish-packages.sh",
-    "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run"
+    "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "@commitlint/cli": "^18.6.1",
+    "@commitlint/config-conventional": "^18.6.3",
+    "@eslint/js": "^9.39.2",
     "@ory/hydra-client": "^2.2.1",
+    "@synap-core/core": "workspace:*",
     "@vitest/ui": "^4.0.7",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "globals": "^16.5.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^3.7.4",
     "tsx": "^4.7.0",
     "turbo": "^2.0.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.53.0",
     "vitest": "^4.0.7"
   },
   "pnpm": {
     "overrides": {
-      "drizzle-orm": "^0.45.1"
+      "drizzle-orm": "^0.45.1",
+      "drizzle-zod": "0.7.0",
+      "zod": "3.23.8",
+      "zod-to-json-schema": "3.23.2"
     }
   },
-  "packageManager": "pnpm@8.15.0",
+  "packageManager": "pnpm@10.28.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=20 <21",
+    "pnpm": ">=10"
   }
 }

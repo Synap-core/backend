@@ -1,27 +1,27 @@
 /**
  * Seed System Agents
- * 
+ *
  * Creates default system agents for the chat system.
  */
 
-import { sql } from '../src/client-pg.js';
-
+import { sql } from "../src/client-pg.js";
 
 const systemAgents = [
   {
-    id: 'orchestrator',
-    name: 'Main Chat Orchestrator',
-    description: 'Coordinates all user interactions and delegates to specialized agents',
-    createdBy: 'system',
+    id: "orchestrator",
+    name: "Main Chat Orchestrator",
+    description:
+      "Coordinates all user interactions and delegates to specialized agents",
+    createdBy: "system",
     userId: null,
-    llmProvider: 'claude',
-    llmModel: 'claude-3-7-sonnet-20250219',
+    llmProvider: "claude",
+    llmModel: "claude-3-7-sonnet-20250219",
     capabilities: [
-      'intent_analysis',
-      'entity_extraction',
-      'branching_decision',
-      'mem0_search',
-      'conversation_management',
+      "intent_analysis",
+      "entity_extraction",
+      "branching_decision",
+      "mem0_search",
+      "conversation_management",
     ],
     systemPrompt: `You are the main AI assistant for a solo founder or small team building a startup.
 
@@ -42,32 +42,52 @@ Guidelines:
 - Use memory (Mem0) to maintain long-term context about user preferences and project state`,
     toolsConfig: {
       tools: [
-        { name: 'search_memory', type: 'mem0', description: 'Search long-term memory' },
-        { name: 'vector_search', type: 'pgvector', description: 'Search documents and entities' },
-        { name: 'extract_entities', type: 'llm_function', description: 'Extract structured data' },
-        { name: 'create_branch', type: 'internal', description: 'Create conversation branch' },
-        { name: 'create_document', type: 'internal', description: 'Create new document' },
+        {
+          name: "search_memory",
+          type: "mem0",
+          description: "Search long-term memory",
+        },
+        {
+          name: "vector_search",
+          type: "pgvector",
+          description: "Search documents and entities",
+        },
+        {
+          name: "extract_entities",
+          type: "llm_function",
+          description: "Extract structured data",
+        },
+        {
+          name: "create_branch",
+          type: "internal",
+          description: "Create conversation branch",
+        },
+        {
+          name: "create_document",
+          type: "internal",
+          description: "Create new document",
+        },
       ],
     },
-    executionMode: 'react',
+    executionMode: "react",
     maxIterations: 5,
     timeoutSeconds: 30,
     weight: 1.0,
     active: true,
   },
   {
-    id: 'research-agent',
-    name: 'Research & Analysis Agent',
-    description: 'Performs in-depth research and synthesizes findings',
-    createdBy: 'system',
+    id: "research-agent",
+    name: "Research & Analysis Agent",
+    description: "Performs in-depth research and synthesizes findings",
+    createdBy: "system",
     userId: null,
-    llmProvider: 'claude',
-    llmModel: 'claude-3-7-sonnet-20250219',
+    llmProvider: "claude",
+    llmModel: "claude-3-7-sonnet-20250219",
     capabilities: [
-      'vector_search',
-      'synthesis',
-      'mem0_search',
-      'document_creation',
+      "vector_search",
+      "synthesis",
+      "mem0_search",
+      "document_creation",
     ],
     systemPrompt: `You are a research analyst specializing in startup and business research.
 
@@ -85,12 +105,24 @@ Guidelines:
 - Use markdown formatting for clarity`,
     toolsConfig: {
       tools: [
-        { name: 'vector_search', type: 'pgvector', description: 'Search internal documents' },
-        { name: 'search_memory', type: 'mem0', description: 'Search long-term memory' },
-        { name: 'create_document', type: 'internal', description: 'Create research document' },
+        {
+          name: "vector_search",
+          type: "pgvector",
+          description: "Search internal documents",
+        },
+        {
+          name: "search_memory",
+          type: "mem0",
+          description: "Search long-term memory",
+        },
+        {
+          name: "create_document",
+          type: "internal",
+          description: "Create research document",
+        },
       ],
     },
-    executionMode: 'react',
+    executionMode: "react",
     maxIterations: 10,
     timeoutSeconds: 60,
     weight: 1.0,
@@ -99,20 +131,20 @@ Guidelines:
 ];
 
 async function seedAgents() {
-  console.log('🌱 Seeding system agents...\n');
-  
+  console.log("🌱 Seeding system agents...\n");
+
   try {
     for (const agent of systemAgents) {
       // Check if agent already exists
       const existing = await sql`
         SELECT id FROM agents WHERE id = ${agent.id}
       `;
-      
+
       if (existing.length > 0) {
         console.log(`  ⏭️  Agent '${agent.id}' already exists`);
         continue;
       }
-      
+
       // Insert agent
       await sql`
         INSERT INTO agents (
@@ -137,13 +169,13 @@ async function seedAgents() {
           ${agent.active}
         )
       `;
-      
+
       console.log(`  ✅ Created agent '${agent.id}'`);
     }
-    
-    console.log('\n✅ System agents seeded successfully!\n');
+
+    console.log("\n✅ System agents seeded successfully!\n");
   } catch (error) {
-    console.error('❌ Error seeding agents:', error);
+    console.error("❌ Error seeding agents:", error);
     process.exit(1);
   } finally {
     await sql.end();
@@ -151,4 +183,3 @@ async function seedAgents() {
 }
 
 seedAgents();
-

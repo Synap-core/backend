@@ -1,6 +1,6 @@
 /**
  * User Preferences Types - SSOT from Database
- * 
+ *
  * Re-exports database schemas and types. Only UI-specific Zod schemas
  * remain in this package for validation.
  */
@@ -9,8 +9,8 @@
 // DATABASE RE-EXPORTS (Single Source of Truth)
 // ============================================================================
 
-export type { 
-  UserPreference, 
+export type {
+  UserPreference,
   NewUserPreference,
   CustomTheme,
   DefaultTemplates,
@@ -18,12 +18,12 @@ export type {
   EntityMetadataSchemas,
   UIPreferences,
   GraphPreferences,
-} from '@synap/database/schema';
+} from "@synap/database/schema";
 
 export {
   insertUserPreferenceSchema,
   selectUserPreferenceSchema,
-} from '@synap/database/schema';
+} from "@synap/database/schema";
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Frontend Validation)
@@ -35,8 +35,7 @@ export {
   UIPreferencesSchema,
   GraphPreferencesSchema,
   UpdatePreferencesInputSchema,
-} from './schemas.js';
+} from "./schemas.js";
 
 // Theme type (for backwards compatibility)
-export type Theme = 'light' | 'dark' | 'system';
-
+export type Theme = "light" | "dark" | "system";

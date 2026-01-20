@@ -1,212 +1,154 @@
 /**
- * Roles Router - Custom role management
- * 
- * Allows workspace admins/owners to create custom roles with:
- * - Fine-grained permissions (RBAC)
- * - Attribute filters (ABAC)
+ * Roles Router - Custom Role Management (RBAC + ABAC)
+ *
+ * Handles custom role CRUD with event-driven architecture.
+ * Supports workspace-scoped and global roles.
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, and, or, isNull } from '@synap/database';
-import { roles, workspaceMembers, insertRoleSchema } from '@synap/database/schema';
-import { TRPCError } from '@trpc/server';
-
-/**
- * Permissions structure - Used for runtime validation
- * 
- * NOTE: The permissions field is stored as JSONB in the database.
- * For type safety, insertRoleSchema.pick() is used for DB operations.
- */
-const PermissionsSchema = z.object({
-  entities: z.object({
-    create: z.boolean().default(false),
-    read: z.boolean().default(true),
-    update: z.boolean().default(false),
-    delete: z.boolean().default(false),
-  }).optional(),
-  views: z.object({
-    create: z.boolean().default(false),
-    read: z.boolean().default(true),
-    update: z.boolean().default(false),
-    delete: z.boolean().default(false),
-  }).optional(),
-  workspaces: z.object({
-    read: z.boolean().default(true),
-    update: z.boolean().default(false),
-    delete: z.boolean().default(false),
-  }).optional(),
-  relations: z.object({
-    create: z.boolean().default(false),
-    read: z.boolean().default(true),
-    update: z.boolean().default(false),
-    delete: z.boolean().default(false),
-  }).optional(),
-});
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import { db, eq, isNull, roles } from "@synap/database";
+import { emitRequestEvent } from "../utils/emit-event.js";
+import { randomUUID } from "crypto";
 
 export const rolesRouter = router({
   /**
-   * List roles available in workspace (including system roles)
+   * List roles (workspace-scoped or global)
    */
   list: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-    }))
-    .query(async ({ ctx, input }) => {
-      // Check user has access to workspace
-      const member = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-      
-      if (!member) {
-        throw new TRPCError({ code: 'FORBIDDEN' });
-      }
-      
-      // Get workspace-specific + system roles
-      return await db.query.roles.findMany({
-        where: or(
-          eq(roles.workspaceId, input.workspaceId),
-          isNull(roles.workspaceId) // System roles
-        ),
-        orderBy: (roles, { asc }) => [asc(roles.name)],
-      });
-    }),
-    
-  /**
-   * Create custom role (admin/owner only)
-   */
-  create: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-      name: z.string().min(1).max(50),
-      description: z.string().optional(),
-      permissions: PermissionsSchema,
-      filters: z.record(z.any()).optional(),
-      // Example filters: {"entity.type": ["task"], "entity.metadata.category": ["dev"]}
-    }))
-    .mutation(async ({ ctx, input }) => {
-      // Check user is admin/owner
-      const member = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-      
-      if (!member || !['owner', 'admin'].includes(member.role)) {
-        throw new TRPCError({ 
-          code: 'FORBIDDEN',
-          message: 'Only owners/admins can create roles'
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input }) => {
+      if (input?.workspaceId) {
+        // Workspace-scoped roles
+        return db.query.roles.findMany({
+          where: eq(roles.workspaceId, input.workspaceId),
+        });
+      } else {
+        // Global roles
+        return db.query.roles.findMany({
+          where: isNull(roles.workspaceId),
         });
       }
-      
-      // Create role
-      const [role] = await db.insert(roles).values({
-        name: input.name,
-        description: input.description,
-        workspaceId: input.workspaceId,
-        permissions: input.permissions as any,
-        filters: input.filters || {},
-        createdBy: ctx.userId,
-      }).returning();
-      
+    }),
+
+  /**
+   * Get a single role by ID
+   */
+  get: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const role = await db.query.roles.findFirst({
+        where: eq(roles.id, input.id),
+      });
+
+      if (!role) {
+        throw new Error("Role not found");
+      }
+
       return role;
     }),
-    
+
   /**
-   * Update custom role
+   * Create a new role
+   * Event-driven: emits roles.create.requested
    */
-  update: protectedProcedure
-    .input(z.object({
-      roleId: z.string().uuid(),
-      name: z.string().min(1).max(50).optional(),
-      description: z.string().optional(),
-      permissions: PermissionsSchema.optional(),
-      filters: z.record(z.any()).optional(),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      // Get role
-      const role = await db.query.roles.findFirst({
-        where: eq(roles.id, input.roleId),
-      });
-      
-      if (!role) {
-        throw new TRPCError({ code: 'NOT_FOUND' });
-      }
-      
-      // Cannot update system roles
-      if (!role.workspaceId) {
-        throw new TRPCError({ 
-          code: 'FORBIDDEN',
-          message: 'Cannot update system roles'
-        });
-      }
-      
-      // Check user is admin/owner of workspace
-      const member = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, role.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-      
-      if (!member || !['owner', 'admin'].includes(member.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN' });
-      }
-      
-      // Update
-      const [updated] = await db.update(roles)
-        .set({
+  create: protectedProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(100),
+        description: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
+        permissions: z.record(z.any()),
+        filters: z.record(z.any()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const id = randomUUID();
+
+      await emitRequestEvent({
+        type: "roles.create.requested",
+        subjectId: id,
+        subjectType: "role",
+        data: {
+          id,
           name: input.name,
           description: input.description,
-          permissions: input.permissions as any,
+          workspaceId: input.workspaceId,
+          permissions: input.permissions,
           filters: input.filters,
-          updatedAt: new Date(),
-        })
-        .where(eq(roles.id, input.roleId))
-        .returning();
-      
-      return updated;
+          createdBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        id,
+        status: "requested",
+        message: "Role creation requested",
+      };
     }),
-    
+
   /**
-   * Delete custom role
+   * Update a role
+   * Event-driven: emits roles.update.requested
+   */
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().min(1).max(100).optional(),
+        description: z.string().optional(),
+        permissions: z.record(z.any()).optional(),
+        filters: z.record(z.any()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      await emitRequestEvent({
+        type: "roles.update.requested",
+        subjectId: input.id,
+        subjectType: "role",
+        data: {
+          id: input.id,
+          name: input.name,
+          description: input.description,
+          permissions: input.permissions,
+          filters: input.filters,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message: "Role update requested",
+      };
+    }),
+
+  /**
+   * Delete a role
+   * Event-driven: emits roles.delete.requested
    */
   delete: protectedProcedure
-    .input(z.object({
-      roleId: z.string().uuid(),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      // Get role
-      const role = await db.query.roles.findFirst({
-        where: eq(roles.id, input.roleId),
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await emitRequestEvent({
+        type: "roles.delete.requested",
+        subjectId: input.id,
+        subjectType: "role",
+        data: {
+          id: input.id,
+        },
+        userId: ctx.userId,
       });
-      
-      if (!role || !role.workspaceId) {
-        throw new TRPCError({ 
-          code: 'FORBIDDEN',
-          message: 'Cannot delete system roles'
-        });
-      }
-      
-      // Check user is owner
-      const member = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, role.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-      
-      if (!member || member.role !== 'owner') {
-        throw new TRPCError({ code: 'FORBIDDEN' });
-      }
-      
-      // Delete
-      await db.delete(roles).where(eq(roles.id, input.roleId));
-      
-      return { success: true };
+
+      return {
+        status: "requested",
+        message: "Role deletion requested",
+      };
     }),
 });

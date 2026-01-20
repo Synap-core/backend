@@ -1,14 +1,22 @@
 /**
  * GlobalErrorBoundary Component
- * 
+ *
  * Catches React errors anywhere in the component tree and displays
  * a user-friendly error UI instead of crashing the entire app.
  */
 
-import { Component, type ReactNode } from 'react';
-import { Container, Stack, Title, Text, Button, Code, Card } from '@mantine/core';
-import { IconAlertTriangle, IconRefresh } from '@tabler/icons-react';
-import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
+import { Component, type ReactNode } from "react";
+import {
+  Container,
+  Stack,
+  Title,
+  Text,
+  Button,
+  Code,
+  Card,
+} from "@mantine/core";
+import { IconAlertTriangle, IconRefresh } from "@tabler/icons-react";
+import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 
 interface Props {
   children: ReactNode;
@@ -41,7 +49,7 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: { componentStack: string }) {
     // Log error to console in development
     if (import.meta.env.DEV) {
-      console.error('GlobalErrorBoundary caught an error:', error, errorInfo);
+      console.error("GlobalErrorBoundary caught an error:", error, errorInfo);
     }
 
     // In production, you could log to an error reporting service here
@@ -80,7 +88,7 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
             }}
           >
             <Stack gap={spacing[4]}>
-              <div style={{ textAlign: 'center' }}>
+              <div style={{ textAlign: "center" }}>
                 <IconAlertTriangle
                   size={64}
                   color={colors.semantic.error}
@@ -121,16 +129,16 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
                     block
                     style={{
                       fontSize: typography.fontSize.xs,
-                      maxHeight: '200px',
-                      overflow: 'auto',
+                      maxHeight: "200px",
+                      overflow: "auto",
                     }}
                   >
                     {this.state.error.toString()}
                     {this.state.errorInfo && (
                       <>
-                        {'\n\n'}
+                        {"\n\n"}
                         Component Stack:
-                        {'\n'}
+                        {"\n"}
                         {this.state.errorInfo.componentStack}
                       </>
                     )}
@@ -138,7 +146,13 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: spacing[3], justifyContent: 'center' }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: spacing[3],
+                  justifyContent: "center",
+                }}
+              >
                 <Button
                   leftSection={<IconRefresh size={18} />}
                   onClick={this.handleReset}
@@ -162,4 +176,3 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
     return this.props.children;
   }
 }
-

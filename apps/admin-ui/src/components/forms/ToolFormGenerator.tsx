@@ -7,10 +7,10 @@ import {
   Group,
   Text,
   Badge,
-} from '@mantine/core';
+} from "@mantine/core";
 
-import { colors, spacing, typography } from '../../theme/tokens';
-import { trpc } from '../../lib/trpc';
+import { colors, spacing, typography } from "../../theme/tokens";
+import { trpc } from "../../lib/trpc";
 
 interface ToolFormGeneratorProps {
   toolName: string;
@@ -38,7 +38,11 @@ export default function ToolFormGenerator({
   };
 
   if (isLoading) {
-    return <Text size="sm" c={colors.text.tertiary}>Loading tool schema...</Text>;
+    return (
+      <Text size="sm" c={colors.text.tertiary}>
+        Loading tool schema...
+      </Text>
+    );
   }
 
   if (!toolSchema) {
@@ -55,21 +59,21 @@ export default function ToolFormGenerator({
   const fields = Object.keys(schemaProperties).map((key) => {
     const prop = schemaProperties[key];
     const zodType = prop as any;
-    
+
     // Try to determine type from Zod schema
-    let fieldType = 'string';
+    let fieldType = "string";
     if (zodType?._def) {
       const innerType = zodType._def.innerType || zodType._def;
-      if (innerType?.typeName === 'ZodString') {
-        fieldType = 'string';
-      } else if (innerType?.typeName === 'ZodNumber') {
-        fieldType = 'number';
-      } else if (innerType?.typeName === 'ZodBoolean') {
-        fieldType = 'boolean';
-      } else if (innerType?.typeName === 'ZodArray') {
-        fieldType = 'array';
-      } else if (innerType?.typeName === 'ZodEnum') {
-        fieldType = 'enum';
+      if (innerType?.typeName === "ZodString") {
+        fieldType = "string";
+      } else if (innerType?.typeName === "ZodNumber") {
+        fieldType = "number";
+      } else if (innerType?.typeName === "ZodBoolean") {
+        fieldType = "boolean";
+      } else if (innerType?.typeName === "ZodArray") {
+        fieldType = "array";
+      } else if (innerType?.typeName === "ZodEnum") {
+        fieldType = "enum";
       }
     }
 
@@ -96,25 +100,39 @@ export default function ToolFormGenerator({
         const fieldError = errors?.[field.name];
 
         switch (field.type) {
-          case 'string':
-            const isLongString = field.name.toLowerCase().includes('query') ||
-                                field.name.toLowerCase().includes('content') ||
-                                field.name.toLowerCase().includes('description');
-            
+          case "string": {
+            const isLongString =
+              field.name.toLowerCase().includes("query") ||
+              field.name.toLowerCase().includes("content") ||
+              field.name.toLowerCase().includes("description");
+
             return isLongString ? (
               <Textarea
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
-                value={(fieldValue as string) || ''}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.value)}
+                value={(fieldValue as string) || ""}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.value)
+                }
                 error={fieldError}
                 required={field.required}
                 minRows={4}
@@ -124,30 +142,55 @@ export default function ToolFormGenerator({
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
-                value={(fieldValue as string) || ''}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.value)}
+                value={(fieldValue as string) || ""}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.value)
+                }
                 error={fieldError}
                 required={field.required}
               />
             );
+          }
 
-          case 'number':
+          case "number":
             return (
               <NumberInput
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
@@ -158,21 +201,34 @@ export default function ToolFormGenerator({
               />
             );
 
-          case 'boolean':
+          case "boolean":
             return (
               <Switch
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 description={field.description}
                 checked={(fieldValue as boolean) || false}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.checked)}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.checked)
+                }
                 error={fieldError}
               />
             );
@@ -183,15 +239,28 @@ export default function ToolFormGenerator({
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
-                value={String(fieldValue || '')}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.value)}
+                value={String(fieldValue || "")}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.value)
+                }
                 error={fieldError}
                 required={field.required}
               />
@@ -201,4 +270,3 @@ export default function ToolFormGenerator({
     </Stack>
   );
 }
-

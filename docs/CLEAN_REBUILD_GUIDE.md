@@ -1,6 +1,7 @@
 # Clean System Rebuild Guide
 
 This guide provides instructions for completely rebuilding the Synap backend system from scratch, useful for:
+
 - Verifying everything works with clean state
 - Resolving Docker corruption issues
 - Testing new environment variable setup
@@ -11,6 +12,7 @@ This guide provides instructions for completely rebuilding the Synap backend sys
 ## Prerequisites
 
 1. **Backup Important Data** (if any)
+
    ```bash
    # Backup PostgreSQL data (optional)
    docker compose exec postgres pg_dump -U postgres synap > backup.sql
@@ -135,6 +137,7 @@ docker compose exec postgres psql -U postgres synap -c "\\dx"
 ```
 
 **Expected extensions:**
+
 - `pgvector` - Vector similarity search
 - `timescaledb` - Time-series data
 - `uuid-ossp` - UUID generation
@@ -151,6 +154,7 @@ pnpm run build
 ```
 
 **Verify each package:**
+
 ```bash
 packages/
 ├── database ✅ dist/ created
@@ -177,6 +181,7 @@ pnpm test:coverage
 ```
 
 **Expected Results:**
+
 - Database tests: 9/9 passing
 - Domain tests: All passing
 - Client tests: All passing
@@ -209,23 +214,27 @@ open http://localhost:5180
 ## Step 9: Verification Checklist
 
 ### Database
+
 - [ ] PostgreSQL container healthy
 - [ ] Extensions installed (pgvector, timescaledb)
 - [ ] Migrations applied successfully
 - [ ] Can query tables
 
 ### API
+
 - [ ] Server starts on port 3000
 - [ ] Health endpoint returns 200
 - [ ] tRPC routes accessible
 - [ ] Authentication working
 
 ### Tests
+
 - [ ] Database tests passing (9/9)
 - [ ] All package tests passing
 - [ ] No environment variable errors
 
 ### Admin UI
+
 - [ ] Starts on port 5180
 - [ ] Can access dashboard
 - [ ] Architecture visualizer works
@@ -361,6 +370,7 @@ echo "✅ All systems operational!"
 ```
 
 Save as `scripts/validate-system.sh` and run:
+
 ```bash
 chmod +x scripts/validate-system.sh
 ./scripts/validate-system.sh
@@ -373,6 +383,7 @@ chmod +x scripts/validate-system.sh
 **Total Time:** ~10-15 minutes
 
 **Steps:**
+
 1. ✅ Clean Docker (2 min)
 2. ✅ Clean node_modules (3 min)
 3. ✅ Install dependencies (3 min)

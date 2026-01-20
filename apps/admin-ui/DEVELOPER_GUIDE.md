@@ -87,6 +87,7 @@ export const EventTypeSchemas = {
 ```
 
 **How it works:**
+
 1. Frontend calls `system.getEventTypeSchema`
 2. Backend extracts Zod schema structure
 3. Frontend maps Zod types to Mantine components
@@ -103,7 +104,7 @@ const { data, isLoading } = trpc.system.getCapabilities.useQuery();
 // Mutation
 const mutation = trpc.system.publishEvent.useMutation({
   onSuccess: (data) => {
-    showSuccessNotification({ message: 'Published!' });
+    showSuccessNotification({ message: "Published!" });
   },
 });
 ```
@@ -185,10 +186,10 @@ import MyNewPage from './pages/(v2)/MyNewPage';
 const navItems = [
   // ... existing items
   {
-    path: '/my-page',
-    label: 'My Page',
+    path: "/my-page",
+    label: "My Page",
     icon: IconMyIcon,
-    description: 'My page description',
+    description: "My page description",
   },
 ];
 ```
@@ -200,10 +201,10 @@ const navItems = [
 ```typescript
 // packages/types/src/synap-event.ts
 export const EventTypeSchemas = {
-  'my.new.event': z.object({
+  "my.new.event": z.object({
     field1: z.string().min(1),
     field2: z.number().optional(),
-    field3: z.enum(['option1', 'option2']).optional(),
+    field3: z.enum(["option1", "option2"]).optional(),
   }),
 } as const;
 ```
@@ -211,6 +212,7 @@ export const EventTypeSchemas = {
 2. **Form Appears Automatically**
 
 The form generator will automatically:
+
 - Detect the schema
 - Generate appropriate fields
 - Add validation
@@ -239,27 +241,27 @@ import {
   showErrorNotification,
   showWarningNotification,
   showInfoNotification,
-} from '../lib/notifications';
+} from "../lib/notifications";
 
 // Success
 showSuccessNotification({
-  message: 'Operation completed',
-  title: 'Success', // optional
+  message: "Operation completed",
+  title: "Success", // optional
 });
 
 // Error
 showErrorNotification({
-  message: 'Something went wrong',
+  message: "Something went wrong",
 });
 
 // Warning
 showWarningNotification({
-  message: 'Please review',
+  message: "Please review",
 });
 
 // Info
 showInfoNotification({
-  message: 'Processing...',
+  message: "Processing...",
 });
 ```
 
@@ -283,6 +285,7 @@ showInfoNotification({
 ### Type Safety
 
 ✅ **DO:**
+
 ```typescript
 interface MyProps {
   eventId: string;
@@ -295,6 +298,7 @@ function MyComponent({ eventId, onSelect }: MyProps) {
 ```
 
 ❌ **DON'T:**
+
 ```typescript
 function MyComponent(props: any) {
   // ...
@@ -304,10 +308,11 @@ function MyComponent(props: any) {
 ### Error Handling
 
 ✅ **DO:**
+
 ```typescript
 const mutation = trpc.system.publishEvent.useMutation({
   onSuccess: (data) => {
-    showSuccessNotification({ message: 'Success!' });
+    showSuccessNotification({ message: "Success!" });
   },
   onError: (error) => {
     showErrorNotification({ message: error.message });
@@ -318,6 +323,7 @@ const mutation = trpc.system.publishEvent.useMutation({
 ### Loading States
 
 ✅ **DO:**
+
 ```typescript
 const { data, isLoading } = trpc.system.getCapabilities.useQuery();
 
@@ -331,6 +337,7 @@ const { data, isLoading } = trpc.system.getCapabilities.useQuery();
 ### Accessibility
 
 ✅ **DO:**
+
 ```typescript
 <ActionIcon
   aria-label="Refresh data"
@@ -343,6 +350,7 @@ const { data, isLoading } = trpc.system.getCapabilities.useQuery();
 ### Performance
 
 ✅ **DO:**
+
 ```typescript
 // Memoize heavy components
 export default memo(HeavyComponent);
@@ -357,6 +365,7 @@ const virtualizer = useVirtualizer({ ... });
 ### Responsive Design
 
 ✅ **DO:**
+
 ```typescript
 const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`);
 
@@ -443,17 +452,17 @@ const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`);
 
 ```typescript
 // External libraries
-import { useState } from 'react';
-import { Button } from '@mantine/core';
+import { useState } from "react";
+import { Button } from "@mantine/core";
 
 // Internal components
-import EventCard from '../components/events/EventCard';
+import EventCard from "../components/events/EventCard";
 
 // Utilities
-import { showSuccessNotification } from '../lib/notifications';
+import { showSuccessNotification } from "../lib/notifications";
 
 // Types
-import type { Event } from '../types';
+import type { Event } from "../types";
 ```
 
 ## Debugging
@@ -461,16 +470,19 @@ import type { Event } from '../types';
 ### Common Issues
 
 **Forms not appearing:**
+
 - Check schema exists in `EventTypeSchemas`
 - Verify API endpoint returns schema
 - Check browser console for errors
 
 **Events not loading:**
+
 - Verify API URL in `.env`
 - Check backend is running
 - Inspect network tab
 
 **Type errors:**
+
 - Run `pnpm type-check`
 - Ensure all imports are correct
 - Check tRPC types are up to date
@@ -496,9 +508,11 @@ pnpm build
 ### Environment Variables
 
 Required:
+
 - `VITE_API_URL`: Backend API URL
 
 Optional:
+
 - Custom configuration
 
 ### Build Optimization
@@ -511,4 +525,3 @@ Optional:
 ---
 
 **Questions?** Check the [README](./README.md) or [User Guide](./USER_GUIDE.md).
-

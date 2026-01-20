@@ -6,14 +6,18 @@
  * - Request size limits (prevent memory exhaustion)
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
-import type { MiddlewareHandler } from 'hono';
+import type { MiddlewareHandler } from "hono";
 /**
  * Rate Limiting Middleware (General)
  *
  * Limits: 100 requests per 15 minutes per IP
  * Applied to all routes by default
  */
-export declare const rateLimitMiddleware: MiddlewareHandler<import("hono").Env, string, import("hono").Input>;
+export declare const rateLimitMiddleware: MiddlewareHandler<
+  import("hono").Env,
+  string,
+  import("hono").Input
+>;
 /**
  * AI Endpoint Rate Limiting Middleware
  *
@@ -27,7 +31,11 @@ export declare const rateLimitMiddleware: MiddlewareHandler<import("hono").Env, 
  * - AI API calls are slow (can cause DoS if too many concurrent)
  * - Prevents abuse and cost explosion
  */
-export declare const aiRateLimitMiddleware: MiddlewareHandler<import("hono").Env, string, import("hono").Input>;
+export declare const aiRateLimitMiddleware: MiddlewareHandler<
+  import("hono").Env,
+  string,
+  import("hono").Input
+>;
 /**
  * Request Size Limit Middleware
  *

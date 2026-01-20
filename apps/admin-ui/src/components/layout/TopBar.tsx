@@ -1,6 +1,6 @@
-import { Group, Text, ActionIcon, Badge } from '@mantine/core';
-import { IconSearch, IconUser, IconMenu2 } from '@tabler/icons-react';
-import { colors, layout, typography, spacing } from '../../theme/tokens';
+import { Group, Text, ActionIcon, Badge } from "@mantine/core";
+import { IconSearch, IconUser, IconMenu2 } from "@tabler/icons-react";
+import { colors, layout, typography, spacing } from "../../theme/tokens";
 
 interface TopBarProps {
   onCommandPaletteOpen: () => void;
@@ -8,22 +8,26 @@ interface TopBarProps {
   showMenuButton?: boolean;
 }
 
-export default function TopBar({ onCommandPaletteOpen, onMenuClick, showMenuButton = false }: TopBarProps) {
+export default function TopBar({
+  onCommandPaletteOpen,
+  onMenuClick,
+  showMenuButton = false,
+}: TopBarProps) {
   return (
     <div
       style={{
         height: layout.topBarHeight,
         borderBottom: `1px solid ${colors.border.default}`,
         backgroundColor: colors.background.primary,
-        display: 'flex',
-        alignItems: 'center',
+        display: "flex",
+        alignItems: "center",
         padding: `0 ${spacing[6]}`,
-        position: 'sticky',
+        position: "sticky",
         top: 0,
         zIndex: 100,
       }}
     >
-      <Group justify="space-between" style={{ width: '100%' }}>
+      <Group justify="space-between" style={{ width: "100%" }}>
         {/* Logo & Title */}
         <Group gap={spacing[3]}>
           {showMenuButton && onMenuClick && (
@@ -34,7 +38,7 @@ export default function TopBar({ onCommandPaletteOpen, onMenuClick, showMenuButt
               aria-label="Open navigation menu"
               tabIndex={0}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   onMenuClick();
                 }
@@ -72,7 +76,7 @@ export default function TopBar({ onCommandPaletteOpen, onMenuClick, showMenuButt
             aria-label="Open command palette (⌘K)"
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onCommandPaletteOpen();
               }

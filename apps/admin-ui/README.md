@@ -16,24 +16,28 @@ The Control Tower provides a comprehensive view of your Synap system, allowing y
 ## ✨ Key Features
 
 ### 🚀 Smart Forms
+
 - **Dynamic Form Generation**: Automatically generates forms from event type schemas
 - **No JSON Required**: Fill forms instead of writing JSON manually
 - **Real-time Validation**: Get instant feedback on your inputs
 - **Template System**: Quick-start templates for common events
 
 ### 🔍 Powerful Search
+
 - **Unified Search Interface**: Professional search modal with history
 - **Event Tracing**: Follow event chains and correlations
 - **User Investigation**: Search all events for a specific user
 - **Search History**: Access your recent searches instantly
 
 ### ⚡ Contextual Actions
+
 - **Right-Click Menus**: Quick actions on every event
 - **Smart Navigation**: Seamlessly move between related views
 - **Publish Similar**: Clone and modify events with one click
 - **Copy & Share**: Copy event IDs and URLs easily
 
 ### 🎨 Professional UX
+
 - **Responsive Design**: Works on desktop, tablet, and mobile
 - **Command Palette**: Quick access to all features (⌘K / Ctrl+K)
 - **Toast Notifications**: Instant feedback for all actions
@@ -93,6 +97,7 @@ The **Dashboard** is your home base. It provides:
 - **Live Event Stream**: See events as they happen
 
 **Quick Actions:**
+
 - **Investigate User**: Search all events for a specific user
 - **View Event Trace**: Follow an event's correlation chain
 - **Test AI Tool**: Open the AI Tools Playground
@@ -108,6 +113,7 @@ The **Investigate** page helps you debug and trace events:
 4. **Trace Correlations**: See related events in the timeline
 
 **Contextual Actions** (right-click or "..." menu):
+
 - **Inspect in Detail**: Navigate to full event details
 - **View Full Trace**: See all correlated events
 - **Publish Similar Event**: Clone this event for testing
@@ -132,6 +138,7 @@ The **Testing** page has two main tools:
 4. **Publish**: Send the event to the system
 
 **Templates Available:**
+
 - Note Creation
 - Task Creation
 - Project Creation
@@ -149,6 +156,7 @@ The **Explore** page shows your system architecture:
 Press **⌘K** (Mac) or **Ctrl+K** (Windows/Linux) to open the Command Palette.
 
 **Available Commands:**
+
 - Navigate to any page
 - Quick actions (refresh, copy URL, etc.)
 - Search for features by name
@@ -221,7 +229,7 @@ apps/admin-ui/
 
 ```typescript
 export const EventTypeSchemas = {
-  'my.new.event': z.object({
+  "my.new.event": z.object({
     field1: z.string(),
     field2: z.number().optional(),
   }),
@@ -257,18 +265,21 @@ export default function MyNewPage() {
 ### Adding Notifications
 
 ```typescript
-import { showSuccessNotification, showErrorNotification } from '../lib/notifications';
+import {
+  showSuccessNotification,
+  showErrorNotification,
+} from "../lib/notifications";
 
 // Success
 showSuccessNotification({
-  message: 'Operation completed successfully',
-  title: 'Success',
+  message: "Operation completed successfully",
+  title: "Success",
 });
 
 // Error
 showErrorNotification({
-  message: 'Something went wrong',
-  title: 'Error',
+  message: "Something went wrong",
+  title: "Error",
 });
 ```
 
@@ -288,6 +299,7 @@ The application is fully type-safe:
 The dynamic form system automatically generates forms from Zod schemas:
 
 **Supported Field Types:**
+
 - `string` → TextInput or Textarea
 - `number` → NumberInput
 - `boolean` → Switch
@@ -295,6 +307,7 @@ The dynamic form system automatically generates forms from Zod schemas:
 - `array` → Dynamic array with add/remove
 
 **Features:**
+
 - Required field indicators
 - Real-time validation
 - Default values
@@ -325,6 +338,7 @@ Every event has a context menu with:
 - **Mobile**: Drawer navigation
 
 Breakpoints:
+
 - Mobile: < 768px
 - Tablet: 768px - 1024px
 - Desktop: > 1024px
@@ -334,21 +348,25 @@ Breakpoints:
 ### Build Errors
 
 **Error: "Expected '>' but found 'size'"**
+
 - Make sure files with JSX have `.tsx` extension
 - Check that React is imported in files using JSX
 
 **Error: "Cannot find module '@synap/types'"**
+
 - Run `pnpm install` from the monorepo root
 - Ensure all packages are built
 
 ### Runtime Errors
 
 **Events not loading:**
+
 - Check API URL in `.env`
 - Verify backend is running
 - Check browser console for errors
 
 **Forms not appearing:**
+
 - Ensure event type has a schema in `EventTypeSchemas`
 - Check browser console for schema fetch errors
 

@@ -1,4 +1,4 @@
-import { sql } from '../client-pg.js';
+import { sql } from "../client-pg.js";
 
 export interface VectorSearchParams {
   userId: string;
@@ -27,7 +27,7 @@ export async function searchEntityVectorsRaw(
   // Use JSON.stringify with ::vector cast (proven pattern from repository tests)
   // This is the same approach used in all 10 passing repository tests
   // See: packages/database/src/__tests__/vector-repository.test.ts
-  
+
   const results = await sql<VectorSearchRow[]>`
     SELECT
       entity_id as "entityId",

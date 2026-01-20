@@ -1,0 +1,91 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "20"
+  PNPM_VERSION: "10.28.0"
+
+jobs:
+  deploy:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Build Docker images
+        run: |
+          docker build -t synap-backend:${{ github.sha }} -f Dockerfile .
+          docker tag synap-backend:${{ github.sha }} synap-backend:staging
+
+      - name: Push to registry
+        run: |
+          echo ${{ secrets.REGISTRY_PASSWORD }} | docker login -u ${{ secrets.REGISTRY_USERNAME }} --password-stdin
+          docker push synap-backend:${{ github.sha }}
+          docker push synap-backend:staging
+
+      - name: Deploy to staging
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/synap
+            docker compose pull
+            docker compose up -d --no-deps api
+            docker compose exec -T api pnpm db:migrate
+
+      - name: Wait for health check
+        run: |
+          sleep 10
+          curl -f https://staging.synap.app/health || exit 1
+
+      - name: Run smoke tests
+        run: |
+          npx newman run tests/postman/smoke-tests.json \
+            --env-var baseUrl=https://staging.synap.app \
+            --bail
+
+      - name: Rollback on failure
+        if: failure()
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/synap
+            docker compose down api
+            docker tag synap-backend:previous synap-backend:staging
+            docker compose up -d api
+
+      - name: Notify deployment
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: "Staging deployment ${{ job.status }}"
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

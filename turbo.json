@@ -1,50 +1,29 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": [
-    "**/.env",
-    "tsconfig.json"
-  ],
-  "globalEnv": [
-    "NODE_ENV",
-    "DATABASE_URL"
-  ],
+  "globalDependencies": ["**/.env", "tsconfig.json"],
+  "globalEnv": ["NODE_ENV", "DATABASE_URL"],
   "ui": "tui",
   "tasks": {
     "build": {
-      "dependsOn": [
-        "^build"
-      ],
+      "dependsOn": ["^build"],
       "inputs": [
         "src/**/*.ts",
         "src/**/*.tsx",
         "tsconfig.json",
         "package.json"
       ],
-      "outputs": [
-        "dist/**",
-        ".tsbuildinfo"
-      ],
+      "outputs": ["dist/**", ".tsbuildinfo"],
       "outputLogs": "errors-only"
     },
     "dev": {
-      "dependsOn": [
-        "^build"
-      ],
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     },
     "test": {
-      "dependsOn": [
-        "build"
-      ],
-      "inputs": [
-        "src/**/*.ts",
-        "**/*.test.ts",
-        "vitest.config.ts"
-      ],
-      "outputs": [
-        "coverage/**"
-      ]
+      "dependsOn": ["build"],
+      "inputs": ["src/**/*.ts", "**/*.test.ts", "vitest.config.ts"],
+      "outputs": ["coverage/**"]
     }
   }
 }

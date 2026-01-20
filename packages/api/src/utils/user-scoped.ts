@@ -1,29 +1,29 @@
 /**
  * User-Scoped Query Helpers
- * 
+ *
  * These utilities ensure all database operations are scoped to the authenticated user.
  * This provides application-level multi-tenancy isolation.
  */
 
-import { eq, and } from '@synap/database';
-import type { SQL } from '@synap/database';
-import { UnauthorizedError, ValidationError } from '@synap-core/core';
+import { eq, and } from "@synap/database";
+import type { SQL } from "@synap/database";
+import { UnauthorizedError, ValidationError } from "@synap-core/types";
 
 /**
  * Validates and returns userId, throwing if not present
- * 
+ *
  * @throws {UnauthorizedError} If userId is null or undefined
  */
 export function requireUserId(userId?: string | null): string {
   if (!userId) {
-    throw new UnauthorizedError('User ID is required for this operation');
+    throw new UnauthorizedError("User ID is required for this operation");
   }
   return userId;
 }
 
 /**
  * Helper to create user-scoped WHERE clause
- * 
+ *
  * Usage:
  * ```typescript
  * const notes = await db.select()
@@ -37,7 +37,7 @@ export function userScope(userIdColumn: any, userId: string): SQL {
 
 /**
  * Helper to combine user scope with other conditions
- * 
+ *
  * Usage:
  * ```typescript
  * const tasks = await db.select()
@@ -68,13 +68,15 @@ export interface EventDataWithUser {
 
 /**
  * Validates event data has required userId
- * 
+ *
  * @throws {ValidationError} If userId is missing from event data
  */
 export function requireEventUserId(data: any): EventDataWithUser {
   if (!data.userId) {
-    throw new ValidationError('Event data must include userId for multi-user isolation', { data });
+    throw new ValidationError(
+      "Event data must include userId for multi-user isolation",
+      { data }
+    );
   }
   return data as EventDataWithUser;
 }
-

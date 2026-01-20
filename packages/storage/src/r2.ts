@@ -1,6 +1,6 @@
 /**
  * Cloudflare R2 Storage Client
- * 
+ *
  * R2 is S3-compatible object storage with zero egress fees.
  * We use AWS SDK with a custom endpoint.
  */
@@ -11,9 +11,9 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createHash } from 'crypto';
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createHash } from "crypto";
 
 // ============================================================================
 // TYPES
@@ -51,14 +51,14 @@ export class R2Storage {
 
   constructor(config: R2Config) {
     this.client = new S3Client({
-      region: 'auto', // R2 uses 'auto' region
+      region: "auto", // R2 uses 'auto' region
       endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
       credentials: {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
       },
     });
-    
+
     this.bucketName = config.bucketName;
     this.publicUrl = config.publicUrl || `https://${config.bucketName}.r2.dev`;
   }
@@ -69,7 +69,7 @@ export class R2Storage {
 
   /**
    * Upload file to R2
-   * 
+   *
    * @example
    * ```typescript
    * const result = await r2.upload(
@@ -85,16 +85,19 @@ export class R2Storage {
     content: string | Buffer,
     options?: UploadOptions
   ): Promise<FileMetadata> {
-    const body = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
+    const body =
+      typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     const checksum = this.calculateChecksum(body);
-    
-    await this.client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-      Body: body,
-      ContentType: options?.contentType || 'application/octet-stream',
-      Metadata: options?.metadata,
-    }));
+
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: body,
+        ContentType: options?.contentType || "application/octet-stream",
+        Metadata: options?.metadata,
+      })
+    );
 
     return {
       url: `${this.publicUrl}/${key}`,
@@ -111,7 +114,7 @@ export class R2Storage {
 
   /**
    * Download file as string
-   * 
+   *
    * @example
    * ```typescript
    * const content = await r2.download('users/123/notes/456.md');
@@ -119,10 +122,12 @@ export class R2Storage {
    * ```
    */
   async download(key: string): Promise<string> {
-    const response = await this.client.send(new GetObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-    }));
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      })
+    );
 
     if (!response.Body) {
       throw new Error(`File not found: ${key}`);
@@ -135,10 +140,12 @@ export class R2Storage {
    * Download file as Buffer (for binary files)
    */
   async downloadBuffer(key: string): Promise<Buffer> {
-    const response = await this.client.send(new GetObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-    }));
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      })
+    );
 
     if (!response.Body) {
       throw new Error(`File not found: ${key}`);
@@ -148,7 +155,7 @@ export class R2Storage {
     for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
       chunks.push(chunk);
     }
-    
+
     return Buffer.concat(chunks);
   }
 
@@ -160,10 +167,12 @@ export class R2Storage {
    * Delete file from R2
    */
   async delete(key: string): Promise<void> {
-    await this.client.send(new DeleteObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-    }));
+    await this.client.send(
+      new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      })
+    );
   }
 
   // ==========================================================================
@@ -175,10 +184,12 @@ export class R2Storage {
    */
   async exists(key: string): Promise<boolean> {
     try {
-      await this.client.send(new HeadObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-      }));
+      await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+        })
+      );
       return true;
     } catch (error) {
       return false;
@@ -193,15 +204,17 @@ export class R2Storage {
     lastModified: Date;
     contentType: string;
   }> {
-    const response = await this.client.send(new HeadObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-    }));
+    const response = await this.client.send(
+      new HeadObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      })
+    );
 
     return {
       size: response.ContentLength || 0,
       lastModified: response.LastModified || new Date(),
-      contentType: response.ContentType || 'application/octet-stream',
+      contentType: response.ContentType || "application/octet-stream",
     };
   }
 
@@ -211,9 +224,9 @@ export class R2Storage {
 
   /**
    * Generate signed URL for temporary access
-   * 
+   *
    * @param expiresIn - Expiration time in seconds (default: 1 hour)
-   * 
+   *
    * @example
    * ```typescript
    * const url = await r2.getSignedUrl('private/doc.pdf', 3600);
@@ -237,12 +250,12 @@ export class R2Storage {
    * Calculate SHA256 checksum
    */
   private calculateChecksum(data: Buffer): string {
-    return createHash('sha256').update(data).digest('base64');
+    return createHash("sha256").update(data).digest("base64");
   }
 
   /**
    * Build file path for user entity
-   * 
+   *
    * @example
    * ```typescript
    * R2Storage.buildPath('user-123', 'note', 'entity-456', 'md')
@@ -253,7 +266,7 @@ export class R2Storage {
     userId: string,
     entityType: string,
     entityId: string,
-    extension: string = 'md'
+    extension: string = "md"
   ): string {
     return `users/${userId}/${entityType}s/${entityId}.${extension}`;
   }
@@ -265,7 +278,7 @@ export class R2Storage {
 
 /**
  * Default R2 instance configured from environment variables
- * 
+ *
  * Required env vars:
  * - R2_ACCOUNT_ID
  * - R2_ACCESS_KEY_ID
@@ -274,10 +287,9 @@ export class R2Storage {
  * - R2_PUBLIC_URL (optional)
  */
 export const r2 = new R2Storage({
-  accountId: process.env.R2_ACCOUNT_ID || '',
-  accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
-  bucketName: process.env.R2_BUCKET_NAME || 'synap-storage',
+  accountId: process.env.R2_ACCOUNT_ID || "",
+  accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
+  bucketName: process.env.R2_BUCKET_NAME || "synap-storage",
   publicUrl: process.env.R2_PUBLIC_URL,
 });
-

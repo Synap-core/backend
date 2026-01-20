@@ -1,15 +1,15 @@
 /**
  * VectorRepository Tests
- * 
+ *
  * Tests for pgvector-based similarity search and embedding storage.
  * Validates HNSW index performance, user isolation, and search relevance.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sql } from '../index.js';
-import { generateTestUserId } from './test-utils.js';
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { sql } from "../index.js";
+import { generateTestUserId } from "./test-utils.js";
 
-describe('VectorRepository', () => {
+describe("VectorRepository", () => {
   beforeAll(async () => {
     // Clean test data
     await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
@@ -19,8 +19,8 @@ describe('VectorRepository', () => {
     await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
   });
 
-  describe('embedding storage', () => {
-    it('should store embedding vector', async () => {
+  describe("embedding storage", () => {
+    it("should store embedding vector", async () => {
       const userId = generateTestUserId();
       const entityId = crypto.randomUUID();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
@@ -46,12 +46,12 @@ describe('VectorRepository', () => {
 
       expect(stored).toBeDefined();
       expect(stored.user_id).toBe(userId);
-      expect(stored.entity_type).toBe('note');
-      expect(stored.title).toBe('Test Note');
+      expect(stored.entity_type).toBe("note");
+      expect(stored.title).toBe("Test Note");
       expect(JSON.parse(stored.embedding as any).length).toBe(1536);
     });
 
-    it('should update embedding on conflict', async () => {
+    it("should update embedding on conflict", async () => {
       const userId = generateTestUserId();
       const entityId = crypto.randomUUID();
       const embedding1 = Array.from({ length: 1536 }, () => 0.1);
@@ -92,24 +92,30 @@ describe('VectorRepository', () => {
       `;
 
       expect(stored.length).toBe(1);
-      expect(stored[0].title).toBe('Updated');
+      expect(stored[0].title).toBe("Updated");
     });
   });
 
-  describe('vector similarity search', () => {
-    it('should find similar vectors using cosine distance', async () => {
+  describe("vector similarity search", () => {
+    it("should find similar vectors using cosine distance", async () => {
       const userId = generateTestUserId();
-      
+
       // Create reference vector
-      const refEmbedding = Array.from({ length: 1536 }, (_, i) => i < 100 ? 1.0 : 0.0);
-      
+      const refEmbedding = Array.from({ length: 1536 }, (_, i) =>
+        i < 100 ? 1.0 : 0.0
+      );
+
       // Create similar vector (same pattern)
       const similarId = crypto.randomUUID();
-      const similarEmbedding = Array.from({ length: 1536 }, (_, i) => i < 100 ? 0.9 : 0.1);
-      
+      const similarEmbedding = Array.from({ length: 1536 }, (_, i) =>
+        i < 100 ? 0.9 : 0.1
+      );
+
       // Create dissimilar vector (opposite pattern)
       const dissimilarId = crypto.randomUUID();
-      const dissimilarEmbedding = Array.from({ length: 1536 }, (_, i) => i < 100 ? 0.0 : 1.0);
+      const dissimilarEmbedding = Array.from({ length: 1536 }, (_, i) =>
+        i < 100 ? 0.0 : 1.0
+      );
 
       // Create parent entities
       await sql`
@@ -144,10 +150,12 @@ describe('VectorRepository', () => {
       expect(results[0].entity_id).toBe(similarId);
       expect(results[1].entity_id).toBe(dissimilarId);
       // Similarity should be higher for similar vector
-      expect(parseFloat(results[0].similarity)).toBeGreaterThan(parseFloat(results[1].similarity));
+      expect(parseFloat(results[0].similarity)).toBeGreaterThan(
+        parseFloat(results[1].similarity)
+      );
     });
 
-    it('should enforce user isolation in search', async () => {
+    it("should enforce user isolation in search", async () => {
       const user1 = generateTestUserId();
       const user2 = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
@@ -178,10 +186,10 @@ describe('VectorRepository', () => {
       `;
 
       expect(user1Results.length).toBe(1);
-      expect(user1Results.every(r => r.user_id === user1)).toBe(true);
+      expect(user1Results.every((r) => r.user_id === user1)).toBe(true);
     });
 
-    it('should respect limit parameter', async () => {
+    it("should respect limit parameter", async () => {
       const userId = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
 
@@ -194,7 +202,7 @@ describe('VectorRepository', () => {
         `;
         await sql`
           INSERT INTO entity_vectors (entity_id, user_id, entity_type, title, embedding, embedding_model, indexed_at, updated_at)
-          VALUES (${id}, ${userId}, 'note', ${'Doc ' + i}, ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW())
+          VALUES (${id}, ${userId}, 'note', ${"Doc " + i}, ${JSON.stringify(embedding)}, 'text-embedding-3-small', NOW(), NOW())
         `;
       }
 
@@ -209,7 +217,7 @@ describe('VectorRepository', () => {
       expect(results.length).toBe(3);
     });
 
-    it('should calculate relevance scores correctly', async () => {
+    it("should calculate relevance scores correctly", async () => {
       const userId = generateTestUserId();
       const queryEmbedding = Array.from({ length: 1536 }, () => Math.random());
       const docEmbedding = Array.from({ length: 1536 }, () => Math.random());
@@ -237,7 +245,7 @@ describe('VectorRepository', () => {
       expect(score).toBeLessThanOrEqual(1);
     });
 
-    it('should handle empty results gracefully', async () => {
+    it("should handle empty results gracefully", async () => {
       const userId = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
 
@@ -252,12 +260,12 @@ describe('VectorRepository', () => {
     });
   });
 
-  describe('metadata storage', () => {
-    it('should store file URL metadata', async () => {
+  describe("metadata storage", () => {
+    it("should store file URL metadata", async () => {
       const userId = generateTestUserId();
       const entityId = crypto.randomUUID();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
-      const fileUrl = 'https://example.com/file.pdf';
+      const fileUrl = "https://example.com/file.pdf";
 
       await sql`
         INSERT INTO entities (id, user_id, type, created_at, updated_at)
@@ -280,11 +288,11 @@ describe('VectorRepository', () => {
       expect(stored.file_url).toBe(fileUrl);
     });
 
-    it('should store preview text', async () => {
+    it("should store preview text", async () => {
       const userId = generateTestUserId();
       const entityId = crypto.randomUUID();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
-      const preview = 'This is a preview of the document content...';
+      const preview = "This is a preview of the document content...";
 
       await sql`
         INSERT INTO entities (id, user_id, type, created_at, updated_at)

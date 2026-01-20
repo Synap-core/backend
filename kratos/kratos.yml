@@ -45,7 +45,7 @@ selfservice:
       enabled: true
       ui_url: http://localhost:3000/recovery
     verification:
-      enabled: false  # Disabled: mailslurper service not running
+      enabled: false # Disabled: mailslurper service not running
       ui_url: http://localhost:3000/verification
     logout:
       after:

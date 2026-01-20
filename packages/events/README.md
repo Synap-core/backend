@@ -20,16 +20,16 @@ Synap uses a **schema-driven event sourcing architecture** where all state chang
 
 ```typescript
 // Creation flow
-'entities.create.requested'  // Intent submitted
-'entities.create.validated'  // Change confirmed and applied
+"entities.create.requested"; // Intent submitted
+"entities.create.validated"; // Change confirmed and applied
 
 // Update flow
-'entities.update.requested'  // Update intent
-'entities.update.validated'  // Update confirmed
+"entities.update.requested"; // Update intent
+"entities.update.validated"; // Update confirmed
 
 // Deletion flow
-'entities.delete.requested'  // Delete intent
-'entities.delete.validated'  // Delete confirmed
+"entities.delete.requested"; // Delete intent
+"entities.delete.validated"; // Delete confirmed
 ```
 
 ## Why This Pattern?
@@ -37,6 +37,7 @@ Synap uses a **schema-driven event sourcing architecture** where all state chang
 ### 1. **Explicit Intent vs. Execution**
 
 Every state change has two phases:
+
 - **Requested**: Expresses intent (from user or AI)
 - **Validated**: Confirms execution (after approval/validation)
 
@@ -49,12 +50,12 @@ AI agents can propose changes without directly modifying data:
 ```typescript
 // AI suggests creating a task
 await publishEvent({
-  type: 'entities.create.requested',
+  type: "entities.create.requested",
   data: {
-    type: 'task',
-    title: 'AI-suggested task',
-    source: 'ai-agent',
-  }
+    type: "task",
+    title: "AI-suggested task",
+    source: "ai-agent",
+  },
 });
 
 // User reviews and approves (or system auto-approves)
@@ -65,15 +66,16 @@ await publishEvent({
 
 Different actors have different permissions:
 
-| Actor | Can Publish | Auto-Validated |
-|-------|------------|----------------|
-| **User** | `*.requested` | ✅ Yes (instant) |
+| Actor        | Can Publish   | Auto-Validated       |
+| ------------ | ------------- | -------------------- |
+| **User**     | `*.requested` | ✅ Yes (instant)     |
 | **AI Agent** | `*.requested` | ❌ Requires approval |
-| **System** | `*.validated` | ✅ Always |
+| **System**   | `*.validated` | ✅ Always            |
 
 ### 4. **Data Pod Integration**
 
 For personal data pods, users can configure:
+
 - Which AI agents can auto-validate
 - Which changes require manual review
 - Audit logs of all AI proposals
@@ -132,15 +134,15 @@ Events are automatically generated from database tables:
 ```typescript
 // packages/events/src/generator.ts
 export const CORE_TABLES = [
-  'entities',
-  'documents',
-  'documentVersions',
-  'chatThreads',
-  'conversationMessages',
-  'webhookSubscriptions',
-  'apiKeys',
-  'tags',
-  'agents',
+  "entities",
+  "documents",
+  "documentVersions",
+  "chatThreads",
+  "conversationMessages",
+  "webhookSubscriptions",
+  "apiKeys",
+  "tags",
+  "agents",
 ] as const;
 
 // Result: 9 tables × 6 events = 54 generated events
@@ -151,32 +153,32 @@ export const CORE_TABLES = [
 ### Publishing Events
 
 ```typescript
-import { createSynapEvent, GeneratedEventTypes } from '@synap/types';
-import { publishEvent } from '@synap/events';
+import { createSynapEvent, GeneratedEventTypes } from "@synap/types";
+import { publishEvent } from "@synap/events";
 
 // User creates a note
 const event = createSynapEvent({
-  type: GeneratedEventTypes.entities['create.requested'],
-  userId: 'user-123',
+  type: GeneratedEventTypes.entities["create.requested"],
+  userId: "user-123",
   data: {
-    type: 'note',
-    title: 'My Note',
-    content: '...',
+    type: "note",
+    title: "My Note",
+    content: "...",
   },
 });
 
-await publishEvent('api/event.logged', event);
+await publishEvent("api/event.logged", event);
 ```
 
 ### Subscribing to Events
 
 ```typescript
-import { inngest } from './inngest';
+import { inngest } from "./inngest";
 
 // Worker that processes validated entities
 export const entityCreatedHandler = inngest.createFunction(
-  { id: 'entity-created-handler' },
-  { event: 'entities.create.validated' },
+  { id: "entity-created-handler" },
+  { event: "entities.create.validated" },
   async ({ event }) => {
     // Process the validated entity
     const { entityId, type } = event.data;
@@ -190,15 +192,17 @@ export const entityCreatedHandler = inngest.createFunction(
 ### Adding New Tables
 
 1. **Add to generator**:
+
 ```typescript
 // packages/events/src/generator.ts
 export const CORE_TABLES = [
   // ...
-  'myNewTable',
+  "myNewTable",
 ] as const;
 ```
 
 2. **Events auto-generate**:
+
 ```
 myNewTable.create.requested
 myNewTable.create.validated
@@ -213,20 +217,20 @@ myNewTable.delete.validated
 ```typescript
 // Implement custom approval workflow
 inngest.createFunction(
-  { id: 'ai-proposal-reviewer' },
-  { event: '*.create.requested' },
+  { id: "ai-proposal-reviewer" },
+  { event: "*.create.requested" },
   async ({ event }) => {
-    if (event.data.source === 'ai-agent') {
+    if (event.data.source === "ai-agent") {
       // Check if auto-approve is enabled
       const canAutoApprove = await checkAIPermissions(
         event.userId,
         event.data.aiAgent
       );
-      
+
       if (canAutoApprove) {
         // Auto-approve
         await publishEvent({
-          type: event.type.replace('.requested', '.validated'),
+          type: event.type.replace(".requested", ".validated"),
           ...event,
         });
       } else {
@@ -245,8 +249,8 @@ For cross-cutting concerns that don't map to tables:
 ```typescript
 // packages/types/src/event-types.ts
 export const SystemEventTypes = {
-  WEBHOOK_DELIVERY: 'webhooks.deliver.requested',
-  EMAIL_SEND: 'emails.send.requested',
+  WEBHOOK_DELIVERY: "webhooks.deliver.requested",
+  EMAIL_SEND: "emails.send.requested",
   // ...
 } as const;
 ```
@@ -255,21 +259,21 @@ export const SystemEventTypes = {
 
 ### Breaking Changes
 
-| V1 Event | V2 Event |
-|----------|----------|
-| `entities.create` | ❌ Removed (use `.requested`) |
-| `entities.create.completed` | ✅ `entities.create.validated` |
-| `taskDetails.*` | ❌ Removed (extension table) |
-| `projects.*` | ❌ Removed (use `entities` with `type='project'`) |
+| V1 Event                    | V2 Event                                          |
+| --------------------------- | ------------------------------------------------- |
+| `entities.create`           | ❌ Removed (use `.requested`)                     |
+| `entities.create.completed` | ✅ `entities.create.validated`                    |
+| `taskDetails.*`             | ❌ Removed (extension table)                      |
+| `projects.*`                | ❌ Removed (use `entities` with `type='project'`) |
 
 ### Update Pattern
 
 ```typescript
 // Before (V1)
-type: 'entities.create.completed'
+type: "entities.create.completed";
 
 // After (V2)
-type: GeneratedEventTypes.entities['create.validated']
+type: GeneratedEventTypes.entities["create.validated"];
 ```
 
 ## Best Practices
@@ -278,16 +282,16 @@ type: GeneratedEventTypes.entities['create.validated']
 
 ```typescript
 // ✅ Good
-type: GeneratedEventTypes.entities['create.requested']
+type: GeneratedEventTypes.entities["create.requested"];
 
 // ❌ Bad (hard-coded strings)
-type: 'entities.create.requested'
+type: "entities.create.requested";
 ```
 
 ### 2. Validate at Boundaries
 
 ```typescript
-import { isGeneratedEventType } from '@synap/events';
+import { isGeneratedEventType } from "@synap/events";
 
 if (!isGeneratedEventType(eventType)) {
   throw new Error(`Invalid event type: ${eventType}`);
@@ -299,7 +303,7 @@ if (!isGeneratedEventType(eventType)) {
 ```typescript
 // packages/types/src/synap-event.ts
 export const EventTypeSchemas = {
-  'entities.create.requested': z.object({
+  "entities.create.requested": z.object({
     type: z.string(),
     title: z.string().optional(),
     content: z.string().optional(),

@@ -9,19 +9,18 @@
  * Used by the admin dashboard to visualize and interact with the system.
  */
 
-import { z } from 'zod';
-import { publicProcedure, router } from '../trpc.js';
-import { EventTypeSchemas } from '@synap-core/core';
-import { getAllEventTypes } from '@synap/events';
-import { getAllGeneratedEventTypes, parseEventType } from '@synap/events';
-import { inngest, getAllWorkers } from '@synap/jobs';
-import { dynamicToolRegistry } from '@synap/ai';
-import { dynamicRouterRegistry } from '../router-registry.js';
-import { createSynapEvent } from '@synap-core/core';
-import { eventRepository } from '@synap/database';
-import { eventStreamManager } from '../event-stream-manager.js';
-import { sqlDrizzle } from '@synap/database';
-import { db } from '@synap/database';
+import { z } from "zod";
+import { publicProcedure, router } from "../trpc.js";
+import { EventTypeSchemas } from "@synap-core/core";
+import { getAllEventTypes } from "@synap/events";
+import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
+import { dynamicToolRegistry } from "@synap/ai";
+import { dynamicRouterRegistry } from "../router-registry.js";
+import { createSynapEvent } from "@synap-core/core";
+import { eventRepository } from "@synap/database";
+import { eventStreamManager } from "../event-stream-manager.js";
+import { sqlDrizzle } from "@synap/database";
+import { db } from "@synap/database";
 
 /**
  * System Router
@@ -35,18 +34,18 @@ export const systemRouter = router({
    */
   getCapabilities: publicProcedure.query(async () => {
     // Get all event types - combine custom/legacy + generated
-    const customEventTypes = getAllEventTypes().map(type => ({
+    const customEventTypes = getAllEventTypes().map((type) => ({
       type,
       hasSchema: type in EventTypeSchemas,
-      category: 'custom' as const,
+      category: "custom" as const,
     }));
 
-    const generatedEventTypes = getAllGeneratedEventTypes().map(type => {
+    const generatedEventTypes = getAllGeneratedEventTypes().map((type) => {
       const parsed = parseEventType(type);
       return {
         type,
         hasSchema: true, // Generated events always have schemas
-        category: 'generated' as const,
+        category: "generated" as const,
         table: parsed?.table,
         action: parsed?.action,
       };
@@ -55,28 +54,31 @@ export const systemRouter = router({
     const eventTypes = [...generatedEventTypes, ...customEventTypes];
 
     // Get all workers from registry
+    const { getAllWorkers } = await import("@synap/jobs");
     const workers = getAllWorkers();
 
     // Get all tools
     const toolsStats = dynamicToolRegistry.getStats();
-    const tools = dynamicToolRegistry.getAllTools().map((tool: { name: string; description?: string }) => {
-      const metadata = dynamicToolRegistry.getToolMetadata(tool.name);
-      return {
-        name: tool.name,
-        description: tool.description,
-        version: metadata?.version || 'unknown',
-        source: metadata?.source || 'unknown',
-      };
-    });
+    const tools = dynamicToolRegistry
+      .getAllTools()
+      .map((tool: { name: string; description?: string }) => {
+        const metadata = dynamicToolRegistry.getToolMetadata(tool.name);
+        return {
+          name: tool.name,
+          description: tool.description,
+          version: metadata?.version || "unknown",
+          source: metadata?.source || "unknown",
+        };
+      });
 
     // Get all routers
     const routersStats = dynamicRouterRegistry.getStats();
-    const routers = dynamicRouterRegistry.getRouterNames().map(name => {
+    const routers = dynamicRouterRegistry.getRouterNames().map((name) => {
       const metadata = dynamicRouterRegistry.getRouterMetadata(name);
       return {
         name,
-        version: metadata?.version || 'unknown',
-        source: metadata?.source || 'unknown',
+        version: metadata?.version || "unknown",
+        source: metadata?.source || "unknown",
         description: metadata?.description,
       };
     });
@@ -110,8 +112,9 @@ export const systemRouter = router({
   getEventTypeSchema: publicProcedure
     .input(z.object({ eventType: z.string() }))
     .query(async ({ input }) => {
-      const schema = EventTypeSchemas[input.eventType as keyof typeof EventTypeSchemas];
-      
+      const schema =
+        EventTypeSchemas[input.eventType as keyof typeof EventTypeSchemas];
+
       if (!schema) {
         return {
           hasSchema: false,
@@ -120,7 +123,7 @@ export const systemRouter = router({
       }
 
       // Convert Zod schema to a simplified structure for frontend
-      const shape = (schema as z.ZodObject<any>)._def.shape();
+      const shape = (schema as any)._def.shape();
       const fields: Array<{
         name: string;
         type: string;
@@ -132,7 +135,7 @@ export const systemRouter = router({
 
       for (const [key, value] of Object.entries(shape)) {
         const zodType = value as z.ZodTypeAny;
-        let fieldType = 'string';
+        let fieldType = "string";
         let required = true;
         let options: string[] | undefined;
         let defaultValue: unknown = undefined;
@@ -165,20 +168,20 @@ export const systemRouter = router({
 
         // Determine field type
         if (innerType instanceof z.ZodString) {
-          fieldType = 'string';
+          fieldType = "string";
         } else if (innerType instanceof z.ZodNumber) {
-          fieldType = 'number';
+          fieldType = "number";
         } else if (innerType instanceof z.ZodBoolean) {
-          fieldType = 'boolean';
+          fieldType = "boolean";
         } else if (innerType instanceof z.ZodArray) {
-          fieldType = 'array';
+          fieldType = "array";
         } else if (innerType instanceof z.ZodEnum) {
-          fieldType = 'enum';
+          fieldType = "enum";
           options = innerType._def.values;
         } else if (innerType instanceof z.ZodObject) {
-          fieldType = 'object';
+          fieldType = "object";
         } else {
-          fieldType = 'string'; // Default fallback
+          fieldType = "string"; // Default fallback
         }
 
         fields.push({
@@ -208,8 +211,10 @@ export const systemRouter = router({
         type: z.string().min(1),
         data: z.record(z.unknown()),
         userId: z.string().min(1),
-        aggregateId: z.string().uuid().optional(),
-        source: z.enum(['api', 'automation', 'sync', 'migration', 'system']).optional(),
+        subjectId: z.string().uuid().optional(),
+        source: z
+          .enum(["api", "automation", "sync", "migration", "system"])
+          .optional(),
         correlationId: z.string().uuid().optional(),
         causationId: z.string().uuid().optional(),
       })
@@ -220,8 +225,8 @@ export const systemRouter = router({
         type: input.type as any,
         data: input.data,
         userId: input.userId,
-        aggregateId: input.aggregateId,
-        source: input.source || 'system',
+        subjectId: input.subjectId,
+        source: input.source || "system",
         correlationId: input.correlationId,
         causationId: input.causationId,
       });
@@ -229,18 +234,13 @@ export const systemRouter = router({
       // Store in event repository (this will also broadcast via SSE hook)
       const storedEvent = await eventRepository.append(event);
 
-      // Publish to Inngest for worker processing
-      // Note: Inngest events use a different format (name/data)
+      // Publish to Inngest using the ACTUAL event type
+      // This allows the event to flow through the proper executor pipeline
+      const { inngest } = await import("@synap/jobs");
       await inngest.send({
-        name: 'api/event.logged',
-        data: {
-          eventId: storedEvent.id,
-          eventType: storedEvent.eventType,
-          aggregateId: storedEvent.aggregateId,
-          userId: storedEvent.userId,
-          timestamp: storedEvent.timestamp.toISOString(),
-          correlationId: storedEvent.correlationId,
-        },
+        name: input.type, // Use the actual event type, not "api/event.logged"
+        data: input.data,
+        user: { id: input.userId },
       });
 
       return {
@@ -275,14 +275,15 @@ export const systemRouter = router({
       });
 
       return {
-        events: events.map(event => ({
+        events: events.map((event) => ({
           id: event.id,
           type: event.eventType,
           userId: event.userId,
           timestamp: event.timestamp.toISOString(),
           correlationId: event.correlationId,
-          isError: event.eventType.toLowerCase().includes('error') ||
-                   event.eventType.toLowerCase().includes('failed'),
+          isError:
+            event.eventType.toLowerCase().includes("error") ||
+            event.eventType.toLowerCase().includes("failed"),
         })),
         total: events.length,
         timestamp: new Date().toISOString(),
@@ -302,16 +303,18 @@ export const systemRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const events = await eventRepository.getCorrelatedEvents(input.correlationId);
+      const events = await eventRepository.getCorrelatedEvents(
+        input.correlationId
+      );
 
       return {
         correlationId: input.correlationId,
-        events: events.map(event => ({
+        events: events.map((event) => ({
           id: event.id,
           type: event.eventType,
           timestamp: event.timestamp.toISOString(),
           userId: event.userId,
-          aggregateId: event.aggregateId,
+          subjectId: event.subjectId,
           data: event.data,
           metadata: event.metadata,
           causationId: event.causationId,
@@ -330,17 +333,19 @@ export const systemRouter = router({
     .query(async ({ input }) => {
       // 1. Get the main event
       const event = await eventRepository.findById(input.eventId);
-      
+
       if (!event) {
         throw new Error(`Event ${input.eventId} not found`);
       }
 
       // 2. Get related events if correlation ID exists
-      let relatedEvents: typeof event[] = [];
+      let relatedEvents: (typeof event)[] = [];
       if (event.correlationId) {
-        relatedEvents = await eventRepository.getCorrelatedEvents(event.correlationId);
+        relatedEvents = await eventRepository.getCorrelatedEvents(
+          event.correlationId
+        );
         // Exclude the main event from related list
-        relatedEvents = relatedEvents.filter(e => e.id !== event.id);
+        relatedEvents = relatedEvents.filter((e) => e.id !== event.id);
       }
 
       return {
@@ -353,7 +358,7 @@ export const systemRouter = router({
           metadata: event.metadata,
           correlationId: event.correlationId,
         },
-        relatedEvents: relatedEvents.map(e => ({
+        relatedEvents: relatedEvents.map((e) => ({
           eventId: e.id,
           eventType: e.eventType,
           timestamp: e.timestamp.toISOString(),
@@ -375,8 +380,8 @@ export const systemRouter = router({
       z.object({
         userId: z.string().optional(),
         eventType: z.string().optional(),
-        aggregateType: z.string().optional(),
-        aggregateId: z.string().optional(),
+        subjectType: z.string().optional(),
+        subjectId: z.string().optional(),
         correlationId: z.string().optional(),
         fromDate: z.string().datetime().optional(),
         toDate: z.string().datetime().optional(),
@@ -388,8 +393,8 @@ export const systemRouter = router({
       const filters = {
         userId: input.userId,
         eventType: input.eventType,
-        aggregateType: input.aggregateType as any,
-        aggregateId: input.aggregateId,
+        subjectType: input.subjectType as any,
+        subjectId: input.subjectId,
         correlationId: input.correlationId,
         fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
         toDate: input.toDate ? new Date(input.toDate) : undefined,
@@ -401,19 +406,19 @@ export const systemRouter = router({
       const totalCount = await eventRepository.countEvents({
         userId: input.userId,
         eventType: input.eventType,
-        aggregateType: input.aggregateType as any,
+        subjectType: input.subjectType as any,
         fromDate: filters.fromDate,
         toDate: filters.toDate,
       });
 
       return {
-        events: events.map(event => ({
+        events: events.map((event) => ({
           id: event.id,
           type: event.eventType,
           timestamp: event.timestamp.toISOString(),
           userId: event.userId,
-          aggregateId: event.aggregateId,
-          aggregateType: event.aggregateType,
+          subjectId: event.subjectId,
+          subjectType: event.subjectType,
           data: event.data,
           metadata: event.metadata,
           causationId: event.causationId,
@@ -444,26 +449,30 @@ export const systemRouter = router({
       const tool = dynamicToolRegistry.getTool(input.toolName);
 
       if (!tool) {
-        throw new Error(`Tool "${input.toolName}" not found. Available tools: ${dynamicToolRegistry.getToolNames().join(', ')}`);
+        throw new Error(
+          `Tool "${input.toolName}" not found. Available tools: ${dynamicToolRegistry.getToolNames().join(", ")}`
+        );
       }
 
       const metadata = dynamicToolRegistry.getToolMetadata(input.toolName);
 
       // Extract schema properties for UI rendering
       const schema = tool.schema as any;
-      const schemaShape = schema._def?.shape ? Object.keys(schema._def.shape()) : [];
+      const schemaShape = schema._def?.shape
+        ? Object.keys(schema._def.shape())
+        : [];
 
       return {
         name: tool.name,
         description: tool.description,
         schema: {
-          type: 'object',
+          type: "object",
           properties: schema._def?.shape ? schema._def.shape() : {},
           required: schemaShape,
         },
         metadata: {
-          version: metadata?.version || 'unknown',
-          source: metadata?.source || 'unknown',
+          version: metadata?.version || "unknown",
+          source: metadata?.source || "unknown",
           registeredAt: metadata?.registeredAt.toISOString(),
         },
       };
@@ -480,16 +489,16 @@ export const systemRouter = router({
         toolName: z.string(),
         parameters: z.record(z.any()),
         userId: z.string(),
-        threadId: z.string().default('playground'),
+        threadId: z.string().default("playground"),
       })
     )
     .mutation(async ({ input }) => {
       const tool = dynamicToolRegistry.getTool(input.toolName);
-      
+
       if (!tool) {
         throw new Error(`Tool "${input.toolName}" not found`);
       }
-      
+
       // Execute the tool with parameters
       // Note: tool.execute expects (params, context?)
       const result = await tool.execute(input.parameters, {
@@ -529,13 +538,15 @@ export const systemRouter = router({
     });
 
     // Calculate error rate (events with 'error' in type)
-    const errorEvents = recentEvents.filter(e =>
-      e.eventType.toLowerCase().includes('error') ||
-      e.eventType.toLowerCase().includes('failed')
+    const errorEvents = recentEvents.filter(
+      (e) =>
+        e.eventType.toLowerCase().includes("error") ||
+        e.eventType.toLowerCase().includes("failed")
     );
-    const errorRate = recentEvents.length > 0
-      ? (errorEvents.length / recentEvents.length) * 100
-      : 0;
+    const errorRate =
+      recentEvents.length > 0
+        ? (errorEvents.length / recentEvents.length) * 100
+        : 0;
 
     // Get system stats
     const sseStats = eventStreamManager.getStats();
@@ -544,13 +555,13 @@ export const systemRouter = router({
     const handlersStats = 0;
 
     // Determine overall health status
-    let healthStatus: 'healthy' | 'degraded' | 'critical';
+    let healthStatus: "healthy" | "degraded" | "critical";
     if (errorRate > 10) {
-      healthStatus = 'critical';
+      healthStatus = "critical";
     } else if (errorRate > 5 || eventsPerSecond > 100) {
-      healthStatus = 'degraded';
+      healthStatus = "degraded";
     } else {
-      healthStatus = 'healthy';
+      healthStatus = "healthy";
     }
 
     return {
@@ -571,13 +582,14 @@ export const systemRouter = router({
         totalTools: toolsStats.totalTools,
         totalExecutions: 0, // TODO: Track tool executions
       },
-      latestEvents: latestEvents.map(event => ({
+      latestEvents: latestEvents.map((event) => ({
         id: event.id,
         type: event.eventType,
         userId: event.userId,
         timestamp: event.timestamp.toISOString(),
-        isError: event.eventType.toLowerCase().includes('error') ||
-                 event.eventType.toLowerCase().includes('failed'),
+        isError:
+          event.eventType.toLowerCase().includes("error") ||
+          event.eventType.toLowerCase().includes("failed"),
       })),
     };
   }),
@@ -587,9 +599,8 @@ export const systemRouter = router({
    *
    * Returns a list of all tables in the public schema with their row counts.
    */
-  getDatabaseTables: publicProcedure
-    .query(async () => {
-       const tables = await db.execute(sqlDrizzle`
+  getDatabaseTables: publicProcedure.query(async () => {
+    const tables = await db.execute(sqlDrizzle`
         SELECT
           table_name as name,
           (SELECT count(*) FROM information_schema.columns WHERE table_name = t.table_name) as column_count,
@@ -598,9 +609,9 @@ export const systemRouter = router({
         WHERE table_schema = 'public'
         ORDER BY table_name;
       `);
-      console.log(`[SystemRouter] Found ${tables.length} tables`);
-      return [...tables];
-    }),
+    console.log(`[SystemRouter] Found ${tables.length} tables`);
+    return [...tables];
+  }),
 
   /**
    * Get database table rows
@@ -608,18 +619,22 @@ export const systemRouter = router({
    * Returns raw data from a specific table with pagination.
    */
   getDatabaseTableRows: publicProcedure
-    .input(z.object({
-      tableName: z.string(),
-      limit: z.number().min(1).max(100).default(50),
-      offset: z.number().min(0).default(0)
-    }))
+    .input(
+      z.object({
+        tableName: z.string(),
+        limit: z.number().min(1).max(100).default(50),
+        offset: z.number().min(0).default(0),
+      })
+    )
     .query(async ({ input }) => {
       // Validate table name to prevent SQL injection (whitelisting)
       const validTables = await db.execute(sqlDrizzle`
         SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'
       `);
 
-      const isValid = validTables.some((t: any) => t.table_name === input.tableName);
+      const isValid = validTables.some(
+        (t: any) => t.table_name === input.tableName
+      );
       if (!isValid) {
         throw new Error(`Invalid table name: ${input.tableName}`);
       }
@@ -627,9 +642,10 @@ export const systemRouter = router({
       // Safe query using sql.raw is risky if input is not validated, but we validated it against the schema above.
       // However, parameters cannot be used for identifiers.
       // Since we validated input.tableName exists in information_schema, it is safe to interpolate.
-      const query = sqlDrizzle.raw(`SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`);
+      const query = sqlDrizzle.raw(
+        `SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`
+      );
       const rows = await db.execute(query);
       return rows;
     }),
-
 });

@@ -1,22 +1,22 @@
 /**
  * MinIO Storage Provider Unit Tests
- * 
+ *
  * Tests the MinIOStorageProvider implementation using mocks.
  * Validates upload, download, delete, exists, getMetadata, and bucket creation.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { MinIOStorageProvider, type MinIOConfig } from '../minio-provider.js';
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { MinIOStorageProvider, type MinIOConfig } from "../minio-provider.js";
 import {
-  S3Client,
+  type S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
   CreateBucketCommand,
   HeadBucketCommand,
-} from '@aws-sdk/client-s3';
+} from "@aws-sdk/client-s3";
 
 // Mock AWS SDK
-vi.mock('@aws-sdk/client-s3', () => {
+vi.mock("@aws-sdk/client-s3", () => {
   const mockSend = vi.fn();
   return {
     S3Client: vi.fn().mockImplementation(() => ({
@@ -31,17 +31,21 @@ vi.mock('@aws-sdk/client-s3', () => {
   };
 });
 
-vi.mock('@aws-sdk/s3-request-presigner', () => ({
-  getSignedUrl: vi.fn().mockResolvedValue('https://localhost:9000/bucket/file.md?signature=abc123'),
+vi.mock("@aws-sdk/s3-request-presigner", () => ({
+  getSignedUrl: vi
+    .fn()
+    .mockResolvedValue(
+      "https://localhost:9000/bucket/file.md?signature=abc123"
+    ),
 }));
 
-describe('MinIOStorageProvider', () => {
+describe("MinIOStorageProvider", () => {
   const config: MinIOConfig = {
-    endpoint: 'http://localhost:9000',
-    accessKeyId: 'minioadmin',
-    secretAccessKey: 'minioadmin',
-    bucketName: 'test-bucket',
-    publicUrl: 'http://localhost:9000',
+    endpoint: "http://localhost:9000",
+    accessKeyId: "minioadmin",
+    secretAccessKey: "minioadmin",
+    bucketName: "test-bucket",
+    publicUrl: "http://localhost:9000",
     createBucketIfNotExists: true,
     forcePathStyle: true,
   };
@@ -58,14 +62,14 @@ describe('MinIOStorageProvider', () => {
     (provider as any).bucketInitialized = false;
   });
 
-  describe('bucket initialization', () => {
-    it('should create bucket if it does not exist', async () => {
-      const path = 'users/123/notes/456.md';
-      const content = '# Test Note';
+  describe("bucket initialization", () => {
+    it("should create bucket if it does not exist", async () => {
+      const path = "users/123/notes/456.md";
+      const content = "# Test Note";
 
       // First call: bucket doesn't exist
       mockSend
-        .mockRejectedValueOnce(new Error('Not found')) // HeadBucketCommand fails
+        .mockRejectedValueOnce(new Error("Not found")) // HeadBucketCommand fails
         .mockResolvedValueOnce({}) // CreateBucketCommand succeeds
         .mockResolvedValueOnce({}); // PutObjectCommand succeeds
 
@@ -73,13 +77,13 @@ describe('MinIOStorageProvider', () => {
 
       expect(HeadBucketCommand).toHaveBeenCalled();
       expect(CreateBucketCommand).toHaveBeenCalledWith({
-        Bucket: 'test-bucket',
+        Bucket: "test-bucket",
       });
     });
 
-    it('should not create bucket if it already exists', async () => {
-      const path = 'users/123/notes/456.md';
-      const content = '# Test Note';
+    it("should not create bucket if it already exists", async () => {
+      const path = "users/123/notes/456.md";
+      const content = "# Test Note";
 
       // Bucket exists
       mockSend
@@ -93,17 +97,17 @@ describe('MinIOStorageProvider', () => {
     });
   });
 
-  describe('upload', () => {
-    it('should upload content successfully', async () => {
-      const path = 'users/123/notes/456.md';
-      const content = '# Test Note\n\nContent here.';
+  describe("upload", () => {
+    it("should upload content successfully", async () => {
+      const path = "users/123/notes/456.md";
+      const content = "# Test Note\n\nContent here.";
 
       mockSend
         .mockResolvedValueOnce({}) // HeadBucketCommand
         .mockResolvedValueOnce({}); // PutObjectCommand
 
       const result = await provider.upload(path, content, {
-        contentType: 'text/markdown',
+        contentType: "text/markdown",
       });
 
       expect(result).toMatchObject({
@@ -112,15 +116,15 @@ describe('MinIOStorageProvider', () => {
         checksum: expect.stringMatching(/^sha256:/),
         uploadedAt: expect.any(Date),
       });
-      expect(result.url).toContain('test-bucket');
+      expect(result.url).toContain("test-bucket");
       expect(PutObjectCommand).toHaveBeenCalled();
     });
   });
 
-  describe('download', () => {
-    it('should download file as string', async () => {
-      const path = 'users/123/notes/456.md';
-      const content = '# Test Note\n\nContent here.';
+  describe("download", () => {
+    it("should download file as string", async () => {
+      const path = "users/123/notes/456.md";
+      const content = "# Test Note\n\nContent here.";
 
       mockSend
         .mockResolvedValueOnce({}) // HeadBucketCommand
@@ -136,9 +140,9 @@ describe('MinIOStorageProvider', () => {
     });
   });
 
-  describe('delete', () => {
-    it('should delete file successfully', async () => {
-      const path = 'users/123/notes/456.md';
+  describe("delete", () => {
+    it("should delete file successfully", async () => {
+      const path = "users/123/notes/456.md";
 
       mockSend
         .mockResolvedValueOnce({}) // HeadBucketCommand
@@ -150,9 +154,9 @@ describe('MinIOStorageProvider', () => {
     });
   });
 
-  describe('exists', () => {
-    it('should return true if file exists', async () => {
-      const path = 'users/123/notes/456.md';
+  describe("exists", () => {
+    it("should return true if file exists", async () => {
+      const path = "users/123/notes/456.md";
 
       mockSend
         .mockResolvedValueOnce({}) // HeadBucketCommand
@@ -163,12 +167,12 @@ describe('MinIOStorageProvider', () => {
       expect(result).toBe(true);
     });
 
-    it('should return false if file does not exist', async () => {
-      const path = 'users/123/notes/nonexistent.md';
+    it("should return false if file does not exist", async () => {
+      const path = "users/123/notes/nonexistent.md";
 
       mockSend
         .mockResolvedValueOnce({}) // HeadBucketCommand
-        .mockRejectedValueOnce(new Error('Not found')); // HeadObjectCommand
+        .mockRejectedValueOnce(new Error("Not found")); // HeadObjectCommand
 
       const result = await provider.exists(path);
 
@@ -176,9 +180,9 @@ describe('MinIOStorageProvider', () => {
     });
   });
 
-  describe('getMetadata', () => {
-    it('should return file metadata', async () => {
-      const path = 'users/123/notes/456.md';
+  describe("getMetadata", () => {
+    it("should return file metadata", async () => {
+      const path = "users/123/notes/456.md";
       const lastModified = new Date();
 
       mockSend
@@ -186,7 +190,7 @@ describe('MinIOStorageProvider', () => {
         .mockResolvedValueOnce({
           ContentLength: 1024,
           LastModified: lastModified,
-          ContentType: 'text/markdown',
+          ContentType: "text/markdown",
         }); // HeadObjectCommand
 
       const result = await provider.getMetadata(path);
@@ -194,17 +198,16 @@ describe('MinIOStorageProvider', () => {
       expect(result).toEqual({
         size: 1024,
         lastModified,
-        contentType: 'text/markdown',
+        contentType: "text/markdown",
       });
     });
   });
 
-  describe('buildPath', () => {
-    it('should build standardized path', () => {
-      const path = provider.buildPath('user-123', 'note', 'entity-456', 'md');
+  describe("buildPath", () => {
+    it("should build standardized path", () => {
+      const path = provider.buildPath("user-123", "note", "entity-456", "md");
 
-      expect(path).toBe('users/user-123/notes/entity-456.md');
+      expect(path).toBe("users/user-123/notes/entity-456.md");
     });
   });
 });
-

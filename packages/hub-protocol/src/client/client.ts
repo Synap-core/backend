@@ -1,26 +1,30 @@
 /**
  * Hub Protocol Client
- * 
+ *
  * Type-safe tRPC client for communicating with Synap Data Pod
  * via the Hub Protocol V1.0.
- * 
+ *
  * This client allows any Hub (Intelligence Hub or third-party Hub) to:
  * - Generate temporary access tokens
  * - Request read-only data from Data Pod
  * - Submit structured insights that will be transformed into events
  */
 
-import { createTRPCProxyClient, httpBatchLink, TRPCClientError } from '@trpc/client';
-import type { AppRouter } from '@synap/api';
-import type { HubInsight } from '@synap/hub-protocol';
-import { createLogger } from '@synap-core/core';
+import {
+  createTRPCProxyClient,
+  httpBatchLink,
+  TRPCClientError,
+} from "@trpc/client";
+import type { AppRouter } from "@synap/api";
+import type { HubInsight } from "@synap/hub-protocol";
+import { createLogger } from "@synap-core/core";
 import type {
   HubProtocolClientConfig,
   HubScope,
   RequestDataFilters,
-} from './types.js';
+} from "./types.js";
 
-const logger = createLogger({ module: 'hub-protocol-client' });
+const logger = createLogger({ module: "hub-protocol-client" });
 
 // ============================================================================
 // CLIENT CLASS
@@ -28,16 +32,16 @@ const logger = createLogger({ module: 'hub-protocol-client' });
 
 /**
  * Hub Protocol Client
- * 
+ *
  * Provides type-safe methods to interact with the Data Pod Hub Protocol.
- * 
+ *
  * @example
  * ```typescript
  * const client = new HubProtocolClient({
  *   dataPodUrl: 'http://localhost:3000',
  *   token: 'user-session-token',
  * });
- * 
+ *
  * const { token } = await client.generateAccessToken('req-123', ['preferences', 'notes']);
  * const data = await client.requestData(token, ['preferences', 'notes']);
  * await client.submitInsight(token, insight);
@@ -45,7 +49,8 @@ const logger = createLogger({ module: 'hub-protocol-client' });
  */
 export class HubProtocolClient {
   private client: ReturnType<typeof createTRPCProxyClient<AppRouter>>;
-  private config: Required<Pick<HubProtocolClientConfig, 'retry'>> & Omit<HubProtocolClientConfig, 'retry'>;
+  private config: Required<Pick<HubProtocolClientConfig, "retry">> &
+    Omit<HubProtocolClientConfig, "retry">;
 
   constructor(config: HubProtocolClientConfig) {
     this.config = {
@@ -63,13 +68,13 @@ export class HubProtocolClient {
           url: `${this.config.dataPodUrl}/trpc`,
           headers: async () => {
             const headers: Record<string, string> = {
-              'Content-Type': 'application/json',
+              "Content-Type": "application/json",
               ...this.config.headers,
             };
 
             // Add authentication token
             let token: string | null = null;
-            
+
             if (this.config.token) {
               token = this.config.token;
             } else if (this.config.getToken) {
@@ -78,7 +83,7 @@ export class HubProtocolClient {
             }
 
             if (token) {
-              headers['Authorization'] = `Bearer ${token}`;
+              headers["Authorization"] = `Bearer ${token}`;
             }
 
             return headers;
@@ -90,7 +95,7 @@ export class HubProtocolClient {
 
   /**
    * Update Data Pod URL
-   * 
+   *
    * Allows updating the Data Pod URL dynamically (useful when handling multiple users).
    */
   updateDataPodUrl(dataPodUrl: string): void {
@@ -102,12 +107,12 @@ export class HubProtocolClient {
           url: `${this.config.dataPodUrl}/trpc`,
           headers: async () => {
             const headers: Record<string, string> = {
-              'Content-Type': 'application/json',
+              "Content-Type": "application/json",
               ...this.config.headers,
             };
 
             let token: string | null = null;
-            
+
             if (this.config.token) {
               token = this.config.token;
             } else if (this.config.getToken) {
@@ -116,7 +121,7 @@ export class HubProtocolClient {
             }
 
             if (token) {
-              headers['Authorization'] = `Bearer ${token}`;
+              headers["Authorization"] = `Bearer ${token}`;
             }
 
             return headers;
@@ -128,16 +133,16 @@ export class HubProtocolClient {
 
   /**
    * Generate Access Token
-   * 
+   *
    * Generates a temporary JWT token (1-5 minutes) for accessing user data.
    * This token must be used for subsequent requestData and submitInsight calls.
-   * 
+   *
    * @param requestId - UUID of the Hub request
    * @param scope - Array of data scopes to access
    * @param expiresIn - Token expiration in seconds (60-300, default: 300)
    * @param userId - User ID for token generation (optional, will use authenticated user if not provided)
    * @returns JWT token, expiration timestamp, and request ID
-   * 
+   *
    * @example
    * ```typescript
    * const { token, expiresAt } = await client.generateAccessToken(
@@ -153,7 +158,10 @@ export class HubProtocolClient {
     expiresIn: number = 300,
     userId?: string
   ): Promise<{ token: string; expiresAt: number; requestId: string }> {
-    logger.debug({ requestId, scope, expiresIn, userId }, 'Generating access token');
+    logger.debug(
+      { requestId, scope, expiresIn, userId },
+      "Generating access token"
+    );
 
     try {
       // Type assertion needed because AppRouter is built dynamically
@@ -163,25 +171,31 @@ export class HubProtocolClient {
         expiresIn,
       });
 
-      logger.info({ requestId, expiresAt: result.expiresAt }, 'Access token generated');
+      logger.info(
+        { requestId, expiresAt: result.expiresAt },
+        "Access token generated"
+      );
       return result;
     } catch (error) {
-      logger.error({ err: error, requestId, scope }, 'Failed to generate access token');
-      throw this.handleError(error, 'generateAccessToken');
+      logger.error(
+        { err: error, requestId, scope },
+        "Failed to generate access token"
+      );
+      throw this.handleError(error, "generateAccessToken");
     }
   }
 
   /**
    * Request Data
-   * 
+   *
    * Retrieves read-only data from the Data Pod based on the provided scope.
    * Requires a valid JWT token from generateAccessToken.
-   * 
+   *
    * @param token - JWT token from generateAccessToken
    * @param scope - Array of data scopes to retrieve
    * @param filters - Optional filters (date range, entity types, pagination)
    * @returns User data according to scope
-   * 
+   *
    * @example
    * ```typescript
    * const data = await client.requestData(
@@ -211,7 +225,10 @@ export class HubProtocolClient {
       recordCount: number;
     };
   }> {
-    logger.debug({ scope, hasFilters: !!filters }, 'Requesting data from Data Pod');
+    logger.debug(
+      { scope, hasFilters: !!filters },
+      "Requesting data from Data Pod"
+    );
 
     try {
       // Type assertion needed because AppRouter is built dynamically
@@ -221,29 +238,32 @@ export class HubProtocolClient {
         filters,
       });
 
-      logger.info({ 
-        requestId: result.requestId, 
-        recordCount: result.metadata.recordCount 
-      }, 'Data retrieved from Data Pod');
-      
+      logger.info(
+        {
+          requestId: result.requestId,
+          recordCount: result.metadata.recordCount,
+        },
+        "Data retrieved from Data Pod"
+      );
+
       return result;
     } catch (error) {
-      logger.error({ err: error, scope }, 'Failed to request data');
-      throw this.handleError(error, 'requestData');
+      logger.error({ err: error, scope }, "Failed to request data");
+      throw this.handleError(error, "requestData");
     }
   }
 
   /**
    * Submit Insight
-   * 
+   *
    * Submits a structured insight that will be transformed into SynapEvent objects
    * and published to the Event Store.
    * Requires a valid JWT token from generateAccessToken.
-   * 
+   *
    * @param token - JWT token from generateAccessToken
    * @param insight - Structured HubInsight (validated with HubInsightSchema)
    * @returns Success status and event IDs
-   * 
+   *
    * @example
    * ```typescript
    * const result = await client.submitInsight(token, {
@@ -272,10 +292,13 @@ export class HubProtocolClient {
     eventsCreated: number;
     errors?: Array<{ actionIndex: number; error: string }>;
   }> {
-    logger.debug({ 
-      insightType: insight.type, 
-      correlationId: insight.correlationId 
-    }, 'Submitting insight to Data Pod');
+    logger.debug(
+      {
+        insightType: insight.type,
+        correlationId: insight.correlationId,
+      },
+      "Submitting insight to Data Pod"
+    );
 
     try {
       // Type assertion needed because AppRouter is built dynamically
@@ -284,16 +307,22 @@ export class HubProtocolClient {
         insight,
       });
 
-      logger.info({ 
-        requestId: result.requestId, 
-        eventsCreated: result.eventsCreated,
-        success: result.success 
-      }, 'Insight submitted to Data Pod');
-      
+      logger.info(
+        {
+          requestId: result.requestId,
+          eventsCreated: result.eventsCreated,
+          success: result.success,
+        },
+        "Insight submitted to Data Pod"
+      );
+
       return result;
     } catch (error) {
-      logger.error({ err: error, insightType: insight.type }, 'Failed to submit insight');
-      throw this.handleError(error, 'submitInsight');
+      logger.error(
+        { err: error, insightType: insight.type },
+        "Failed to submit insight"
+      );
+      throw this.handleError(error, "submitInsight");
     }
   }
 
@@ -307,18 +336,20 @@ export class HubProtocolClient {
   private async handleError(error: unknown, operation: string): Promise<never> {
     // If it's a TRPCClientError, extract the message
     if (error instanceof TRPCClientError) {
-      logger.error({ 
-        operation, 
-        code: error.data?.code,
-        message: error.message 
-      }, 'TRPC client error');
-      
+      logger.error(
+        {
+          operation,
+          code: error.data?.code,
+          message: error.message,
+        },
+        "TRPC client error"
+      );
+
       throw new Error(`Hub Protocol ${operation} failed: ${error.message}`);
     }
 
     // For other errors, wrap them
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    const message = error instanceof Error ? error.message : "Unknown error";
     throw new Error(`Hub Protocol ${operation} failed: ${message}`);
   }
 }
-

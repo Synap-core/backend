@@ -26,10 +26,10 @@
     "@trpc/client": "^11.7.1",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
-    "zod": "^3.22.0"
+    "zod": "3.23.8"
   },
   "peerDependencies": {
-    "@synap-core/core": "*",
+    "@synap-core/core": "workspace:*",
     "@synap/api": "workspace:*"
   },
   "devDependencies": {

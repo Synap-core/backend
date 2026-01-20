@@ -10,10 +10,10 @@
  * - Automatic connection cleanup
  */
 
-import { createLogger } from '@synap-core/core';
-import type { EventRecord } from '@synap/database';
+import { createLogger } from "@synap-core/core";
+import type { EventRecord } from "@synap/database";
 
-const logger = createLogger({ module: 'event-stream-manager' });
+const logger = createLogger({ module: "event-stream-manager" });
 
 /**
  * SSE Client Connection
@@ -35,14 +35,20 @@ class EventStreamManager {
   /**
    * Register a new SSE client
    */
-  registerClient(clientId: string, controller: ReadableStreamDefaultController): void {
+  registerClient(
+    clientId: string,
+    controller: ReadableStreamDefaultController
+  ): void {
     this.clients.set(clientId, {
       id: clientId,
       controller,
       connectedAt: new Date(),
     });
 
-    logger.info({ clientId, totalClients: this.clients.size }, 'SSE client connected');
+    logger.info(
+      { clientId, totalClients: this.clients.size },
+      "SSE client connected"
+    );
   }
 
   /**
@@ -50,7 +56,10 @@ class EventStreamManager {
    */
   unregisterClient(clientId: string): void {
     this.clients.delete(clientId);
-    logger.info({ clientId, totalClients: this.clients.size }, 'SSE client disconnected');
+    logger.info(
+      { clientId, totalClients: this.clients.size },
+      "SSE client disconnected"
+    );
   }
 
   /**
@@ -68,8 +77,8 @@ class EventStreamManager {
       type: event.eventType,
       timestamp: event.timestamp.toISOString(),
       userId: event.userId,
-      aggregateId: event.aggregateId,
-      aggregateType: event.aggregateType,
+      subjectId: event.subjectId,
+      subjectType: event.subjectType,
       data: event.data,
       metadata: event.metadata,
       correlationId: event.correlationId,
@@ -89,7 +98,10 @@ class EventStreamManager {
       try {
         client.controller.enqueue(encoded);
       } catch (error) {
-        logger.warn({ clientId, err: error }, 'Failed to send event to client, marking for cleanup');
+        logger.warn(
+          { clientId, err: error },
+          "Failed to send event to client, marking for cleanup"
+        );
         deadClients.push(clientId);
       }
     }
@@ -99,11 +111,14 @@ class EventStreamManager {
       this.unregisterClient(clientId);
     }
 
-    logger.debug({
-      eventType: event.eventType,
-      clientsSent: this.clients.size - deadClients.length,
-      clientsFailed: deadClients.length
-    }, 'Event broadcasted');
+    logger.debug(
+      {
+        eventType: event.eventType,
+        clientsSent: this.clients.size - deadClients.length,
+        clientsFailed: deadClients.length,
+      },
+      "Event broadcasted"
+    );
   }
 
   /**
@@ -115,7 +130,7 @@ class EventStreamManager {
   } {
     return {
       totalClients: this.clients.size,
-      clients: Array.from(this.clients.values()).map(client => ({
+      clients: Array.from(this.clients.values()).map((client) => ({
         id: client.id,
         connectedAt: client.connectedAt.toISOString(),
       })),
@@ -126,7 +141,7 @@ class EventStreamManager {
    * Send a heartbeat to all connected clients to keep connections alive
    */
   sendHeartbeat(): void {
-    const heartbeat = ': heartbeat\n\n';
+    const heartbeat = ": heartbeat\n\n";
     const encoder = new TextEncoder();
     const encoded = encoder.encode(heartbeat);
 

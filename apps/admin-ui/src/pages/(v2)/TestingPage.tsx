@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState } from "react";
 import {
   Title,
   Text,
@@ -16,7 +16,7 @@ import {
   SegmentedControl,
   Divider,
   Skeleton,
-} from '@mantine/core';
+} from "@mantine/core";
 import {
   IconFlask,
   IconPlayerPlay,
@@ -25,23 +25,30 @@ import {
   IconCheck,
   IconX,
   IconAlertCircle,
-} from '@tabler/icons-react';
-import { colors, typography, spacing, borderRadius } from '../../theme/tokens';
-import { trpc } from '../../lib/trpc';
-import type { ToolExecutionInput, ToolExecutionOutput, PublishEventResult } from '../../types';
-import ToolFormGenerator from '../../components/forms/ToolFormGenerator';
-import { showSuccessNotification, showErrorNotification } from '../../lib/notifications';
-import SchemaFormGenerator from '../../components/forms/SchemaFormGenerator';
-import EventTemplates from '../../components/forms/EventTemplates';
+} from "@tabler/icons-react";
+import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
+import { trpc } from "../../lib/trpc";
+import type {
+  ToolExecutionInput,
+  ToolExecutionOutput,
+  PublishEventResult,
+} from "../../types";
+import ToolFormGenerator from "../../components/forms/ToolFormGenerator";
+import {
+  showSuccessNotification,
+  showErrorNotification,
+} from "../../lib/notifications";
+import SchemaFormGenerator from "../../components/forms/SchemaFormGenerator";
+import EventTemplates from "../../components/forms/EventTemplates";
 
 // Lazy load Monaco Editor
-import React from 'react';
-const Editor = React.lazy(() => import('@monaco-editor/react'));
+import React from "react";
+const Editor = React.lazy(() => import("@monaco-editor/react"));
 
 interface ExecutionHistoryItemInternal {
   id: string;
   timestamp: Date;
-  type: 'tool' | 'event';
+  type: "tool" | "event";
   name: string;
   input: ToolExecutionInput | Record<string, unknown>;
   output?: ToolExecutionInput | ToolExecutionOutput;
@@ -50,31 +57,40 @@ interface ExecutionHistoryItemInternal {
 }
 
 export default function TestingPage() {
-  const [activeTab, setActiveTab] = useState<string | null>('playground');
+  const [activeTab, setActiveTab] = useState<string | null>("playground");
 
   // AI Tools Playground State
   const [selectedTool, setSelectedTool] = useState<string | null>(null);
-  const [toolInput, setToolInput] = useState('');
-  const [toolInputObject, setToolInputObject] = useState<Record<string, unknown>>({});
-  const [toolOutput, setToolOutput] = useState<ToolExecutionOutput | null>(null);
+  const [toolInput, setToolInput] = useState("");
+  const [toolInputObject, setToolInputObject] = useState<
+    Record<string, unknown>
+  >({});
+  const [toolOutput, setToolOutput] = useState<ToolExecutionOutput | null>(
+    null
+  );
   const [isExecutingTool, setIsExecutingTool] = useState(false);
 
-
-
-  const [selectedEventType, setSelectedEventType] = useState<string>('');
-  const [eventData, setEventData] = useState('{}');
-  const [eventDataObject, setEventDataObject] = useState<Record<string, unknown>>({});
-  const [userId, setUserId] = useState('test-user');
-  const [publishResult, setPublishResult] = useState<PublishEventResult | null>(null);
-  const [inputMode, setInputMode] = useState<'form' | 'json'>('form');
+  const [selectedEventType, setSelectedEventType] = useState<string>("");
+  const [eventData, setEventData] = useState("{}");
+  const [eventDataObject, setEventDataObject] = useState<
+    Record<string, unknown>
+  >({});
+  const [userId, setUserId] = useState("test-user");
+  const [publishResult, setPublishResult] = useState<PublishEventResult | null>(
+    null
+  );
+  const [inputMode, setInputMode] = useState<"form" | "json">("form");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [editorError, setEditorError] = useState<string | null>(null);
 
   // Execution History
-  const [executionHistory, setExecutionHistory] = useState<ExecutionHistoryItemInternal[]>([]);
+  const [executionHistory, setExecutionHistory] = useState<
+    ExecutionHistoryItemInternal[]
+  >([]);
 
   // Fetch available capabilities
-  const { data: capabilities, isLoading: isLoadingCapabilities } = trpc.system.getCapabilities.useQuery();
+  const { data: capabilities, isLoading: isLoadingCapabilities } =
+    trpc.system.getCapabilities.useQuery();
 
   // Fetch event schema
   const { data: schemaData } = trpc.system.getEventTypeSchema.useQuery(
@@ -92,23 +108,26 @@ export default function TestingPage() {
         message: `Tool "${selectedTool}" executed successfully`,
       });
       addToHistory({
-        type: 'tool',
+        type: "tool",
         name: selectedTool!,
-        input: JSON.parse(toolInput || '{}'),
+        input: JSON.parse(toolInput || "{}"),
         output: data,
         success: true,
       });
     },
     onError: (error) => {
-      setToolOutput({ error: error.message, success: false } as unknown as ToolExecutionOutput);
+      setToolOutput({
+        error: error.message,
+        success: false,
+      } as unknown as ToolExecutionOutput);
       setIsExecutingTool(false);
       showErrorNotification({
         message: `Tool execution failed: ${error.message}`,
       });
       addToHistory({
-        type: 'tool',
+        type: "tool",
         name: selectedTool!,
-        input: JSON.parse(toolInput || '{}'),
+        input: JSON.parse(toolInput || "{}"),
         error: error.message,
         success: false,
       });
@@ -121,12 +140,16 @@ export default function TestingPage() {
       setPublishResult({ success: true, data });
       showSuccessNotification({
         message: `Event "${selectedEventType}" published successfully`,
-        title: 'Event Published',
+        title: "Event Published",
       });
       addToHistory({
-        type: 'event',
+        type: "event",
         name: selectedEventType!,
-        input: { eventType: selectedEventType, data: JSON.parse(eventData), userId },
+        input: {
+          eventType: selectedEventType,
+          data: JSON.parse(eventData),
+          userId,
+        },
         output: data,
         success: true,
       });
@@ -135,10 +158,10 @@ export default function TestingPage() {
       setPublishResult({ success: false, error: error.message });
       showErrorNotification({
         message: `Failed to publish event: ${error.message}`,
-        title: 'Publish Failed',
+        title: "Publish Failed",
       });
       addToHistory({
-        type: 'event',
+        type: "event",
         name: selectedEventType!,
         input: { eventType: selectedEventType, data: eventData, userId },
         error: error.message,
@@ -147,7 +170,9 @@ export default function TestingPage() {
     },
   });
 
-  const addToHistory = (item: Omit<ExecutionHistoryItemInternal, 'id' | 'timestamp'>) => {
+  const addToHistory = (
+    item: Omit<ExecutionHistoryItemInternal, "id" | "timestamp">
+  ) => {
     setExecutionHistory((prev) => [
       {
         ...item,
@@ -169,7 +194,7 @@ export default function TestingPage() {
       if (Object.keys(toolInputObject).length > 0) {
         parsedInput = toolInputObject;
       } else {
-        parsedInput = JSON.parse(toolInput || '{}');
+        parsedInput = JSON.parse(toolInput || "{}");
       }
     } catch {
       parsedInput = { query: toolInput };
@@ -178,7 +203,7 @@ export default function TestingPage() {
     executeTool.mutate({
       toolName: selectedTool,
       parameters: parsedInput as Record<string, unknown>,
-      userId: 'test-user',
+      userId: "test-user",
     });
   };
 
@@ -188,14 +213,14 @@ export default function TestingPage() {
     try {
       let parsedData: Record<string, unknown>;
 
-      if (inputMode === 'form' && hasSchema) {
-         parsedData = eventDataObject;
+      if (inputMode === "form" && hasSchema) {
+        parsedData = eventDataObject;
       } else {
-         parsedData = JSON.parse(eventData);
+        parsedData = JSON.parse(eventData);
       }
 
       // Validate required fields if using form
-      if (inputMode === 'form' && hasSchema && schemaData?.fields) {
+      if (inputMode === "form" && hasSchema && schemaData?.fields) {
         const errors: Record<string, string> = {};
         for (const field of schemaData.fields) {
           if (field.required && !parsedData[field.name]) {
@@ -204,7 +229,9 @@ export default function TestingPage() {
         }
         if (Object.keys(errors).length > 0) {
           setFormErrors(errors);
-          showErrorNotification({ message: 'Please fill in all required fields' });
+          showErrorNotification({
+            message: "Please fill in all required fields",
+          });
           return;
         }
       }
@@ -212,18 +239,22 @@ export default function TestingPage() {
       publishEvent.mutate({
         type: selectedEventType,
         data: parsedData,
-        userId: userId || 'test-user',
+        userId: userId || "test-user",
       });
       setFormErrors({});
       setEditorError(null);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Invalid JSON in event data';
+      const errorMessage =
+        error instanceof Error ? error.message : "Invalid JSON in event data";
       setPublishResult({ success: false, error: errorMessage });
       setEditorError(errorMessage);
     }
   };
 
-  const handleTemplateSelect = (template: { eventType: string; data: Record<string, unknown> }) => {
+  const handleTemplateSelect = (template: {
+    eventType: string;
+    data: Record<string, unknown>;
+  }) => {
     setSelectedEventType(template.eventType);
     setEventDataObject(template.data);
     setEventData(JSON.stringify(template.data, null, 2));
@@ -237,7 +268,7 @@ export default function TestingPage() {
   };
 
   return (
-    <div style={{ width: '100%', padding: spacing[8] }}>
+    <div style={{ width: "100%", padding: spacing[8] }}>
       <Stack gap={spacing[8]}>
         {/* Header */}
         <div>
@@ -276,7 +307,13 @@ export default function TestingPage() {
 
           {/* AI Tools Playground Tab */}
           <Tabs.Panel value="playground" pt={spacing[4]}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: spacing[4] }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: spacing[4],
+              }}
+            >
               {/* Left: Input */}
               <Card
                 padding={spacing[4]}
@@ -286,7 +323,11 @@ export default function TestingPage() {
                   backgroundColor: colors.background.primary,
                 }}
               >
-                <Text size="lg" fw={typography.fontWeight.semibold} mb={spacing[4]}>
+                <Text
+                  size="lg"
+                  fw={typography.fontWeight.semibold}
+                  mb={spacing[4]}
+                >
                   Tool Input
                 </Text>
                 <Stack gap={spacing[3]}>
@@ -314,8 +355,9 @@ export default function TestingPage() {
                     <>
                       <Alert icon={<IconAlertCircle size={16} />} color="blue">
                         <Text size="xs">
-                          {capabilities?.tools.find((t) => t.name === selectedTool)?.description ||
-                            'No description available'}
+                          {capabilities?.tools.find(
+                            (t) => t.name === selectedTool
+                          )?.description || "No description available"}
                         </Text>
                       </Alert>
                       <ToolFormGenerator
@@ -349,17 +391,26 @@ export default function TestingPage() {
                   backgroundColor: colors.background.primary,
                 }}
               >
-                <Text size="lg" fw={typography.fontWeight.semibold} mb={spacing[4]}>
+                <Text
+                  size="lg"
+                  fw={typography.fontWeight.semibold}
+                  mb={spacing[4]}
+                >
                   Tool Output
                 </Text>
                 {toolOutput ? (
-                  <ScrollArea style={{ height: '400px' }}>
+                  <ScrollArea style={{ height: "400px" }}>
                     <Code block style={{ fontSize: typography.fontSize.xs }}>
                       {JSON.stringify(toolOutput, null, 2)}
                     </Code>
                   </ScrollArea>
                 ) : (
-                  <Text size="sm" c={colors.text.tertiary} ta="center" p={spacing[6]}>
+                  <Text
+                    size="sm"
+                    c={colors.text.tertiary}
+                    ta="center"
+                    p={spacing[6]}
+                  >
                     Execute a tool to see output here
                   </Text>
                 )}
@@ -390,7 +441,7 @@ export default function TestingPage() {
                     })) || []
                   }
                   value={selectedEventType}
-                  onChange={(value) => setSelectedEventType(value || '')}
+                  onChange={(value) => setSelectedEventType(value || "")}
                   searchable
                   required
                 />
@@ -402,17 +453,19 @@ export default function TestingPage() {
                   {hasSchema && (
                     <SegmentedControl
                       value={inputMode}
-                      onChange={(value) => setInputMode(value as 'form' | 'json')}
+                      onChange={(value) =>
+                        setInputMode(value as "form" | "json")
+                      }
                       data={[
-                        { label: 'Form', value: 'form' },
-                        { label: 'JSON', value: 'json' },
+                        { label: "Form", value: "form" },
+                        { label: "JSON", value: "json" },
                       ]}
                       size="xs"
                     />
                   )}
                 </Group>
 
-                {inputMode === 'form' && hasSchema ? (
+                {inputMode === "form" && hasSchema ? (
                   <SchemaFormGenerator
                     eventType={selectedEventType}
                     value={eventDataObject}
@@ -423,9 +476,9 @@ export default function TestingPage() {
                   <React.Suspense fallback={<Skeleton height={300} />}>
                     <div
                       style={{
-                        border: '1px solid #dee2e6',
-                        borderRadius: '4px',
-                        overflow: 'hidden',
+                        border: "1px solid #dee2e6",
+                        borderRadius: "4px",
+                        overflow: "hidden",
                       }}
                     >
                       <Editor
@@ -433,13 +486,13 @@ export default function TestingPage() {
                         defaultLanguage="json"
                         value={eventData}
                         onChange={(value: string | undefined) => {
-                           setEventData(value || '{}');
-                           setEditorError(null);
+                          setEventData(value || "{}");
+                          setEditorError(null);
                         }}
                         options={{
                           minimap: { enabled: false },
                           fontSize: 14,
-                          lineNumbers: 'on',
+                          lineNumbers: "on",
                           scrollBeyondLastLine: false,
                           automaticLayout: true,
                         }}
@@ -460,7 +513,11 @@ export default function TestingPage() {
                   leftSection={<IconSend size={16} />}
                   onClick={handlePublishEvent}
                   loading={publishEvent.isPending}
-                  disabled={!selectedEventType || publishResult?.success === false && false /* dummy logic to avoid typescript complaint on unused prop if needed */} 
+                  disabled={
+                    !selectedEventType ||
+                    (publishResult?.success === false &&
+                      false) /* dummy logic to avoid typescript complaint on unused prop if needed */
+                  }
                   fullWidth
                 >
                   Publish Event
@@ -468,26 +525,38 @@ export default function TestingPage() {
 
                 {publishResult && (
                   <Alert
-                    icon={publishResult.success ? <IconCheck size={16} /> : <IconX size={16} />}
-                    color={publishResult.success ? 'green' : 'red'}
+                    icon={
+                      publishResult.success ? (
+                        <IconCheck size={16} />
+                      ) : (
+                        <IconX size={16} />
+                      )
+                    }
+                    color={publishResult.success ? "green" : "red"}
                     mt={spacing[3]}
-                    title={publishResult.success ? 'Success' : 'Error'}
+                    title={publishResult.success ? "Success" : "Error"}
                   >
-                     {publishResult.success ? (
-                        <>
-                          Event published successfully!
-                          <Text size="xs" mt={4}>ID: {(publishResult.data as any).eventId}</Text>
-                        </>
-                     ) : (
-                        publishResult.error
-                     )}
+                    {publishResult.success ? (
+                      <>
+                        Event published successfully!
+                        <Text size="xs" mt={4}>
+                          ID: {(publishResult.data as any).eventId}
+                        </Text>
+                      </>
+                    ) : (
+                      publishResult.error
+                    )}
                   </Alert>
                 )}
 
                 {editorError && (
-                    <Alert icon={<IconX size={16}/>} color="red" title="JSON Error">
-                        {editorError}
-                    </Alert>
+                  <Alert
+                    icon={<IconX size={16} />}
+                    color="red"
+                    title="JSON Error"
+                  >
+                    {editorError}
+                  </Alert>
                 )}
               </Stack>
             </Card>
@@ -512,11 +581,17 @@ export default function TestingPage() {
                 </Badge>
               </Group>
 
-              <ScrollArea style={{ height: '600px' }}>
+              <ScrollArea style={{ height: "600px" }}>
                 <Stack gap={spacing[3]}>
                   {executionHistory.length === 0 ? (
-                    <Text size="sm" c={colors.text.tertiary} ta="center" p={spacing[6]}>
-                      No executions yet. Try running a tool or publishing an event.
+                    <Text
+                      size="sm"
+                      c={colors.text.tertiary}
+                      ta="center"
+                      p={spacing[6]}
+                    >
+                      No executions yet. Try running a tool or publishing an
+                      event.
                     </Text>
                   ) : (
                     executionHistory.map((item) => (
@@ -531,38 +606,57 @@ export default function TestingPage() {
                         <Group justify="space-between" mb={spacing[2]}>
                           <Badge
                             variant="light"
-                            color={item.type === 'tool' ? 'blue' : 'purple'}
+                            color={item.type === "tool" ? "blue" : "purple"}
                             size="sm"
                           >
                             {item.type.toUpperCase()}
                           </Badge>
                           <Badge
                             variant="light"
-                            color={item.success ? 'green' : 'red'}
+                            color={item.success ? "green" : "red"}
                             size="sm"
                           >
-                            {item.success ? 'Success' : 'Failed'}
+                            {item.success ? "Success" : "Failed"}
                           </Badge>
                         </Group>
-                        <Text size="sm" fw={typography.fontWeight.medium} mb={spacing[1]}>
+                        <Text
+                          size="sm"
+                          fw={typography.fontWeight.medium}
+                          mb={spacing[1]}
+                        >
                           {item.name}
                         </Text>
-                        <Text size="xs" c={colors.text.tertiary} mb={spacing[2]}>
+                        <Text
+                          size="xs"
+                          c={colors.text.tertiary}
+                          mb={spacing[2]}
+                        >
                           {item.timestamp.toLocaleString()}
                         </Text>
                         <Divider my={spacing[2]} />
-                        <Text size="xs" c={colors.text.secondary} mb={spacing[1]}>
+                        <Text
+                          size="xs"
+                          c={colors.text.secondary}
+                          mb={spacing[1]}
+                        >
                           Input:
                         </Text>
-                        <Code block style={{ fontSize: '10px', marginBottom: spacing[2] }}>
+                        <Code
+                          block
+                          style={{ fontSize: "10px", marginBottom: spacing[2] }}
+                        >
                           {JSON.stringify(item.input, null, 2)}
                         </Code>
                         {item.output && (
                           <>
-                            <Text size="xs" c={colors.text.secondary} mb={spacing[1]}>
+                            <Text
+                              size="xs"
+                              c={colors.text.secondary}
+                              mb={spacing[1]}
+                            >
                               Output:
                             </Text>
-                            <Code block style={{ fontSize: '10px' }}>
+                            <Code block style={{ fontSize: "10px" }}>
                               {JSON.stringify(item.output, null, 2)}
                             </Code>
                           </>
@@ -572,7 +666,11 @@ export default function TestingPage() {
                             <Text size="xs" c="red" mb={spacing[1]}>
                               Error:
                             </Text>
-                            <Code block color="red" style={{ fontSize: '10px' }}>
+                            <Code
+                              block
+                              color="red"
+                              style={{ fontSize: "10px" }}
+                            >
                               {item.error}
                             </Code>
                           </>

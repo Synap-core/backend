@@ -1,175 +1,188 @@
 /**
  * API Keys Router
- * 
+ *
  * Hub Protocol V1.0 - Phase 2
- * 
- * tRPC router for managing API keys (create, list, revoke, rotate).
+ *
+ * Event-driven API key management with bcrypt hashing.
+ * ⚠️ SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
-import { router, protectedProcedure } from '../trpc.js';
-import { z } from 'zod';
-import { apiKeyService } from '../services/api-keys.js';
-import { API_KEY_SCOPES, type ApiKeyScope } from '@synap/database';
-import { TRPCError } from '@trpc/server';
+import { router, protectedProcedure } from "../trpc.js";
+import { z } from "zod";
+import { API_KEY_SCOPES } from "@synap/database/schema";
+import { db, eq, apiKeys } from "@synap/database";
+import { emitRequestEvent } from "../utils/emit-event.js";
+import { randomUUID, randomBytes } from "crypto";
 
 /**
- * Validation schemas
+ * Generate API key with proper prefix
  */
-const CreateApiKeyInputSchema = z.object({
-  keyName: z.string().min(1, 'Key name is required').max(100, 'Key name too long'),
-  scope: z.array(z.enum([...API_KEY_SCOPES] as [string, ...string[]])).min(1, 'At least one scope required'),
-  hubId: z.string().optional(),
-  expiresInDays: z.number().int().min(1).max(365).optional(),
-});
+function generateApiKey(prefix: string): string {
+  const randomPart = randomBytes(32).toString("hex");
+  return `${prefix}${randomPart}`;
+}
 
-const RevokeApiKeyInputSchema = z.object({
-  keyId: z.string().uuid('Invalid key ID'),
-  reason: z.string().optional(),
-});
-
-const RotateApiKeyInputSchema = z.object({
-  keyId: z.string().uuid('Invalid key ID'),
-});
-
-/**
- * API Keys Router
- */
 export const apiKeysRouter = router({
   /**
+   * List API keys for the current user
+   */
+  list: protectedProcedure.query(async ({ ctx }) => {
+    const keys = await db.query.apiKeys.findMany({
+      where: eq(apiKeys.userId, ctx.userId),
+      orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
+    });
+
+    // Remove sensitive fields (keyHash)
+    return keys.map((key) => ({
+      id: key.id,
+      keyName: key.keyName,
+      keyPrefix: key.keyPrefix,
+      hubId: key.hubId,
+      scope: key.scope,
+      isActive: key.isActive,
+      expiresAt: key.expiresAt,
+      lastUsedAt: key.lastUsedAt,
+      usageCount: key.usageCount,
+      createdAt: key.createdAt,
+      revokedAt: key.revokedAt,
+      revokedReason: key.revokedReason,
+    }));
+  }),
+
+  /**
    * Create a new API key
-   * 
-   * Generates a new API key with bcrypt hashing and returns it.
-   * ⚠️ The key is displayed ONCE and cannot be retrieved later.
-   * 
-   * @input keyName - User-friendly name for the key
-   * @input scope - Array of permissions
-   * @input hubId - Optional Hub ID (for Hub keys)
-   * @input expiresInDays - Optional expiration in days
-   * @returns The generated key, key ID, and metadata
+   * Event-driven: emits api_keys.create.requested
+   *
+   * ⚠️ SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
   create: protectedProcedure
-    .input(CreateApiKeyInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      try {
-        const { key, keyId } = await apiKeyService.generateApiKey(
-          ctx.userId,
-          input.keyName,
-          input.scope as ApiKeyScope[],
-          input.hubId,
-          input.expiresInDays
-        );
-        
-        return {
-          success: true,
-          key, // ⚠️ Displayed ONCE
-          keyId,
-          message: '⚠️ Save this key securely. It will not be displayed again.',
-        };
-      } catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to create API key',
-        });
-      }
+    .input(
+      z.object({
+        keyName: z.string().min(1).max(100),
+        scope: z
+          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+          .min(1),
+        hubId: z.string().optional(),
+        expiresInDays: z.number().int().min(1).max(365).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const id = randomUUID();
+
+      // Determine key prefix
+      const keyPrefix = input.hubId
+        ? process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_"
+        : "synap_user_";
+
+      // Generate key (plaintext - will be hashed in executor)
+      const key = generateApiKey(keyPrefix);
+
+      // Calculate expiration
+      const expiresAt = input.expiresInDays
+        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
+        : undefined;
+
+      await emitRequestEvent({
+        type: "api_keys.create.requested",
+        subjectId: id,
+        subjectType: "api_key",
+        data: {
+          id,
+          keyName: input.keyName,
+          keyPrefix,
+          key, // Will be hashed in executor
+          hubId: input.hubId,
+          scope: input.scope,
+          expiresAt,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      // Return key ONLY once (never stored in plaintext)
+      return {
+        id,
+        key, // ⚠️ Displayed ONCE
+        keyPrefix,
+        status: "requested",
+        message: "⚠️ Save this key securely. It will not be displayed again.",
+      };
     }),
-  
-  /**
-   * List API keys for the current user
-   * 
-   * Returns all API keys (active and revoked) without the hash.
-   * 
-   * @returns Array of key records with metadata
-   */
-  list: protectedProcedure
-    .query(async ({ ctx }) => {
-      try {
-        const keys = await apiKeyService.listUserKeys(ctx.userId);
-        
-        // Remove sensitive fields
-        return keys.map((key) => ({
-          id: key.id,
-          keyName: key.keyName,
-          keyPrefix: key.keyPrefix,
-          hubId: key.hubId,
-          scope: key.scope,
-          isActive: key.isActive,
-          expiresAt: key.expiresAt,
-          lastUsedAt: key.lastUsedAt,
-          usageCount: key.usageCount,
-          rotationScheduledAt: key.rotationScheduledAt,
-          createdAt: key.createdAt,
-          revokedAt: key.revokedAt,
-          revokedReason: key.revokedReason,
-        }));
-      } catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to list API keys',
-        });
-      }
-    }),
-  
+
   /**
    * Revoke an API key
-   * 
-   * Deactivates a key immediately. All future requests with this key will fail.
-   * 
-   * @input keyId - Key ID to revoke
-   * @input reason - Optional reason for revocation
-   * @returns Success confirmation
+   * Event-driven: emits api_keys.revoke.requested
    */
   revoke: protectedProcedure
-    .input(RevokeApiKeyInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      try {
-        await apiKeyService.revokeApiKey(
-          input.keyId,
-          ctx.userId,
-          input.reason
-        );
-        
-        return {
-          success: true,
-          message: 'API key revoked successfully',
-        };
-      } catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to revoke API key',
-        });
+    .input(
+      z.object({
+        keyId: z.string().uuid(),
+        reason: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Verify ownership
+      const key = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, input.keyId),
+      });
+
+      if (!key || key.userId !== ctx.userId) {
+        throw new Error("API key not found");
       }
+
+      await emitRequestEvent({
+        type: "api_keys.revoke.requested",
+        subjectId: input.keyId,
+        subjectType: "api_key",
+        data: {
+          id: input.keyId,
+          reason: input.reason,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message: "API key revocation requested",
+      };
     }),
-  
+
   /**
-   * Rotate an API key
-   * 
-   * Creates a new key with the same properties and revokes the old one.
-   * Useful for security best practices (rotate keys every 90 days).
-   * 
-   * @input keyId - Key ID to rotate
-   * @returns The new key and key ID
+   * Rotate an API key (create new, revoke old)
+   * Event-driven: emits api_keys.rotate.requested
    */
   rotate: protectedProcedure
-    .input(RotateApiKeyInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      try {
-        const { newKey, newKeyId } = await apiKeyService.rotateApiKey(
-          input.keyId,
-          ctx.userId
-        );
-        
-        return {
-          success: true,
-          newKey, // ⚠️ Displayed ONCE
-          newKeyId,
-          message: '⚠️ Save this key securely. The old key has been revoked.',
-        };
-      } catch (error) {
-        throw new TRPCError({
-          code: 'INTERNAL_SERVER_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to rotate API key',
-        });
+    .input(
+      z.object({
+        keyId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Verify ownership
+      const oldKey = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, input.keyId),
+      });
+
+      if (!oldKey || oldKey.userId !== ctx.userId) {
+        throw new Error("API key not found");
       }
+
+      await emitRequestEvent({
+        type: "api_keys.rotate.requested",
+        subjectId: input.keyId,
+        subjectType: "api_key",
+        data: {
+          id: input.keyId,
+          keyPrefix: oldKey.keyPrefix,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message: "API key rotation requested. New key will be generated.",
+      };
     }),
 });
-

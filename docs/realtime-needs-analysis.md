@@ -17,93 +17,95 @@ Determine the actual real-time requirements for Synap to make informed architect
 ### 1. **Who needs real-time updates?**
 
 - [ ] **Web Applications** (Browser-based clients)
-  - What: _____________________________________
-  - Why: _____________________________________
-  - Critical or nice-to-have? _______________
+  - What: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Why: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Critical or nice-to-have? **\*\***\_\_\_**\*\***
 
 - [ ] **Background Workers** (Inside pods)
-  - What: _____________________________________
-  - Why: _____________________________________
-  - Critical or nice-to-have? _______________
+  - What: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Why: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Critical or nice-to-have? **\*\***\_\_\_**\*\***
 
 - [ ] **Pod-to-Pod Communication**
-  - What: _____________________________________
-  - Why: _____________________________________
-  - Critical or nice-to-have? _______________
+  - What: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Why: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Critical or nice-to-have? **\*\***\_\_\_**\*\***
 
 - [ ] **External Systems** (IoT devices, integrations)
-  - What: _____________________________________
-  - Why: _____________________________________
-  - Critical or nice-to-have? _______________
+  - What: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Why: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Critical or nice-to-have? **\*\***\_\_\_**\*\***
 
 - [ ] **Multi-User Collaboration**
-  - What: _____________________________________
-  - Why: _____________________________________
-  - Critical or nice-to-have? _______________
+  - What: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Why: **\*\*\*\***\*\***\*\*\*\***\_**\*\*\*\***\*\***\*\*\*\***
+  - Critical or nice-to-have? **\*\***\_\_\_**\*\***
 
 ### 2. **What data needs to be real-time?**
 
 - [ ] **Event Notifications**
-  - Examples: _________________________________
-  - Latency requirement: < _____ ms/seconds
+  - Examples: **\*\***\*\*\*\***\*\***\_**\*\***\*\*\*\***\*\***
+  - Latency requirement: < **\_** ms/seconds
 
 - [ ] **State Synchronization**
-  - Examples: _________________________________
-  - Latency requirement: < _____ ms/seconds
+  - Examples: **\*\***\*\*\*\***\*\***\_**\*\***\*\*\*\***\*\***
+  - Latency requirement: < **\_** ms/seconds
 
 - [ ] **Live Collaboration**
-  - Examples: _________________________________
-  - Latency requirement: < _____ ms/seconds
+  - Examples: **\*\***\*\*\*\***\*\***\_**\*\***\*\*\*\***\*\***
+  - Latency requirement: < **\_** ms/seconds
 
 - [ ] **Progress Updates**
-  - Examples: _________________________________
-  - Latency requirement: < _____ ms/seconds
+  - Examples: **\*\***\*\*\*\***\*\***\_**\*\***\*\*\*\***\*\***
+  - Latency requirement: < **\_** ms/seconds
 
 - [ ] **Alerts/Notifications**
-  - Examples: _________________________________
-  - Latency requirement: < _____ ms/seconds
+  - Examples: **\*\***\*\*\*\***\*\***\_**\*\***\*\*\*\***\*\***
+  - Latency requirement: < **\_** ms/seconds
 
 ### 3. **Communication Patterns**
 
 - [ ] **Server → Client** (One-way broadcast)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 - [ ] **Client → Server** (One-way submission)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 - [ ] **Bidirectional** (Request/Response + Push)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 - [ ] **Multi-User Broadcast** (Server → Many Clients)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 ### 4. **Scale and Volume**
 
 **Current Expected Volume:**
-- Concurrent connections per user: _________
-- Concurrent users: _________
-- Messages per second (peak): _________
-- Message size (average): _________ KB
+
+- Concurrent connections per user: \***\*\_\*\***
+- Concurrent users: \***\*\_\*\***
+- Messages per second (peak): \***\*\_\*\***
+- Message size (average): \***\*\_\*\*** KB
 
 **Future Expected Volume (12 months):**
-- Concurrent connections per user: _________
-- Concurrent users: _________
-- Messages per second (peak): _________
-- Message size (average): _________ KB
+
+- Concurrent connections per user: \***\*\_\*\***
+- Concurrent users: \***\*\_\*\***
+- Messages per second (peak): \***\*\_\*\***
+- Message size (average): \***\*\_\*\*** KB
 
 ### 5. **Reliability Requirements**
 
 - [ ] **Guaranteed Delivery** (Messages must not be lost)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 - [ ] **Best Effort** (OK to lose some messages)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 - [ ] **Ordered Delivery** (Messages must arrive in order)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 - [ ] **Replay/History** (Need to catch up missed messages)
-  - Use cases: ________________________________
+  - Use cases: **\*\***\*\***\*\***\_\_\_\_**\*\***\*\***\*\***
 
 ---
 
@@ -112,74 +114,85 @@ Determine the actual real-time requirements for Synap to make informed architect
 **Deployment Model:** Pod-per-user (single isolated pod per user)
 
 **Current Components:**
+
 - PostgreSQL + TimescaleDB (events, time-series)
 - Inngest (background jobs, async processing)
 - MinIO (file storage)
 - Ory (authentication)
 
 **Question:** Do we already have implicit real-time via:
+
 - [ ] Polling (client periodically checks for updates)
 - [ ] Inngest job completion callbacks
-- [ ] Other mechanism: ___________________________
+- [ ] Other mechanism: \***\*\*\*\*\*\*\***\_\_\_\***\*\*\*\*\*\*\***
 
 ---
 
 ## 💡 Specific Use Case Analysis
 
-### Use Case 1: _____________________________
+### Use Case 1: **\*\***\*\***\*\***\_**\*\***\*\***\*\***
 
-**Description:**  
-_________________________________________________________________
-_________________________________________________________________
-
-**Real-time requirement:** [ ] Critical [ ] Nice-to-have [ ] Not needed
-
-**Acceptable latency:** ____ ms/seconds
-
-**Communication pattern:** [ ] Server→Client [ ] Client→Server [ ] Bidirectional
-
-**Reliability:** [ ] Guaranteed [ ] Best effort
-
-**Current workaround (if any):**  
-_________________________________________________________________
+**Description:**
 
 ---
 
-### Use Case 2: _____________________________
-
-**Description:**  
-_________________________________________________________________
-_________________________________________________________________
+---
 
 **Real-time requirement:** [ ] Critical [ ] Nice-to-have [ ] Not needed
 
-**Acceptable latency:** ____ ms/seconds
+**Acceptable latency:** \_\_\_\_ ms/seconds
 
 **Communication pattern:** [ ] Server→Client [ ] Client→Server [ ] Bidirectional
 
 **Reliability:** [ ] Guaranteed [ ] Best effort
 
-**Current workaround (if any):**  
-_________________________________________________________________
+**Current workaround (if any):**
 
 ---
 
-### Use Case 3: _____________________________
+---
 
-**Description:**  
-_________________________________________________________________
-_________________________________________________________________
+### Use Case 2: **\*\***\*\***\*\***\_**\*\***\*\***\*\***
+
+**Description:**
+
+---
+
+---
 
 **Real-time requirement:** [ ] Critical [ ] Nice-to-have [ ] Not needed
 
-**Acceptable latency:** ____ ms/seconds
+**Acceptable latency:** \_\_\_\_ ms/seconds
 
 **Communication pattern:** [ ] Server→Client [ ] Client→Server [ ] Bidirectional
 
 **Reliability:** [ ] Guaranteed [ ] Best effort
 
-**Current workaround (if any):**  
-_________________________________________________________________
+**Current workaround (if any):**
+
+---
+
+---
+
+### Use Case 3: **\*\***\*\***\*\***\_**\*\***\*\***\*\***
+
+**Description:**
+
+---
+
+---
+
+**Real-time requirement:** [ ] Critical [ ] Nice-to-have [ ] Not needed
+
+**Acceptable latency:** \_\_\_\_ ms/seconds
+
+**Communication pattern:** [ ] Server→Client [ ] Client→Server [ ] Bidirectional
+
+**Reliability:** [ ] Guaranteed [ ] Best effort
+
+**Current workaround (if any):**
+
+---
 
 ---
 
@@ -190,6 +203,7 @@ _________________________________________________________________
 **Recommendation:** Server-Sent Events (SSE)
 
 **Why:**
+
 - ✅ Simple HTTP-based (no WebSocket complexity)
 - ✅ Auto-reconnection built-in
 - ✅ Perfect for server→client notifications
@@ -197,6 +211,7 @@ _________________________________________________________________
 - ✅ ~100KB/sec throughput sufficient for most cases
 
 **When to use:**
+
 - Notifications, status updates, progress bars
 - < 100 messages/second
 - Unidirectional (server→client)
@@ -208,6 +223,7 @@ _________________________________________________________________
 **Recommendation:** WebSocket (`ws` library)
 
 **Why:**
+
 - ✅ Lowest latency (<20ms)
 - ✅ Bidirectional communication
 - ✅ 50,000+ concurrent connections/pod
@@ -215,6 +231,7 @@ _________________________________________________________________
 - ✅ Full control over implementation
 
 **When to use:**
+
 - Chat, collaboration, real-time dashboards
 - > 100 messages/second
 - Bidirectional or high-frequency updates
@@ -226,12 +243,14 @@ _________________________________________________________________
 **Recommendation:** Smart Polling or Webhook Events
 
 **Why:**
+
 - ✅ Simplest implementation
 - ✅ No persistent connections
 - ✅ Works everywhere
 - ✅ Leverage existing Inngest jobs
 
 **When to use:**
+
 - Background processing results
 - Occasional status checks
 - Non-time-critical updates
@@ -240,12 +259,12 @@ _________________________________________________________________
 
 ## 📊 Decision Matrix
 
-| Requirement | Solution | Complexity | Latency | Cost |
-|-------------|----------|------------|---------|------|
-| Server→Client notifications | SSE | Low | Medium | Low |
-| Bidirectional chat/collaboration | WebSocket | Medium | Lowest | Medium |
-| Background job updates | Polling + Inngest | Lowest | High | Lowest |
-| Real-time analytics | WebSocket + LISTEN/NOTIFY | High | Lowest | Medium |
+| Requirement                      | Solution                  | Complexity | Latency | Cost   |
+| -------------------------------- | ------------------------- | ---------- | ------- | ------ |
+| Server→Client notifications      | SSE                       | Low        | Medium  | Low    |
+| Bidirectional chat/collaboration | WebSocket                 | Medium     | Lowest  | Medium |
+| Background job updates           | Polling + Inngest         | Lowest     | High    | Lowest |
+| Real-time analytics              | WebSocket + LISTEN/NOTIFY | High       | Lowest  | Medium |
 
 ---
 
@@ -264,9 +283,11 @@ _________________________________________________________________
 
 _Add any additional context, constraints, or observations here:_
 
-_________________________________________________________________
-_________________________________________________________________
-_________________________________________________________________
+---
+
+---
+
+---
 
 ---
 

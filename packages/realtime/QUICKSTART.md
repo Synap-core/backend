@@ -61,6 +61,7 @@ You should see the message appear in the WebSocket client.
 ### 1. Set Environment Variable
 
 In your backend environment:
+
 ```bash
 export REALTIME_URL=https://realtime.synap.app
 ```
@@ -110,4 +111,3 @@ function MyComponent() {
 - Add authentication to WebSocket connections
 - Implement message queuing for offline users
 - Add presence system (track online users)
-

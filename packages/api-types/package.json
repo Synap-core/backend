@@ -1,0 +1,52 @@
+{
+  "name": "@synap-core/api-types",
+  "version": "1.0.10",
+  "description": "Type definitions for Synap API Router - tRPC types for frontend",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "dts-bundle-generator -o dist/index.d.ts src/index.ts --no-check && node scripts/inject-imports.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@synap-core/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@synap/api": "workspace:*",
+    "@trpc/server": "^11.8.1",
+    "drizzle-orm": "^0.45.1",
+    "dts-bundle-generator": "^9.5.1",
+    "postgres": "^3.4.8",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.3",
+    "zod": "3.23.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synap/synap.git",
+    "directory": "packages/api-types"
+  },
+  "keywords": [
+    "synap",
+    "api",
+    "types",
+    "trpc",
+    "router"
+  ],
+  "license": "MIT"
+}

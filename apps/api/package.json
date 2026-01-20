@@ -20,16 +20,16 @@
     "@trpc/server": "^11.0.0",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
-    "hono": "^4.0.0",
+    "hono": "^4.11.4",
     "hono-rate-limiter": "^0.4.2",
-    "inngest": "^3.15.0",
-    "zod": "^3.22.0"
+    "inngest": "3.22.12",
+    "zod": "3.23.8"
   },
   "devDependencies": {
     "@types/pg": "^8.15.6",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

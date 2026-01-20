@@ -7,12 +7,14 @@ This directory contains **manually written** SQL migrations for PostgreSQL featu
 Use custom migrations for:
 
 1. **PostgreSQL Extensions**
+
    ```sql
    CREATE EXTENSION IF NOT EXISTS vector;
    CREATE EXTENSION IF NOT EXISTS timescaledb;
    ```
 
 2. **PL/pgSQL Functions**
+
    ```sql
    CREATE OR REPLACE FUNCTION my_function()
    RETURNS TABLE(...) AS $$
@@ -23,18 +25,20 @@ Use custom migrations for:
    ```
 
 3. **TimescaleDB Hypertables**
+
    ```sql
    SELECT create_hypertable('events', 'timestamp');
    ```
 
 4. **Complex Data Migrations**
+
    ```sql
    UPDATE users SET role = 'admin' WHERE email IN (...);
    ```
 
 5. **Indexes with Special Options**
    ```sql
-   CREATE INDEX CONCURRENTLY idx_embeddings ON entities 
+   CREATE INDEX CONCURRENTLY idx_embeddings ON entities
    USING ivfflat (embedding vector_cosine_ops);
    ```
 
@@ -48,6 +52,7 @@ XXXX_description.sql
 - `description`: Snake_case description
 
 Examples:
+
 - `0001_enable_extensions.sql`
 - `0002_create_hypertables.sql`
 - `0010_api_keys_functions.sql`
@@ -59,4 +64,3 @@ Examples:
 3. Both are tracked in the `_migrations` table
 
 See `../src/migrate.ts` for the migration script.
-

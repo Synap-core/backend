@@ -1,11 +1,11 @@
 /**
  * Ingestion Engine Inngest Function
- * 
+ *
  * ⚠️ DEPRECATED: This function has been moved to synap-intelligence-hub repository.
- * 
+ *
  * This file is kept for reference only. The Ingestion Engine is now part of
  * the proprietary Intelligence Hub and should not be used in the open-source Data Pod.
- * 
+ *
  * If you need ingestion capabilities, use the Intelligence Hub via Hub Protocol.
  */
 
@@ -21,9 +21,9 @@
 
 /**
  * Ingestion Engine Worker
- * 
+ *
  * ⚠️ DEPRECATED: This function has been moved to synap-intelligence-hub repository.
- * 
+ *
  * The Ingestion Engine is now part of the proprietary Intelligence Hub.
  * Use the Intelligence Hub via Hub Protocol instead.
  */
@@ -104,8 +104,8 @@ export const ingestionEngineV1 = inngest.createFunction(
           data: {
             id: synapEvent.id,
             type: synapEvent.type,
-            aggregateId: synapEvent.aggregateId,
-            aggregateType: 'entity',
+            subjectId: synapEvent.subjectId,
+            subjectType: 'entity',
             userId: synapEvent.userId,
             version: 1,
             timestamp: timestamp.toISOString(),
@@ -135,4 +135,3 @@ export const ingestionEngineV1 = inngest.createFunction(
   }
 );
 */
-

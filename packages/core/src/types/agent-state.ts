@@ -1,8 +1,8 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export const AgentExecutionSummarySchema = z.object({
   tool: z.string(),
-  status: z.enum(['success', 'error', 'skipped']),
+  status: z.enum(["success", "error", "skipped"]),
   result: z.unknown().optional(),
   error: z.string().optional(),
 });
@@ -65,5 +65,6 @@ export const ConversationMessageMetadataSchema = z.object({
   latency: z.number().optional(),
 });
 
-export type ConversationMessageMetadata = z.infer<typeof ConversationMessageMetadataSchema>;
-
+export type ConversationMessageMetadata = z.infer<
+  typeof ConversationMessageMetadataSchema
+>;

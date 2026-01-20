@@ -1,11 +1,11 @@
 /**
  * Loading Skeleton Components
- * 
+ *
  * Reusable skeleton components for consistent loading states across the application.
  */
 
-import { Skeleton, Stack, Card, Group } from '@mantine/core';
-import { spacing, borderRadius } from '../../theme/tokens';
+import { Skeleton, Stack, Card, Group } from "@mantine/core";
+import { spacing, borderRadius } from "../../theme/tokens";
 
 /**
  * Skeleton for metric cards (Dashboard)
@@ -32,9 +32,9 @@ export function EventListItemSkeleton() {
       style={{
         padding: spacing[3],
         borderRadius: borderRadius.base,
-        border: '1px solid #E5E7EB',
-        display: 'flex',
-        alignItems: 'center',
+        border: "1px solid #E5E7EB",
+        display: "flex",
+        alignItems: "center",
         gap: spacing[3],
       }}
     >
@@ -122,7 +122,13 @@ export function ToolAccordionSkeleton() {
  */
 export function CodeBlockSkeleton() {
   return (
-    <div style={{ padding: spacing[3], backgroundColor: '#F9FAFB', borderRadius: borderRadius.base }}>
+    <div
+      style={{
+        padding: spacing[3],
+        backgroundColor: "#F9FAFB",
+        borderRadius: borderRadius.base,
+      }}
+    >
       <Skeleton height={12} width="100%" mb={spacing[1]} />
       <Skeleton height={12} width="90%" mb={spacing[1]} />
       <Skeleton height={12} width="95%" mb={spacing[1]} />
@@ -130,4 +136,3 @@ export function CodeBlockSkeleton() {
     </div>
   );
 }
-

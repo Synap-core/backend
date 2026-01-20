@@ -1,9 +1,9 @@
 /**
  * Conversational Agent Base Class
- * 
+ *
  * Base class for creating conversational agents in the Data Pod.
  * Plugins can extend this to create custom conversational experiences.
- * 
+ *
  * @example
  * ```typescript
  * export class MyConversationalAgent extends ConversationalAgent {
@@ -16,7 +16,7 @@
  */
 
 export interface ConversationMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   content: string;
   timestamp?: Date;
 }

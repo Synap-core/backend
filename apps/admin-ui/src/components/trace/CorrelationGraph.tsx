@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { Card, Title, Text, Stack, Alert } from '@mantine/core';
-import { IconInfoCircle } from '@tabler/icons-react';
-import cytoscape from 'cytoscape';
-import type { Core, EdgeDataDefinition, NodeSingular } from 'cytoscape';
+import { useEffect, useRef, useState } from "react";
+import { Card, Title, Text, Stack, Alert } from "@mantine/core";
+import { IconInfoCircle } from "@tabler/icons-react";
+import cytoscape from "cytoscape";
+import type { Core, EdgeDataDefinition, NodeSingular } from "cytoscape";
 
 interface CorrelationGraphProps {
   events: Array<{
@@ -48,7 +48,7 @@ export default function CorrelationGraph({
               id: `${event.causationId}-${event.id}`,
               source: event.causationId,
               target: event.id,
-              label: 'caused',
+              label: "caused",
             },
           });
         }
@@ -61,45 +61,45 @@ export default function CorrelationGraph({
       elements: [...nodes, ...edges],
       style: [
         {
-          selector: 'node',
+          selector: "node",
           style: {
-            'background-color': '#228BE6',
-            label: 'data(label)',
-            'text-valign': 'center',
-            'text-halign': 'center',
-            color: '#fff',
-            'font-size': '10px',
-            width: '60px',
-            height: '60px',
-            'text-wrap': 'wrap',
-            'text-max-width': '50px',
+            "background-color": "#228BE6",
+            label: "data(label)",
+            "text-valign": "center",
+            "text-halign": "center",
+            color: "#fff",
+            "font-size": "10px",
+            width: "60px",
+            height: "60px",
+            "text-wrap": "wrap",
+            "text-max-width": "50px",
           },
         },
         {
-          selector: 'node:selected',
+          selector: "node:selected",
           style: {
-            'background-color': '#fd7e14',
-            'border-width': 3,
-            'border-color': '#f76707',
+            "background-color": "#fd7e14",
+            "border-width": 3,
+            "border-color": "#f76707",
           },
         },
         {
-          selector: 'edge',
+          selector: "edge",
           style: {
             width: 2,
-            'line-color': '#dee2e6',
-            'target-arrow-color': '#dee2e6',
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            label: 'data(label)',
-            'font-size': '8px',
-            color: '#868e96',
-            'text-rotation': 'autorotate',
+            "line-color": "#dee2e6",
+            "target-arrow-color": "#dee2e6",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            label: "data(label)",
+            "font-size": "8px",
+            color: "#868e96",
+            "text-rotation": "autorotate",
           },
         },
       ],
       layout: {
-        name: 'breadthfirst',
+        name: "breadthfirst",
         directed: true,
         spacingFactor: 1.5,
         animate: true,
@@ -108,7 +108,7 @@ export default function CorrelationGraph({
     });
 
     // Event handlers
-    cy.on('tap', 'node', (evt) => {
+    cy.on("tap", "node", (evt) => {
       const node = evt.target as NodeSingular;
       const eventId = node.id();
       if (onEventClick) {
@@ -140,7 +140,8 @@ export default function CorrelationGraph({
   if (events.length === 0) {
     return (
       <Alert icon={<IconInfoCircle size={16} />} title="No Events" color="blue">
-        No events to visualize. Search for events by correlation ID to see the event flow graph.
+        No events to visualize. Search for events by correlation ID to see the
+        event flow graph.
       </Alert>
     );
   }
@@ -157,15 +158,15 @@ export default function CorrelationGraph({
         <div
           ref={containerRef}
           style={{
-            width: '100%',
-            height: '500px',
-            border: '1px solid #dee2e6',
-            borderRadius: '4px',
+            width: "100%",
+            height: "500px",
+            border: "1px solid #dee2e6",
+            borderRadius: "4px",
           }}
         />
         <Text size="xs" c="dimmed">
-          Click on a node to view event details. Arrows show causation relationships (A → B means
-          "A caused B").
+          Click on a node to view event details. Arrows show causation
+          relationships (A → B means "A caused B").
         </Text>
       </Stack>
     </Card>

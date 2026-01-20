@@ -32,7 +32,7 @@ export interface ToolExecutionOutput {
 export interface ExecutionHistoryItem {
   id: string;
   timestamp: Date;
-  type: 'tool' | 'event';
+  type: "tool" | "event";
   name: string;
   input: ToolExecutionInput | Record<string, unknown>;
   output?: ToolExecutionInput | ToolExecutionOutput;
@@ -53,7 +53,7 @@ export interface PublishEventResult {
 // System metrics types
 export interface SystemMetrics {
   health: {
-    status: 'healthy' | 'degraded' | 'critical';
+    status: "healthy" | "degraded" | "critical";
     errorRate: number;
   };
   throughput: {
@@ -100,4 +100,3 @@ export interface CytoscapeEdge {
     [key: string]: unknown;
   };
 }
-

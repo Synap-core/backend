@@ -1,41 +1,52 @@
 // Target Types
-export type TemplateTargetType = 'entity' | 'document' | 'project' | 'inbox_item';
-export type LayoutZone = 'banner' | 'header' | 'sidebar' | 'contentBefore' | 'content' | 'contentAfter' | 'footer';
-export type FieldRendererType = 
-  | 'text' 
-  | 'badge' 
-  | 'icon'
-  | 'avatar' 
-  | 'avatarGroup'
-  | 'date' 
-  | 'progress' 
-  | 'checkbox' 
-  | 'link' 
-  | 'number' 
-  | 'currency' 
-  | 'relations'
-  | 'tags'
-  | 'code'
-  | 'image'
-  | 'timeline'
-  | 'backlinks'
-  | 'links'
-  | 'toc'
-  | 'embeddedView';
+export type TemplateTargetType =
+  | "entity"
+  | "document"
+  | "project"
+  | "inbox_item";
+export type LayoutZone =
+  | "banner"
+  | "header"
+  | "sidebar"
+  | "contentBefore"
+  | "content"
+  | "contentAfter"
+  | "footer";
+export type FieldRendererType =
+  | "text"
+  | "badge"
+  | "icon"
+  | "avatar"
+  | "avatarGroup"
+  | "date"
+  | "progress"
+  | "checkbox"
+  | "link"
+  | "number"
+  | "currency"
+  | "relations"
+  | "tags"
+  | "code"
+  | "image"
+  | "timeline"
+  | "backlinks"
+  | "links"
+  | "toc"
+  | "embeddedView";
 
 // Zone Configuration
 export interface ZoneConfig {
   enabled: boolean;
   slots?: string[];
-  position?: 'left' | 'right';  // For sidebar
-  width?: string;               // For sidebar
-  layout?: 'horizontal' | 'vertical'; // For header/zones with multiple items
-  align?: 'left' | 'center' | 'right';
+  position?: "left" | "right"; // For sidebar
+  width?: string; // For sidebar
+  layout?: "horizontal" | "vertical"; // For header/zones with multiple items
+  align?: "left" | "center" | "right";
 }
 
 // Header-specific configuration
 export interface HeaderConfig extends ZoneConfig {
-  metadataPosition?: 'inline' | 'above' | 'below'; // Where metadata appears relative to title
+  metadataPosition?: "inline" | "above" | "below"; // Where metadata appears relative to title
   showIcon?: boolean;
 }
 
@@ -56,12 +67,12 @@ export interface FieldRendererConfig {
   variant?: string;
   size?: string;
   format?: string;
-  appearance?: 'compact' | 'detailed' | 'cards'; // For relations
-  aspect?: 'wide' | 'square' | 'tall'; // For images
+  appearance?: "compact" | "detailed" | "cards"; // For relations
+  aspect?: "wide" | "square" | "tall"; // For images
 }
 
 export interface FieldSlotMapping {
-  slot: string;  // e.g., "header.metadata" or "contentBefore.propertiesGrid"
+  slot: string; // e.g., "header.metadata" or "contentBefore.propertiesGrid"
   renderer?: FieldRendererConfig;
   label?: string;
   showLabel?: boolean;
@@ -126,7 +137,7 @@ export interface TemplateConfig {
   colors?: TemplateColorsConfig;
   styling?: TemplateStylingConfig;
   containerStyling?: ContainerStyling;
-  
+
   // View-specific overrides
   viewOverrides?: {
     modal?: Partial<TemplateLayoutConfig>;

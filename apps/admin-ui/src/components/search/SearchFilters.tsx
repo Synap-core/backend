@@ -9,16 +9,21 @@ import {
   Grid,
   Collapse,
   Text,
-} from '@mantine/core';
-import { DateTimePicker } from '@mantine/dates';
-import { IconSearch, IconFilterOff, IconChevronDown, IconChevronUp } from '@tabler/icons-react';
-import { useState } from 'react';
+} from "@mantine/core";
+import { DateTimePicker } from "@mantine/dates";
+import {
+  IconSearch,
+  IconFilterOff,
+  IconChevronDown,
+  IconChevronUp,
+} from "@tabler/icons-react";
+import { useState } from "react";
 
 export interface SearchFiltersState {
   userId?: string;
   eventType?: string;
-  aggregateType?: string;
-  aggregateId?: string;
+  subjectType?: string;
+  subjectId?: string;
   correlationId?: string;
   fromDate?: Date;
   toDate?: Date;
@@ -77,8 +82,10 @@ export default function SearchFilters({
             <TextInput
               label="User ID"
               placeholder="Enter user ID..."
-              value={filters.userId || ''}
-              onChange={(e) => updateFilter('userId', e.currentTarget.value || undefined)}
+              value={filters.userId || ""}
+              onChange={(e) =>
+                updateFilter("userId", e.currentTarget.value || undefined)
+              }
             />
           </Grid.Col>
           <Grid.Col span={{ base: 12, sm: 6 }}>
@@ -87,7 +94,9 @@ export default function SearchFilters({
               placeholder="Select event type..."
               data={eventTypes.map((et) => ({ value: et, label: et }))}
               value={filters.eventType || null}
-              onChange={(value) => updateFilter('eventType', value || undefined)}
+              onChange={(value) =>
+                updateFilter("eventType", value || undefined)
+              }
               searchable
               clearable
             />
@@ -99,9 +108,15 @@ export default function SearchFilters({
           variant="subtle"
           size="xs"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          rightSection={showAdvanced ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+          rightSection={
+            showAdvanced ? (
+              <IconChevronUp size={14} />
+            ) : (
+              <IconChevronDown size={14} />
+            )
+          }
         >
-          {showAdvanced ? 'Hide' : 'Show'} Advanced Filters
+          {showAdvanced ? "Hide" : "Show"} Advanced Filters
         </Button>
 
         <Collapse in={showAdvanced}>
@@ -111,16 +126,26 @@ export default function SearchFilters({
                 <TextInput
                   label="Aggregate Type"
                   placeholder="e.g., note, task, conversation..."
-                  value={filters.aggregateType || ''}
-                  onChange={(e) => updateFilter('aggregateType', e.currentTarget.value || undefined)}
+                  value={filters.subjectType || ""}
+                  onChange={(e) =>
+                    updateFilter(
+                      "subjectType",
+                      e.currentTarget.value || undefined
+                    )
+                  }
                 />
               </Grid.Col>
               <Grid.Col span={{ base: 12, sm: 6 }}>
                 <TextInput
                   label="Aggregate ID"
                   placeholder="Enter aggregate ID..."
-                  value={filters.aggregateId || ''}
-                  onChange={(e) => updateFilter('aggregateId', e.currentTarget.value || undefined)}
+                  value={filters.subjectId || ""}
+                  onChange={(e) =>
+                    updateFilter(
+                      "subjectId",
+                      e.currentTarget.value || undefined
+                    )
+                  }
                 />
               </Grid.Col>
             </Grid>
@@ -128,8 +153,13 @@ export default function SearchFilters({
             <TextInput
               label="Correlation ID"
               placeholder="Enter correlation ID..."
-              value={filters.correlationId || ''}
-              onChange={(e) => updateFilter('correlationId', e.currentTarget.value || undefined)}
+              value={filters.correlationId || ""}
+              onChange={(e) =>
+                updateFilter(
+                  "correlationId",
+                  e.currentTarget.value || undefined
+                )
+              }
             />
 
             <Grid>
@@ -138,7 +168,12 @@ export default function SearchFilters({
                   label="From Date"
                   placeholder="Select start date..."
                   value={filters.fromDate || null}
-                  onChange={(value) => updateFilter('fromDate', (value as unknown) as Date | undefined)}
+                  onChange={(value) =>
+                    updateFilter(
+                      "fromDate",
+                      value as unknown as Date | undefined
+                    )
+                  }
                   clearable
                 />
               </Grid.Col>
@@ -147,7 +182,9 @@ export default function SearchFilters({
                   label="To Date"
                   placeholder="Select end date..."
                   value={filters.toDate || null}
-                  onChange={(value) => updateFilter('toDate', (value as unknown) as Date | undefined)}
+                  onChange={(value) =>
+                    updateFilter("toDate", value as unknown as Date | undefined)
+                  }
                   clearable
                 />
               </Grid.Col>
@@ -160,7 +197,9 @@ export default function SearchFilters({
                   description="Max results to return (1-1000)"
                   placeholder="50"
                   value={filters.limit}
-                  onChange={(value) => updateFilter('limit', Number(value) || 50)}
+                  onChange={(value) =>
+                    updateFilter("limit", Number(value) || 50)
+                  }
                   min={1}
                   max={1000}
                 />
@@ -171,7 +210,9 @@ export default function SearchFilters({
                   description="Skip first N results"
                   placeholder="0"
                   value={filters.offset}
-                  onChange={(value) => updateFilter('offset', Number(value) || 0)}
+                  onChange={(value) =>
+                    updateFilter("offset", Number(value) || 0)
+                  }
                   min={0}
                 />
               </Grid.Col>

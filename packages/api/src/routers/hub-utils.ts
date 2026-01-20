@@ -1,25 +1,30 @@
 /**
  * Hub Protocol Utilities
- * 
+ *
  * Functions for JWT token generation, validation, and audit logging
  * for the Hub Protocol V1.0
  */
 
-import jwt from 'jsonwebtoken';
-import { createLogger } from '@synap-core/core';
-import { getEventRepository } from '@synap/database';
-import { createSynapEvent } from '@synap-core/core';
+import jwt from "jsonwebtoken";
+import { createLogger } from "@synap-core/core";
+import { getEventRepository } from "@synap/database";
+import { createSynapEvent } from "@synap-core/core";
 
-const logger = createLogger({ module: 'hub-utils' });
+const logger = createLogger({ module: "hub-utils" });
 
 // ============================================================================
 // JWT CONFIGURATION
 // ============================================================================
 
-const HUB_JWT_SECRET = process.env.HUB_JWT_SECRET || process.env.SYNAP_SECRET_TOKEN || 'change-me-in-production';
+const HUB_JWT_SECRET =
+  process.env.HUB_JWT_SECRET ||
+  process.env.SYNAP_SECRET_TOKEN ||
+  "change-me-in-production";
 
-if (!process.env.HUB_JWT_SECRET && process.env.NODE_ENV === 'production') {
-  logger.warn('HUB_JWT_SECRET not set - using SYNAP_SECRET_TOKEN. This is not recommended for production.');
+if (!process.env.HUB_JWT_SECRET && process.env.NODE_ENV === "production") {
+  logger.warn(
+    "HUB_JWT_SECRET not set - using SYNAP_SECRET_TOKEN. This is not recommended for production."
+  );
 }
 
 // ============================================================================
@@ -40,7 +45,7 @@ export interface HubTokenPayload {
 
 /**
  * Generate a JWT token for Hub access
- * 
+ *
  * @param userId - User ID
  * @param requestId - Request ID from Hub
  * @param scope - List of permissions (e.g., ['preferences', 'calendar'])
@@ -53,12 +58,12 @@ export function generateHubAccessToken(
   scope: string[],
   expiresIn: number = 300
 ): { token: string; expiresAt: number } {
-  // Clamp expiresIn between 60 and 300 seconds (1-5 minutes)
-  const validExpiresIn = Math.max(60, Math.min(300, expiresIn));
-  
+  // Clamp expiresIn between 1 and 300 seconds
+  const validExpiresIn = Math.max(1, Math.min(300, expiresIn));
+
   const now = Math.floor(Date.now() / 1000);
   const exp = now + validExpiresIn;
-  
+
   const payload: HubTokenPayload = {
     userId,
     requestId,
@@ -66,14 +71,17 @@ export function generateHubAccessToken(
     iat: now,
     exp,
   };
-  
+
   const token = jwt.sign(payload, HUB_JWT_SECRET, {
-    algorithm: 'HS256',
-    expiresIn: validExpiresIn,
+    algorithm: "HS256",
+    // expiresIn provided via payload.exp
   });
-  
-  logger.debug({ userId, requestId, scope, expiresIn: validExpiresIn }, 'Hub access token generated');
-  
+
+  logger.debug(
+    { userId, requestId, scope, expiresIn: validExpiresIn },
+    "Hub access token generated"
+  );
+
   return {
     token,
     expiresAt: exp * 1000, // Return in milliseconds
@@ -86,32 +94,32 @@ export function generateHubAccessToken(
 
 /**
  * Validate a Hub JWT token
- * 
+ *
  * @param token - JWT token to validate
  * @returns Decoded payload or null if invalid
  */
 export function validateHubToken(token: string): HubTokenPayload | null {
   try {
     const decoded = jwt.verify(token, HUB_JWT_SECRET, {
-      algorithms: ['HS256'],
+      algorithms: ["HS256"],
     }) as HubTokenPayload;
-    
+
     // Verify token hasn't expired
     const now = Math.floor(Date.now() / 1000);
     if (decoded.exp < now) {
-      logger.warn({ exp: decoded.exp, now }, 'Hub token expired');
+      logger.warn({ exp: decoded.exp, now }, "Hub token expired");
       return null;
     }
-    
+
     // Verify required fields
     if (!decoded.userId || !decoded.requestId || !decoded.scope) {
-      logger.warn({ decoded }, 'Hub token missing required fields');
+      logger.warn({ decoded }, "Hub token missing required fields");
       return null;
     }
-    
+
     return decoded;
   } catch (error) {
-    logger.warn({ err: error }, 'Hub token validation failed');
+    logger.warn({ err: error }, "Hub token validation failed");
     return null;
   }
 }
@@ -121,14 +129,14 @@ export function validateHubToken(token: string): HubTokenPayload | null {
 // ============================================================================
 
 export type HubAccessEventType =
-  | 'token.generated'
-  | 'data.requested'
-  | 'insight.submitted'
-  | 'semantic.search';
+  | "token.generated"
+  | "data.requested"
+  | "insight.submitted"
+  | "semantic.search";
 
 /**
  * Log a Hub access event for audit trail
- * 
+ *
  * @param userId - User ID
  * @param requestId - Request ID
  * @param action - Action type ('token.generated' | 'data.requested' | 'insight.submitted' | 'semantic.search')
@@ -142,26 +150,28 @@ export async function logHubAccess(
 ): Promise<void> {
   try {
     const eventRepo = getEventRepository();
-    
+
     // Create audit event
     const auditEvent = createSynapEvent({
-      type: 'accessLogs.create' as any, // Audit event
+      type: "accessLogs.create" as any, // Audit event
       data: {
         action,
         requestId,
         ...metadata,
       },
       userId,
-      source: 'system',
+      source: "system",
       correlationId: requestId,
     });
-    
+
     await eventRepo.append(auditEvent);
-    
-    logger.debug({ userId, requestId, action }, 'Hub access logged');
+
+    logger.debug({ userId, requestId, action }, "Hub access logged");
   } catch (error) {
     // Don't fail the request if audit logging fails
-    logger.error({ err: error, userId, requestId, action }, 'Failed to log Hub access');
+    logger.error(
+      { err: error, userId, requestId, action },
+      "Failed to log Hub access"
+    );
   }
 }
-

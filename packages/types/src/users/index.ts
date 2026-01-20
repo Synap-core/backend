@@ -1,13 +1,13 @@
 /**
  * User Types
- * 
+ *
  * Re-exports user-related types from database schema.
- * 
+ *
  * @see {@link @synap/database/schema}
  */
 
 // Direct re-exports from database
-export type { 
+export type {
   UserEntityState,
   NewUserEntityState,
   EntityEnrichment,
@@ -16,4 +16,4 @@ export type {
   NewEntityRelationship,
   ReasoningTrace,
   NewReasoningTrace,
-} from '@synap/database/schema';
+} from "@synap/database/schema";

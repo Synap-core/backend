@@ -18,7 +18,9 @@
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",
-    "dev": "npx inngest-cli@latest dev"
+    "test:unit": "vitest run -c vitest.unit.config.ts",
+    "dev": "npx inngest-cli@latest dev",
+    "index-entities": "tsx src/scripts/index-existing-entities.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
@@ -30,8 +32,8 @@
     "ai": "^4.0.0",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
-    "inngest": "^3.15.0",
-    "zod": "^3.22.0"
+    "inngest": "3.22.12",
+    "zod": "3.23.8"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

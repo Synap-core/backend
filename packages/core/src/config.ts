@@ -1,60 +1,62 @@
 /**
  * Centralized Configuration Management
- * 
+ *
  * Provides type-safe, validated configuration from environment variables.
  * All packages should use this instead of directly accessing process.env.
- * 
+ *
  * @example
  * ```typescript
  * import { config } from '@synap-core/core';
- * 
+ *
  * const dbUrl = config.database.url;
  * const storageProvider = config.storage.provider;
  * ```
  */
 
-import { z } from 'zod';
-import { createLogger } from './logger.js';
+import { z } from "zod";
+import { createLogger } from "./logger.js";
 
-const configLogger = createLogger({ module: 'config' });
+const configLogger = createLogger({ module: "config" });
 
 // ============================================================================
 // CONFIGURATION SCHEMAS
 // ============================================================================
 
 const DatabaseConfigSchema = z.object({
-  dialect: z.enum(['postgres']).default('postgres'),
+  dialect: z.enum(["postgres"]).default("postgres"),
   url: z.string({
-    required_error: 'DATABASE_URL is required (PostgreSQL connection string)',
+    required_error: "DATABASE_URL is required (PostgreSQL connection string)",
   }),
 });
 
 const StorageConfigSchema = z.object({
-  provider: z.enum(['r2', 'minio']).default('minio'), // Default to MinIO, auto-detect R2 if credentials present
+  provider: z.enum(["r2", "minio"]).default("minio"), // Default to MinIO, auto-detect R2 if credentials present
   // R2 config
   r2AccountId: z.string().optional(),
   r2AccessKeyId: z.string().optional(),
   r2SecretAccessKey: z.string().optional(),
-  r2BucketName: z.string().default('synap-storage'),
+  r2BucketName: z.string().default("synap-storage"),
   r2PublicUrl: z.string().optional(),
   // MinIO config
-  minioEndpoint: z.string().default('http://localhost:9000'),
-  minioAccessKeyId: z.string().default('minioadmin'),
-  minioSecretAccessKey: z.string().default('minioadmin'),
-  minioBucketName: z.string().default('synap-storage'),
+  minioEndpoint: z.string().default("http://localhost:9000"),
+  minioAccessKeyId: z.string().default("minioadmin"),
+  minioSecretAccessKey: z.string().default("minioadmin"),
+  minioBucketName: z.string().default("synap-storage"),
   minioPublicUrl: z.string().optional(),
 });
 
-const AIModelOverrideSchema = z.object({
-  chat: z.string().optional(),
-  intent: z.string().optional(),
-  planner: z.string().optional(),
-  responder: z.string().optional(),
-}).default({});
+const AIModelOverrideSchema = z
+  .object({
+    chat: z.string().optional(),
+    intent: z.string().optional(),
+    planner: z.string().optional(),
+    responder: z.string().optional(),
+  })
+  .default({});
 
 const AIAnthropicConfigSchema = z.object({
   apiKey: z.string().optional(),
-  model: z.string().default('claude-3-haiku-20240307'),
+  model: z.string().default("claude-3-haiku-20240307"),
   maxOutputTokens: z.coerce.number().default(2048),
   temperature: z.coerce.number().min(0).max(2).default(0.7),
   models: AIModelOverrideSchema,
@@ -63,21 +65,23 @@ const AIAnthropicConfigSchema = z.object({
 const AIOpenAIConfigSchema = z.object({
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
-  model: z.string().default('gpt-4o-mini'),
+  model: z.string().default("gpt-4o-mini"),
   maxTokens: z.coerce.number().default(2048),
   temperature: z.coerce.number().min(0).max(2).default(0.7),
   models: AIModelOverrideSchema,
 });
 
 const AIConfigSchema = z.object({
-  provider: z.enum(['anthropic', 'openai']).default('anthropic'),
+  provider: z.enum(["anthropic", "openai"]).default("anthropic"),
   streaming: z.coerce.boolean().default(false),
   anthropic: AIAnthropicConfigSchema.default({}),
   openai: AIOpenAIConfigSchema.default({}),
-  embeddings: z.object({
-    provider: z.enum(['openai', 'deterministic']).default('openai'),
-    model: z.string().default('text-embedding-3-small'),
-  }).default({}),
+  embeddings: z
+    .object({
+      provider: z.enum(["openai", "deterministic"]).default("openai"),
+      model: z.string().default("text-embedding-3-small"),
+    })
+    .default({}),
 });
 
 const AuthConfigSchema = z.object({
@@ -96,9 +100,11 @@ const AuthConfigSchema = z.object({
 
 const ServerConfigSchema = z.object({
   port: z.coerce.number().default(3000),
-  nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
+  nodeEnv: z.enum(["development", "production", "test"]).default("development"),
   corsOrigins: z.string().optional(),
-  logLevel: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  logLevel: z
+    .enum(["trace", "debug", "info", "warn", "error", "fatal"])
+    .default("info"),
 });
 
 const InngestConfigSchema = z.object({
@@ -127,8 +133,11 @@ const ConfigSchema = z.object({
 export type Config = z.infer<typeof ConfigSchema>;
 export type DatabaseConfig = z.infer<typeof DatabaseConfigSchema>;
 // StorageConfig with provider always set (after auto-detection)
-export type StorageConfig = Omit<z.infer<typeof StorageConfigSchema>, 'provider'> & {
-  provider: 'r2' | 'minio';
+export type StorageConfig = Omit<
+  z.infer<typeof StorageConfigSchema>,
+  "provider"
+> & {
+  provider: "r2" | "minio";
 };
 export type AIConfig = z.infer<typeof AIConfigSchema>;
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
@@ -142,25 +151,29 @@ export type Mem0Config = z.infer<typeof Mem0ConfigSchema>;
 
 /**
  * Load and validate configuration from environment variables
- * 
+ *
  * @returns Validated configuration object
  * @throws Error if required configuration is invalid
  */
 function loadConfig(): Config {
   try {
     // Auto-detect storage provider if not explicitly set
-    const explicitProvider = process.env.STORAGE_PROVIDER as 'r2' | 'minio' | undefined;
-    const hasR2Credentials = 
-      process.env.R2_ACCOUNT_ID && 
-      process.env.R2_ACCESS_KEY_ID && 
+    const explicitProvider = process.env.STORAGE_PROVIDER as
+      | "r2"
+      | "minio"
+      | undefined;
+    const hasR2Credentials =
+      process.env.R2_ACCOUNT_ID &&
+      process.env.R2_ACCESS_KEY_ID &&
       process.env.R2_SECRET_ACCESS_KEY;
-    
+
     // If provider not set, auto-detect: use R2 if credentials exist, otherwise MinIO
-    const detectedProvider: 'r2' | 'minio' = explicitProvider || (hasR2Credentials ? 'r2' : 'minio');
-    
+    const detectedProvider: "r2" | "minio" =
+      explicitProvider || (hasR2Credentials ? "r2" : "minio");
+
     const rawConfig = {
       database: {
-        dialect: 'postgres' as const,
+        dialect: "postgres" as const,
         url: process.env.DATABASE_URL,
       },
       storage: {
@@ -206,7 +219,8 @@ function loadConfig(): Config {
         },
         embeddings: {
           provider: process.env.EMBEDDING_PROVIDER,
-          model: process.env.EMBEDDING_MODEL ?? process.env.OPENAI_EMBEDDING_MODEL,
+          model:
+            process.env.EMBEDDING_MODEL ?? process.env.OPENAI_EMBEDDING_MODEL,
         },
       },
       auth: {
@@ -242,7 +256,7 @@ function loadConfig(): Config {
     };
 
     const parsedConfig = ConfigSchema.parse(rawConfig);
-    
+
     // Override provider with auto-detected value if not explicitly set
     // This ensures we use MinIO by default if R2 credentials are missing
     const config: Config = {
@@ -254,25 +268,28 @@ function loadConfig(): Config {
     };
 
     // Log configuration status (without secrets)
-    configLogger.info({
-      database: { connected: !!config.database.url },
-      storage: { 
-        provider: config.storage.provider,
-        autoDetected: !explicitProvider,
+    configLogger.info(
+      {
+        database: { connected: !!config.database.url },
+        storage: {
+          provider: config.storage.provider,
+          autoDetected: !explicitProvider,
+        },
+        server: { port: config.server.port, env: config.server.nodeEnv },
       },
-      server: { port: config.server.port, env: config.server.nodeEnv },
-    }, 'Configuration loaded');
+      "Configuration loaded"
+    );
 
     return config;
   } catch (error) {
     if (error instanceof z.ZodError) {
       const issues = error.issues.map((issue) => ({
-        path: issue.path.join('.'),
+        path: issue.path.join("."),
         message: issue.message,
       }));
-      configLogger.error({ issues }, 'Configuration validation failed');
+      configLogger.error({ issues }, "Configuration validation failed");
       throw new Error(
-        `Invalid configuration: ${issues.map((i) => `${i.path}: ${i.message}`).join(', ')}`
+        `Invalid configuration: ${issues.map((i) => `${i.path}: ${i.message}`).join(", ")}`
       );
     }
     throw error;
@@ -281,14 +298,14 @@ function loadConfig(): Config {
 
 /**
  * Global configuration instance
- * 
+ *
  * Loaded once at module initialization.
  * All packages should import this instead of accessing process.env directly.
- * 
+ *
  * @example
  * ```typescript
  * import { config } from '@synap-core/core';
- * 
+ *
  * const dbUrl = config.database.url;
  * const storageProvider = config.storage.provider;
  * ```
@@ -296,77 +313,90 @@ function loadConfig(): Config {
 export const config = loadConfig();
 
 // Make config available globally for lazy access (avoids circular dependencies)
-if (typeof globalThis !== 'undefined') {
+if (typeof globalThis !== "undefined") {
   (globalThis as any).__synap_core_module = { config };
 }
 
 /**
  * Validate required configuration for specific features
- * 
+ *
  * @param feature - Feature name (e.g., 'r2', 'ory', 'ai', 'postgres')
  * @throws Error if required configuration is missing
- * 
+ *
  * @example
  * ```typescript
  * validateConfig('r2');
  * // Throws if R2 credentials are missing
  * ```
  */
-export function validateConfig(feature: 'r2' | 'ory' | 'ai' | 'postgres' | 'mem0'): void {
+export function validateConfig(
+  feature: "r2" | "ory" | "ai" | "postgres" | "mem0"
+): void {
   switch (feature) {
-    case 'r2':
-      if (!config.storage.r2AccountId || !config.storage.r2AccessKeyId || !config.storage.r2SecretAccessKey) {
+    case "r2":
+      if (
+        !config.storage.r2AccountId ||
+        !config.storage.r2AccessKeyId ||
+        !config.storage.r2SecretAccessKey
+      ) {
         throw new Error(
-          'R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables'
+          "R2 storage requires R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY environment variables"
         );
       }
       break;
 
-    case 'ory':
+    case "ory":
       if (!config.auth.kratosPublicUrl || !config.auth.hydraPublicUrl) {
         throw new Error(
-          'Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables'
+          "Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables"
         );
       }
       if (!config.auth.hydraSecretsSystem) {
         throw new Error(
-          'Ory Hydra requires ORY_HYDRA_SECRETS_SYSTEM environment variable'
+          "Ory Hydra requires ORY_HYDRA_SECRETS_SYSTEM environment variable"
         );
       }
       break;
 
-    case 'ai': {
+    case "ai": {
       const { provider, anthropic, openai, embeddings } = config.ai;
 
-      if (provider === 'anthropic' && !anthropic.apiKey) {
-        throw new Error('Anthropic provider requires ANTHROPIC_API_KEY environment variable');
+      if (provider === "anthropic" && !anthropic.apiKey) {
+        throw new Error(
+          "Anthropic provider requires ANTHROPIC_API_KEY environment variable"
+        );
       }
 
-      if (provider === 'openai' && !openai.apiKey) {
-        throw new Error('OpenAI provider requires OPENAI_API_KEY environment variable');
+      if (provider === "openai" && !openai.apiKey) {
+        throw new Error(
+          "OpenAI provider requires OPENAI_API_KEY environment variable"
+        );
       }
 
-      if (embeddings.provider === 'openai' && !openai.apiKey) {
-        throw new Error('OpenAI embeddings require OPENAI_API_KEY environment variable');
+      if (embeddings.provider === "openai" && !openai.apiKey) {
+        throw new Error(
+          "OpenAI embeddings require OPENAI_API_KEY environment variable"
+        );
       }
 
       break;
     }
 
-    case 'postgres':
+    case "postgres":
       if (!config.database.url) {
-        throw new Error('PostgreSQL requires DATABASE_URL environment variable');
+        throw new Error(
+          "PostgreSQL requires DATABASE_URL environment variable"
+        );
       }
       break;
 
-    case 'mem0':
+    case "mem0":
       if (!config.mem0.apiKey) {
-        throw new Error('Mem0 requires MEM0_API_KEY environment variable');
+        throw new Error("Mem0 requires MEM0_API_KEY environment variable");
       }
       if (!config.mem0.apiUrl) {
-        throw new Error('Mem0 requires MEM0_API_URL environment variable');
+        throw new Error("Mem0 requires MEM0_API_URL environment variable");
       }
       break;
   }
 }
-

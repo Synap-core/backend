@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS "reasoning_traces" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "events" ADD COLUMN "metadata" jsonb;--> statement-breakpoint
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "metadata" jsonb;--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "entity_enrichments" ADD CONSTRAINT "entity_enrichments_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION

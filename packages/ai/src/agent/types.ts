@@ -1,10 +1,10 @@
 /**
  * Agent Types
- * 
+ *
  * Type definitions for LangGraph agents.
  */
 
-export type AgentIntent = 'capture' | 'command' | 'query' | 'unknown';
+export type AgentIntent = "capture" | "command" | "query" | "unknown";
 
 export interface IntentAnalysis {
   label: AgentIntent;
@@ -14,7 +14,7 @@ export interface IntentAnalysis {
 }
 
 export interface ConversationSnippet {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
 }
 
@@ -55,7 +55,7 @@ export interface AgentPlanSummary extends AgentActionPlan {
   reasoning: string;
 }
 
-export type ActionExecutionStatus = 'success' | 'error' | 'skipped';
+export type ActionExecutionStatus = "success" | "error" | "skipped";
 
 export interface ActionExecutionLog {
   tool: string;
@@ -64,4 +64,3 @@ export interface ActionExecutionLog {
   result?: unknown;
   errorMessage?: string;
 }
-

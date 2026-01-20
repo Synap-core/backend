@@ -7,18 +7,22 @@
 ## 📚 Documentation Disponible
 
 ### [Backend SDK Reference](./SDK_REFERENCE.md)
+
 Référence complète du SDK backend avec tous les packages et leurs APIs.
 
 **Contenu :**
+
 - Packages disponibles (`@synap/core`, `@synap/database`, etc.)
 - APIs de chaque package
 - Exemples d'utilisation
 - Patterns recommandés
 
 ### [Extensibility Guide V1](./EXTENSIBILITY_GUIDE_V1.md)
+
 Guide complet pour étendre le Synap Core OS avec des capacités.
 
 **Contenu :**
+
 - Architecture d'extensibilité
 - Internal Plugins vs External Services
 - Ajouter une capacité (migration, worker, router, tool)
@@ -26,18 +30,22 @@ Guide complet pour étendre le Synap Core OS avec des capacités.
 - Exemples complets
 
 ### [Creating Custom Hubs](./CREATING_CUSTOM_HUB.md)
+
 Guide pour créer des Hubs personnalisés (alternatives au Synap Intelligence Hub).
 
 **Contenu :**
+
 - Architecture des Hubs
 - Utilisation de @synap/hub-protocol-client
 - Utilisation de @synap/hub-orchestrator-base
 - Exemples de code
 
 ### [SDK npm Package](./SDK_NPM.md)
+
 Guide pour créer et publier le package npm `@synap/client`.
 
 **Contenu :**
+
 - Structure du package
 - Implémentation du client tRPC
 - Support React
@@ -121,4 +129,3 @@ curl http://localhost:3000/health
 - **[Getting Started](../getting-started/README.md)** - Installation
 - **[Architecture](../architecture/README.md)** - Architecture technique
 - **[Deployment](../deployment/README.md)** - Déploiement
-

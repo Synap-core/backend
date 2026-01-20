@@ -1,16 +1,23 @@
 /**
  * Search Router - Semantic Search API
- * 
+ *
  * Provides full-text and vector similarity search
  * Uses: entities, entity_vectors tables + pgvector
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { db, entities, eq, and, desc, sqlDrizzle as sql } from '@synap/database';
-import { createLogger } from '@synap-core/core';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import {
+  db,
+  entities,
+  eq,
+  and,
+  desc,
+  sqlDrizzle as sql,
+} from "@synap/database";
+import { createLogger } from "@synap-core/core";
 
-const logger = createLogger({ module: 'search-router' });
+const logger = createLogger({ module: "search-router" });
 
 export const searchRouter = router({
   /**
@@ -18,15 +25,20 @@ export const searchRouter = router({
    * Uses PostgreSQL's tsvector for fast text search
    */
   entities: protectedProcedure
-    .input(z.object({
-      query: z.string().min(1),
-      type: z.enum(['note', 'task', 'document', 'project']).optional(),
-      limit: z.number().min(1).max(100).default(20),
-    }))
+    .input(
+      z.object({
+        query: z.string().min(1),
+        type: z.enum(["note", "task", "document", "project"]).optional(),
+        limit: z.number().min(1).max(100).default(20),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
-      logger.debug({ userId, query: input.query, type: input.type }, 'Searching entities');
+      logger.debug(
+        { userId, query: input.query, type: input.type },
+        "Searching entities"
+      );
 
       // Simple text search using ILIKE for now
       // TODO: Implement full-text search with tsvector/tsquery
@@ -51,7 +63,7 @@ export const searchRouter = router({
         limit: input.limit,
       });
 
-      logger.debug({ userId, resultCount: results.length }, 'Search complete');
+      logger.debug({ userId, resultCount: results.length }, "Search complete");
 
       return { entities: results };
     }),
@@ -61,29 +73,33 @@ export const searchRouter = router({
    * Finds entities similar to the query using embeddings
    */
   semantic: protectedProcedure
-    .input(z.object({
-      query: z.string().min(1),
-      type: z.enum(['note', 'task', 'document', 'project']).optional(),
-      limit: z.number().min(1).max(50).default(10),
-      threshold: z.number().min(0).max(1).default(0.7),
-    }))
+    .input(
+      z.object({
+        query: z.string().min(1),
+        type: z.enum(["note", "task", "document", "project"]).optional(),
+        limit: z.number().min(1).max(50).default(10),
+        threshold: z.number().min(0).max(1).default(0.7),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
-      logger.debug({ userId, query: input.query }, 'Semantic search requested');
+      logger.debug({ userId, query: input.query }, "Semantic search requested");
 
       // TODO: Implement vector search with pgvector
       // 1. Generate embedding for input.query using AI service
       // 2. Query entity_vectors using cosine similarity
       // 3. Join back to entities table
       // 4. Return ranked results
-      
+
       // For now, return empty results with a note
-      logger.warn('Semantic search not yet implemented - requires embedding service');
+      logger.warn(
+        "Semantic search not yet implemented - requires embedding service"
+      );
 
       return {
         entities: [],
-        message: 'Semantic search requires embedding service configuration',
+        message: "Semantic search requires embedding service configuration",
       };
     }),
 
@@ -92,10 +108,12 @@ export const searchRouter = router({
    * Uses vector similarity + explicit relationships
    */
   related: protectedProcedure
-    .input(z.object({
-      entityId: z.string().uuid(),
-      limit: z.number().min(1).max(50).default(10),
-    }))
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        limit: z.number().min(1).max(50).default(10),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
@@ -108,17 +126,20 @@ export const searchRouter = router({
       });
 
       if (!entity) {
-        throw new Error('Entity not found');
+        throw new Error("Entity not found");
       }
 
-      logger.debug({ userId, entityId: input.entityId }, 'Finding related entities');
+      logger.debug(
+        { userId, entityId: input.entityId },
+        "Finding related entities"
+      );
 
       // TODO: Implement vector similarity search
       // 1. Get entity vector for input.entityId
       // 2. Find similar vectors using pgvector
       // 3. Join to entities table
       // 4. Rank by similarity score
-      
+
       // For now, return entities of the same type (simple approach)
       const results = await db.query.entities.findMany({
         where: and(
@@ -131,7 +152,10 @@ export const searchRouter = router({
         limit: input.limit,
       });
 
-      logger.debug({ userId, resultCount: results.length }, 'Related entities found');
+      logger.debug(
+        { userId, resultCount: results.length },
+        "Related entities found"
+      );
 
       return { entities: results };
     }),
@@ -141,14 +165,16 @@ export const searchRouter = router({
    * Find entities that have all specified tags
    */
   byTags: protectedProcedure
-    .input(z.object({
-      tagIds: z.array(z.string().uuid()).min(1),
-      limit: z.number().min(1).max(100).default(20),
-    }))
+    .input(
+      z.object({
+        tagIds: z.array(z.string().uuid()).min(1),
+        limit: z.number().min(1).max(100).default(20),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
 
-      logger.debug({ userId, tagIds: input.tagIds }, 'Searching by tags');
+      logger.debug({ userId, tagIds: input.tagIds }, "Searching by tags");
 
       // Find entities that have ALL the specified tags
       // This is a set intersection query
@@ -161,13 +187,16 @@ export const searchRouter = router({
             SELECT COUNT(DISTINCT et.tag_id)
             FROM entity_tags et
             WHERE et.entity_id = e.id
-              AND et.tag_id = ANY(ARRAY[${input.tagIds.map(() => '?').join(',')}]::uuid[])
+              AND et.tag_id = ANY(ARRAY[${input.tagIds.map(() => "?").join(",")}]::uuid[])
           ) = ${input.tagIds.length}
         ORDER BY e.updated_at DESC
         LIMIT ${input.limit}
       `);
 
-      logger.debug({ userId, resultCount: results.length }, 'Tag search complete');
+      logger.debug(
+        { userId, resultCount: results.length },
+        "Tag search complete"
+      );
 
       return { entities: results as any[] };
     }),

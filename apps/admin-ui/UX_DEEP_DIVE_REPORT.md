@@ -5,6 +5,7 @@
 This report provides a comprehensive analysis of the admin-ui application's user experience, comparing it with backend capabilities, and proposing concrete improvements to simplify workflows while maintaining power and flexibility.
 
 **Key Finding**: The application is technically solid but has significant UX friction points that prevent it from being truly user-friendly. The main issues are:
+
 1. **High technical barrier** - JSON editors for non-technical users
 2. **Fragmented user journeys** - No clear workflows connecting related actions
 3. **Lack of guidance** - Users must know system internals to use effectively
@@ -17,6 +18,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ### 1.1 Architecture Overview
 
 **Backend Capabilities:**
+
 - ✅ Event type registry with schemas (`EventTypeSchemas`)
 - ✅ Tool registry with Zod schemas
 - ✅ Schema validation available (`validateEventData`)
@@ -24,6 +26,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 - ✅ Event types have structured data requirements
 
 **Frontend Current State:**
+
 - ❌ Raw JSON editors (Monaco) for event publishing
 - ❌ Raw JSON textarea for tool inputs
 - ❌ No schema-driven form generation
@@ -34,6 +37,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ### 1.2 User Journey Analysis
 
 #### Journey 1: Publishing an Event (Current)
+
 ```
 1. Navigate to Testing → Event Publisher tab
 2. Select event type from dropdown
@@ -44,6 +48,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ```
 
 **Pain Points:**
+
 - Requires JSON knowledge
 - No guidance on required fields
 - No validation until submission
@@ -51,6 +56,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 - No examples for specific event types
 
 #### Journey 2: Testing an AI Tool (Current)
+
 ```
 1. Navigate to Testing → AI Tools Playground
 2. Select tool from dropdown
@@ -59,12 +65,14 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ```
 
 **Pain Points:**
+
 - Must know tool parameter structure
 - No schema guidance
 - No autocomplete or suggestions
 - Easy to make syntax errors
 
 #### Journey 3: Investigating an Issue (Current)
+
 ```
 1. Navigate to Dashboard
 2. Click "Investigate User" → JavaScript prompt appears
@@ -75,6 +83,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ```
 
 **Pain Points:**
+
 - JavaScript prompts are unprofessional
 - No search history
 - No saved searches
@@ -88,12 +97,14 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ### 2.1 High Technical Barrier
 
 **Problem**: Users must understand:
+
 - JSON syntax
 - Event type structures
 - Tool parameter schemas
 - System internals
 
-**Impact**: 
+**Impact**:
+
 - Only technical users can use effectively
 - High error rate
 - Slow workflow
@@ -102,12 +113,14 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ### 2.2 Lack of Guidance
 
 **Problem**: No help for users:
+
 - What fields are required?
 - What format should data be?
 - What are valid values?
 - What does this event type do?
 
 **Impact**:
+
 - Trial and error approach
 - Frustration
 - Errors that could be prevented
@@ -115,11 +128,13 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ### 2.3 Fragmented Workflows
 
 **Problem**: Related actions are disconnected:
+
 - Event stream → Investigation (manual navigation)
 - Tool testing → Event publishing (separate tabs)
 - Search → Event details (drawer, not integrated)
 
 **Impact**:
+
 - Context switching
 - Lost information
 - Inefficient workflows
@@ -127,12 +142,14 @@ This report provides a comprehensive analysis of the admin-ui application's user
 ### 2.4 No Smart Defaults
 
 **Problem**: Everything starts empty:
+
 - No user ID pre-filled
 - No event templates
 - No recent searches
 - No suggested actions
 
 **Impact**:
+
 - Repetitive work
 - Slower task completion
 - Missed opportunities for automation
@@ -146,6 +163,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 **Concept**: Replace JSON editor with intelligent forms that adapt to event type.
 
 **Implementation**:
+
 1. Create endpoint to get event schema: `getEventTypeSchema(eventType)`
 2. Build form generator that converts Zod schema → Mantine form fields
 3. Show/hide fields based on event type selection
@@ -153,6 +171,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 5. Keep JSON view as "Advanced" option for power users
 
 **Benefits**:
+
 - ✅ No JSON knowledge required
 - ✅ Clear field labels and descriptions
 - ✅ Validation before submission
@@ -160,6 +179,7 @@ This report provides a comprehensive analysis of the admin-ui application's user
 - ✅ Reduced errors
 
 **Example Flow**:
+
 ```
 User selects "note.creation.requested"
 → Form shows:
@@ -177,6 +197,7 @@ User selects "note.creation.requested"
 **Concept**: Use existing `getToolSchema` to generate forms dynamically.
 
 **Implementation**:
+
 1. When tool selected, fetch schema via `getToolSchema`
 2. Generate form fields from schema
 3. Show parameter descriptions
@@ -184,6 +205,7 @@ User selects "note.creation.requested"
 5. Validate before execution
 
 **Benefits**:
+
 - ✅ No need to know tool internals
 - ✅ Guided parameter entry
 - ✅ Better error prevention
@@ -193,6 +215,7 @@ User selects "note.creation.requested"
 **Concept**: Replace JavaScript prompts with proper search interface.
 
 **Implementation**:
+
 1. Replace prompts with modal/drawer with search
 2. Add search history
 3. Add autocomplete for user IDs
@@ -200,6 +223,7 @@ User selects "note.creation.requested"
 5. Add saved search presets
 
 **Benefits**:
+
 - ✅ Professional UI
 - ✅ Faster repeated searches
 - ✅ Better discoverability
@@ -209,12 +233,14 @@ User selects "note.creation.requested"
 **Concept**: Make related actions easily accessible from any context.
 
 **Implementation**:
+
 1. Event stream items → Click → Quick actions (Investigate, View Trace, Publish Similar)
 2. Search results → Click → Related events, user timeline
 3. Tool output → Click → Create event from result
 4. Event details → Click → Publish related event
 
 **Benefits**:
+
 - ✅ Reduced navigation
 - ✅ Better workflow continuity
 - ✅ Discoverability of features
@@ -224,6 +250,7 @@ User selects "note.creation.requested"
 **Concept**: Pre-fill common values and provide templates.
 
 **Implementation**:
+
 1. Remember last used user ID
 2. Event type templates (common configurations)
 3. Tool parameter presets
@@ -231,6 +258,7 @@ User selects "note.creation.requested"
 5. Quick actions based on context
 
 **Benefits**:
+
 - ✅ Faster task completion
 - ✅ Less repetitive work
 - ✅ Better UX for power users
@@ -242,12 +270,15 @@ User selects "note.creation.requested"
 ### 4.1 Event Publisher Redesign
 
 #### Current State
+
 - Monaco Editor with raw JSON
 - No guidance
 - Manual validation
 
 #### Proposed State
+
 **Primary View: Smart Form**
+
 - Dynamic form based on event type
 - Field-level validation
 - Helpful descriptions
@@ -255,12 +286,14 @@ User selects "note.creation.requested"
 - Required/optional indicators
 
 **Advanced View: JSON Editor**
+
 - Toggle to switch to JSON view
 - JSON editor with schema validation
 - Real-time error highlighting
 - Format on save
 
 **Features**:
+
 - Event type selector with descriptions
 - Form auto-generates from schema
 - Validation feedback
@@ -271,11 +304,14 @@ User selects "note.creation.requested"
 ### 4.2 Tool Testing Redesign
 
 #### Current State
+
 - JSON textarea
 - No schema guidance
 
 #### Proposed State
+
 **Smart Parameter Form**
+
 - Fetch tool schema on selection
 - Generate form from schema
 - Show parameter descriptions
@@ -283,6 +319,7 @@ User selects "note.creation.requested"
 - Validate before execution
 
 **Features**:
+
 - Tool selector with search
 - Parameter form (auto-generated)
 - Description tooltips
@@ -293,12 +330,15 @@ User selects "note.creation.requested"
 ### 4.3 Investigation Flow Redesign
 
 #### Current State
+
 - JavaScript prompts
 - Manual navigation
 - No context preservation
 
 #### Proposed State
+
 **Unified Search Interface**
+
 - Modal/drawer for quick searches
 - Search history dropdown
 - Autocomplete for user IDs
@@ -307,6 +347,7 @@ User selects "note.creation.requested"
 - Quick filters (last hour, today, this week)
 
 **Enhanced Results View**
+
 - Click event → Side panel (not drawer)
 - Related events shown automatically
 - Quick actions: "View Trace", "Publish Similar", "Search User"
@@ -316,17 +357,21 @@ User selects "note.creation.requested"
 ### 4.4 Dashboard Improvements
 
 #### Current State
+
 - Quick actions use prompts
 - Event stream is separate
 
 #### Proposed State
+
 **Smart Quick Actions**
+
 - Replace prompts with search modal
 - Recent users dropdown
 - Recent event IDs
 - Quick filters
 
 **Enhanced Event Stream**
+
 - Click event → Quick preview
 - Hover → Show details tooltip
 - Right-click → Context menu (Investigate, View Trace, etc.)
@@ -336,6 +381,7 @@ User selects "note.creation.requested"
 ### 4.5 Cross-Page Integration
 
 **Proposed Features**:
+
 1. **Event Stream → Investigation**
    - Click event → Auto-populate search
    - "Investigate this user" button
@@ -369,6 +415,7 @@ User selects "note.creation.requested"
 ```
 
 **Improvements**:
+
 - ✅ No JSON knowledge needed
 - ✅ Clear guidance
 - ✅ Immediate feedback
@@ -386,6 +433,7 @@ User selects "note.creation.requested"
 ```
 
 **Improvements**:
+
 - ✅ Guided parameter entry
 - ✅ No schema knowledge needed
 - ✅ Better error prevention
@@ -402,6 +450,7 @@ User selects "note.creation.requested"
 ```
 
 **Improvements**:
+
 - ✅ Professional UI (no prompts)
 - ✅ Faster searches
 - ✅ Better context
@@ -414,6 +463,7 @@ User selects "note.creation.requested"
 ### Phase 1: Schema-Driven Forms (High Priority)
 
 **Tasks**:
+
 1. Create `getEventTypeSchema` endpoint in system router
 2. Build `SchemaFormGenerator` component (Zod → Mantine fields)
 3. Replace JSON editor in EventPublisher with dynamic form
@@ -421,6 +471,7 @@ User selects "note.creation.requested"
 5. Add form validation and error display
 
 **Components to Create**:
+
 - `DynamicEventForm` - Generates form from event type schema
 - `SchemaFieldRenderer` - Renders appropriate field type from Zod schema
 - `FormValidationDisplay` - Shows validation errors clearly
@@ -428,6 +479,7 @@ User selects "note.creation.requested"
 ### Phase 2: Tool Form Enhancement (High Priority)
 
 **Tasks**:
+
 1. Use existing `getToolSchema` endpoint
 2. Build `DynamicToolForm` component
 3. Replace JSON textarea in TestingPage
@@ -435,6 +487,7 @@ User selects "note.creation.requested"
 5. Add preset/example buttons
 
 **Components to Create**:
+
 - `DynamicToolForm` - Generates form from tool schema
 - `ParameterHelpTooltip` - Shows parameter descriptions
 - `ExamplePresets` - Provides example parameter sets
@@ -442,6 +495,7 @@ User selects "note.creation.requested"
 ### Phase 3: Search Experience (Medium Priority)
 
 **Tasks**:
+
 1. Create `SearchModal` component
 2. Replace JavaScript prompts
 3. Add search history (localStorage)
@@ -449,6 +503,7 @@ User selects "note.creation.requested"
 5. Add saved search presets
 
 **Components to Create**:
+
 - `SearchModal` - Unified search interface
 - `SearchHistory` - Recent searches dropdown
 - `SearchPresets` - Saved search configurations
@@ -456,6 +511,7 @@ User selects "note.creation.requested"
 ### Phase 4: Contextual Actions (Medium Priority)
 
 **Tasks**:
+
 1. Add quick actions to event items
 2. Create context menu component
 3. Add "Publish Similar" functionality
@@ -463,6 +519,7 @@ User selects "note.creation.requested"
 5. Add clipboard integration
 
 **Components to Create**:
+
 - `EventQuickActions` - Context menu for events
 - `PublishSimilarModal` - Clone event with modifications
 - `ContextualNavigation` - Smart navigation helpers
@@ -470,6 +527,7 @@ User selects "note.creation.requested"
 ### Phase 5: Smart Defaults (Low Priority)
 
 **Tasks**:
+
 1. Implement localStorage for user preferences
 2. Add event templates
 3. Add tool parameter presets
@@ -493,6 +551,7 @@ User selects "note.creation.requested"
 ```
 
 **Features**:
+
 - Auto-detects field types (string, number, boolean, array, object)
 - Renders appropriate Mantine components
 - Handles nested objects
@@ -512,6 +571,7 @@ User selects "note.creation.requested"
 ```
 
 **Features**:
+
 - Fetches schema on event type change
 - Generates form automatically
 - Toggle between form/JSON view
@@ -532,6 +592,7 @@ User selects "note.creation.requested"
 ```
 
 **Features**:
+
 - Unified search interface
 - Autocomplete
 - Search history
@@ -543,16 +604,19 @@ User selects "note.creation.requested"
 ## 8. Priority Matrix
 
 ### High Priority (Do First)
+
 1. ✅ **Dynamic Event Form** - Biggest UX win, removes JSON barrier
 2. ✅ **Dynamic Tool Form** - Similar impact for tool testing
 3. ✅ **Search Modal** - Replace unprofessional prompts
 
 ### Medium Priority
+
 4. **Contextual Actions** - Improve workflow continuity
 5. **Event Templates** - Speed up common tasks
 6. **Enhanced Event Stream** - Better interactivity
 
 ### Low Priority (Nice to Have)
+
 7. **Search Presets** - For power users
 8. **Cross-page Integration** - Advanced workflows
 9. **Analytics/Insights** - Usage patterns
@@ -562,12 +626,14 @@ User selects "note.creation.requested"
 ## 9. Success Metrics
 
 ### Before (Current)
+
 - Time to publish event: ~2-3 minutes (with JSON knowledge)
 - Error rate: ~30% (syntax errors, wrong structure)
 - User satisfaction: Low (technical barrier)
 - Onboarding time: High (must learn JSON)
 
 ### After (Proposed)
+
 - Time to publish event: ~30 seconds (guided form)
 - Error rate: <5% (validation prevents errors)
 - User satisfaction: High (intuitive)
@@ -580,6 +646,7 @@ User selects "note.creation.requested"
 ### Before: Publishing a Note Creation Event
 
 **Current Flow**:
+
 1. Select "note.creation.requested"
 2. Open JSON editor
 3. Manually type:
@@ -599,6 +666,7 @@ User selects "note.creation.requested"
 ### After: Publishing a Note Creation Event
 
 **Improved Flow**:
+
 1. Select "note.creation.requested"
 2. Form appears automatically:
    - Content (textarea, required) - "Enter note content"
@@ -617,22 +685,25 @@ User selects "note.creation.requested"
 ### 11.1 Backend Requirements
 
 **New Endpoint Needed**:
+
 ```typescript
 getEventTypeSchema: publicProcedure
   .input(z.object({ eventType: z.string() }))
   .query(async ({ input }) => {
     // Return Zod schema for event type
     // Or null if no schema exists
-  })
+  });
 ```
 
 **Enhancement to Existing**:
+
 - `getCapabilities` should include `hasSchema: true/false` (currently hardcoded to false)
 - Could return schema metadata for each event type
 
 ### 11.2 Frontend Libraries
 
 **Consider Adding**:
+
 - `@hookform/resolvers` + `zod` - For form validation
 - `react-hook-form` - For form state management
 - Or use Mantine's built-in form with Zod validation
@@ -640,6 +711,7 @@ getEventTypeSchema: publicProcedure
 ### 11.3 Schema Mapping
 
 **Zod → Mantine Field Types**:
+
 - `z.string()` → `TextInput` or `Textarea`
 - `z.number()` → `NumberInput`
 - `z.boolean()` → `Checkbox` or `Switch`
@@ -660,6 +732,7 @@ The admin-ui application has a solid technical foundation but needs significant 
 4. **Add intelligence** - Smart defaults, templates, history
 
 **Recommended Next Steps**:
+
 1. Implement dynamic event form (highest impact)
 2. Implement dynamic tool form
 3. Replace prompts with search modal
@@ -673,6 +746,7 @@ These improvements will transform the application from a "developer tool" into a
 ## Appendix: Quick Wins
 
 ### Immediate Improvements (No Backend Changes)
+
 1. Replace `prompt()` with proper modals
 2. Add search history (localStorage)
 3. Add event templates (hardcoded common events)
@@ -680,13 +754,14 @@ These improvements will transform the application from a "developer tool" into a
 5. Add loading states (already done ✅)
 
 ### Short-term (Minimal Backend)
+
 1. Enhance `getCapabilities` to return schema info
 2. Add `getEventTypeSchema` endpoint
 3. Use existing `getToolSchema` better
 
 ### Long-term (Full Implementation)
+
 1. Complete form generator system
 2. Advanced features (presets, templates, history)
 3. Cross-page integration
 4. Analytics and insights
-

@@ -1,12 +1,12 @@
 /**
  * Files Router - File Storage API
- * 
+ *
  * Provides API for browsing and managing files in MinIO/S3 storage.
  * Used by the Admin UI Files page.
  */
 
-import { z } from 'zod';
-import { router, publicProcedure } from '../trpc.js';
+import { z } from "zod";
+import { router, publicProcedure } from "../trpc.js";
 import {
   S3Client,
   ListObjectsV2Command,
@@ -14,23 +14,23 @@ import {
   type Bucket,
   type _Object,
   type CommonPrefix,
-} from '@aws-sdk/client-s3';
-import { storage } from '@synap/storage';
+} from "@aws-sdk/client-s3";
+import { storage } from "@synap/storage";
 
 // Get MinIO client from environment
 const getS3Client = (): S3Client => {
   return new S3Client({
-    region: process.env.MINIO_REGION || 'us-east-1',
-    endpoint: process.env.MINIO_ENDPOINT || 'http://localhost:9000',
+    region: process.env.MINIO_REGION || "us-east-1",
+    endpoint: process.env.MINIO_ENDPOINT || "http://localhost:9000",
     credentials: {
-      accessKeyId: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-      secretAccessKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+      accessKeyId: process.env.MINIO_ACCESS_KEY || "minioadmin",
+      secretAccessKey: process.env.MINIO_SECRET_KEY || "minioadmin",
     },
     forcePathStyle: true,
   });
 };
 
-const defaultBucket = process.env.MINIO_BUCKET || 'synap-storage';
+const defaultBucket = process.env.MINIO_BUCKET || "synap-storage";
 
 export const filesRouter = router({
   /**
@@ -40,15 +40,15 @@ export const filesRouter = router({
     try {
       const client = getS3Client();
       const response = await client.send(new ListBucketsCommand({}));
-      
+
       return {
         buckets: (response.Buckets || []).map((b: Bucket) => ({
-          name: b.Name || 'unknown',
+          name: b.Name || "unknown",
           createdAt: b.CreationDate?.toISOString() || null,
         })),
       };
     } catch (error) {
-      console.error('Failed to list buckets:', error);
+      console.error("Failed to list buckets:", error);
       return { buckets: [] };
     }
   }),
@@ -57,35 +57,43 @@ export const filesRouter = router({
    * List files in a bucket with optional prefix
    */
   listFiles: publicProcedure
-    .input(z.object({
-      bucket: z.string().default(defaultBucket),
-      prefix: z.string().optional(),
-      maxKeys: z.number().default(100),
-    }))
+    .input(
+      z.object({
+        bucket: z.string().default(defaultBucket),
+        prefix: z.string().optional(),
+        maxKeys: z.number().default(100),
+      })
+    )
     .query(async ({ input }) => {
       try {
         const client = getS3Client();
-        const response = await client.send(new ListObjectsV2Command({
-          Bucket: input.bucket,
-          Prefix: input.prefix || '',
-          MaxKeys: input.maxKeys,
-          Delimiter: '/',  // For folder-like navigation
-        }));
+        const response = await client.send(
+          new ListObjectsV2Command({
+            Bucket: input.bucket,
+            Prefix: input.prefix || "",
+            MaxKeys: input.maxKeys,
+            Delimiter: "/", // For folder-like navigation
+          })
+        );
 
         // Get "folders" (common prefixes)
-        const folders = (response.CommonPrefixes || []).map((cp: CommonPrefix) => ({
-          type: 'folder' as const,
-          name: cp.Prefix?.replace(input.prefix || '', '').replace(/\/$/, '') || '',
-          path: cp.Prefix || '',
-        }));
+        const folders = (response.CommonPrefixes || []).map(
+          (cp: CommonPrefix) => ({
+            type: "folder" as const,
+            name:
+              cp.Prefix?.replace(input.prefix || "", "").replace(/\/$/, "") ||
+              "",
+            path: cp.Prefix || "",
+          })
+        );
 
         // Get files
         const files = (response.Contents || [])
           .filter((obj: _Object) => obj.Key !== input.prefix) // Exclude the prefix itself
           .map((obj: _Object) => ({
-            type: 'file' as const,
-            name: obj.Key?.replace(input.prefix || '', '') || '',
-            path: obj.Key || '',
+            type: "file" as const,
+            name: obj.Key?.replace(input.prefix || "", "") || "",
+            path: obj.Key || "",
             size: obj.Size || 0,
             lastModified: obj.LastModified?.toISOString() || null,
           }));
@@ -93,19 +101,19 @@ export const filesRouter = router({
         return {
           items: [...folders, ...files],
           totalItems: folders.length + files.length,
-          prefix: input.prefix || '',
+          prefix: input.prefix || "",
           bucket: input.bucket,
           isTruncated: response.IsTruncated || false,
         };
       } catch (error) {
-        console.error('Failed to list files:', error);
-        return { 
-          items: [], 
-          totalItems: 0, 
-          prefix: input.prefix || '',
+        console.error("Failed to list files:", error);
+        return {
+          items: [],
+          totalItems: 0,
+          prefix: input.prefix || "",
           bucket: input.bucket,
           isTruncated: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: error instanceof Error ? error.message : "Unknown error",
         };
       }
     }),
@@ -114,9 +122,11 @@ export const filesRouter = router({
    * Get file metadata
    */
   getFileMetadata: publicProcedure
-    .input(z.object({
-      path: z.string(),
-    }))
+    .input(
+      z.object({
+        path: z.string(),
+      })
+    )
     .query(async ({ input }) => {
       try {
         const metadata = await storage.getMetadata(input.path);
@@ -131,7 +141,7 @@ export const filesRouter = router({
         return {
           success: false,
           path: input.path,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: error instanceof Error ? error.message : "Unknown error",
         };
       }
     }),
@@ -140,10 +150,12 @@ export const filesRouter = router({
    * Get signed download URL
    */
   getDownloadUrl: publicProcedure
-    .input(z.object({
-      path: z.string(),
-      expiresIn: z.number().default(3600), // 1 hour default
-    }))
+    .input(
+      z.object({
+        path: z.string(),
+        expiresIn: z.number().default(3600), // 1 hour default
+      })
+    )
     .query(async ({ input }) => {
       try {
         const url = await storage.getSignedUrl(input.path, input.expiresIn);
@@ -155,7 +167,7 @@ export const filesRouter = router({
       } catch (error) {
         return {
           success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: error instanceof Error ? error.message : "Unknown error",
         };
       }
     }),
@@ -164,9 +176,11 @@ export const filesRouter = router({
    * Check if file exists
    */
   exists: publicProcedure
-    .input(z.object({
-      path: z.string(),
-    }))
+    .input(
+      z.object({
+        path: z.string(),
+      })
+    )
     .query(async ({ input }) => {
       const exists = await storage.exists(input.path);
       return { exists, path: input.path };
@@ -176,9 +190,11 @@ export const filesRouter = router({
    * Delete a file
    */
   deleteFile: publicProcedure
-    .input(z.object({
-      path: z.string(),
-    }))
+    .input(
+      z.object({
+        path: z.string(),
+      })
+    )
     .mutation(async ({ input }) => {
       try {
         await storage.delete(input.path);
@@ -187,7 +203,7 @@ export const filesRouter = router({
         return {
           success: false,
           path: input.path,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: error instanceof Error ? error.message : "Unknown error",
         };
       }
     }),

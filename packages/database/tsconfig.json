@@ -5,16 +5,9 @@
     "rootDir": "./src",
     "skipLibCheck": true,
     "declaration": true,
-    "composite": false,
     "preserveSymlinks": true,
     "noEmit": false // Override root tsconfig to allow declaration generation
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/migrate.ts"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/migrate.ts"]
 }

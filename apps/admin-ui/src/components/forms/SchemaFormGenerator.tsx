@@ -10,10 +10,10 @@ import {
   ActionIcon,
   Text,
   Badge,
-} from '@mantine/core';
-import { IconPlus, IconTrash } from '@tabler/icons-react';
-import { colors, spacing, typography } from '../../theme/tokens';
-import { trpc } from '../../lib/trpc';
+} from "@mantine/core";
+import { IconPlus, IconTrash } from "@tabler/icons-react";
+import { colors, spacing, typography } from "../../theme/tokens";
+import { trpc } from "../../lib/trpc";
 
 interface SchemaFormGeneratorProps {
   eventType: string;
@@ -28,10 +28,11 @@ export default function SchemaFormGenerator({
   onChange,
   errors,
 }: SchemaFormGeneratorProps) {
-  const { data: schemaData, isLoading } = trpc.system.getEventTypeSchema.useQuery(
-    { eventType },
-    { enabled: !!eventType }
-  );
+  const { data: schemaData, isLoading } =
+    trpc.system.getEventTypeSchema.useQuery(
+      { eventType },
+      { enabled: !!eventType }
+    );
 
   const handleFieldChange = (fieldName: string, fieldValue: unknown) => {
     onChange({
@@ -42,15 +43,22 @@ export default function SchemaFormGenerator({
 
   const handleArrayAdd = (fieldName: string) => {
     const currentArray = (value[fieldName] as unknown[]) || [];
-    handleFieldChange(fieldName, [...currentArray, '']);
+    handleFieldChange(fieldName, [...currentArray, ""]);
   };
 
   const handleArrayRemove = (fieldName: string, index: number) => {
     const currentArray = (value[fieldName] as unknown[]) || [];
-    handleFieldChange(fieldName, currentArray.filter((_, i) => i !== index));
+    handleFieldChange(
+      fieldName,
+      currentArray.filter((_, i) => i !== index)
+    );
   };
 
-  const handleArrayItemChange = (fieldName: string, index: number, itemValue: unknown) => {
+  const handleArrayItemChange = (
+    fieldName: string,
+    index: number,
+    itemValue: unknown
+  ) => {
     const currentArray = (value[fieldName] as unknown[]) || [];
     const newArray = [...currentArray];
     newArray[index] = itemValue;
@@ -58,7 +66,11 @@ export default function SchemaFormGenerator({
   };
 
   if (isLoading) {
-    return <Text size="sm" c={colors.text.tertiary}>Loading form schema...</Text>;
+    return (
+      <Text size="sm" c={colors.text.tertiary}>
+        Loading form schema...
+      </Text>
+    );
   }
 
   if (!schemaData?.hasSchema || !schemaData.fields) {
@@ -77,28 +89,41 @@ export default function SchemaFormGenerator({
         const fieldValue = value[field.name] ?? field.defaultValue;
         const fieldError = errors?.[field.name];
 
-
         switch (field.type) {
-          case 'string':
+          case "string": {
             // Use textarea for longer strings, text input for short ones
-            const isLongString = field.name.toLowerCase().includes('content') ||
-                                field.name.toLowerCase().includes('description') ||
-                                field.name.toLowerCase().includes('body');
-            
+            const isLongString =
+              field.name.toLowerCase().includes("content") ||
+              field.name.toLowerCase().includes("description") ||
+              field.name.toLowerCase().includes("body");
+
             return isLongString ? (
               <Textarea
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
-                value={(fieldValue as string) || ''}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.value)}
+                value={(fieldValue as string) || ""}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.value)
+                }
                 error={fieldError}
                 required={field.required}
                 minRows={4}
@@ -108,30 +133,55 @@ export default function SchemaFormGenerator({
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
-                value={(fieldValue as string) || ''}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.value)}
+                value={(fieldValue as string) || ""}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.value)
+                }
                 error={fieldError}
                 required={field.required}
               />
             );
+          }
 
-          case 'number':
+          case "number":
             return (
               <NumberInput
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
@@ -142,54 +192,88 @@ export default function SchemaFormGenerator({
               />
             );
 
-          case 'boolean':
+          case "boolean":
             return (
               <Switch
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 description={field.description}
                 checked={(fieldValue as boolean) || false}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.checked)}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.checked)
+                }
                 error={fieldError}
               />
             );
 
-          case 'enum':
+          case "enum":
             return (
               <Select
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Select ${field.name}`}
-                data={field.options?.map(opt => ({ value: opt, label: opt })) || []}
-                value={(fieldValue as string) || ''}
-                onChange={(val) => handleFieldChange(field.name, val || '')}
+                data={
+                  field.options?.map((opt) => ({ value: opt, label: opt })) ||
+                  []
+                }
+                value={(fieldValue as string) || ""}
+                onChange={(val) => handleFieldChange(field.name, val || "")}
                 error={fieldError}
                 required={field.required}
                 clearable={!field.required}
               />
             );
 
-          case 'array':
+          case "array": {
             const arrayValue = (fieldValue as unknown[]) || [];
             return (
               <div key={field.name}>
                 <Group justify="space-between" mb={spacing[2]}>
                   <div>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
                     {field.description && (
@@ -198,7 +282,11 @@ export default function SchemaFormGenerator({
                       </Text>
                     )}
                   </div>
-                  {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                  {field.required && (
+                    <Badge size="xs" variant="light" color="red">
+                      Required
+                    </Badge>
+                  )}
                 </Group>
                 <Stack gap={spacing[2]}>
                   {arrayValue.map((item, index) => (
@@ -206,8 +294,14 @@ export default function SchemaFormGenerator({
                       <TextInput
                         style={{ flex: 1 }}
                         placeholder={`Item ${index + 1}`}
-                        value={(item as string) || ''}
-                        onChange={(e) => handleArrayItemChange(field.name, index, e.currentTarget.value)}
+                        value={(item as string) || ""}
+                        onChange={(e) =>
+                          handleArrayItemChange(
+                            field.name,
+                            index,
+                            e.currentTarget.value
+                          )
+                        }
                         error={fieldError}
                       />
                       <ActionIcon
@@ -236,6 +330,7 @@ export default function SchemaFormGenerator({
                 )}
               </div>
             );
+          }
 
           default:
             return (
@@ -243,15 +338,28 @@ export default function SchemaFormGenerator({
                 key={field.name}
                 label={
                   <Group gap={spacing[1]}>
-                    <Text size="sm" fw={field.required ? typography.fontWeight.semibold : typography.fontWeight.normal}>
+                    <Text
+                      size="sm"
+                      fw={
+                        field.required
+                          ? typography.fontWeight.semibold
+                          : typography.fontWeight.normal
+                      }
+                    >
                       {field.name}
                     </Text>
-                    {field.required && <Badge size="xs" variant="light" color="red">Required</Badge>}
+                    {field.required && (
+                      <Badge size="xs" variant="light" color="red">
+                        Required
+                      </Badge>
+                    )}
                   </Group>
                 }
                 placeholder={field.description || `Enter ${field.name}`}
-                value={String(fieldValue || '')}
-                onChange={(e) => handleFieldChange(field.name, e.currentTarget.value)}
+                value={String(fieldValue || "")}
+                onChange={(e) =>
+                  handleFieldChange(field.name, e.currentTarget.value)
+                }
                 error={fieldError}
                 required={field.required}
               />
@@ -261,4 +369,3 @@ export default function SchemaFormGenerator({
     </Stack>
   );
 }
-

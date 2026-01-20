@@ -1,4 +1,5 @@
 # n8n Integration Architecture - Final Plan
+
 ## From Isolated Data Pod to Connected Intelligence Ecosystem
 
 **Version**: 2.0 (OAuth2 Revision)  
@@ -14,20 +15,21 @@ Transform Synap from an isolated Data Pod into **the intelligent orchestration l
 
 ### Strategic Impact
 
-| Dimension | Value |
-|-----------|-------|
-| **Market Access** | 50k+ n8n community members, enterprise automation users |
-| **Product Stickiness** | 10x increase - Synap becomes mission-critical infrastructure |
-| **Vision Validation** | First proof of "Personal OS" + "3 Systems Brain" architecture |
-| **Revenue Unlock** | Premium "Automation Agent" tier, B2B opportunities |
+| Dimension              | Value                                                         |
+| ---------------------- | ------------------------------------------------------------- |
+| **Market Access**      | 50k+ n8n community members, enterprise automation users       |
+| **Product Stickiness** | 10x increase - Synap becomes mission-critical infrastructure  |
+| **Vision Validation**  | First proof of "Personal OS" + "3 Systems Brain" architecture |
+| **Revenue Unlock**     | Premium "Automation Agent" tier, B2B opportunities            |
 
 ### Architecture Approach
 
 **✅ Leverage Existing Infrastructure**: Use Ory Hydra OAuth2 (already configured) instead of building custom API keys
 
 **🎯 Three Foundation Pillars**:
+
 1. **OAuth2 Authentication** - Industry-standard machine-to-machine auth via Hydra
-2. **Webhooks System** - Real-time event notifications to external services  
+2. **Webhooks System** - Real-time event notifications to external services
 3. **Actions API** - Programmatic access to Synap's intelligence
 
 **📅 Timeline**: 8 weeks to production-ready MVP
@@ -60,7 +62,7 @@ Our architecture is remarkably well-positioned for this integration:
 kratos:
   image: oryd/kratos:v1.3.0
   profiles: ["auth"]
-  
+
 # packages/auth/src/ory-hydra.ts - Already implemented
 - createOAuth2Client()
 - introspectToken()
@@ -90,7 +92,7 @@ events (
 ```
 Intelligence Hub (Proprietary)        Data Pod (Open Source)
   ├─ Frontend UI                        ├─ Event Store
-  ├─ mem0 memory                        ├─ Vector DB  
+  ├─ mem0 memory                        ├─ Vector DB
   ├─ Agent orchestration                ├─ PostgreSQL
   └─ Hub Protocol ──────────────────────┴─ APIs
 ```
@@ -102,21 +104,21 @@ Intelligence Hub (Proprietary)        Data Pod (Open Source)
 ```typescript
 // Already supports runtime extensibility
 pluginManager.register(n8nPlugin);
-dynamicRouterRegistry.register('n8n-actions', router);
+dynamicRouterRegistry.register("n8n-actions", router);
 ```
 
 **Advantage**: n8n features can be added as plugins without core modifications.
 
 ### 1.2 What We Need to Build
 
-| Component | Status | Priority |
-|-----------|--------|----------|
-| OAuth2 Client Management UI | ❌ Missing | 🔴 Critical |
-| OAuth2 Auth Middleware | ⚠️ Partial | 🔴 Critical |
+| Component                    | Status     | Priority    |
+| ---------------------------- | ---------- | ----------- |
+| OAuth2 Client Management UI  | ❌ Missing | 🔴 Critical |
+| OAuth2 Auth Middleware       | ⚠️ Partial | 🔴 Critical |
 | Webhook Subscriptions System | ❌ Missing | 🔴 Critical |
-| Webhook Broker (Inngest) | ❌ Missing | 🔴 Critical |
-| n8n Actions API Router | ❌ Missing | 🟡 High |
-| Rate Limiting | ❌ Missing | 🟡 High |
+| Webhook Broker (Inngest)     | ❌ Missing | 🔴 Critical |
+| n8n Actions API Router       | ❌ Missing | 🟡 High     |
+| Rate Limiting                | ❌ Missing | 🟡 High     |
 
 ---
 
@@ -124,15 +126,15 @@ dynamicRouterRegistry.register('n8n-actions', router);
 
 ### 2.1 Why OAuth2 Over Custom API Keys?
 
-| Criterion | Custom API Keys | OAuth2 Client Credentials ✅ |
-|-----------|-----------------|------------------------------|
-| **Infrastructure** | Need to build | Already exists (Ory Hydra) |
-| **Standards** | Custom implementation | RFC 6749 (industry standard) |
-| **Token Lifetime** | Long-lived (security risk) | Short-lived (15min, auto-refresh) |
-| **Scope Management** | Basic (read/write) | Granular (read:notes, write:tasks) |
-| **Enterprise Ready** | Requires work | Native OAuth2 |
-| **Audit Trail** | Custom implementation | Built-in Hydra logs |
-| **Revocation** | Database update | Immediate (token introspection) |
+| Criterion            | Custom API Keys            | OAuth2 Client Credentials ✅       |
+| -------------------- | -------------------------- | ---------------------------------- |
+| **Infrastructure**   | Need to build              | Already exists (Ory Hydra)         |
+| **Standards**        | Custom implementation      | RFC 6749 (industry standard)       |
+| **Token Lifetime**   | Long-lived (security risk) | Short-lived (15min, auto-refresh)  |
+| **Scope Management** | Basic (read/write)         | Granular (read:notes, write:tasks) |
+| **Enterprise Ready** | Requires work              | Native OAuth2                      |
+| **Audit Trail**      | Custom implementation      | Built-in Hydra logs                |
+| **Revocation**       | Database update            | Immediate (token introspection)    |
 
 **Decision**: Use OAuth2 Client Credentials flow via existing Ory Hydra infrastructure.
 
@@ -212,7 +214,7 @@ router.oauth2.clients.create({
   name: string,                      // "n8n Production Workflow"
   scopes: string[],                  // ["read:entities", "write:tasks"]
   description?: string
-}) → { 
+}) → {
   clientId: string,                  // synap_user123_abc
   clientSecret: string,              // Shown ONCE, never again
   tokenUrl: string                   // https://api.synap.ai/oauth2/token
@@ -227,44 +229,47 @@ router.oauth2.clients.getStats(clientId: string) → { requests: number, lastUse
 
 ```typescript
 // packages/domain/src/services/oauth2-client-service.ts
-import { createOAuth2Client } from '@synap/auth';
-import { randomBytes } from 'crypto';
+import { createOAuth2Client } from "@synap/auth";
+import { randomBytes } from "crypto";
 
 export class OAuth2ClientService {
-  async createClient(userId: string, input: {
-    name: string;
-    scopes: string[];
-  }) {
+  async createClient(
+    userId: string,
+    input: {
+      name: string;
+      scopes: string[];
+    }
+  ) {
     // Generate client credentials
-    const clientId = `synap_${userId}_${randomBytes(8).toString('hex')}`;
-    const clientSecret = randomBytes(32).toString('hex');
-    
+    const clientId = `synap_${userId}_${randomBytes(8).toString("hex")}`;
+    const clientSecret = randomBytes(32).toString("hex");
+
     // Register with Hydra
     await createOAuth2Client({
       client_id: clientId,
       client_secret: clientSecret,
-      grant_types: ['client_credentials'],
+      grant_types: ["client_credentials"],
       response_types: [],
-      scope: input.scopes.join(' '),
+      scope: input.scopes.join(" "),
       redirect_uris: [], // Not needed for client_credentials
       metadata: {
         user_id: userId,
-        name: input.name
-      }
+        name: input.name,
+      },
     });
-    
+
     // Store mapping in our DB
     await db.insert(oauth2ClientOwners).values({
       client_id: clientId,
       user_id: userId,
       name: input.name,
-      scopes: input.scopes
+      scopes: input.scopes,
     });
-    
+
     return {
       clientId,
-      clientSecret,  // Return once!
-      tokenUrl: `${config.apiUrl}/oauth2/token`
+      clientSecret, // Return once!
+      tokenUrl: `${config.apiUrl}/oauth2/token`,
     };
   }
 }
@@ -274,45 +279,46 @@ export class OAuth2ClientService {
 
 ```typescript
 // packages/auth/src/middleware/oauth2-auth.ts
-import { introspectToken } from '../ory-hydra.js';
+import { introspectToken } from "../ory-hydra.js";
 
 export async function validateOAuth2Token(req: Request): Promise<{
   userId: string;
   scopes: string[];
   clientId: string;
 }> {
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    throw new UnauthorizedError('Missing OAuth2 token');
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    throw new UnauthorizedError("Missing OAuth2 token");
   }
 
   const token = authHeader.substring(7);
-  
+
   // Introspect via Hydra
   const tokenInfo = await introspectToken(token);
-  
+
   if (!tokenInfo?.active) {
-    throw new UnauthorizedError('Invalid or expired token');
+    throw new UnauthorizedError("Invalid or expired token");
   }
-  
+
   // Resolve user from client
   const client = await db.query.oauth2ClientOwners.findFirst({
-    where: eq(oauth2ClientOwners.client_id, tokenInfo.client_id)
+    where: eq(oauth2ClientOwners.client_id, tokenInfo.client_id),
   });
-  
+
   if (!client) {
-    throw new UnauthorizedError('Client not found');
+    throw new UnauthorizedError("Client not found");
   }
-  
+
   // Update last used
-  await db.update(oauth2ClientOwners)
+  await db
+    .update(oauth2ClientOwners)
     .set({ last_used_at: new Date() })
     .where(eq(oauth2ClientOwners.client_id, tokenInfo.client_id));
-  
+
   return {
     userId: client.user_id,
-    scopes: tokenInfo.scope?.split(' ') || [],
-    clientId: tokenInfo.client_id
+    scopes: tokenInfo.scope?.split(" ") || [],
+    clientId: tokenInfo.client_id,
   };
 }
 ```
@@ -320,6 +326,7 @@ export async function validateOAuth2Token(req: Request): Promise<{
 ### 2.5 User Experience: Connecting n8n
 
 **Step 1**: User creates OAuth2 client in Synap UI
+
 - Navigate to Settings > Integrations > OAuth2 Clients
 - Click "Create New Client"
 - Enter name: "n8n Production"
@@ -327,6 +334,7 @@ export async function validateOAuth2Token(req: Request): Promise<{
 - Click Create
 
 **Step 2**: Copy credentials (shown once!)
+
 ```
 Client ID: synap_user123_abc7f2e4
 Client Secret: ••••••••••••••••••••••••••
@@ -335,6 +343,7 @@ Scopes: read:entities write:entities webhook:manage
 ```
 
 **Step 3**: Configure n8n credentials
+
 - In n8n: Credentials > New > OAuth2 API
 - Grant Type: Client Credentials
 - Access Token URL: [paste from Synap]
@@ -344,6 +353,7 @@ Scopes: read:entities write:entities webhook:manage
 - Save
 
 **Step 4**: Use in workflows
+
 - n8n automatically handles token acquisition and refresh
 - User builds workflows with Synap nodes
 
@@ -422,53 +432,53 @@ CREATE INDEX idx_deliveries_status ON webhook_deliveries(status, created_at);
 
 ```typescript
 // packages/jobs/src/functions/webhook-broker.ts
-import { inngest } from '../client';
-import { createHmac } from 'crypto';
+import { inngest } from "../client";
+import { createHmac } from "crypto";
 
 export const webhookBroker = inngest.createFunction(
-  { id: 'webhook-broker', name: 'Webhook Event Broadcaster' },
-  { event: 'db/events.inserted' },
+  { id: "webhook-broker", name: "Webhook Event Broadcaster" },
+  { event: "db/events.inserted" },
   async ({ event, step }) => {
     const synapEvent = event.data;
-    
+
     // Find active subscriptions
-    const subscriptions = await step.run('find-subscriptions', async () => {
+    const subscriptions = await step.run("find-subscriptions", async () => {
       return db.query.webhookSubscriptions.findMany({
         where: and(
           eq(webhookSubscriptions.userId, synapEvent.userId),
           eq(webhookSubscriptions.active, true),
           sql`event_types && ARRAY[${synapEvent.type}]::text[]`
-        )
+        ),
       });
     });
-    
+
     // Deliver to each subscription
     await Promise.all(
-      subscriptions.map(sub => 
+      subscriptions.map((sub) =>
         step.run(`deliver-${sub.id}`, async () => {
-          const signature = createHmac('sha256', sub.secret)
+          const signature = createHmac("sha256", sub.secret)
             .update(JSON.stringify(synapEvent))
-            .digest('hex');
-          
+            .digest("hex");
+
           const response = await fetch(sub.url, {
-            method: 'POST',
+            method: "POST",
             headers: {
-              'Content-Type': 'application/json',
-              'X-Synap-Signature': signature,
-              'X-Synap-Event-Type': synapEvent.type,
-              'X-Synap-Event-ID': synapEvent.id
+              "Content-Type": "application/json",
+              "X-Synap-Signature": signature,
+              "X-Synap-Event-Type": synapEvent.type,
+              "X-Synap-Event-ID": synapEvent.id,
             },
-            body: JSON.stringify(synapEvent)
+            body: JSON.stringify(synapEvent),
           });
-          
+
           await logDelivery({
             subscriptionId: sub.id,
             eventId: synapEvent.id,
-            status: response.ok ? 'success' : 'failed',
-            responseStatus: response.status
+            status: response.ok ? "success" : "failed",
+            responseStatus: response.status,
           });
-          
-          if (!response.ok) throw new Error('Webhook delivery failed');
+
+          if (!response.ok) throw new Error("Webhook delivery failed");
         })
       )
     );
@@ -507,76 +517,84 @@ export const n8nActionsRouter = router({
    * Create Entity (Note, Task, Project)
    */
   createEntity: protectedOAuth2Procedure
-    .input(z.object({
-      type: z.enum(['note', 'task', 'project']),
-      data: z.record(z.any())
-    }))
+    .input(
+      z.object({
+        type: z.enum(["note", "task", "project"]),
+        data: z.record(z.any()),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       // Check scope
-      if (!ctx.scopes.includes('write:entities')) {
-        throw new ForbiddenError('Missing scope: write:entities');
+      if (!ctx.scopes.includes("write:entities")) {
+        throw new ForbiddenError("Missing scope: write:entities");
       }
-      
+
       const event = await eventService.createEvent({
         type: `${input.type}.creation.requested`,
         data: input.data,
-        userId: ctx.userId
+        userId: ctx.userId,
       });
-      
-      return { eventId: event.id, status: 'created' };
+
+      return { eventId: event.id, status: "created" };
     }),
-  
+
   /**
    * Semantic Search
    */
   searchEntities: protectedOAuth2Procedure
-    .input(z.object({
-      query: z.string(),
-      type: z.enum(['note', 'task', 'all']).optional(),
-      limit: z.number().default(10)
-    }))
+    .input(
+      z.object({
+        query: z.string(),
+        type: z.enum(["note", "task", "all"]).optional(),
+        limit: z.number().default(10),
+      })
+    )
     .query(async ({ input, ctx }) => {
-      if (!ctx.scopes.includes('read:entities')) {
-        throw new ForbiddenError('Missing scope: read:entities');
+      if (!ctx.scopes.includes("read:entities")) {
+        throw new ForbiddenError("Missing scope: read:entities");
       }
-      
+
       const embedding = await generateEmbedding(input.query);
       const results = await vectorService.searchByEmbedding({
         userId: ctx.userId,
         embedding,
-        limit: input.limit
+        limit: input.limit,
       });
-      
+
       return { results };
     }),
-  
+
   /**
    * AI Analysis (🔥 Killer Feature!)
    */
   analyzeContent: protectedOAuth2Procedure
-    .input(z.object({
-      content: z.string(),
-      analysisTypes: z.enum(['tags', 'summary', 'tasks', 'sentiment']).array()
-    }))
+    .input(
+      z.object({
+        content: z.string(),
+        analysisTypes: z
+          .enum(["tags", "summary", "tasks", "sentiment"])
+          .array(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      if (!ctx.scopes.includes('ai:analyze')) {
-        throw new ForbiddenError('Missing scope: ai:analyze');
+      if (!ctx.scopes.includes("ai:analyze")) {
+        throw new ForbiddenError("Missing scope: ai:analyze");
       }
-      
+
       // Call Intelligence Hub
       const insight = await intelligenceHub.analyze({
         userId: ctx.userId,
         content: input.content,
-        types: input.analysisTypes
+        types: input.analysisTypes,
       });
-      
+
       return {
         tags: insight.analysis?.tags || [],
-        summary: insight.analysis?.content || '',
+        summary: insight.analysis?.content || "",
         tasks: extractTasks(insight),
-        sentiment: insight.metadata?.sentiment
+        sentiment: insight.metadata?.sentiment,
       };
-    })
+    }),
 });
 ```
 
@@ -590,20 +608,20 @@ export function createRestAdapter(routerPath: string) {
   return async (c: Context) => {
     const method = c.req.method;
     const body = await c.req.json();
-    
+
     // Call tRPC procedure
     const result = await trpcRouter[routerPath][method.toLowerCase()]({
       input: body,
-      ctx: c.get('authContext')
+      ctx: c.get("authContext"),
     });
-    
+
     return c.json(result);
   };
 }
 
 // Usage in Hono
-app.post('/api/n8n/entities', createRestAdapter('n8n.createEntity'));
-app.post('/api/n8n/analyze', createRestAdapter('n8n.analyzeContent'));
+app.post("/api/n8n/entities", createRestAdapter("n8n.createEntity"));
+app.post("/api/n8n/analyze", createRestAdapter("n8n.analyzeContent"));
 ```
 
 ---
@@ -612,21 +630,23 @@ app.post('/api/n8n/analyze', createRestAdapter('n8n.analyzeContent'));
 
 ### 5.1 Mapping Integration to Brain Systems
 
-| System | Role in Synap | n8n Integration |
-|--------|---------------|-----------------|
+| System                    | Role in Synap          | n8n Integration                                        |
+| ------------------------- | ---------------------- | ------------------------------------------------------ |
 | **Système 1: Perception** | Capture and store data | ✅ **Webhooks OUT**: n8n receives events from Data Pod |
-| **Système 2: Raison** | Process and decide | ✅ **Actions API**: n8n calls Synap's AI for analysis |
-| **Système 3: Intuition** | Discover patterns | 🎯 **Future**: Agent generates n8n workflows |
+| **Système 2: Raison**     | Process and decide     | ✅ **Actions API**: n8n calls Synap's AI for analysis  |
+| **Système 3: Intuition**  | Discover patterns      | 🎯 **Future**: Agent generates n8n workflows           |
 
 ### 5.2 Evolution Path
 
 #### Today (MVP - Week 8)
+
 ```
 User manually creates n8n workflow:
 "When task.completed → Analyze with Synap AI → Send Slack notification"
 ```
 
 #### V2 (3-6 months) - Agent d'Automatisation
+
 ```
 System 3 (Intuition) detects pattern:
 "User completes 3 weekly reports every Friday 5pm"
@@ -639,6 +659,7 @@ System 2 (Raison) executes: POST /api/n8n/workflows/deploy
 ```
 
 #### V3 (6-12 months) - Self-Improving OS
+
 ```
 System monitors workflow performance:
 "Your summary email has 90% open rate"
@@ -655,28 +676,28 @@ New API endpoint auto-deployed via The Architech
 ```typescript
 // Future: n8n as a Data Pod plugin
 export const n8nIntegrationPlugin: DataPodPlugin = {
-  name: 'n8n-integration',
-  version: '1.0.0',
+  name: "n8n-integration",
+  version: "1.0.0",
   enabled: true,
-  
+
   registerRouter() {
     return n8nActionsRouter;
   },
-  
+
   registerTools(toolRegistry) {
     toolRegistry.register({
-      name: 'generate_n8n_workflow',
-      description: 'Generate n8n workflow from natural language',
+      name: "generate_n8n_workflow",
+      description: "Generate n8n workflow from natural language",
       execute: async ({ description }) => {
         // Agent d'Automatisation logic
         return { workflowJson };
-      }
+      },
     });
   },
-  
+
   async onInit() {
     await startWebhookBroker();
-  }
+  },
 };
 ```
 
@@ -687,33 +708,37 @@ export const n8nIntegrationPlugin: DataPodPlugin = {
 ### 6.1 Security Layers
 
 #### Layer 1: OAuth2 Authentication
+
 - ✅ Industry-standard RFC 6749
 - ✅ Short-lived tokens (15min default)
 - ✅ Client secret hashing (bcrypt)
 - ✅ Token introspection via Hydra
 
 #### Layer 2: Scope-Based Authorization
+
 ```typescript
 const scopes = {
-  'read:entities': 'Read notes, tasks, projects',
-  'write:entities': 'Create and update entities',
-  'ai:analyze': 'Use AI analysis features',
-  'webhook:manage': 'Create and manage webhooks',
-  'admin': 'Full access (dangerous!)'
+  "read:entities": "Read notes, tasks, projects",
+  "write:entities": "Create and update entities",
+  "ai:analyze": "Use AI analysis features",
+  "webhook:manage": "Create and manage webhooks",
+  admin: "Full access (dangerous!)",
 };
 ```
 
 #### Layer 3: Rate Limiting
+
 ```typescript
 // Redis-based rate limiter
 const limiter = new RateLimiterRedis({
-  points: 1000,      // Requests
-  duration: 3600,    // Per hour
-  blockDuration: 600 // 10min penalty
+  points: 1000, // Requests
+  duration: 3600, // Per hour
+  blockDuration: 600, // 10min penalty
 });
 ```
 
 #### Layer 4: Webhook Security
+
 - ✅ HMAC-SHA256 signature validation
 - ✅ HTTPS-only URLs
 - ✅ Secret rotation capability
@@ -721,13 +746,13 @@ const limiter = new RateLimiterRedis({
 
 ### 6.2 Risk Matrix
 
-| Risk | Impact | Likelihood | Mitigation |
-|------|--------|------------|-----------|
-| **OAuth2 Client Leak** | High | Medium | Short token lifetime, revocation UI, audit logs |
-| **Webhook DDoS** | High | Low | HMAC validation, rate limiting, queue backpressure |
-| **Data Exfiltration** | Critical | Low | Scope enforcement, audit all API calls, alerts |
-| **Token Replay** | Medium | Medium | Token expiry, introspection check, nonce (future) |
-| **Inngest Failure** | Medium | Low | Built-in retries, dead letter queue, monitoring |
+| Risk                   | Impact   | Likelihood | Mitigation                                         |
+| ---------------------- | -------- | ---------- | -------------------------------------------------- |
+| **OAuth2 Client Leak** | High     | Medium     | Short token lifetime, revocation UI, audit logs    |
+| **Webhook DDoS**       | High     | Low        | HMAC validation, rate limiting, queue backpressure |
+| **Data Exfiltration**  | Critical | Low        | Scope enforcement, audit all API calls, alerts     |
+| **Token Replay**       | Medium   | Medium     | Token expiry, introspection check, nonce (future)  |
+| **Inngest Failure**    | Medium   | Low        | Built-in retries, dead letter queue, monitoring    |
 
 ---
 
@@ -737,16 +762,17 @@ const limiter = new RateLimiterRedis({
 
 **Goal**: Users can create OAuth2 clients and authenticate
 
-| Task | Owner | Deliverable |
-|------|-------|-------------|
-| Enable Hydra in docker-compose | DevOps | `docker compose --profile auth up` ✅ |
-| Create `oauth2_client_owners` schema | Backend | Migration file |
-| Implement OAuth2 client service | Backend | `OAuth2ClientService` |
-| Build OAuth2 auth middleware | Backend | `validateOAuth2Token()` |
-| Create management UI | Frontend | React components |
-| Write integration tests | QA | 10+ test cases |
+| Task                                 | Owner    | Deliverable                           |
+| ------------------------------------ | -------- | ------------------------------------- |
+| Enable Hydra in docker-compose       | DevOps   | `docker compose --profile auth up` ✅ |
+| Create `oauth2_client_owners` schema | Backend  | Migration file                        |
+| Implement OAuth2 client service      | Backend  | `OAuth2ClientService`                 |
+| Build OAuth2 auth middleware         | Backend  | `validateOAuth2Token()`               |
+| Create management UI                 | Frontend | React components                      |
+| Write integration tests              | QA       | 10+ test cases                        |
 
 **Acceptance Criteria**:
+
 - [ ] User can create OAuth2 client in UI
 - [ ] Client credentials returned once
 - [ ] API call with valid token succeeds
@@ -759,16 +785,17 @@ const limiter = new RateLimiterRedis({
 
 **Goal**: Events trigger webhooks to external URLs
 
-| Task | Owner | Deliverable |
-|------|-------|-------------|
-| Create webhook schemas | Backend | Migration files |
-| Implement webhook service | Backend | `WebhookService` |
-| Build Inngest broker | Backend | `webhook-broker.ts` |
-| Add HMAC signature | Security | `createSignature()` |
-| Create webhook UI | Frontend | Subscription management |
-| Test with n8n | QA | Live webhook test |
+| Task                      | Owner    | Deliverable             |
+| ------------------------- | -------- | ----------------------- |
+| Create webhook schemas    | Backend  | Migration files         |
+| Implement webhook service | Backend  | `WebhookService`        |
+| Build Inngest broker      | Backend  | `webhook-broker.ts`     |
+| Add HMAC signature        | Security | `createSignature()`     |
+| Create webhook UI         | Frontend | Subscription management |
+| Test with n8n             | QA       | Live webhook test       |
 
 **Acceptance Criteria**:
+
 - [ ] User can create webhook subscription
 - [ ] Webhook fires when event occurs
 - [ ] HMAC signature validates
@@ -781,16 +808,17 @@ const limiter = new RateLimiterRedis({
 
 **Goal**: n8n can call Synap actions via API
 
-| Task | Owner | Deliverable |
-|------|-------|-------------|
-| Design n8n actions schema | Product | API spec |
-| Implement tRPC router | Backend | `n8nActionsRouter` |
-| Build REST adapter | Backend | Hono middleware |
-| Add scope validation | Security | Per-endpoint checks |
-| Create API documentation | DevRel | OpenAPI spec |
-| Test with n8n HTTP node | QA | Example workflows |
+| Task                      | Owner    | Deliverable         |
+| ------------------------- | -------- | ------------------- |
+| Design n8n actions schema | Product  | API spec            |
+| Implement tRPC router     | Backend  | `n8nActionsRouter`  |
+| Build REST adapter        | Backend  | Hono middleware     |
+| Add scope validation      | Security | Per-endpoint checks |
+| Create API documentation  | DevRel   | OpenAPI spec        |
+| Test with n8n HTTP node   | QA       | Example workflows   |
 
 **Acceptance Criteria**:
+
 - [ ] `createEntity` endpoint works
 - [ ] `searchEntities` returns results
 - [ ] `analyzeContent` calls Intelligence Hub
@@ -803,16 +831,17 @@ const limiter = new RateLimiterRedis({
 
 **Goal**: Official n8n community nodes for Synap
 
-| Task | Owner | Deliverable |
-|------|-------|-------------|
-| Create n8n credentials type | DevRel | `SynapOAuth2.credentials.ts` |
-| Build trigger node | DevRel | `SynapTrigger.node.ts` |
-| Build action nodes | DevRel | `SynapActions.node.ts` |
-| Write documentation | DevRel | README, examples |
-| Publish to npm | DevOps | `n8n-nodes-synap@1.0.0` |
-| Promote in community | Marketing | n8n forum post |
+| Task                        | Owner     | Deliverable                  |
+| --------------------------- | --------- | ---------------------------- |
+| Create n8n credentials type | DevRel    | `SynapOAuth2.credentials.ts` |
+| Build trigger node          | DevRel    | `SynapTrigger.node.ts`       |
+| Build action nodes          | DevRel    | `SynapActions.node.ts`       |
+| Write documentation         | DevRel    | README, examples             |
+| Publish to npm              | DevOps    | `n8n-nodes-synap@1.0.0`      |
+| Promote in community        | Marketing | n8n forum post               |
 
 **Acceptance Criteria**:
+
 - [ ] Node pack installs in n8n
 - [ ] OAuth2 credentials work
 - [ ] Trigger receives webhooks
@@ -859,16 +888,17 @@ const limiter = new RateLimiterRedis({
 
 While OAuth2 is the primary approach for n8n, we may optionally add simple API keys for:
 
-| Use Case | Recommended Auth |
-|----------|------------------|
-| **n8n workflows** | 🏆 OAuth2 |
-| **Zapier integration** | 🏆 OAuth2 |
-| **Enterprise plugins** | 🏆 OAuth2 |
-| **Quick scripts** | ⭐ API Keys |
-| **Webhooks (outgoing)** | ⭐ API Keys |
-| **Dev testing** | ⭐ API Keys |
+| Use Case                | Recommended Auth |
+| ----------------------- | ---------------- |
+| **n8n workflows**       | 🏆 OAuth2        |
+| **Zapier integration**  | 🏆 OAuth2        |
+| **Enterprise plugins**  | 🏆 OAuth2        |
+| **Quick scripts**       | ⭐ API Keys      |
+| **Webhooks (outgoing)** | ⭐ API Keys      |
+| **Dev testing**         | ⭐ API Keys      |
 
 **Implementation**: Unified middleware that accepts both:
+
 ```typescript
 if (token.startsWith('ory_at_')) → OAuth2
 else if (token.startsWith('sk_')) → API Key
@@ -880,23 +910,25 @@ else if (token.startsWith('sk_')) → API Key
 
 Both use the same OAuth2 infrastructure:
 
-| Layer | Authentication |
-|-------|----------------|
-| **Intelligence Hub (Cloud)** | Ory Hydra (centralized) + Better Auth (users) |
-| **Data Pod (Self-hosted)** | Ory Hydra (self-hosted) + (optional Better Auth) |
-| **Hybrid** | OAuth2 federation between Hub ↔ Pod |
+| Layer                        | Authentication                                   |
+| ---------------------------- | ------------------------------------------------ |
+| **Intelligence Hub (Cloud)** | Ory Hydra (centralized) + Better Auth (users)    |
+| **Data Pod (Self-hosted)**   | Ory Hydra (self-hosted) + (optional Better Auth) |
+| **Hybrid**                   | OAuth2 federation between Hub ↔ Pod              |
 
 ---
 
 ## Next Steps
 
 **For Stakeholder Review**:
+
 1. ✅ Review this architecture document
 2. → Provide feedback on approach
 3. → Approve roadmap and timeline
 4. → Greenlight Sprint 1 (OAuth2 Foundation)
 
 **Questions to Address**:
+
 - Scope granularity: Start coarse or fine-grained from day 1?
 - Rate limits: Fixed or tiered by plan?
 - Webhook retry policy: Configurable per subscription?
@@ -906,4 +938,4 @@ Both use the same OAuth2 infrastructure:
 
 **Ready for your review and feedback!** 🚀
 
-*Archie, CTO - "Let it learn, then it clicks with your brain."*
+_Archie, CTO - "Let it learn, then it clicks with your brain."_

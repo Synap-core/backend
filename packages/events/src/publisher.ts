@@ -1,25 +1,25 @@
 /**
  * Type-Safe Event Publisher
- * 
+ *
  * Dual-Write Pattern:
  * 1. Saves event to TimescaleDB (audit trail, source of truth)
  * 2. Sends to Inngest (triggers workers for processing)
- * 
+ *
  * This ensures both persistence AND real-time processing.
  */
 
-import { db, events, sql } from '@synap/database';
-import type { DomainEvent, EventDataFor } from './domain-events.js';
-import { createLogger } from '@synap-core/core';
-import { Inngest } from 'inngest';
+import { db, events, sql } from "@synap/database";
+import type { DomainEvent, EventDataFor } from "./domain-events.js";
+import { createLogger } from "@synap-core/core";
+import { Inngest } from "inngest";
 
-const logger = createLogger({ module: 'event-publisher' });
+const logger = createLogger({ module: "event-publisher" });
 
 // Create Inngest client for event publishing
 // Note: This is separate from @synap/jobs client to avoid circular dependencies
 const inngest = new Inngest({
-  id: 'synap-events-publisher',
-  name: 'Synap Event Publisher',
+  id: "synap-events-publisher",
+  name: "Synap Event Publisher",
 });
 
 // ============================================================================
@@ -43,13 +43,13 @@ export interface PublishEventOptions {
 
 /**
  * Publish a domain event (Dual-Write Pattern)
- * 
+ *
  * 1. Saves to TimescaleDB (audit trail, source of truth)
  * 2. Sends to Inngest (triggers workers)
- * 
+ *
  * If Inngest send fails, marks event with retry metadata.
  * Background job will retry later.
- * 
+ *
  * @example
  * ```typescript
  * await publishEvent({
@@ -67,26 +67,32 @@ export async function publishEvent<T extends DomainEvent>(
   event: T,
   options: PublishEventOptions
 ): Promise<{ eventId: string }> {
-  logger.debug({ 
-    type: event.type, 
-    subjectType: event.subjectType,
-    subjectId: event.subjectId 
-  }, 'Publishing event (dual-write)');
-  
+  logger.debug(
+    {
+      type: event.type,
+      subjectType: event.subjectType,
+      subjectId: event.subjectId,
+    },
+    "Publishing event (dual-write)"
+  );
+
   // STEP 1: Save to TimescaleDB (source of truth)
-  const [result] = await db.insert(events).values({
-    type: event.type,
-    subjectId: event.subjectId,
-    subjectType: event.subjectType,
-    data: event.data as any, // Cast needed for JSONB
-    userId: options.userId,
-    source: options.source,
-    metadata: options.metadata,
-    correlationId: options.correlationId,
-  }).returning({ id: events.id });
-  
-  logger.debug({ eventId: result.id }, 'Event saved to TimescaleDB');
-  
+  const [result] = await db
+    .insert(events)
+    .values({
+      type: event.type,
+      subjectId: event.subjectId,
+      subjectType: event.subjectType,
+      data: event.data as any, // Cast needed for JSONB
+      userId: options.userId,
+      source: options.source,
+      metadata: options.metadata,
+      correlationId: options.correlationId,
+    })
+    .returning({ id: events.id });
+
+  logger.debug({ eventId: result.id }, "Event saved to TimescaleDB");
+
   // STEP 2: Send to Inngest (trigger workers)
   try {
     await inngest.send({
@@ -101,14 +107,17 @@ export async function publishEvent<T extends DomainEvent>(
         id: options.userId,
       },
     });
-    
-    logger.debug({ eventId: result.id, type: event.type }, 'Event sent to Inngest');
+
+    logger.debug(
+      { eventId: result.id, type: event.type },
+      "Event sent to Inngest"
+    );
   } catch (error) {
     logger.error(
       { err: error, eventId: result.id, type: event.type },
-      'Failed to send event to Inngest - marking for retry'
+      "Failed to send event to Inngest - marking for retry"
     );
-    
+
     // Mark event for retry (background job will pick this up)
     await sql`
       UPDATE events 
@@ -120,11 +129,14 @@ export async function publishEvent<T extends DomainEvent>(
       })}::jsonb 
       WHERE id = ${result.id}
     `;
-    
+
     // Don't throw - event is saved, retry will handle Inngest
-    logger.warn({ eventId: result.id }, 'Event will be retried by background job');
+    logger.warn(
+      { eventId: result.id },
+      "Event will be retried by background job"
+    );
   }
-  
+
   return { eventId: result.id };
 }
 
@@ -137,12 +149,12 @@ export async function publishEvent<T extends DomainEvent>(
  */
 export function createInboxItemReceivedEvent(
   itemId: string,
-  data: EventDataFor<'inbox.item.received'>
+  data: EventDataFor<"inbox.item.received">
 ) {
   return {
-    type: 'inbox.item.received' as const,
+    type: "inbox.item.received" as const,
     subjectId: itemId,
-    subjectType: 'inbox_item' as const,
+    subjectType: "inbox_item" as const,
     data,
   };
 }
@@ -152,12 +164,12 @@ export function createInboxItemReceivedEvent(
  */
 export function createInboxItemAnalyzedEvent(
   itemId: string,
-  data: EventDataFor<'inbox.item.analyzed'>
+  data: EventDataFor<"inbox.item.analyzed">
 ) {
   return {
-    type: 'inbox.item.analyzed' as const,
+    type: "inbox.item.analyzed" as const,
     subjectId: itemId,
-    subjectType: 'inbox_item' as const,
+    subjectType: "inbox_item" as const,
     data,
   };
 }
@@ -167,12 +179,12 @@ export function createInboxItemAnalyzedEvent(
  */
 export function createInboxItemStatusUpdatedEvent(
   itemId: string,
-  data: EventDataFor<'inbox.item.status.updated'>
+  data: EventDataFor<"inbox.item.status.updated">
 ) {
   return {
-    type: 'inbox.item.status.updated' as const,
+    type: "inbox.item.status.updated" as const,
     subjectId: itemId,
-    subjectType: 'inbox_item' as const,
+    subjectType: "inbox_item" as const,
     data,
   };
 }
@@ -182,12 +194,12 @@ export function createInboxItemStatusUpdatedEvent(
  */
 export function createEntityCreateRequestedEvent(
   entityId: string,
-  data: EventDataFor<'entities.create.requested'>
+  data: EventDataFor<"entities.create.requested">
 ) {
   return {
-    type: 'entities.create.requested' as const,
+    type: "entities.create.requested" as const,
     subjectId: entityId,
-    subjectType: 'entity' as const,
+    subjectType: "entity" as const,
     data,
   };
 }
@@ -197,12 +209,12 @@ export function createEntityCreateRequestedEvent(
  */
 export function createEntityCreateCompletedEvent(
   entityId: string,
-  data: EventDataFor<'entities.create.completed'>
+  data: EventDataFor<"entities.create.completed">
 ) {
   return {
-    type: 'entities.create.completed' as const,
+    type: "entities.create.completed" as const,
     subjectId: entityId,
-    subjectType: 'entity' as const,
+    subjectType: "entity" as const,
     data,
   };
 }

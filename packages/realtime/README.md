@@ -51,17 +51,17 @@ wrangler secret put REALTIME_URL
 ### Worker Side (Broadcasting)
 
 ```typescript
-import { broadcastNotification } from '@synap/jobs/utils/realtime-broadcast';
+import { broadcastNotification } from "@synap/jobs/utils/realtime-broadcast";
 
 // Broadcast success notification
 await broadcastNotification({
-  userId: 'user-123',
-  requestId: 'request-456',
+  userId: "user-123",
+  requestId: "request-456",
   message: {
-    type: 'note.creation.completed',
-    data: { entityId: 'entity-789' },
-    requestId: 'request-456',
-    status: 'success',
+    type: "note.creation.completed",
+    data: { entityId: "entity-789" },
+    requestId: "request-456",
+    status: "success",
     timestamp: new Date().toISOString(),
   },
 });
@@ -119,4 +119,3 @@ wscat -c wss://realtime.synap.app/rooms/user_test-123/subscribe
 ## Documentation
 
 See [ARCHITECTURE_REALTIME.md](../../ARCHITECTURE_REALTIME.md) for detailed architecture documentation.
-

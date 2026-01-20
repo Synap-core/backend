@@ -1,4 +1,3 @@
+import { insertViewSchema } from "@synap/database/schema";
 
-import { insertViewSchema } from '@synap/database/schema';
-
-console.log('insertViewSchema keys:', Object.keys(insertViewSchema.shape));
+console.log("insertViewSchema keys:", Object.keys(insertViewSchema.shape));

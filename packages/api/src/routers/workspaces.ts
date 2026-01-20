@@ -1,20 +1,27 @@
-
 /**
  * Workspaces Router - Multi-user workspace management
- * 
+ *
  * Handles:
  * - Workspace CRUD
  * - Member management
  * - Invitation system
  */
 
-import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc.js';
-import { db, eq, and, desc } from '@synap/database';
-import { workspaces, workspaceMembers, workspaceInvites, insertWorkspaceSchema, insertWorkspaceInviteSchema } from '@synap/database/schema';
-import { TRPCError } from '@trpc/server';
-import { randomBytes } from 'crypto';
-import { WorkspaceMemberEvents } from '../lib/event-helpers.js';
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  workspaces,
+  workspaceMembers,
+  workspaceInvites,
+} from "@synap/database";
+import { TRPCError } from "@trpc/server";
+import { randomBytes } from "crypto";
+import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
+import { emitRequestEvent } from "../utils/emit-event.js";
 
 /**
  * Workspace CRUD operations
@@ -25,33 +32,36 @@ export const workspacesRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertWorkspaceSchema.pick({
-        name: true,
-        description: true,
-        settings: true,
-      }).extend({
+      z.object({
         name: z.string().min(1).max(100),
-        type: z.enum(['personal', 'team', 'enterprise']).default('personal'),
+        description: z.string().optional(),
+        settings: z.record(z.unknown()).optional(),
+        type: z.enum(["personal", "team", "enterprise"]).default("personal"),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - worker will create workspace
-      const { inngest } = await import('@synap/jobs');
-      
-      await inngest.send({
-        name: 'workspaces.create.requested',
+      const { randomUUID } = await import("crypto");
+      const workspaceId = randomUUID();
+
+      await emitRequestEvent({
+        type: "workspaces.create.requested",
+        subjectId: workspaceId,
+        subjectType: "workspace",
         data: {
+          id: workspaceId,
           name: input.name,
           description: input.description,
           type: input.type,
           userId: ctx.userId,
+          settings: input.settings,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
-      return { 
-        status: 'requested',
-        message: 'Workspace creation requested. It will be created shortly.'
+      return {
+        status: "requested",
+        message: "Workspace creation requested. It will be created shortly.",
+        workspaceId,
       };
     }),
 
@@ -66,7 +76,7 @@ export const workspacesRouter = router({
       },
     });
 
-    return memberships.map(m => {
+    return memberships.map((m) => {
       const workspace = m.workspace!;
       return {
         ...workspace,
@@ -87,7 +97,10 @@ export const workspacesRouter = router({
       });
 
       if (!workspace) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found' });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
       }
 
       // Check user has access
@@ -99,7 +112,7 @@ export const workspacesRouter = router({
       });
 
       if (!membership) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       return { ...workspace, role: membership.role };
@@ -110,34 +123,32 @@ export const workspacesRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertWorkspaceSchema.pick({
-        name: true,
-        description: true,
-        settings: true,
-      }).partial().extend({
+      z.object({
         id: z.string().uuid(),
         name: z.string().min(1).max(100).optional(),
+        description: z.string().optional(),
+        settings: z.record(z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - permission validator will check permissions
-      const { inngest } = await import('@synap/jobs');
-      
-      await inngest.send({
-        name: 'workspaces.update.requested',
+      await emitRequestEvent({
+        type: "workspaces.update.requested",
+        subjectId: input.id,
+        subjectType: "workspace",
         data: {
           workspaceId: input.id,
+          id: input.id,
           name: input.name,
           description: input.description,
           settings: input.settings,
           userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
-      return { 
-        status: 'requested',
-        message: 'Workspace update requested'
+      return {
+        status: "requested",
+        message: "Workspace update requested",
       };
     }),
 
@@ -147,21 +158,198 @@ export const workspacesRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event - permission validator enforces owner-only
-      const { inngest } = await import('@synap/jobs');
-      
-      await inngest.send({
-        name: 'workspaces.delete.requested',
+      await emitRequestEvent({
+        type: "workspaces.delete.requested",
+        subjectId: input.id,
+        subjectType: "workspace",
         data: {
           workspaceId: input.id,
+          id: input.id,
           userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
-      return { 
-        status: 'requested',
-        message: 'Workspace deletion requested. Only the owner can approve this.'
+      return {
+        status: "requested",
+        message:
+          "Workspace deletion requested. Only the owner can approve this.",
+      };
+    }),
+
+  /**
+   * Add member to workspace
+   * Event-driven: emits workspaceMembers.add.requested
+   */
+  addMember: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string(),
+        role: z.enum(["owner", "editor", "viewer"]),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
+        data: {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+          invitedBy: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message: "Member addition requested",
       };
     }),
 
@@ -180,7 +368,7 @@ export const workspacesRouter = router({
       });
 
       if (!membership) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       return await db.query.workspaceMembers.findMany({
@@ -193,27 +381,27 @@ export const workspacesRouter = router({
    * Remove member from workspace
    */
   removeMember: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-      userId: z.string(),
-    }))
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import('@synap/jobs');
-      
-      await inngest.send({
-        name: 'workspaceMembers.remove.requested',
+      await emitRequestEvent({
+        type: "workspace_members.delete.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
-      return { 
-        status: 'requested',
-        message: 'Member removal requested'
+      return {
+        status: "requested",
+        message: "Member removal requested",
       };
     }),
 
@@ -221,29 +409,29 @@ export const workspacesRouter = router({
    * Update member role
    */
   updateMemberRole: protectedProcedure
-    .input(z.object({
-      workspaceId: z.string().uuid(),
-      userId: z.string(),
-      role: z.enum(['admin', 'editor', 'viewer']),
-    }))
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        userId: z.string(),
+        role: z.enum(["admin", "editor", "viewer"]),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import('@synap/jobs');
-      
-      await inngest.send({
-        name: 'workspaceMembers.updateRole.requested',
+      await emitRequestEvent({
+        type: "workspace_members.update.requested",
+        subjectId: `${input.workspaceId}-${input.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
           newRole: input.role,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
-      return { 
-        status: 'requested',
-        message: 'Role update requested'
+      return {
+        status: "requested",
+        message: "Role update requested",
       };
     }),
 
@@ -252,12 +440,10 @@ export const workspacesRouter = router({
    */
   createInvite: protectedProcedure
     .input(
-      insertWorkspaceInviteSchema.pick({
-        workspaceId: true,
-        email: true,
-        role: true,
-      }).extend({
-        role: z.enum(['admin', 'editor', 'viewer']),
+      z.object({
+        workspaceId: z.string().uuid(),
+        email: z.string().email(),
+        role: z.enum(["admin", "editor", "viewer"]),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -269,26 +455,35 @@ export const workspacesRouter = router({
         ),
       });
 
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can invite' });
+      if (!membership || !["owner", "admin"].includes(membership.role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners/admins can invite",
+        });
       }
-      
+
       // Log requested event
-      await WorkspaceMemberEvents.inviteRequested(ctx.userId, input);
+      await WorkspaceMemberEvents.inviteRequested(ctx.userId, {
+        ...input,
+        role: input.role as any,
+      });
 
       // Generate token
-      const token = randomBytes(32).toString('hex');
+      const token = randomBytes(32).toString("hex");
 
       // Create invite
-      const [invite] = await db.insert(workspaceInvites).values({
-        workspaceId: input.workspaceId,
-        email: input.email,
-        role: input.role,
-        token,
-        invitedBy: ctx.userId,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-      }).returning();
-      
+      const [invite] = await db
+        .insert(workspaceInvites)
+        .values({
+          workspaceId: input.workspaceId,
+          email: input.email,
+          role: input.role,
+          token,
+          invitedBy: ctx.userId,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        } as any)
+        .returning();
+
       // Log validated event (invite created)
       await WorkspaceMemberEvents.inviteValidated(ctx.userId, {
         id: invite.id,
@@ -318,7 +513,7 @@ export const workspacesRouter = router({
       });
 
       if (!membership) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied' });
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       return await db.query.workspaceInvites.findMany({
@@ -339,33 +534,31 @@ export const workspacesRouter = router({
       });
 
       if (!invite) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       }
 
       if (invite.expiresAt < new Date()) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invite expired' });
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
       }
 
-      // ✅ Publish .requested event
-      const { inngest } = await import('@synap/jobs');
-      
-      await inngest.send({
-        name: 'workspaceMembers.add.requested',
+      await emitRequestEvent({
+        type: "workspace_members.create.requested",
+        subjectId: `${invite.workspaceId}-${ctx.userId}`,
+        subjectType: "workspace_member",
         data: {
           workspaceId: invite.workspaceId,
-          targetUserId: ctx.userId,
+          userId: ctx.userId,
           role: invite.role,
           invitedBy: invite.invitedBy,
           inviteId: invite.id,
-          userId: ctx.userId,
         },
-        user: { id: ctx.userId },
+        userId: ctx.userId,
       });
 
-      return { 
-        status: 'requested',
+      return {
+        status: "requested",
         workspaceId: invite.workspaceId,
-        message: 'Invite acceptance requested'
+        message: "Invite acceptance requested",
       };
     }),
 
@@ -380,7 +573,7 @@ export const workspacesRouter = router({
       });
 
       if (!invite) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Invite not found' });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       }
 
       // Check user is owner/admin
@@ -391,11 +584,16 @@ export const workspacesRouter = router({
         ),
       });
 
-      if (!membership || !['owner', 'admin'].includes(membership.role)) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only owners/admins can revoke invites' });
+      if (!membership || !["owner", "admin"].includes(membership.role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners/admins can revoke invites",
+        });
       }
 
-      await db.delete(workspaceInvites).where(eq(workspaceInvites.id, input.id));
+      await db
+        .delete(workspaceInvites)
+        .where(eq(workspaceInvites.id, input.id));
 
       return { success: true };
     }),

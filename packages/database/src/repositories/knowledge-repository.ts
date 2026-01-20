@@ -1,12 +1,12 @@
 /**
  * Knowledge Repository - Knowledge Facts Management
- * 
+ *
  * Uses shared postgres.js client from client-pg.ts
  */
 
-import { sql } from '../client-pg.js';
-import { randomUUID } from 'crypto';
-import type { KnowledgeFactRow } from '../schema/knowledge-facts.js';
+import { sql } from "../client-pg.js";
+import { randomUUID } from "crypto";
+import type { KnowledgeFactRow } from "../schema/knowledge-facts.js";
 
 export interface SaveKnowledgeFactInput {
   userId: string;
@@ -75,7 +75,7 @@ export class KnowledgeRepository {
     }
 
     if (!this.memoryStore) {
-      throw new Error('Knowledge repository not initialised.');
+      throw new Error("Knowledge repository not initialised.");
     }
 
     const factRecord: KnowledgeFactRecord = {
@@ -95,7 +95,9 @@ export class KnowledgeRepository {
     return factRecord;
   }
 
-  async searchFacts(input: SearchKnowledgeFactsInput): Promise<KnowledgeFactRecord[]> {
+  async searchFacts(
+    input: SearchKnowledgeFactsInput
+  ): Promise<KnowledgeFactRecord[]> {
     const { userId, query, limit = 10 } = input;
 
     const facts = await this.fetchFacts(userId, Math.max(limit * 3, limit));
@@ -119,7 +121,10 @@ export class KnowledgeRepository {
     return scored.slice(0, limit).map((entry) => entry.fact);
   }
 
-  private async fetchFacts(userId: string, limit: number): Promise<KnowledgeFactRecord[]> {
+  private async fetchFacts(
+    userId: string,
+    limit: number
+  ): Promise<KnowledgeFactRecord[]> {
     if (this.useDatabase) {
       const dbResult = await sql`
         SELECT * FROM knowledge_facts
@@ -141,12 +146,14 @@ export class KnowledgeRepository {
 
   private ensureEmbeddingDimensions(embedding: number[]) {
     if (embedding.length !== 1536) {
-      throw new Error(`Knowledge embeddings must have 1536 dimensions. Received ${embedding.length}.`);
+      throw new Error(
+        `Knowledge embeddings must have 1536 dimensions. Received ${embedding.length}.`
+      );
     }
   }
 
   private embedToPgVector(embedding: number[]): string {
-    const formatted = embedding.map((value) => value.toFixed(6)).join(',');
+    const formatted = embedding.map((value) => value.toFixed(6)).join(",");
     return `[${formatted}]`;
   }
 
@@ -176,18 +183,30 @@ export class KnowledgeRepository {
     );
   }
 
-  private mapRow(row: KnowledgeFactRow | Record<string, unknown>): KnowledgeFactRecord {
+  private mapRow(
+    row: KnowledgeFactRow | Record<string, unknown>
+  ): KnowledgeFactRecord {
     const raw = row as Record<string, unknown>;
 
-    const id = (raw.id ?? raw['id']) as string;
-    const userId = (raw.userId ?? raw['user_id']) as string;
-    const fact = (raw.fact ?? raw['fact']) as string;
-    const confidenceValue = raw.confidence ?? raw['confidence'];
-    const confidence = typeof confidenceValue === 'number' ? confidenceValue : Number(confidenceValue ?? 0);
-    const sourceEntityId = (raw.sourceEntityId ?? raw['source_entity_id']) as string | null | undefined;
-    const sourceMessageId = (raw.sourceMessageId ?? raw['source_message_id']) as string | null | undefined;
-    const createdAtRaw = raw.createdAt ?? raw['created_at'];
-    const createdAt = createdAtRaw instanceof Date ? createdAtRaw : new Date(createdAtRaw as string | number | Date);
+    const id = (raw.id ?? raw["id"]) as string;
+    const userId = (raw.userId ?? raw["user_id"]) as string;
+    const fact = (raw.fact ?? raw["fact"]) as string;
+    const confidenceValue = raw.confidence ?? raw["confidence"];
+    const confidence =
+      typeof confidenceValue === "number"
+        ? confidenceValue
+        : Number(confidenceValue ?? 0);
+    const sourceEntityId = (raw.sourceEntityId ?? raw["source_entity_id"]) as
+      | string
+      | null
+      | undefined;
+    const sourceMessageId = (raw.sourceMessageId ??
+      raw["source_message_id"]) as string | null | undefined;
+    const createdAtRaw = raw.createdAt ?? raw["created_at"];
+    const createdAt =
+      createdAtRaw instanceof Date
+        ? createdAtRaw
+        : new Date(createdAtRaw as string | number | Date);
 
     return {
       id,
@@ -205,7 +224,7 @@ let _knowledgeRepository: KnowledgeRepository | null = null;
 
 export function getKnowledgeRepository(): KnowledgeRepository {
   if (!_knowledgeRepository) {
-    const isPostgres = process.env.DB_DIALECT === 'postgres';
+    const isPostgres = process.env.DB_DIALECT === "postgres";
     const connectionString = process.env.DATABASE_URL;
 
     if (isPostgres && connectionString) {

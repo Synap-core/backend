@@ -26,6 +26,7 @@
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run -c vitest.unit.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "db:migrate": "tsx scripts/migrate.ts",
@@ -36,17 +37,21 @@
     "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop"
   },
   "dependencies": {
-    "@synap-core/core": "^1.0.0",
+    "@synap-core/core": "workspace:*",
+    "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "pgvector": "^0.2.1",
     "postgres": "^3.4.7",
-    "zod": "^3.25.0"
+    "zod": "3.23.8"
   },
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.0.15",
-    "drizzle-kit": "^0.24.2",
+    "bcryptjs": "^3.0.3",
+    "drizzle-kit": "^0.31.8",
     "postgres": "^3.4.7",
     "tsup": "^8.0.0",
     "tsx": "^4.7.0",

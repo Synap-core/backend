@@ -1,10 +1,23 @@
-import { Group, Text, Badge, ActionIcon, Tooltip, UnstyledButton } from '@mantine/core';
-import { Link, useLocation } from 'react-router-dom';
-import { 
-  IconHeart, IconBolt, IconDatabase, IconFolder,
-  IconRobot, IconHierarchy, IconCommand, IconFlask
-} from '@tabler/icons-react';
-import { colors, spacing } from '../../theme/tokens';
+import {
+  Group,
+  Text,
+  Badge,
+  ActionIcon,
+  Tooltip,
+  UnstyledButton,
+} from "@mantine/core";
+import { Link, useLocation } from "react-router-dom";
+import {
+  IconHeart,
+  IconBolt,
+  IconDatabase,
+  IconFolder,
+  IconRobot,
+  IconHierarchy,
+  IconCommand,
+  IconFlask,
+} from "@tabler/icons-react";
+import { colors, spacing } from "../../theme/tokens";
 
 interface NavItem {
   path: string;
@@ -17,16 +30,17 @@ export default function TopNav() {
   const location = useLocation();
 
   const navItems: NavItem[] = [
-    { path: '/', label: 'Health', icon: <IconHeart size={18} /> },
-    { path: '/events', label: 'Events', icon: <IconBolt size={18} /> },
-    { path: '/data', label: 'Data', icon: <IconDatabase size={18} /> },
-    { path: '/files', label: 'Files', icon: <IconFolder size={18} /> },
-    { path: '/automation', label: 'Automation', icon: <IconRobot size={18} /> },
-    { path: '/flow', label: 'Architecture', icon: <IconHierarchy size={18} /> },
+    { path: "/", label: "Health", icon: <IconHeart size={18} /> },
+    { path: "/events", label: "Events", icon: <IconBolt size={18} /> },
+    { path: "/data", label: "Data", icon: <IconDatabase size={18} /> },
+    { path: "/files", label: "Files", icon: <IconFolder size={18} /> },
+    { path: "/automation", label: "Automation", icon: <IconRobot size={18} /> },
+    { path: "/flow", label: "Architecture", icon: <IconHierarchy size={18} /> },
   ];
 
   const isActive = (path: string) => {
-    if (path === '/') return location.pathname === '/' || location.pathname === '/health';
+    if (path === "/")
+      return location.pathname === "/" || location.pathname === "/health";
     return location.pathname.startsWith(path);
   };
 
@@ -47,13 +61,15 @@ export default function TopNav() {
           size="lg"
           style={{
             background: `linear-gradient(135deg, ${colors.eventTypes.created} 0%, ${colors.eventTypes.ai} 100%)`,
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
           }}
         >
           SYNAP
         </Text>
-        <Badge size="xs" variant="light" color="gray">Admin</Badge>
+        <Badge size="xs" variant="light" color="gray">
+          Admin
+        </Badge>
       </Group>
 
       {/* Navigation Items */}
@@ -64,18 +80,18 @@ export default function TopNav() {
             component={Link}
             to={item.path}
             style={{
-              display: 'flex',
-              alignItems: 'center',
+              display: "flex",
+              alignItems: "center",
               gap: 8,
-              padding: '8px 16px',
+              padding: "8px 16px",
               borderRadius: 8,
-              background: isActive(item.path) 
-                ? `${colors.eventTypes.created}15` 
-                : 'transparent',
-              color: isActive(item.path) 
-                ? colors.eventTypes.created 
+              background: isActive(item.path)
+                ? `${colors.eventTypes.created}15`
+                : "transparent",
+              color: isActive(item.path)
+                ? colors.eventTypes.created
                 : colors.text.secondary,
-              transition: 'all 0.15s ease',
+              transition: "all 0.15s ease",
             }}
           >
             {item.icon}
@@ -99,7 +115,7 @@ export default function TopNav() {
             to="/testing"
             variant="subtle"
             size="lg"
-            color={location.pathname === '/testing' ? 'violet' : 'gray'}
+            color={location.pathname === "/testing" ? "violet" : "gray"}
           >
             <IconFlask size={20} />
           </ActionIcon>

@@ -1,4 +1,5 @@
 # Frontend Deep Dive Audit Report (REVISED)
+
 **Date**: 2026-01-07  
 **Scope**: Complete Frontend & Backend Analysis
 
@@ -18,25 +19,27 @@ After deeper analysis, the situation is **more complex** than initially assessed
 
 ```typescript
 // Lines 14-17
-const activeWorkspaceId = 'workspace_demo';  // ❌ HARD-CODED
-const userId = 'user_1';                      // ❌ HARD-CODED  
-const userName = 'Demo User';                // ❌ HARD-CODED
+const activeWorkspaceId = "workspace_demo"; // ❌ HARD-CODED
+const userId = "user_1"; // ❌ HARD-CODED
+const userName = "Demo User"; // ❌ HARD-CODED
 ```
 
-**Impact**: 
+**Impact**:
+
 - **Real-time sync NEVER connects to actual user workspace**
 - All users connect to the same demo workspace ID
 - WebSocket events go to wrong workspace
 - Collaborative features don't work for real users
 
 **Fix Required**:
+
 ```typescript
 // Should be:
 const { activeWorkspaceId } = useWorkspaceStore();
 const { user } = useAuth();  // Or from tRPC context
 
 return (
-  <SocketIOProvider 
+  <SocketIOProvider
     url={url}
     workspaceId={activeWorkspaceId || ''}  // From store
     userId={user?.id || ''}                // From auth
@@ -53,6 +56,7 @@ return (
 **Problem**: Frontend hooks reference `trpc.chat.*` but backend has TWO routers:
 
 #### 1. [`chat.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/api/src/routers/chat.ts) - EMPTY ❌
+
 ```typescript
 export const chatRouter = router({
   // All endpoints temporarily disabled - refactor needed
@@ -61,20 +65,22 @@ export const chatRouter = router({
 ```
 
 #### 2. [`infinite-chat.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/api/src/routers/infinite-chat.ts) - FULLY FUNCTIONAL ✅
+
 ```typescript
 export const infiniteChatRouter = router({
-  createThread,      // ✅ Works
-  sendMessage,       // ✅ Works - calls Intelligence Hub
-  getMessages,       // ✅ Works - infinite scroll
-  listThreads,       // ✅ Works
-  getBranches,       // ✅ Works
-  mergeBranch,       // ✅ Works
+  createThread, // ✅ Works
+  sendMessage, // ✅ Works - calls Intelligence Hub
+  getMessages, // ✅ Works - infinite scroll
+  listThreads, // ✅ Works
+  getBranches, // ✅ Works
+  mergeBranch, // ✅ Works
 });
 ```
 
 **Issue**: `infinite-chat.ts` is NOT REGISTERED in the app router!
 
 Looking at [`packages/api/src/index.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/api/src/index.ts):
+
 - Line 74: `registerRouter('chat', chatRouter, ...)` ← Registers EMPTY router
 - `infiniteChatRouter` is NEVER imported or registered!
 
@@ -87,20 +93,23 @@ Looking at [`packages/api/src/index.ts`](file:///Users/antoine/Documents/Code/sy
 ### Chat Store (408 lines) - Client-Side Only
 
 [`chatStore.ts`](file:///Users/antoine/Documents/Code/synap/synap-app/packages/synap-stores/src/chatStore.ts) manages:
+
 - Thread creation
 - Message history
 - AI proposals
 - Streaming state
 
 **Problem**: It's 100% local state with NO backend persistence.
+
 ```typescript
 createThread: (workspaceId, title) => {
   const id = `thread-${Date.now()}-${Math.random().toString(36).slice(2)}`; // ❌ Local ID
   // ... stores in Zustand, NOT in database
-}
+};
 ```
 
-**Impact**: 
+**Impact**:
+
 - Threads are lost on refresh
 - No cross-device sync
 - No collaboration
@@ -108,6 +117,7 @@ createThread: (workspaceId, title) => {
 ### Document Store (298 lines) - Client-Side Only
 
 [`documentStore.ts`](file:///Users/antoine/Documents/Code/synap/synap-app/packages/synap-stores/src/documentStore.ts) manages:
+
 - Document state
 - Version history (snapshots)
 - AI proposals as "staged commits"
@@ -122,6 +132,7 @@ createThread: (workspaceId, title) => {
 ### Documents Router - FULLY FUNCTIONAL ✅
 
 [`documents.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/api/src/routers/documents.ts) has:
+
 - ✅ `upload` - Create document
 - ✅ `get` - Fetch document
 - ✅ `update` - Save changes (DIRECT UPDATE for performance)
@@ -137,6 +148,7 @@ createThread: (workspaceId, title) => {
 ### Infinite Chat Router - FULLY FUNCTIONAL ✅ (BUT NOT REGISTERED)
 
 [`infinite-chat.ts`](file:///Users/antoine/Documents/Code/synap/synap-backend/packages/api/src/routers/infinite-chat.ts) has:
+
 - ✅ `createThread` - Start new conversation
 - ✅ `sendMessage` - Send to Intelligence Hub, get AI response
 - ✅ `getMessages` - Infinite scroll pagination
@@ -193,13 +205,13 @@ createThread: (workspaceId, title) => {
 
 ```typescript
 // ADD IMPORT
-import { infiniteChatRouter } from './routers/infinite-chat.js';
+import { infiniteChatRouter } from "./routers/infinite-chat.js";
 
 // REPLACE LINE 74
-registerRouter('chat', infiniteChatRouter, { 
-  version: '2.0.0', 
-  source: 'core', 
-  description: 'Infinite chat with Intelligence Hub and branching' 
+registerRouter("chat", infiniteChatRouter, {
+  version: "2.0.0",
+  source: "core",
+  description: "Infinite chat with Intelligence Hub and branching",
 });
 ```
 
@@ -233,7 +245,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <SocketIOProvider 
+    <SocketIOProvider
       url={url}
       workspaceId={activeWorkspaceId}
       userId={user.id}
@@ -269,16 +281,16 @@ return trpc.chat.getMessages.useInfiniteQuery(...)
 **NEW FILE**: `packages/synap-hooks/src/useChatThreads.ts`
 
 ```typescript
-import { trpc } from '@synap/client';
+import { trpc } from "@synap/client";
 
 export function useChatThreads(workspaceId: string) {
-  const threadsQuery = trpc.chat.listThreads.useQuery({ 
-    projectId: workspaceId 
+  const threadsQuery = trpc.chat.listThreads.useQuery({
+    projectId: workspaceId,
   });
-  
+
   const createThreadMutation = trpc.chat.createThread.useMutation();
   const sendMessageMutation = trpc.chat.sendMessage.useMutation();
-  
+
   return {
     threads: threadsQuery.data?.threads || [],
     isLoading: threadsQuery.isLoading,
@@ -294,12 +306,14 @@ export function useChatThreads(workspaceId: string) {
 
 ```typescript
 // REMOVE
-import { MOCK_CHATS } from './mock-data';
+import { MOCK_CHATS } from "./mock-data";
 const [currentChatId, setCurrentChatId] = useState(MOCK_CHATS[0].id);
 
 // ADD
-import { useChatThreads } from '@synap/hooks';
-const { threads: chats, isLoading: isLoadingChats } = useChatThreads(activeWorkspaceId || '');
+import { useChatThreads } from "@synap/hooks";
+const { threads: chats, isLoading: isLoadingChats } = useChatThreads(
+  activeWorkspaceId || ""
+);
 const [currentChatId, setCurrentChatId] = useState<string | null>(null);
 
 // Initialize to first thread once loaded
@@ -321,16 +335,16 @@ useEffect(() => {
 **NEW FILE**: `packages/synap-hooks/src/useDocuments.ts`
 
 ```typescript
-import { trpc } from '@synap/client';
+import { trpc } from "@synap/client";
 
 export function useDocuments(workspaceId: string) {
-  const documentsQuery = trpc.documents.list.useQuery({ 
-    projectId: workspaceId 
+  const documentsQuery = trpc.documents.list.useQuery({
+    projectId: workspaceId,
   });
-  
+
   const uploadMutation = trpc.documents.upload.useMutation();
   const updateMutation = trpc.documents.update.useMutation();
-  
+
   return {
     documents: documentsQuery.data?.documents || [],
     isLoading: documentsQuery.isLoading,
@@ -346,11 +360,11 @@ export function useDocuments(workspaceId: string) {
 
 ```typescript
 // REMOVE
-import { MOCK_ARTIFACTS } from './mock-data';
+import { MOCK_ARTIFACTS } from "./mock-data";
 
 // ADD
-import { useDocuments } from '@synap/hooks';
-const { documents: artifacts } = useDocuments(activeWorkspaceId || '');
+import { useDocuments } from "@synap/hooks";
+const { documents: artifacts } = useDocuments(activeWorkspaceId || "");
 ```
 
 ---
@@ -360,18 +374,21 @@ const { documents: artifacts } = useDocuments(activeWorkspaceId || '');
 **Question**: What role should the Zustand stores play?
 
 **Option A**: Remove Stores, Use tRPC Cache Only
+
 - ✅ Simpler architecture
 - ✅ TanStack Query handles caching
 - ❌ Lose optimistic updates
 - ❌ Lose offline support
 
 **Option B**: Keep Stores, Sync with Backend
+
 - ✅ Optimistic updates (instant UI)
 - ✅ Offline-first capability
 - ❌ More complex state management
 - ❌ Risk of sync conflicts
 
 **Recommendation**: **Option B** - The stores are well-architected. We should:
+
 1. Keep stores for UI state and optimistic updates
 2. Add backend sync layer
 3. Use stores as "write-ahead log" that syncs to backend
@@ -381,10 +398,12 @@ const { documents: artifacts } = useDocuments(activeWorkspaceId || '');
 ## 📝 Summary of Required Changes
 
 ### Immediate (This Session)
+
 1. ✅ Register `infiniteChatRouter` as `chat` router (30 min)
 2. ✅ Fix workspace layout hard-coded values (1 hour)
 
 ### Next Sprint (2-3 days)
+
 3. ✅ Wire `useChatMessages` to backend `chat.getMessages`
 4. ✅ Create `useChatThreads` hook
 5. ✅ Replace `MOCK_CHATS` in workspace UI
@@ -392,6 +411,7 @@ const { documents: artifacts } = useDocuments(activeWorkspaceId || '');
 7. ✅ Replace `MOCK_ARTIFACTS` in workspace UI
 
 ### Future Sprint (Strategic)
+
 8. 🔄 Decide on store syncing strategy
 9. 🔄 Implement bidirectional sync (stores ↔ backend)
 10. 🔄 Add optimistic updates

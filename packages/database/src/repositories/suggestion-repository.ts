@@ -1,14 +1,14 @@
 /**
  * Suggestion Repository - AI Suggestions Management
- * 
+ *
  * Uses shared postgres.js client from client-pg.ts
  */
 
-import { sql } from '../client-pg.js';
-import { randomUUID } from 'crypto';
-import type { AISuggestionRow } from '../schema/ai-suggestions.js';
+import { sql } from "../client-pg.js";
+import { randomUUID } from "crypto";
+import type { AISuggestionRow } from "../schema/ai-suggestions.js";
 
-export type AISuggestionStatus = 'pending' | 'accepted' | 'dismissed';
+export type AISuggestionStatus = "pending" | "accepted" | "dismissed";
 
 export interface CreateSuggestionInput {
   userId: string;
@@ -57,7 +57,9 @@ export class SuggestionRepository {
     }
   }
 
-  async createSuggestion(input: CreateSuggestionInput): Promise<SuggestionRecord> {
+  async createSuggestion(
+    input: CreateSuggestionInput
+  ): Promise<SuggestionRecord> {
     if (this.useDatabase) {
       const result = await sql`
         INSERT INTO ai_suggestions (
@@ -84,14 +86,14 @@ export class SuggestionRepository {
     }
 
     if (!this.memoryStore) {
-      throw new Error('Suggestion repository not initialised.');
+      throw new Error("Suggestion repository not initialised.");
     }
 
     const record: SuggestionRecord = {
       id: randomUUID(),
       userId: input.userId,
       type: input.type,
-      status: 'pending',
+      status: "pending",
       title: input.title,
       description: input.description,
       payload: input.payload,
@@ -107,7 +109,10 @@ export class SuggestionRepository {
     return record;
   }
 
-  async listSuggestions(userId: string, status: AISuggestionStatus = 'pending'): Promise<SuggestionRecord[]> {
+  async listSuggestions(
+    userId: string,
+    status: AISuggestionStatus = "pending"
+  ): Promise<SuggestionRecord[]> {
     const records = await this.fetchSuggestions(userId);
     return records.filter((suggestion) => suggestion.status === status);
   }
@@ -140,7 +145,7 @@ export class SuggestionRepository {
     return (
       suggestions.find(
         (suggestion) =>
-          suggestion.status === 'pending' &&
+          suggestion.status === "pending" &&
           suggestion.type === type &&
           suggestion.payload?.[payloadKey] === payloadValue
       ) ?? null
@@ -180,7 +185,10 @@ export class SuggestionRepository {
     return suggestion;
   }
 
-  async getRecentTagUsage(hours: number, minUsage: number): Promise<TagUsageCandidate[]> {
+  async getRecentTagUsage(
+    hours: number,
+    minUsage: number
+  ): Promise<TagUsageCandidate[]> {
     if (!this.useDatabase) {
       return [];
     }
@@ -219,7 +227,10 @@ export class SuggestionRepository {
     return Number(result[0]?.count ?? 0) > 0;
   }
 
-  async getRelatedEntitiesForTag(tagId: string, limit: number): Promise<RelatedEntitySummary[]> {
+  async getRelatedEntitiesForTag(
+    tagId: string,
+    limit: number
+  ): Promise<RelatedEntitySummary[]> {
     if (!this.useDatabase) {
       return [];
     }
@@ -257,24 +268,38 @@ export class SuggestionRepository {
     return [...(this.memoryStore.get(userId) ?? [])];
   }
 
-  private mapRow(row: AISuggestionRow | Record<string, unknown>): SuggestionRecord {
+  private mapRow(
+    row: AISuggestionRow | Record<string, unknown>
+  ): SuggestionRecord {
     const raw = row as Record<string, unknown>;
 
-    const id = (raw.id ?? raw['id']) as string;
-    const userId = (raw.userId ?? raw['user_id']) as string;
-    const type = (raw.type ?? raw['type']) as string;
-    const statusRaw = raw.status ?? raw['status'];
-    const status = (statusRaw as string) as AISuggestionStatus;
-    const title = (raw.title ?? raw['title']) as string;
-    const description = (raw.description ?? raw['description']) as string;
-    const payloadRaw = raw.payload ?? raw['payload'];
-    const payload = typeof payloadRaw === 'string' ? JSON.parse(payloadRaw) : (payloadRaw as Record<string, unknown> | undefined);
-    const confidenceValue = raw.confidence ?? raw['confidence'];
-    const confidence = typeof confidenceValue === 'number' ? confidenceValue : Number(confidenceValue ?? 0);
-    const createdAtRaw = raw.createdAt ?? raw['created_at'];
-    const updatedAtRaw = raw.updatedAt ?? raw['updated_at'];
-    const createdAt = createdAtRaw instanceof Date ? createdAtRaw : new Date(createdAtRaw as string | number | Date);
-    const updatedAt = updatedAtRaw instanceof Date ? updatedAtRaw : new Date(updatedAtRaw as string | number | Date);
+    const id = (raw.id ?? raw["id"]) as string;
+    const userId = (raw.userId ?? raw["user_id"]) as string;
+    const type = (raw.type ?? raw["type"]) as string;
+    const statusRaw = raw.status ?? raw["status"];
+    const status = statusRaw as string as AISuggestionStatus;
+    const title = (raw.title ?? raw["title"]) as string;
+    const description = (raw.description ?? raw["description"]) as string;
+    const payloadRaw = raw.payload ?? raw["payload"];
+    const payload =
+      typeof payloadRaw === "string"
+        ? JSON.parse(payloadRaw)
+        : (payloadRaw as Record<string, unknown> | undefined);
+    const confidenceValue = raw.confidence ?? raw["confidence"];
+    const confidence =
+      typeof confidenceValue === "number"
+        ? confidenceValue
+        : Number(confidenceValue ?? 0);
+    const createdAtRaw = raw.createdAt ?? raw["created_at"];
+    const updatedAtRaw = raw.updatedAt ?? raw["updated_at"];
+    const createdAt =
+      createdAtRaw instanceof Date
+        ? createdAtRaw
+        : new Date(createdAtRaw as string | number | Date);
+    const updatedAt =
+      updatedAtRaw instanceof Date
+        ? updatedAtRaw
+        : new Date(updatedAtRaw as string | number | Date);
 
     return {
       id,
@@ -295,7 +320,7 @@ let _suggestionRepository: SuggestionRepository | null = null;
 
 export function getSuggestionRepository(): SuggestionRepository {
   if (!_suggestionRepository) {
-    const isPostgres = process.env.DB_DIALECT === 'postgres';
+    const isPostgres = process.env.DB_DIALECT === "postgres";
     const connectionString = process.env.DATABASE_URL;
 
     if (isPostgres && connectionString) {

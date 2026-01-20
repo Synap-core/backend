@@ -1,13 +1,18 @@
 /**
  * tRPC Context
- * 
+ *
  * PostgreSQL-only with Ory Kratos session authentication for multi-user support.
  */
 
-import { getDb } from '@synap/database';
-import { createLogger, InternalServerError } from '@synap-core/core';
+import { getDb } from "@synap/database";
+import { createLogger } from "@synap-core/core";
+import { InternalServerError } from "@synap-core/types";
+import type { Context, KratosSession, User } from "./types/context.js";
 
-const contextLogger = createLogger({ module: 'api-context' });
+// Re-export types
+export type { Context, KratosSession, User };
+
+const contextLogger = createLogger({ module: "api-context" });
 
 // Initialize database connection once at module load
 let dbInstance: Awaited<ReturnType<typeof getDb>> | null = null;
@@ -18,34 +23,30 @@ async function getDbInstance() {
   return dbInstance;
 }
 
-export interface Context extends Record<string, unknown> {
-  db: any; // Awaited<ReturnType<typeof getDb>>; // Fix TS2742
-  authenticated: boolean;
-  userId?: string | null;
-  user?: any;
-  session?: any;
-  req?: Request;
-}
-
 export async function createContext(req: Request): Promise<Context> {
   // Initialize database
   const db = await getDbInstance();
 
   // Use Ory Kratos session for authentication
   try {
-    const authModule = await import('@synap/auth');
+    const authModule = await import("@synap/auth");
     if (!authModule.getSession) {
-      throw new InternalServerError('getSession not available', { module: '@synap/auth' });
+      throw new InternalServerError("getSession not available", {
+        module: "@synap/auth",
+      });
     }
     // Debug logging for cookie presence
-    const cookieHeader = req.headers.get('cookie');
-    contextLogger.info({ 
-      hasCookie: !!cookieHeader, 
-      cookieLength: cookieHeader?.length || 0 
-    }, 'Attempting to get session from request');
+    const cookieHeader = req.headers.get("cookie");
+    contextLogger.info(
+      {
+        hasCookie: !!cookieHeader,
+        cookieLength: cookieHeader?.length || 0,
+      },
+      "Attempting to get session from request"
+    );
 
     const session = await authModule.getSession(req.headers);
-    
+
     // Kratos session structure: { identity: { id, traits: { email, name } } }
     if (session && session.identity) {
       return {
@@ -61,7 +62,7 @@ export async function createContext(req: Request): Promise<Context> {
         req,
       };
     }
-    
+
     // No valid session
     return {
       db,
@@ -72,12 +73,15 @@ export async function createContext(req: Request): Promise<Context> {
       req,
     };
   } catch (error) {
-    contextLogger.error({ 
-      err: error,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      cookiePresent: !!req.headers.get('cookie'),
-      cookieLength: req.headers.get('cookie')?.length || 0
-    }, 'Error getting session (detailed debug)');
+    contextLogger.error(
+      {
+        err: error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        cookiePresent: !!req.headers.get("cookie"),
+        cookieLength: req.headers.get("cookie")?.length || 0,
+      },
+      "Error getting session (detailed debug)"
+    );
     return {
       db,
       authenticated: false,
@@ -88,4 +92,3 @@ export async function createContext(req: Request): Promise<Context> {
     };
   }
 }
-

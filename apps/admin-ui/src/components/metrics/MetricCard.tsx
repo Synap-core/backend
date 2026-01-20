@@ -1,11 +1,15 @@
-import { Card, Text, Group, Stack, Badge, RingProgress } from '@mantine/core';
-import { IconTrendingUp, IconTrendingDown, IconMinus } from '@tabler/icons-react';
+import { Card, Text, Group, Stack, Badge, RingProgress } from "@mantine/core";
+import {
+  IconTrendingUp,
+  IconTrendingDown,
+  IconMinus,
+} from "@tabler/icons-react";
 
 interface MetricCardProps {
   title: string;
   value: string | number;
   unit?: string;
-  trend?: 'up' | 'down' | 'neutral';
+  trend?: "up" | "down" | "neutral";
   trendValue?: string;
   color?: string;
   description?: string;
@@ -18,13 +22,18 @@ export default function MetricCard({
   unit,
   trend,
   trendValue,
-  color = 'blue',
+  color = "blue",
   description,
   percentage,
 }: MetricCardProps) {
   const TrendIcon =
-    trend === 'up' ? IconTrendingUp : trend === 'down' ? IconTrendingDown : IconMinus;
-  const trendColor = trend === 'up' ? 'green' : trend === 'down' ? 'red' : 'gray';
+    trend === "up"
+      ? IconTrendingUp
+      : trend === "down"
+        ? IconTrendingDown
+        : IconMinus;
+  const trendColor =
+    trend === "up" ? "green" : trend === "down" ? "red" : "gray";
 
   return (
     <Card withBorder padding="md">

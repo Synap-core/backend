@@ -1,10 +1,10 @@
 /**
  * User Preferences Schema - UI and application settings
- * 
+ *
  * Stores user-specific preferences that persist across sessions
  */
 
-import { pgTable, text, timestamp, boolean, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
 
 // Type definitions for JSONB columns
 export interface CustomTheme {
@@ -27,7 +27,7 @@ export interface CustomTheme {
   };
   animations?: {
     enabled?: boolean;
-    speed?: 'slow' | 'normal' | 'fast';
+    speed?: "slow" | "normal" | "fast";
   };
 }
 
@@ -54,7 +54,7 @@ export interface UIPreferences {
   compactMode?: boolean;
   fontSize?: string;
   animations?: boolean;
-  defaultView?: 'list' | 'grid' | 'timeline';
+  defaultView?: "list" | "grid" | "timeline";
 }
 
 export interface GraphPreferences {
@@ -73,33 +73,51 @@ export interface GraphPreferences {
   showMinimap?: boolean;
 }
 
-export const userPreferences = pgTable('user_preferences', {
+export const userPreferences = pgTable("user_preferences", {
   // Primary key
-  userId: text('user_id').primaryKey(),
-  
+  userId: text("user_id").primaryKey(),
+
   // Theme Preferences
-  theme: text('theme').default('system').notNull(), // 'light' | 'dark' | 'system'
-  customTheme: jsonb('custom_theme').$type<CustomTheme>(),
-  
+  theme: text("theme").default("system").notNull(), // 'light' | 'dark' | 'system'
+  customTheme: jsonb("custom_theme").$type<CustomTheme>(),
+
   // Template Preferences
-  defaultTemplates: jsonb('default_templates').$type<DefaultTemplates>(),
-  
+  defaultTemplates: jsonb("default_templates").$type<DefaultTemplates>(),
+
   // Entity Customization
-  customEntityTypes: jsonb('custom_entity_types').$type<CustomEntityType[]>(),
-  entityMetadataSchemas: jsonb('entity_metadata_schemas').$type<EntityMetadataSchemas>(),
-  
+  customEntityTypes: jsonb("custom_entity_types").$type<CustomEntityType[]>(),
+  entityMetadataSchemas: jsonb(
+    "entity_metadata_schemas"
+  ).$type<EntityMetadataSchemas>(),
+
   // UI Preferences
-  uiPreferences: jsonb('ui_preferences').$type<UIPreferences>().default({}).notNull(),
-  
+  uiPreferences: jsonb("ui_preferences")
+    .$type<UIPreferences>()
+    .default({})
+    .notNull(),
+
   // Graph Preferences
-  graphPreferences: jsonb('graph_preferences').$type<GraphPreferences>().default({}).notNull(),
-  
+  graphPreferences: jsonb("graph_preferences")
+    .$type<GraphPreferences>()
+    .default({})
+    .notNull(),
+
+  // Intelligence Service Preferences
+  intelligenceServicePreferences: jsonb("intelligence_service_preferences")
+    .$type<{
+      default?: string; // serviceId for general use
+      chat?: string; // serviceId specifically for chat
+      analysis?: string; // for future capabilities
+    }>()
+    .default({})
+    .notNull(),
+
   // Onboarding
-  onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
-  onboardingStep: text('onboarding_step'),
-  
+  onboardingCompleted: boolean("onboarding_completed").default(false).notNull(),
+  onboardingStep: text("onboarding_step"),
+
   // Timestamps
-  updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true })
+  updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),
 });
@@ -107,7 +125,7 @@ export const userPreferences = pgTable('user_preferences', {
 export type UserPreference = typeof userPreferences.$inferSelect;
 export type NewUserPreference = typeof userPreferences.$inferInsert;
 
-import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer
@@ -117,4 +135,3 @@ export const insertUserPreferenceSchema = createInsertSchema(userPreferences);
  * @internal For monorepo usage - enables schema composition in API layer
  */
 export const selectUserPreferenceSchema = createSelectSchema(userPreferences);
-

@@ -1,15 +1,15 @@
 /**
  * Inbox Storage Handler
- * 
+ *
  * Listens to: inbox.item.received
  * Action: Write inbox item to database
  */
 
-import { db, inboxItems } from '@synap/database';
-import type { InboxItemReceivedEvent } from '@synap/events';
-import { createLogger } from '@synap-core/core';
+import { db, inboxItems } from "@synap/database";
+import type { InboxItemReceivedEvent } from "@synap/events";
+import { createLogger } from "@synap-core/core";
 
-const logger = createLogger({ module: 'inbox-storage-handler' });
+const logger = createLogger({ module: "inbox-storage-handler" });
 
 /**
  * Handle inbox item received event
@@ -22,11 +22,14 @@ export async function handleInboxItemReceived(
     timestamp: Date;
   }
 ) {
-  logger.info({ 
-    itemId: event.subjectId,
-    provider: event.data.provider 
-  }, 'Storing inbox item');
-  
+  logger.info(
+    {
+      itemId: event.subjectId,
+      provider: event.data.provider,
+    },
+    "Storing inbox item"
+  );
+
   try {
     await db.insert(inboxItems).values({
       id: event.subjectId,
@@ -40,15 +43,19 @@ export async function handleInboxItemReceived(
       timestamp: event.data.timestamp,
       deepLink: event.data.deepLink,
       data: event.data.rawData,
-      status: 'unread',
+      workspaceId: event.data.workspaceId,
+      status: "unread",
     });
-    
-    logger.info({ itemId: event.subjectId }, 'Inbox item stored successfully');
+
+    logger.info({ itemId: event.subjectId }, "Inbox item stored successfully");
   } catch (error) {
-    logger.error({ 
-      err: error, 
-      itemId: event.subjectId 
-    }, 'Failed to store inbox item');
+    logger.error(
+      {
+        err: error,
+        itemId: event.subjectId,
+      },
+      "Failed to store inbox item"
+    );
     throw error;
   }
 }

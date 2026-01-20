@@ -1,15 +1,15 @@
 /**
  * KnowledgeRepository Tests
- * 
+ *
  * Tests for knowledge fact storage and retrieval.
  * Validates fact creation, querying, and user isolation.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sql } from '../index.js';
-import { generateTestUserId } from './test-utils.js';
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { sql } from "../index.js";
+import { generateTestUserId } from "./test-utils.js";
 
-describe('KnowledgeRepository', () => {
+describe("KnowledgeRepository", () => {
   beforeAll(async () => {
     await sql`DELETE FROM knowledge_facts WHERE user_id LIKE 'test-%'`;
   });
@@ -18,8 +18,8 @@ describe('KnowledgeRepository', () => {
     await sql`DELETE FROM knowledge_facts WHERE user_id LIKE 'test-%'`;
   });
 
-  describe('fact storage', () => {
-    it('should store knowledge fact successfully', async () => {
+  describe("fact storage", () => {
+    it("should store knowledge fact successfully", async () => {
       const userId = generateTestUserId();
       const factId = crypto.randomUUID();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
@@ -36,18 +36,18 @@ describe('KnowledgeRepository', () => {
         SELECT * FROM knowledge_facts WHERE id = ${factId}
       `;
 
-      expect(stored.fact).toBe('Paris is the capital of France');
+      expect(stored.fact).toBe("Paris is the capital of France");
       expect(parseFloat(stored.confidence)).toBe(0.95);
     });
 
-    it('should handle different fact types', async () => {
+    it("should handle different fact types", async () => {
       const userId = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
 
       const facts = [
-        'John works at Google',
-        'Einstein was born in 1879',
-        'Water boils at 100°C'
+        "John works at Google",
+        "Einstein was born in 1879",
+        "Water boils at 100°C",
       ];
 
       for (const fact of facts) {
@@ -66,13 +66,13 @@ describe('KnowledgeRepository', () => {
       `;
 
       expect(stored.length).toBe(3);
-      const storedFacts = stored.map(f => f.fact);
-      expect(storedFacts).toContain('John works at Google');
-      expect(storedFacts).toContain('Einstein was born in 1879');
-      expect(storedFacts).toContain('Water boils at 100°C');
+      const storedFacts = stored.map((f) => f.fact);
+      expect(storedFacts).toContain("John works at Google");
+      expect(storedFacts).toContain("Einstein was born in 1879");
+      expect(storedFacts).toContain("Water boils at 100°C");
     });
 
-    it('should enforce user isolation', async () => {
+    it("should enforce user isolation", async () => {
       const user1 = generateTestUserId();
       const user2 = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
@@ -90,12 +90,12 @@ describe('KnowledgeRepository', () => {
       `;
 
       expect(user1Facts.length).toBe(1);
-      expect(user1Facts[0].fact).toBe('Fact1 Subject');
+      expect(user1Facts[0].fact).toBe("Fact1 Subject");
     });
   });
 
-  describe('fact querying', () => {
-    it('should query facts by keyword', async () => {
+  describe("fact querying", () => {
+    it("should query facts by keyword", async () => {
       const userId = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
 
@@ -114,10 +114,10 @@ describe('KnowledgeRepository', () => {
       `;
 
       expect(parisFacts.length).toBe(2);
-      expect(parisFacts.every(f => f.fact.includes('Paris'))).toBe(true);
+      expect(parisFacts.every((f) => f.fact.includes("Paris"))).toBe(true);
     });
 
-    it('should handle confidence filtering', async () => {
+    it("should handle confidence filtering", async () => {
       const userId = generateTestUserId();
       const embedding = Array.from({ length: 1536 }, () => Math.random());
 
@@ -136,12 +136,12 @@ describe('KnowledgeRepository', () => {
       `;
 
       expect(highConfidence.length).toBe(1);
-      expect(highConfidence[0].fact).toBe('Fact1');
+      expect(highConfidence[0].fact).toBe("Fact1");
     });
   });
 
-  describe('metadata', () => {
-    it('should track source entity', async () => {
+  describe("metadata", () => {
+    it("should track source entity", async () => {
       const userId = generateTestUserId();
       const factId = crypto.randomUUID();
       const sourceEntityId = crypto.randomUUID();

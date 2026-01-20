@@ -1,19 +1,42 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // Target Types
-export const TemplateTargetTypeSchema = z.enum(['entity', 'document', 'project', 'inbox_item']);
+export const TemplateTargetTypeSchema = z.enum([
+  "entity",
+  "document",
+  "project",
+  "inbox_item",
+]);
 
 // Layout Schemas
-export const SectionTypeSchema = z.enum(['header', 'relations', 'content', 'metadata', 'footer', 'banner', 'sidebar', 'contentBefore', 'contentAfter']);
-export const LayoutZoneSchema = z.enum(['banner', 'header', 'sidebar', 'contentBefore', 'content', 'contentAfter', 'footer']);
+export const SectionTypeSchema = z.enum([
+  "header",
+  "relations",
+  "content",
+  "metadata",
+  "footer",
+  "banner",
+  "sidebar",
+  "contentBefore",
+  "contentAfter",
+]);
+export const LayoutZoneSchema = z.enum([
+  "banner",
+  "header",
+  "sidebar",
+  "contentBefore",
+  "content",
+  "contentAfter",
+  "footer",
+]);
 
 export const ZoneConfigSchema = z.object({
   enabled: z.boolean(),
   slots: z.array(z.string()).optional(),
-  position: z.enum(['left', 'right']).optional(),
+  position: z.enum(["left", "right"]).optional(),
   width: z.string().optional(),
-  layout: z.enum(['horizontal', 'vertical']).optional(),
-  align: z.enum(['left', 'center', 'right']).optional(),
+  layout: z.enum(["horizontal", "vertical"]).optional(),
+  align: z.enum(["left", "center", "right"]).optional(),
 });
 
 export const LayoutStructureSchema = z.object({
@@ -28,7 +51,16 @@ export const LayoutStructureSchema = z.object({
 
 // Field Renderer Schemas
 export const FieldRendererTypeSchema = z.enum([
-  'text', 'badge', 'avatar', 'date', 'progress', 'checkbox', 'link', 'number', 'currency', 'relations'
+  "text",
+  "badge",
+  "avatar",
+  "date",
+  "progress",
+  "checkbox",
+  "link",
+  "number",
+  "currency",
+  "relations",
 ]);
 
 export const FieldRendererConfigSchema = z.object({
@@ -36,7 +68,7 @@ export const FieldRendererConfigSchema = z.object({
   variant: z.string().optional(),
   size: z.string().optional(),
   format: z.string().optional(),
-  appearance: z.enum(['compact', 'detailed', 'cards']).optional(),
+  appearance: z.enum(["compact", "detailed", "cards"]).optional(),
 });
 
 export const FieldSlotMappingSchema = z.object({
@@ -94,39 +126,49 @@ export const TemplateConfigSchema = z.object({
 // =============================================================================
 
 // Entity Template Schema
-export const EntityTemplateSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().nullable().optional(),
-  workspaceId: z.string().uuid().nullable().optional(),
-  name: z.string().min(1).max(200),
-  description: z.string().max(1000).nullable().optional(),
-  targetType: TemplateTargetTypeSchema,
-  entityType: z.string().nullable().optional(),
-  inboxItemType: z.string().nullable().optional(),
-  config: TemplateConfigSchema,
-  isDefault: z.boolean().default(false),
-  isPublic: z.boolean().default(false),
-  version: z.number().int().positive().default(1),
-  createdAt: z.date().or(z.string().datetime()),
-  updatedAt: z.date().or(z.string().datetime()),
-}).refine(
-  (data) => {
-    // Validate target_type requirements
-    if (data.targetType === 'entity' && !data.entityType) return false;
-    if (data.targetType === 'inbox_item' && !data.inboxItemType) return false;
-    if (data.targetType === 'document' && (data.entityType || data.inboxItemType)) return false;
-    if (data.targetType === 'project' && (data.entityType || data.inboxItemType)) return false;
-    
-    // Validate scope
-    if (data.userId && data.workspaceId) return false;
-    if (!data.userId && !data.workspaceId) return false;
-    
-    return true;
-  },
-  {
-    message: "Invalid template configuration",
-  }
-);
+export const EntityTemplateSchema = z
+  .object({
+    id: z.string().uuid(),
+    userId: z.string().nullable().optional(),
+    workspaceId: z.string().uuid().nullable().optional(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(1000).nullable().optional(),
+    targetType: TemplateTargetTypeSchema,
+    entityType: z.string().nullable().optional(),
+    inboxItemType: z.string().nullable().optional(),
+    config: TemplateConfigSchema,
+    isDefault: z.boolean().default(false),
+    isPublic: z.boolean().default(false),
+    version: z.number().int().positive().default(1),
+    createdAt: z.date().or(z.string().datetime()),
+    updatedAt: z.date().or(z.string().datetime()),
+  })
+  .refine(
+    (data) => {
+      // Validate target_type requirements
+      if (data.targetType === "entity" && !data.entityType) return false;
+      if (data.targetType === "inbox_item" && !data.inboxItemType) return false;
+      if (
+        data.targetType === "document" &&
+        (data.entityType || data.inboxItemType)
+      )
+        return false;
+      if (
+        data.targetType === "project" &&
+        (data.entityType || data.inboxItemType)
+      )
+        return false;
+
+      // Validate scope
+      if (data.userId && data.workspaceId) return false;
+      if (!data.userId && !data.workspaceId) return false;
+
+      return true;
+    },
+    {
+      message: "Invalid template configuration",
+    }
+  );
 
 // =============================================================================
 // API Input Schemas
