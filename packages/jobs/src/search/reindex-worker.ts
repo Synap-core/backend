@@ -17,7 +17,7 @@ export const reindexWorker = inngest.createFunction(
   },
   { event: "search.reindex.requested" },
   async ({ event, step }) => {
-    const { workspaceId, collections, userId } = event.data;
+    const { workspaceId, collections } = event.data;
 
     // Initialize collections if needed
     await step.run("initialize-collections", async () => {
@@ -69,12 +69,12 @@ export const reindexWorker = inngest.createFunction(
               break;
             case "chat_threads":
               items = await db.query.chatThreads.findMany({
-                where: eq(schema.chatThreads.workspaceId, workspaceId),
+                where: eq((schema.chatThreads as any).workspaceId, workspaceId),
               });
               break;
             case "agents":
               items = await db.query.agents.findMany({
-                where: eq(schema.agents.workspaceId, workspaceId),
+                where: eq((schema.agents as any).workspaceId, workspaceId),
               });
               break;
           }

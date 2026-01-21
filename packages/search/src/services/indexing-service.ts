@@ -5,7 +5,7 @@
 
 import { getTypesenseClient } from "../client.js";
 import { getDb } from "@synap/database";
-import { eq, inArray } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import * as schema from "@synap/database/schema";
 import type { IndexingQueueItem } from "../types/index.js";
 import {

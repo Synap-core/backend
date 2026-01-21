@@ -28,6 +28,7 @@
     "@synap/ai-embeddings": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
+    "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
     "ai": "^4.0.0",
     "drizzle-orm": "^0.45.1",

@@ -5,7 +5,7 @@
 
 import { getTypesenseClient } from "../client.js";
 import type { SearchResult } from "../types/index.js";
-import type { MultiSearchRequestSchema } from "typesense/lib/Typesense/MultiSearch";
+import type { MultiSearchRequestSchema } from "../types/index.js";
 
 export interface UnifiedSearchOptions {
   query: string;
@@ -66,21 +66,21 @@ export class SearchService {
     );
 
     // Execute multi-search
-    const response = await client.multiSearch.perform(
+    const response = (await client.multiSearch.perform(
       {
         searches,
       },
       {
         limit_multi_searches: 100,
-      }
-    );
+      } as any
+    )) as any;
 
     // Process results
     const allResults: SearchResult[] = [];
     let totalFound = 0;
     let totalSearchTime = 0;
 
-    response.results.forEach((result, index) => {
+    response.results.forEach((result: any, index: number) => {
       if ("hits" in result && result.hits) {
         totalFound += result.found || 0;
         totalSearchTime += result.search_time_ms || 0;

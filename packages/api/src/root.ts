@@ -32,7 +32,7 @@ import { whiteboardsRouter } from "./routers/whiteboards.js";
 /**
  * Core API Router
  */
-export const coreRouter: ReturnType<typeof router> = router({
+export const coreRouter = router({
   setup: setupRouter,
   events: eventsRouter,
   capture: captureRouter,

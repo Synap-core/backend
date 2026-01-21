@@ -7,5 +7,28 @@
     "sourceMap": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "__tests__"]
+  "exclude": ["node_modules", "dist", "__tests__"],
+  "references": [
+    {
+      "path": "../search"
+    },
+    {
+      "path": "../database"
+    },
+    {
+      "path": "../events"
+    },
+    {
+      "path": "../jobs"
+    },
+    {
+      "path": "../ai"
+    },
+    {
+      "path": "../storage"
+    },
+    {
+      "path": "../auth"
+    }
+  ]
 }
