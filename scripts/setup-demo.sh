@@ -1,61 +1,43 @@
 #!/bin/bash
 set -e
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Banner
 echo -e "${BLUE}"
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║                                                            ║"
-echo "║        Synap Backend Production Setup Script              ║"
-echo "║        Automated Configuration Generator                  ║"
+echo "║        Synap Demo Mode - Complete Setup                   ║"
+echo "║        Backend + Intelligence Service Together            ║"
 echo "║                                                            ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# Check if running as root or with sudo
-if [ "$EUID" -ne 0 ]; then 
-    echo -e "${YELLOW}⚠️  This script should be run as root or with sudo${NC}"
-    echo "Continue anyway? (y/n)"
-    read -r response
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
+echo -e "${YELLOW}📝 Demo Mode${NC}"
+echo "This script sets up BOTH backend and intelligence service on the same server"
+echo "All demo users will share this backend"
+echo ""
 
-# Detect deployment directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Detect directory
 DEPLOYMENT_ROOT="/srv/synap"
-
-echo -e "${GREEN}📁 Project root: ${PROJECT_ROOT}${NC}"
-echo -e "${GREEN}📁 Deployment root: ${DEPLOYMENT_ROOT}${NC}"
-echo ""
-
-# Production mode (per-user backend)
-DEPLOYMENT_MODE="production"
-DEMO_MODE_ENABLED="false"
-echo -e "${BLUE}🚀 Deployment Mode: Production${NC}"
-echo "This backend will connect to a centralized Intelligence Service"
-echo ""
 
 # Domain configuration
 echo -e "${BLUE}🌐 Domain Configuration${NC}"
-read -p "Enter user subdomain (e.g., user1, acme-corp): " SUBDOMAIN
-read -p "Enter base domain (default: synap.live): " DOMAIN
-DOMAIN=${DOMAIN:-synap.live}
-BACKEND_URL="${SUBDOMAIN}.${DOMAIN}"
+read -p "Enter demo domain (default: demo.synap.live): " DOMAIN
+DOMAIN=${DOMAIN:-demo.synap.live}
+BACKEND_URL="backend.${DOMAIN}"
 APP_URL="app.${DOMAIN}"
 
 echo -e "${GREEN}✓ Backend URL: https://${BACKEND_URL}${NC}"
+echo -e "${GREEN}✓ App URL: https://${APP_URL}${NC}"
 echo ""
 
-# Generate secure secrets
+# Generate secrets
 echo -e "${BLUE}🔐 Generating Secure Secrets...${NC}"
 
 POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
@@ -73,51 +55,31 @@ JWT_SECRET=$(openssl rand -base64 64)
 echo -e "${GREEN}✓ All secrets generated${NC}"
 echo ""
 
-# Intelligence Service configuration
-echo -e "${BLUE}🤖 Intelligence Service Configuration${NC}"
-read -p "Intelligence Service URL (default: https://intelligence.synap.live): " INTELLIGENCE_URL
-INTELLIGENCE_URL=${INTELLIGENCE_URL:-https://intelligence.synap.live}
+# Ask for API keys
+echo -e "${BLUE}🔑 AI Provider API Keys${NC}"
+echo ""
 
-read -p "Intelligence API Key (from Intelligence Service setup): " INTELLIGENCE_API_KEY
-while [ -z "$INTELLIGENCE_API_KEY" ]; do
-    echo -e "${RED}Intelligence API key is required!${NC}"
-    read -p "Intelligence API Key: " INTELLIGENCE_API_KEY
+read -p "OpenAI API Key: " OPENAI_KEY
+while [ -z "$OPENAI_KEY" ]; do
+    echo -e "${RED}OpenAI key is required!${NC}"
+    read -p "OpenAI API Key: " OPENAI_KEY
 done
 
-echo -e "${GREEN}✓ Intelligence Service configured${NC}"
-echo ""
-
-# Ask for API keys
-echo -e "${BLUE}🔑 API Keys Configuration (Optional Fallback)${NC}"
-echo "OpenAI key is optional - Intelligence Service handles AI calls"
-echo ""
-
-# OpenAI (optional fallback)
-read -p "OpenAI API Key (optional fallback): " OPENAI_KEY
-OPENAI_KEY=${OPENAI_KEY:-}
-
-# Anthropic (optional)
 read -p "Anthropic API Key (optional): " ANTHROPIC_KEY
-ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
-
-# Google AI (optional)
 read -p "Google AI API Key (optional): " GOOGLE_AI_KEY
-GOOGLE_AI_KEY=${GOOGLE_AI_KEY:-}
 
 echo ""
-
-echo -e "${GREEN}✓ Configuration collected${NC}"
+echo -e "${GREEN}✓ API keys collected${NC}"
 echo ""
 
 # Summary
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}📋 Configuration Summary${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "Mode: Production (Per-User Backend)"
-echo "Subdomain: ${SUBDOMAIN}"
-echo "Backend URL: https://${BACKEND_URL}"
-echo "Intelligence: ${INTELLIGENCE_URL}"
-echo "API Key: ${INTELLIGENCE_API_KEY:0:10}..."
+echo "Mode: DEMO (Shared Backend)"
+echo "Domain: ${DOMAIN}"
+echo "Backend: https://${BACKEND_URL}"
+echo "OpenAI: ${OPENAI_KEY:0:10}..."
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 read -p "Continue with this configuration? (y/n): " CONFIRM
@@ -131,20 +93,21 @@ echo ""
 echo -e "${BLUE}📁 Creating directory structure...${NC}"
 mkdir -p "${DEPLOYMENT_ROOT}"
 mkdir -p "${DEPLOYMENT_ROOT}/synap-backend"
+mkdir -p "${DEPLOYMENT_ROOT}/intelligence-service"
 mkdir -p "${DEPLOYMENT_ROOT}/data/postgres"
 mkdir -p "${DEPLOYMENT_ROOT}/data/typesense"
 mkdir -p "${DEPLOYMENT_ROOT}/data/minio"
 echo -e "${GREEN}✓ Directories created${NC}"
 
-# Create root .env file (for docker-compose)
+# Create root .env
 echo ""
-echo -e "${BLUE}📝 Creating root .env file...${NC}"
+echo -e "${BLUE}📝 Creating root .env...${NC}"
 cat > "${DEPLOYMENT_ROOT}/.env" <<EOF
-# Generated by setup-production.sh on $(date)
-# DO NOT COMMIT THIS FILE
+# Generated by setup-demo.sh on $(date)
+# DO NOT COMMIT
 
 # Deployment
-DEPLOYMENT_MODE=${DEPLOYMENT_MODE}
+DEPLOYMENT_MODE=demo
 
 # Shared Secrets
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -165,14 +128,16 @@ echo -e "${GREEN}✓ Root .env created${NC}"
 echo ""
 echo -e "${BLUE}📝 Creating backend .env.production...${NC}"
 cat > "${DEPLOYMENT_ROOT}/synap-backend/.env.production" <<EOF
-# Generated by setup-production.sh on $(date)
-# DO NOT COMMIT THIS FILE
+# Generated by setup-demo.sh on $(date)
+# DO NOT COMMIT
 
 # ============================================================================
 # DEPLOYMENT MODE
 # ============================================================================
-DEPLOYMENT_MODE=${DEPLOYMENT_MODE}
+DEPLOYMENT_MODE=demo
 NODE_ENV=production
+DEMO_MODE_ENABLED=true
+DEMO_WORKSPACE_ID=demo-workspace
 
 # ============================================================================
 # SERVER CONFIGURATION
@@ -214,11 +179,12 @@ MINIO_BUCKET=synap-storage
 MINIO_USE_SSL=false
 
 # ============================================================================
-# AI CONFIGURATION (Intelligence Service)
+# AI CONFIGURATION (intelligence Service)
 # ============================================================================
-INTELLIGENCE_HUB_URL=${INTELLIGENCE_URL}
-INTELLIGENCE_API_KEY=${INTELLIGENCE_API_KEY}
-OPENAI_API_KEY=${OPENAI_KEY:-}
+# Internal connection (same server)
+INTELLIGENCE_HUB_URL=http://intelligence-service:3001
+INTELLIGENCE_API_KEY=${INTELLIGENCE_KEY}
+OPENAI_API_KEY=${OPENAI_KEY}
 
 # ============================================================================
 # SEARCH (Typesense)
@@ -240,23 +206,49 @@ INNGEST_SIGNING_KEY=${INNGEST_SIGNING}
 # ============================================================================
 FRONTEND_URL=https://${APP_URL}
 ALLOWED_ORIGINS=https://${APP_URL},https://${DOMAIN}
-
-# ============================================================================
-# DEMO MODE CONFIG
-# ============================================================================
-DEMO_MODE_ENABLED=${DEMO_MODE_ENABLED}
-DEMO_WORKSPACE_ID=demo-workspace
 EOF
 chmod 600 "${DEPLOYMENT_ROOT}/synap-backend/.env.production"
 echo -e "${GREEN}✓ Backend .env.production created${NC}"
 
+# Create intelligence .env.production
+echo ""
+echo -e "${BLUE}📝 Creating intelligence-service .env.production...${NC}"
+cat > "${DEPLOYMENT_ROOT}/intelligence-service/.env.production" <<EOF
+# Generated by setup-demo.sh on $(date)
+# DO NOT COMMIT
 
+# ============================================================================
+# DEPLOYMENT
+# ============================================================================
+NODE_ENV=production
+PORT=3001
+LOG_LEVEL=info
 
-# Save secrets to a secure file (for backup)
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+API_KEY=${INTELLIGENCE_KEY}
+
+# ============================================================================
+# AI PROVIDERS
+# ============================================================================
+OPENAI_API_KEY=${OPENAI_KEY}
+ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+GOOGLE_AI_API_KEY=${GOOGLE_AI_KEY}
+
+# ============================================================================
+# BACKEND CONNECTION
+# ============================================================================
+BACKEND_URL=http://backend:4000
+EOF
+chmod 600 "${DEPLOYMENT_ROOT}/intelligence-service/.env.production"
+echo -e "${GREEN}✓ Intelligence .env.production created${NC}"
+
+# Save secrets backup
 echo ""
 echo -e "${BLUE}💾 Creating secrets backup...${NC}"
 cat > "${DEPLOYMENT_ROOT}/.secrets-backup.txt" <<EOF
-# IMPORTANT: Store this file securely and DELETE from server after backup!
+# CRITICAL: Save this file securely and DELETE from server!
 # Generated: $(date)
 
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -271,36 +263,37 @@ INNGEST_SIGNING=${INNGEST_SIGNING}
 JWT_SECRET=${JWT_SECRET}
 
 OPENAI_KEY=${OPENAI_KEY}
-STRIPE_SECRET=${STRIPE_SECRET}
-STRIPE_WEBHOOK=${STRIPE_WEBHOOK}
+ANTHROPIC_KEY=${ANTHROPIC_KEY}
+GOOGLE_AI_KEY=${GOOGLE_AI_KEY}
 EOF
 chmod 600 "${DEPLOYMENT_ROOT}/.secrets-backup.txt"
-echo -e "${GREEN}✓ Secrets backup created at ${DEPLOYMENT_ROOT}/.secrets-backup.txt${NC}"
-echo -e "${YELLOW}⚠️  IMPORTANT: Save this file securely and DELETE from server!${NC}"
+echo -e "${GREEN}✓ Secrets backup created${NC}"
 
-# Success summary
+# Success
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✅ Setup Complete!${NC}"
+echo -e "${GREEN}✅ Demo Setup Complete!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BLUE}📁 Files Created:${NC}"
 echo "  ✓ ${DEPLOYMENT_ROOT}/.env"
 echo "  ✓ ${DEPLOYMENT_ROOT}/synap-backend/.env.production"
+echo "  ✓ ${DEPLOYMENT_ROOT}/intelligence-service/.env.production"
 echo "  ✓ ${DEPLOYMENT_ROOT}/.secrets-backup.txt"
 echo ""
 echo -e "${YELLOW}📋 Next Steps:${NC}"
-echo "  1. Review generated .env files"
-echo "  2. Copy .secrets-backup.txt to secure location"
-echo "  3. Delete .secrets-backup.txt from server"
-echo "  4. Ensure Intelligence Service is running at ${INTELLIGENCE_URL}"
-echo "  5. Run: cd ${DEPLOYMENT_ROOT} && ./start.sh"
+echo "  1. Backup .secrets-backup.txt to secure location"
+echo "  2. Delete .secrets-backup.txt from server"
+echo "  3. Copy docker-compose.yml to ${DEPLOYMENT_ROOT}/"
+echo "  4. Start services: cd ${DEPLOYMENT_ROOT} && docker compose up -d"
 echo ""
-echo -e "${BLUE}🔗 Intelligence Service:${NC}"
-echo "  This backend connects to: ${INTELLIGENCE_URL}"
-echo "  Make sure Intelligence Service is deployed and accessible"
+echo -e "${BLUE}🔒 Security:${NC}"
+echo "  scp ${DEPLOYMENT_ROOT}/.secrets-backup.txt local:~/"
+echo "  rm ${DEPLOYMENT_ROOT}/.secrets-backup.txt"
 echo ""
-echo -e "${BLUE}🚀 To start the backend:${NC}"
+echo -e "${BLUE}🚀 Start Services:${NC}"
 echo "  cd ${DEPLOYMENT_ROOT}"
-echo "  ./start.sh"
+echo "  docker compose up -d"
+echo ""
+echo -e "${YELLOW}Note: This is for DEMO/TESTING only. For production, use separate scripts.${NC}"
 echo ""
