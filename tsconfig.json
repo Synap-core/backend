@@ -71,6 +71,9 @@
       "path": "./packages/scripts"
     },
     {
+      "path": "./packages/search"
+    },
+    {
       "path": "./packages/storage"
     },
     {

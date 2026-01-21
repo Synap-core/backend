@@ -19,7 +19,7 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "tsc --noEmit && tsup",
+    "build": "tsc -p tsconfig.build.json && tsup",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -34,6 +34,7 @@
     "@synap/events": "workspace:*",
     "@synap/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
+    "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
     "@trpc/server": "^11.8.1",
     "@types/ws": "^8.18.1",
@@ -41,6 +42,7 @@
     "drizzle-zod": "0.7.0",
     "inngest": "3.22.12",
     "jsonwebtoken": "^9.0.2",
+    "postgres": "^3.4.8",
     "ws": "^8.18.3",
     "zod": "3.23.8"
   },
@@ -50,7 +52,6 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/react": "^19.2.8",
     "bcrypt": "^6.0.0",
-    "postgres": "^3.4.8",
     "react": "^19.2.3",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"

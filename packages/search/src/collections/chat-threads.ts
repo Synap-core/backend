@@ -2,7 +2,7 @@
  * Chat Threads Collection Schema
  */
 
-import type { CollectionCreateSchema } from "typesense/lib/Typesense/Collections";
+import type { CollectionCreateSchema } from "../types/index.js";
 
 export const chatThreadsCollectionSchema: CollectionCreateSchema = {
   name: "chat_threads",

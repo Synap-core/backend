@@ -18,7 +18,7 @@ export const bulkIndexer = inngest.createFunction(
       // Get queue status before flushing
       const queueStatus = indexingService.getQueueStatus();
       const totalItems = Object.values(queueStatus).reduce(
-        (sum, count) => sum + count,
+        (sum: number, count: number) => sum + count,
         0
       );
 

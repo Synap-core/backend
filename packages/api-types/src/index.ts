@@ -12,4 +12,5 @@
  * ```
  */
 
+export { coreRouter } from "@synap/api";
 export type { AppRouter } from "@synap/api";

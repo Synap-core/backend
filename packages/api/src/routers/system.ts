@@ -610,7 +610,7 @@ export const systemRouter = router({
         ORDER BY table_name;
       `);
     console.log(`[SystemRouter] Found ${tables.length} tables`);
-    return [...tables];
+    return [...tables] as any[];
   }),
 
   /**
@@ -646,6 +646,6 @@ export const systemRouter = router({
         `SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`
       );
       const rows = await db.execute(query);
-      return rows;
+      return rows as any[];
     }),
 });
