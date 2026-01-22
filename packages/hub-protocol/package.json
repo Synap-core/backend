@@ -1,5 +1,5 @@
 {
-  "name": "@synap/hub-protocol",
+  "name": "@synap-core/hub-protocol",
   "version": "1.0.0",
   "description": "Hub Protocol V1.0 - Standardized schemas for Hub ↔ Data Pod communication",
   "type": "module",
