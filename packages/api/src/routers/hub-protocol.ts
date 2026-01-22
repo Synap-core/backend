@@ -429,7 +429,7 @@ export const hubProtocolRouter = router({
         userId: z.string(),
         title: z.string().optional(),
         preview: z.string().optional(),
-        metadata: z.record(z.any()).optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input }) => {

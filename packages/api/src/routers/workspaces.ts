@@ -35,7 +35,7 @@ export const workspacesRouter = router({
       z.object({
         name: z.string().min(1).max(100),
         description: z.string().optional(),
-        settings: z.record(z.unknown()).optional(),
+        settings: z.record(z.string(), z.unknown()).optional(),
         type: z.enum(["personal", "team", "enterprise"]).default("personal"),
       })
     )
@@ -127,7 +127,7 @@ export const workspacesRouter = router({
         id: z.string().uuid(),
         name: z.string().min(1).max(100).optional(),
         description: z.string().optional(),
-        settings: z.record(z.unknown()).optional(),
+        settings: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

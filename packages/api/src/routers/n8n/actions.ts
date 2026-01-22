@@ -29,7 +29,7 @@ const CreateEntityInputSchema = z.object({
   title: z.string().min(1).max(500).optional(),
   content: z.string().min(1),
   tags: z.array(z.string()).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const SearchEntitiesInputSchema = z.object({

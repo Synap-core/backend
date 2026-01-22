@@ -53,7 +53,7 @@
     "overrides": {
       "drizzle-orm": "^0.45.1",
       "drizzle-zod": "0.7.0",
-      "zod": "3.23.8",
+      "zod": "^4.0.0",
       "zod-to-json-schema": "3.23.2"
     }
   },

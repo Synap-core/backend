@@ -64,8 +64,8 @@ export const rolesRouter = router({
         name: z.string().min(1).max(100),
         description: z.string().optional(),
         workspaceId: z.string().uuid().optional(),
-        permissions: z.record(z.any()),
-        filters: z.record(z.any()).optional(),
+        permissions: z.record(z.string(), z.any()),
+        filters: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -104,8 +104,8 @@ export const rolesRouter = router({
         id: z.string().uuid(),
         name: z.string().min(1).max(100).optional(),
         description: z.string().optional(),
-        permissions: z.record(z.any()).optional(),
-        filters: z.record(z.any()).optional(),
+        permissions: z.record(z.string(), z.any()).optional(),
+        filters: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

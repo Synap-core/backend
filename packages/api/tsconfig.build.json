@@ -5,7 +5,11 @@
     "rootDir": "./src",
     "declaration": true,
     "emitDeclarationOnly": true,
-    "noEmit": false
+    "noEmit": false,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "skipLibCheck": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts", "**/__tests__/**"]

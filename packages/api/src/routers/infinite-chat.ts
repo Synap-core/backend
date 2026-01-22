@@ -11,11 +11,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, desc, and } from "@synap/database";
-import {
-  chatThreads,
-  conversationMessages,
-  insertChatThreadSchema,
-} from "@synap/database/schema";
+import { chatThreads, conversationMessages } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -32,17 +28,23 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
    */
   createThread: protectedProcedure
     .input(
-      insertChatThreadSchema.omit({
-        id: true, // Auto-generated UUID
-        userId: true, // From context (ctx.userId)
-        title: true, // Generated after first message
-        threadType: true, // Derived from parentThreadId
-        status: true, // Has default value 'active'
-        contextSummary: true, // Updated as thread progresses
-        metadata: true, // Optional runtime metadata
-        createdAt: true, // Auto-generated timestamp
-        updatedAt: true, // Auto-generated timestamp
-        mergedAt: true, // Only set when merged
+      z.object({
+        projectId: z.string().uuid().optional(),
+        parentThreadId: z.string().uuid().optional(),
+        branchPurpose: z.string().optional(),
+        agentId: z.string().optional(),
+        agentType: z
+          .enum([
+            "meta",
+            "default",
+            "prompting",
+            "knowledge-search",
+            "code",
+            "writing",
+            "action",
+          ])
+          .optional(),
+        agentConfig: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

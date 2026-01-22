@@ -217,7 +217,7 @@ export const relationsRouter = router({
         sourceEntityId: z.string().uuid(),
         targetEntityId: z.string().uuid(),
         type: RelationTypeSchema,
-        metadata: z.record(z.any()).optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

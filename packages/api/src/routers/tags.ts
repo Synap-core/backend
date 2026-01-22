@@ -8,7 +8,6 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, tags, entityTags, eq, and, desc } from "@synap/database";
-import { insertTagSchema, insertEntityTagSchema } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitRequestEvent } from "../utils/emit-event.js";
 
@@ -42,9 +41,9 @@ export const tagsRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertTagSchema.pick({
-        name: true,
-        color: true,
+      z.object({
+        name: z.string(),
+        color: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -98,16 +97,11 @@ export const tagsRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertTagSchema
-        .pick({
-          id: true,
-          name: true,
-          color: true,
-        })
-        .partial({
-          name: true,
-          color: true,
-        })
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().optional(),
+        color: z.string().optional(),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -150,8 +144,8 @@ export const tagsRouter = router({
    */
   delete: protectedProcedure
     .input(
-      insertTagSchema.pick({
-        id: true,
+      z.object({
+        id: z.string().uuid(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -187,9 +181,9 @@ export const tagsRouter = router({
    */
   attach: protectedProcedure
     .input(
-      insertEntityTagSchema.pick({
-        tagId: true,
-        entityId: true,
+      z.object({
+        tagId: z.string().uuid(),
+        entityId: z.string().uuid(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -218,9 +212,9 @@ export const tagsRouter = router({
    */
   detach: protectedProcedure
     .input(
-      insertEntityTagSchema.pick({
-        tagId: true,
-        entityId: true,
+      z.object({
+        tagId: z.string().uuid(),
+        entityId: z.string().uuid(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -247,8 +241,8 @@ export const tagsRouter = router({
    */
   getForEntity: protectedProcedure
     .input(
-      insertEntityTagSchema.pick({
-        entityId: true,
+      z.object({
+        entityId: z.string().uuid(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -275,13 +269,10 @@ export const tagsRouter = router({
    */
   getEntitiesWithTag: protectedProcedure
     .input(
-      insertEntityTagSchema
-        .pick({
-          tagId: true,
-        })
-        .extend({
-          limit: z.number().min(1).max(100).default(50),
-        })
+      z.object({
+        tagId: z.string().uuid(),
+        limit: z.number().min(1).max(100).default(50),
+      })
     )
     .query(async ({ input, ctx }) => {
       const userId = ctx.userId;

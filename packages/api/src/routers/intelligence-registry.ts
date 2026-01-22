@@ -25,7 +25,7 @@ const RegisterServiceSchema = z.object({
   apiKey: z.string().min(1),
   capabilities: z.array(z.string()).min(1),
   pricing: z.enum(["free", "premium", "enterprise", "custom"]).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const UpdateServiceSchema = z.object({
@@ -37,7 +37,7 @@ const UpdateServiceSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   enabled: z.boolean().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const intelligenceRegistryRouter = router({

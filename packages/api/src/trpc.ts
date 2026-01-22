@@ -10,6 +10,7 @@
  */
 
 import { initTRPC, TRPCError } from "@trpc/server";
+import superjson from "superjson";
 import type { Context } from "./context.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
@@ -17,7 +18,9 @@ import "@synap/database"; // Fix TS2742: inferred type portability
 
 const logger = createLogger({ module: "trpc" });
 
-const t = initTRPC.context<Context>().create();
+const t = initTRPC.context<Context>().create({
+  transformer: superjson,
+});
 
 /**
  * Public procedure (no auth required)

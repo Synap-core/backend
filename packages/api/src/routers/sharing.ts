@@ -10,12 +10,7 @@
 import { z } from "zod";
 import { router, protectedProcedure, publicProcedure } from "../trpc.js";
 import { db, eq, and, sqlDrizzle } from "@synap/database";
-import {
-  resourceShares,
-  views,
-  entities,
-  insertResourceShareSchema,
-} from "@synap/database/schema";
+import { resourceShares, views, entities } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { verifyPermission } from "@synap/database";
@@ -27,14 +22,11 @@ export const sharingRouter = router({
    */
   createPublicLink: protectedProcedure
     .input(
-      insertResourceShareSchema
-        .pick({
-          resourceType: true,
-          resourceId: true,
-        })
-        .extend({
-          expiresInDays: z.number().min(1).max(365).optional(),
-        })
+      z.object({
+        resourceType: z.enum(["view", "entity", "document"]),
+        resourceId: z.string().uuid(),
+        expiresInDays: z.number().min(1).max(365).optional(),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       // Check user owns resource or has editor permission
@@ -136,14 +128,11 @@ export const sharingRouter = router({
    */
   invite: protectedProcedure
     .input(
-      insertResourceShareSchema
-        .pick({
-          resourceType: true,
-          resourceId: true,
-        })
-        .extend({
-          userEmail: z.string().email(),
-        })
+      z.object({
+        resourceType: z.enum(["view", "entity", "document"]),
+        resourceId: z.string().uuid(),
+        userEmail: z.string().email(),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const { randomUUID } = await import("crypto");
@@ -255,11 +244,11 @@ export const sharingRouter = router({
    */
   list: protectedProcedure
     .input(
-      insertResourceShareSchema.pick({
-        resourceType: true,
-        resourceId: true,
-        visibility: true,
-        expiresAt: true,
+      z.object({
+        resourceType: z.enum(["view", "entity", "document"]),
+        resourceId: z.string().uuid(),
+        visibility: z.enum(["public", "private"]).optional(),
+        expiresAt: z.date().optional(),
       })
     )
     .query(async ({ input, ctx }) => {

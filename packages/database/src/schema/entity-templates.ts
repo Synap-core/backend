@@ -36,6 +36,10 @@ export const entityTemplates = pgTable(
     // Template Configuration
     config: jsonb("config").default("{}").notNull(),
 
+    // Schema Definition (Zod Validation Rules)
+    // format: { "field": { "type": "string", "required": true } }
+    schema: jsonb("schema"),
+
     // Metadata
     isDefault: boolean("is_default").default(false).notNull(),
     isPublic: boolean("is_public").default(false).notNull(),

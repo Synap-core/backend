@@ -40,7 +40,7 @@ export const captureRouter = router({
       z.object({
         content: z.string().min(1).describe("Raw thought content"),
         context: z
-          .record(z.any())
+          .record(z.string(), z.any())
           .optional()
           .describe("Optional context metadata"),
       })

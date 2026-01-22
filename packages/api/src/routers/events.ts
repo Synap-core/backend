@@ -43,7 +43,7 @@ export const eventsRouter = router({
         subjectId: z.string().uuid(),
         subjectType: subjectTypeSchema,
         eventType: z.string().min(1),
-        data: z.record(z.unknown()),
+        data: z.record(z.string(), z.unknown()),
         metadata: z.record(z.string(), z.unknown()).optional(),
         version: z.number().int().positive(),
         source: EventSourceSchema.optional(),

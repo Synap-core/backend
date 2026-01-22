@@ -21,7 +21,6 @@ import {
   or,
   type SQL,
   entityTemplates,
-  insertEntityTemplateSchema,
   verifyPermission,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -52,7 +51,7 @@ export const templatesRouter = router({
       const conditions = [
         or(...visibilityConditions),
         input.targetType
-          ? eq(entityTemplates.targetType, input.targetType)
+          ? eq(entityTemplates.targetType, input.targetType as string)
           : undefined,
         input.entityType
           ? eq(entityTemplates.entityType, input.entityType)
@@ -89,7 +88,7 @@ export const templatesRouter = router({
       const userTemplate = await db.query.entityTemplates.findFirst({
         where: and(
           eq(entityTemplates.userId, ctx.userId),
-          eq(entityTemplates.targetType, input.targetType),
+          eq(entityTemplates.targetType, input.targetType as string),
           input.entityType
             ? eq(entityTemplates.entityType, input.entityType)
             : undefined,
@@ -107,7 +106,7 @@ export const templatesRouter = router({
         const workspaceTemplate = await db.query.entityTemplates.findFirst({
           where: and(
             eq(entityTemplates.workspaceId, input.workspaceId),
-            eq(entityTemplates.targetType, input.targetType),
+            eq(entityTemplates.targetType, input.targetType as string),
             input.entityType
               ? eq(entityTemplates.entityType, input.entityType)
               : undefined,
@@ -128,17 +127,17 @@ export const templatesRouter = router({
   // Create template
   create: protectedProcedure
     .input(
-      insertEntityTemplateSchema
-        .pick({
-          name: true,
-          description: true,
-          workspaceId: true,
-          isDefault: true,
-          isPublic: true,
-          targetType: true,
-          entityType: true,
-          inboxItemType: true,
-          config: true,
+      z
+        .object({
+          name: z.string(),
+          description: z.string().optional(),
+          workspaceId: z.string().uuid().optional(),
+          isDefault: z.boolean().optional(),
+          isPublic: z.boolean().optional(),
+          targetType: TemplateTargetTypeSchema,
+          entityType: z.string().optional(),
+          inboxItemType: z.string().optional(),
+          config: TemplateConfigSchema,
         })
         .extend({
           name: z.string().min(1),
@@ -180,19 +179,14 @@ export const templatesRouter = router({
   // Update template
   update: protectedProcedure
     .input(
-      insertEntityTemplateSchema
-        .pick({
-          name: true,
-          description: true,
-          isDefault: true,
-          isPublic: true,
-        })
-        .partial()
-        .extend({
-          id: z.string().uuid(),
-          name: z.string().min(1).optional(),
-          config: TemplateConfigSchema.optional(),
-        })
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        config: TemplateConfigSchema.optional(),
+        isDefault: z.boolean().optional(),
+        isPublic: z.boolean().optional(),
+      })
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...updates } = input;

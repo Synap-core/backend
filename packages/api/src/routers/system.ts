@@ -143,10 +143,10 @@ export const systemRouter = router({
         // Helper to get inner type
         const getInnerType = (type: z.ZodTypeAny): z.ZodTypeAny => {
           if (type instanceof z.ZodOptional) {
-            return type._def.innerType;
+            return (type as any)._def.innerType;
           }
           if (type instanceof z.ZodDefault) {
-            return type._def.innerType;
+            return (type as any)._def.innerType;
           }
           return type;
         };
@@ -160,7 +160,9 @@ export const systemRouter = router({
         // Get default value
         if (zodType instanceof z.ZodDefault) {
           try {
-            defaultValue = zodType._def.defaultValue();
+            const defValue = (zodType._def as any).defaultValue;
+            defaultValue =
+              typeof defValue === "function" ? defValue() : defValue;
           } catch {
             // Default function, skip
           }
@@ -177,7 +179,12 @@ export const systemRouter = router({
           fieldType = "array";
         } else if (innerType instanceof z.ZodEnum) {
           fieldType = "enum";
-          options = innerType._def.values;
+          const enumDef = innerType._def as any;
+          options =
+            enumDef.values ||
+            (Array.isArray(enumDef.options)
+              ? enumDef.options
+              : Object.values(enumDef.options || {}));
         } else if (innerType instanceof z.ZodObject) {
           fieldType = "object";
         } else {
@@ -209,7 +216,7 @@ export const systemRouter = router({
     .input(
       z.object({
         type: z.string().min(1),
-        data: z.record(z.unknown()),
+        data: z.record(z.string(), z.unknown()),
         userId: z.string().min(1),
         subjectId: z.string().uuid().optional(),
         source: z
@@ -487,7 +494,7 @@ export const systemRouter = router({
     .input(
       z.object({
         toolName: z.string(),
-        parameters: z.record(z.any()),
+        parameters: z.record(z.string(), z.any()),
         userId: z.string(),
         threadId: z.string().default("playground"),
       })

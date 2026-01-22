@@ -20,7 +20,7 @@ import {
   documentVersions,
   documentSessions,
 } from "@synap/database";
-import { insertDocumentSchema } from "@synap/database/schema";
+
 import { requireUserId } from "../utils/user-scoped.js";
 import { randomUUID } from "crypto";
 import { emitRequestEvent } from "../utils/emit-event.js";
@@ -31,17 +31,14 @@ import { emitRequestEvent } from "../utils/emit-event.js";
 
 const DocumentTypeSchema = z.enum(["text", "markdown", "code", "pdf", "docx"]);
 
-const UploadDocumentSchema = insertDocumentSchema
-  .pick({
-    title: true,
-    language: true,
-    mimeType: true,
-    projectId: true,
-  })
-  .extend({
-    type: DocumentTypeSchema,
-    content: z.string(), // API-specific field, not stored in documents table
-  });
+const UploadDocumentSchema = z.object({
+  type: DocumentTypeSchema,
+  content: z.string(),
+  title: z.string().optional(),
+  language: z.string().optional(),
+  mimeType: z.string().optional(),
+  projectId: z.string().uuid().optional(),
+});
 
 const UpdateDocumentSchema = z.object({
   documentId: z.string(),

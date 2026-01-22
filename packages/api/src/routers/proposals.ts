@@ -167,7 +167,7 @@ export const proposalsRouter = router({
         ]),
         targetId: z.string().optional(),
         changeType: z.enum(["create", "update", "delete"]),
-        data: z.record(z.any()),
+        data: z.record(z.string(), z.any()),
         reasoning: z.string().optional(),
       })
     )

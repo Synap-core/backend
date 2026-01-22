@@ -72,8 +72,8 @@ export const projectsRouter = router({
         name: z.string().min(1).max(255),
         description: z.string().optional(),
         status: z.enum(["active", "archived", "completed"]).default("active"),
-        settings: z.record(z.unknown()).optional(),
-        metadata: z.record(z.unknown()).optional(),
+        settings: z.record(z.string(), z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -110,8 +110,8 @@ export const projectsRouter = router({
         name: z.string().min(1).max(255).optional(),
         description: z.string().optional(),
         status: z.enum(["active", "archived", "completed"]).optional(),
-        settings: z.record(z.unknown()).optional(),
-        metadata: z.record(z.unknown()).optional(),
+        settings: z.record(z.string(), z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

@@ -8,7 +8,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./src/index.ts",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
     }
   },
@@ -19,20 +19,20 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "tsc -p tsconfig.build.json && tsup",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsup",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.926.0",
     "@hono/trpc-server": "^0.3.2",
     "@synap-core/core": "workspace:*",
+    "@synap-core/hub-protocol": "workspace:*",
     "@synap-core/types": "workspace:*",
     "@synap/ai": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
-    "@synap-core/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
@@ -43,8 +43,9 @@
     "inngest": "3.22.12",
     "jsonwebtoken": "^9.0.2",
     "postgres": "^3.4.8",
+    "superjson": "^2.2.6",
     "ws": "^8.18.3",
-    "zod": "3.23.8"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@trpc/react-query": "^11.8.1",

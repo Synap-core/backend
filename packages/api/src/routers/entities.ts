@@ -7,8 +7,14 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, desc, and } from "@synap/database";
-import { entities, insertEntitySchema } from "@synap/database/schema";
+import { entities } from "@synap/database/schema";
 import { emitRequestEvent } from "../utils/emit-event.js";
+import {
+  validateEntityMetadata,
+  type EntityType,
+  type Entity,
+  EntitySchema,
+} from "@synap-core/types";
 
 // TODO: Move to @synap-core/types or DB enum
 const EntityTypeSchema = z.enum([
@@ -26,32 +32,50 @@ export const entitiesRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertEntitySchema
-        .pick({
-          title: true,
-          workspaceId: true,
-          documentId: true,
-        })
-        .extend({
-          type: EntityTypeSchema,
-          description: z.string().optional(), // Maps to 'preview'
-        })
+      z.object({
+        type: EntityTypeSchema,
+        title: z.string().optional(),
+        description: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
+        documentId: z.string().uuid().optional(),
+      })
+    )
+    .output(
+      z.object({
+        status: z.string(),
+        message: z.string(),
+        id: z.string().uuid(),
+        entity: EntitySchema,
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
       const entityId = randomUUID();
 
+      // Get default metadata for the type
+      const defaultMetadata = validateEntityMetadata(input.type, {});
+
       const optimisticEntity = {
         id: entityId,
         type: input.type,
-        title: input.title,
-        preview: input.description,
+        title: input.title ?? null,
+        preview: input.description ?? null,
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        documentId: input.documentId,
+        workspaceId: input.workspaceId ?? null,
+        documentId: input.documentId ?? null,
+        metadata: defaultMetadata,
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+        deletedAt: null,
+        // Missing fields defaults
+        fileUrl: null,
+        filePath: null,
+        fileSize: null,
+        fileType: null,
+        checksum: null,
+        version: 1,
+        projectIds: [],
+      } as Entity;
 
       // Emit request event (stores in event log + publishes to Inngest)
       await emitRequestEvent({
@@ -99,7 +123,40 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      return { entities: results };
+      const typedEntities = results.map((entity) => {
+        try {
+          const typedMetadata = validateEntityMetadata(
+            entity.type as EntityType,
+            entity.metadata
+          );
+
+          return {
+            ...entity,
+            metadata: typedMetadata,
+            fileUrl: null,
+            filePath: null,
+            fileSize: null,
+            fileType: null,
+            checksum: null,
+          } as Entity;
+        } catch (e) {
+          console.warn(
+            `Entity ${entity.id} has invalid metadata for type ${entity.type}`,
+            e
+          );
+          return {
+            ...entity,
+            metadata: {},
+            fileUrl: null,
+            filePath: null,
+            fileSize: null,
+            fileType: null,
+            checksum: null,
+          } as unknown as Entity;
+        }
+      });
+
+      return { entities: typedEntities };
     }),
 
   /**
@@ -125,7 +182,36 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      return { entities: results };
+      const typedEntities = results.map((entity) => {
+        try {
+          const typedMetadata = validateEntityMetadata(
+            entity.type as EntityType,
+            entity.metadata
+          );
+          return {
+            ...entity,
+            metadata: typedMetadata,
+            fileUrl: null,
+            filePath: null,
+            fileSize: null,
+            fileType: null,
+            checksum: null,
+          } as Entity;
+        } catch (e) {
+          console.warn(`Entity ${entity.id} has invalid metadata`, e);
+          return {
+            ...entity,
+            metadata: {},
+            fileUrl: null,
+            filePath: null,
+            fileSize: null,
+            fileType: null,
+            checksum: null,
+          } as unknown as Entity;
+        }
+      });
+
+      return { entities: typedEntities };
     }),
 
   /**
@@ -137,6 +223,11 @@ export const entitiesRouter = router({
         id: z.string().uuid(),
       })
     )
+    .output(
+      z.object({
+        entity: EntitySchema,
+      })
+    )
     .query(async ({ input, ctx }) => {
       const entity = await db.query.entities.findFirst({
         where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
@@ -146,7 +237,35 @@ export const entitiesRouter = router({
         throw new Error("Entity not found");
       }
 
-      return { entity };
+      let typedEntity: Entity;
+      try {
+        const typedMetadata = validateEntityMetadata(
+          entity.type as EntityType,
+          entity.metadata
+        );
+        typedEntity = {
+          ...entity,
+          metadata: typedMetadata,
+          fileUrl: null,
+          filePath: null,
+          fileSize: null,
+          fileType: null,
+          checksum: null,
+        } as Entity;
+      } catch (e) {
+        console.warn(`Entity ${entity.id} has invalid metadata`, e);
+        typedEntity = {
+          ...entity,
+          metadata: {},
+          fileUrl: null,
+          filePath: null,
+          fileSize: null,
+          fileType: null,
+          checksum: null,
+        } as unknown as Entity;
+      }
+
+      return { entity: typedEntity };
     }),
 
   /**
@@ -154,17 +273,16 @@ export const entitiesRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertEntitySchema
-        .pick({
-          type: true,
-          preview: true,
-          title: true,
-          workspaceId: true,
-          documentId: true,
-        })
-        .extend({
-          id: z.string().uuid(),
-        })
+      z.object({
+        id: z.string().uuid(),
+        type: z
+          .enum(["note", "task", "project", "contact", "meeting", "idea"])
+          .optional(),
+        title: z.string().optional(),
+        preview: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
+        documentId: z.string().uuid().optional(),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({

@@ -35,7 +35,6 @@ import {
   documentVersions,
   entities,
   relations,
-  insertViewSchema,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -58,30 +57,26 @@ export const viewsRouter = router({
    */
   create: protectedProcedure
     .input(
-      insertViewSchema
-        .pick({
-          workspaceId: true,
-          name: true,
-          description: true,
-        })
-        .extend({
-          // Specific validation for view types and custom constraints
-          type: z.enum([
-            "whiteboard",
-            "timeline",
-            "kanban",
-            "table",
-            "list",
-            "grid",
-            "gallery",
-            "calendar",
-            "gantt",
-            "mindmap",
-            "graph",
-          ]),
-          name: z.string().min(1).max(100),
-          initialContent: z.any().optional(),
-        })
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        name: z.string().min(1).max(100),
+        description: z.string().optional(),
+        // Specific validation for view types and custom constraints
+        type: z.enum([
+          "whiteboard",
+          "timeline",
+          "kanban",
+          "table",
+          "list",
+          "grid",
+          "gallery",
+          "calendar",
+          "gantt",
+          "mindmap",
+          "graph",
+        ]),
+        initialContent: z.any().optional(),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // If workspace provided, check user has editor role
@@ -113,10 +108,10 @@ export const viewsRouter = router({
           });
         }
 
-        if (parseResult.data.category !== category) {
+        if ((parseResult.data as any).category !== category) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `View type '${input.type}' requires '${category}' content, got '${parseResult.data.category}'`,
+            message: `View type '${input.type}' requires '${category}' content, got '${(parseResult.data as any).category}'`,
           });
         }
       }
@@ -436,7 +431,7 @@ export const viewsRouter = router({
       z.object({
         id: z.string().uuid(),
         content: z.any(),
-        metadata: z.record(z.any()).optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -476,10 +471,10 @@ export const viewsRouter = router({
 
       // Ensure content category matches view type
       const expectedCategory = getViewCategory(view.type as any);
-      if (parseResult.data.category !== expectedCategory) {
+      if ((parseResult.data as any).category !== expectedCategory) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${parseResult.data.category}'`,
+          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${(parseResult.data as any).category}'`,
         });
       }
 
@@ -527,19 +522,11 @@ export const viewsRouter = router({
    */
   update: protectedProcedure
     .input(
-      insertViewSchema
-        .pick({
-          id: true,
-          name: true,
-          description: true,
-        })
-        .partial({
-          name: true,
-          description: true,
-        })
-        .required({
-          id: true,
-        })
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().min(1).max(100).optional(),
+        description: z.string().optional(),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
