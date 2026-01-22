@@ -20,9 +20,9 @@ COPY turbo.json ./
 COPY packages/*/package.json ./packages/
 COPY apps/*/package.json ./apps/
 
-# Use BuildKit cache mount for pnpm store
+# Use BuildKit cache mount for pnpm store (install all deps including dev for build)
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-  pnpm install --frozen-lockfile --prod=false
+  pnpm install --frozen-lockfile
 
 # ============================================================================
 # Build stage - compile TypeScript
