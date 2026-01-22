@@ -21,7 +21,7 @@ import {
   type HubTokenPayload,
 } from "./hub-utils.js";
 import { transformInsightToEvents } from "./hub-transform.js";
-import { validateHubInsight, type HubInsight } from "@synap/hub-protocol";
+import { validateHubInsight, type HubInsight } from "@synap-core/hub-protocol";
 import { getEventRepository } from "@synap/database";
 import { db, entities } from "@synap/database";
 import { eq, and, desc, gte, lte } from "@synap/database";

@@ -52,15 +52,20 @@ const InboxItemSchema = z.object({
  * N8N Inbox Ingestion Webhook
  *
  * POST /webhooks/n8n/inbox
- * Headers: X-Webhook-Secret, X-User-Id
+ * Headers: X-Webhook-Secret, X-User-Id, X-Workspace-Id
  * Body: { items: InboxItem[] }
  */
 n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
   try {
     const userId = c.req.header("X-User-Id");
+    const workspaceId = c.req.header("X-Workspace-Id");
 
     if (!userId) {
       return c.json({ error: "X-User-Id header required" }, 400);
+    }
+
+    if (!workspaceId) {
+      return c.json({ error: "X-Workspace-Id header required" }, 400);
     }
 
     const body = await c.req.json();
@@ -71,7 +76,7 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
     }
 
     logger.info(
-      { userId, count: items.length },
+      { userId, workspaceId, count: items.length },
       "Processing N8N inbox webhook"
     );
 
@@ -85,7 +90,7 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
         // Generate ID for the inbox item
         const itemId = `inbox_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // ✅ Type-safe event publishing
+        // ✅ Type-safe event publishing with workspaceId
         const event = createInboxItemReceivedEvent(itemId, {
           provider: validated.provider,
           account: validated.provider, // Use provider as account identifier
@@ -96,6 +101,7 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
           timestamp: new Date(validated.timestamp),
           deepLink: validated.deepLink,
           rawData: validated.data,
+          workspaceId, // ✅ Required workspace context
         });
 
         await publishEvent(event, {

@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { hubRouter } from "./hub.js";
 import { createContext } from "../context.js";
-import type { HubInsight } from "@synap/hub-protocol";
+import type { HubInsight } from "@synap-core/hub-protocol";
 
 // Mock dependencies
 vi.mock("@synap/database", () => ({

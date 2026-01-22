@@ -4,7 +4,7 @@
  * Transforms HubInsight into SynapEvent objects
  */
 
-import type { HubInsight } from "@synap/hub-protocol";
+import type { HubInsight } from "@synap-core/hub-protocol";
 import { createSynapEvent } from "@synap-core/core";
 import type { EventType } from "@synap/events";
 import { isValidEventType } from "@synap/events";

@@ -15,8 +15,7 @@ import {
   httpBatchLink,
   TRPCClientError,
 } from "@trpc/client";
-import type { AppRouter } from "@synap/api";
-import type { HubInsight } from "../schemas/index.js";
+import type { HubInsight } from "../schemas.js";
 import { createLogger } from "@synap-core/core";
 import type {
   HubProtocolClientConfig,
@@ -34,6 +33,7 @@ const logger = createLogger({ module: "hub-protocol-client" });
  * Hub Protocol Client
  *
  * Provides type-safe methods to interact with the Data Pod Hub Protocol.
+ * Uses runtime validation via Zod schemas defined in the Hub Protocol specification.
  *
  * @example
  * ```typescript
@@ -48,7 +48,7 @@ const logger = createLogger({ module: "hub-protocol-client" });
  * ```
  */
 export class HubProtocolClient {
-  private client: ReturnType<typeof createTRPCProxyClient<AppRouter>>;
+  private client: ReturnType<typeof createTRPCProxyClient<any>>;
   private config: Required<Pick<HubProtocolClientConfig, "retry">> &
     Omit<HubProtocolClientConfig, "retry">;
 
@@ -62,7 +62,7 @@ export class HubProtocolClient {
     };
 
     // Create tRPC client
-    this.client = createTRPCProxyClient<AppRouter>({
+    this.client = createTRPCProxyClient<any>({
       links: [
         httpBatchLink({
           url: `${this.config.dataPodUrl}/trpc`,
@@ -101,7 +101,7 @@ export class HubProtocolClient {
   updateDataPodUrl(dataPodUrl: string): void {
     this.config.dataPodUrl = dataPodUrl;
     // Recreate client with new URL
-    this.client = createTRPCProxyClient<AppRouter>({
+    this.client = createTRPCProxyClient<any>({
       links: [
         httpBatchLink({
           url: `${this.config.dataPodUrl}/trpc`,

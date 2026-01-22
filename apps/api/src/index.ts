@@ -34,14 +34,7 @@ import { serve } from "@hono/node-server";
 import { serve as inngestServe } from "inngest/hono";
 import { inngest, functions } from "@synap/jobs";
 import crypto from "crypto";
-/*
-import {
-  rateLimitMiddleware,
-  requestSizeLimit,
-  securityHeadersMiddleware,
-  getCorsOrigins,
-} from "./middleware/security.js";
-*/
+import { getCorsOrigins } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 // import { webhookRouter } from "./webhooks/index.js";
 
