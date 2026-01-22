@@ -15,7 +15,7 @@
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
-    "@synap/hub-protocol": "workspace:*",
+    "@synap-core/hub-protocol": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@trpc/server": "^11.0.0",
     "drizzle-orm": "^0.45.1",
