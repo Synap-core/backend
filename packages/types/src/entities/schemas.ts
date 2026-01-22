@@ -76,6 +76,44 @@ export const ENTITY_SCHEMAS = {
     industry: z.string().optional(),
     foundedYear: z.number().int().optional(),
   }),
+
+  // Aliases/New types for API compatibility
+  contact: z.object({
+    email: z.string().email().optional(),
+    phone: z.string().optional(),
+    company: z.string().optional(),
+    role: z.string().optional(),
+    linkedInUrl: z.string().url().optional(),
+    twitterHandle: z.string().optional(),
+    notes: z.string().optional(),
+  }),
+
+  meeting: z.object({
+    startTime: z.string().datetime(),
+    endTime: z.string().datetime(),
+    location: z.string().optional(),
+    attendees: z.array(z.string().uuid()).optional(),
+    recurring: z.boolean().default(false),
+    recurrenceRule: z.string().optional(),
+    isAllDay: z.boolean().default(false),
+    reminderMinutes: z.number().int().optional(),
+  }),
+
+  idea: z.object({
+    tags: z.array(z.string()).default([]),
+    impact: z.enum(["low", "medium", "high"]).optional(),
+    effort: z.enum(["low", "medium", "high"]).optional(),
+  }),
+
+  project: z.object({
+    status: z
+      .enum(["active", "on_hold", "completed", "archived"])
+      .default("active"),
+    priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+    dueDate: z.string().datetime().optional(),
+    completedAt: z.string().datetime().optional(),
+    owner: z.string().uuid().optional(),
+  }),
 } as const;
 
 /**

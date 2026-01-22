@@ -35,6 +35,7 @@ const baseEntitySchema = z.object({
   fileSize: z.number().nullable(),
   fileType: z.string().nullable(),
   checksum: z.string().nullable(),
+  projectIds: z.array(z.string()).nullable(),
   version: z.number(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -75,6 +76,22 @@ export const EntitySchema = z.discriminatedUnion("type", [
     type: z.literal("company"),
     metadata: ENTITY_SCHEMAS.company,
   }),
+  baseEntitySchema.extend({
+    type: z.literal("contact"),
+    metadata: ENTITY_SCHEMAS.contact,
+  }),
+  baseEntitySchema.extend({
+    type: z.literal("meeting"),
+    metadata: ENTITY_SCHEMAS.meeting,
+  }),
+  baseEntitySchema.extend({
+    type: z.literal("idea"),
+    metadata: ENTITY_SCHEMAS.idea,
+  }),
+  baseEntitySchema.extend({
+    type: z.literal("project"),
+    metadata: ENTITY_SCHEMAS.project,
+  }),
 ]);
 
 /**
@@ -95,6 +112,10 @@ export type Note = Extract<Entity, { type: "note" }>;
 export type Person = Extract<Entity, { type: "person" }>;
 export type Event = Extract<Entity, { type: "event" }>;
 export type File = Extract<Entity, { type: "file" }>;
+export type Contact = Extract<Entity, { type: "contact" }>;
+export type Meeting = Extract<Entity, { type: "meeting" }>;
+export type Idea = Extract<Entity, { type: "idea" }>;
+export type Project = Extract<Entity, { type: "project" }>;
 
 /**
  * New entity type (for creation)
