@@ -16,7 +16,7 @@ import {
   TRPCClientError,
 } from "@trpc/client";
 import type { AppRouter } from "@synap/api";
-import type { HubInsight } from "@synap/hub-protocol";
+import type { HubInsight } from "../schemas/index.js";
 import { createLogger } from "@synap-core/core";
 import type {
   HubProtocolClientConfig,
