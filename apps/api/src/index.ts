@@ -184,10 +184,11 @@ if (isPostgres) {
         }
       );
 
+      // Return Response object (Hono accepts this)
       return new Response(response.body, {
         status: response.status,
         headers: response.headers,
-      });
+      }) as any; //TODO: fix type
     } catch (error) {
       apiLogger.error({ err: error, path }, "Error proxying Kratos request");
       return c.json({ error: "Internal server error" }, 500);
@@ -261,6 +262,7 @@ app.get("/api/events/stream", (c) => {
       : allowedOrigins[0]
     : allowedOrigins;
 
+  // Return Response object (Hono accepts this)
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
@@ -269,7 +271,7 @@ app.get("/api/events/stream", (c) => {
       "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Credentials": "true",
     },
-  });
+  }) as any;
 });
 
 // tRPC routes (protected by auth, except public routes)

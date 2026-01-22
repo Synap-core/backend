@@ -17,7 +17,7 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc && api-extractor run --local && mv dist/index.bundled.d.ts dist/index.d.ts",
+    "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
