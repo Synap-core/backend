@@ -145,6 +145,7 @@ export const templatesRouter = router({
           config: TemplateConfigSchema,
           isDefault: z.boolean().default(false),
           isPublic: z.boolean().default(false),
+          schema: z.record(z.string(), z.any()).optional(), // Zod schema definition
         })
     )
     .mutation(async ({ ctx, input }) => {
@@ -165,6 +166,7 @@ export const templatesRouter = router({
           entityType: input.entityType || null,
           inboxItemType: input.inboxItemType || null,
           config: input.config,
+          schema: input.schema || null,
           isDefault: input.isDefault,
           isPublic: input.isPublic,
           version: 1,
@@ -184,6 +186,7 @@ export const templatesRouter = router({
         name: z.string().min(1).optional(),
         description: z.string().optional(),
         config: TemplateConfigSchema.optional(),
+        schema: z.record(z.string(), z.any()).optional(),
         isDefault: z.boolean().optional(),
         isPublic: z.boolean().optional(),
       })
@@ -310,6 +313,7 @@ export const templatesRouter = router({
           entityType: original.entityType,
           inboxItemType: original.inboxItemType,
           config: original.config,
+          schema: original.schema,
           isDefault: false,
           isPublic: false,
           version: 1,

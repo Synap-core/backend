@@ -14,10 +14,13 @@ export type {
   NewWorkspaceMember,
   WorkspaceInvite,
   NewWorkspaceInvite,
-} from "@synap/database/schema";
+} from "../../../database/src/schema/index.js";
 
 // Derived types for API convenience
-import type { Workspace, WorkspaceMember } from "@synap/database/schema";
+import type {
+  Workspace,
+  WorkspaceMember,
+} from "../../../database/src/schema/index.js";
 
 export type WorkspaceType = Workspace["type"];
 export type WorkspaceRole = WorkspaceMember["role"];

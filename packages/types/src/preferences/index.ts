@@ -18,12 +18,12 @@ export type {
   EntityMetadataSchemas,
   UIPreferences,
   GraphPreferences,
-} from "@synap/database/schema";
+} from "../../../database/src/schema/index.js";
 
 export {
   insertUserPreferenceSchema,
   selectUserPreferenceSchema,
-} from "@synap/database/schema";
+} from "../../../database/src/schema/index.js";
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Frontend Validation)

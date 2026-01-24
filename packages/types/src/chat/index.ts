@@ -22,7 +22,10 @@ import type {
  *
  * Generated from database schema - DO NOT manually define
  */
-export type { ChatThread, NewChatThread } from "@synap/database/schema";
+export type {
+  ChatThread,
+  NewChatThread,
+} from "../../../database/src/schema/index.js";
 
 /**
  * Chat message
@@ -32,7 +35,7 @@ export type { ChatThread, NewChatThread } from "@synap/database/schema";
 export type {
   ConversationMessageRow as ChatMessage,
   NewConversationMessageRow as NewChatMessage,
-} from "@synap/database/schema";
+} from "../../../database/src/schema/index.js";
 
 // =============================================================================
 // UI State Types

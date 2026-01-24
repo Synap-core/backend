@@ -428,8 +428,8 @@ importers:
   packages/api-types:
     dependencies:
       '@synap-core/types':
-        specifier: workspace:*
-        version: link:../types
+        specifier: ^1.2.14
+        version: 1.2.16(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       yjs:
         specifier: ^13.0.0
         version: 13.6.29
@@ -3527,6 +3527,9 @@ packages:
 
   '@synap-core/core@1.0.0':
     resolution: {integrity: sha512-l380qnzq77Ul/whlms/IoktugD134GYL5GcENj0KqHTEIToHmitnGUWqO1IohoQ5RlEVptLXnUHxBK9PE0nrkA==}
+
+  '@synap-core/types@1.2.16':
+    resolution: {integrity: sha512-nt3Q0qvcmVt/9d/3jRl1O7iVNpVrKklHDMiz31zXzdYYZ5EN6bt/iVqkEW46BA29JtZVgCE0vvw4NM0lZ3Lm8g==}
 
   '@synap-core/types@1.2.6':
     resolution: {integrity: sha512-4jBMQ4Frg9p+RHbx15HbUccyUYUt8d9v1fdGGlT06rviLfLuCoUMehgUo0HxZRpnOQP5K17L+fSm9Vd7h37U+Q==}
@@ -10473,6 +10476,43 @@ snapshots:
       - '@opentelemetry/core'
       - encoding
       - supports-color
+
+  '@synap-core/types@1.2.16(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
+    dependencies:
+      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
+      drizzle-zod: 0.7.0(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.5)
+      yjs: 13.6.29
+      zod: 4.3.5
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@neondatabase/serverless'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - better-sqlite3
+      - bun-types
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mysql2
+      - pg
+      - postgres
+      - prisma
+      - sql.js
+      - sqlite3
 
   '@synap-core/types@1.2.6(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
     dependencies:

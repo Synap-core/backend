@@ -16,7 +16,10 @@ export default defineConfig({
     "src/proposals/index.ts", // NEW: Universal Proposals
   ],
   format: ["esm"],
-  dts: true,
+  dts: {
+    resolve: ["@synap/database"],
+  },
   clean: true,
-  external: ["@synap/database", "yjs"],
+  external: ["yjs"],
+  noExternal: ["@synap/database"],
 });

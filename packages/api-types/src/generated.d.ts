@@ -4642,6 +4642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             inboxItemType?: string | undefined;
             isDefault?: boolean | undefined;
             isPublic?: boolean | undefined;
+            schema?: Record<string, any> | undefined;
           };
           output: {
             status: string;
@@ -4790,6 +4791,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | undefined;
                 }
               | undefined;
+            schema?: Record<string, any> | undefined;
             isDefault?: boolean | undefined;
             isPublic?: boolean | undefined;
           };

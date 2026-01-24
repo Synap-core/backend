@@ -31,8 +31,8 @@ try {
   content = content.replace(/transformer:\s*false;/, "transformer: any;");
 
   // Fix 2: Remove weird 'typeof self' that leaks from Yjs if present
-  // content = content.replace(/typeof self/g, "any"); 
-  
+  // content = content.replace(/typeof self/g, "any");
+
   writeFileSync(OUTPUT_FILE, content);
 
   console.log(`✅ Types generated at ${OUTPUT_FILE}`);
