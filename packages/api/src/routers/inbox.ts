@@ -24,7 +24,7 @@ const logger = createLogger({ module: "inbox-router" });
  */
 const InboxItemSchema = z.object({
   provider: z.string(),
-  account: z.string().optional(),
+  account: z.string(),
   externalId: z.string(),
   deepLink: z.string().optional(),
   type: z.string(),
@@ -32,7 +32,7 @@ const InboxItemSchema = z.object({
   preview: z.string().optional(),
   timestamp: z.date(),
   data: z.record(z.string(), z.any()).optional(),
-  workspaceId: z.string().uuid().optional(),
+  workspaceId: z.string().uuid(),
 });
 
 export const inboxRouter = router({

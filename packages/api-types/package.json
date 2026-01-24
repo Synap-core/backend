@@ -1,13 +1,13 @@
 {
   "name": "@synap-core/api-types",
-  "version": "1.0.29",
+  "version": "1.0.50",
   "description": "Type definitions for Synap API Router - tRPC types for frontend",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.bundled.d.ts",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.bundled.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     }
@@ -17,15 +17,16 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc && api-extractor run --local --verbose",
+    "build": "tsc && cp src/generated.d.ts dist/generated.d.ts",
+    "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@synap-core/types": "workspace:*"
+    "@synap-core/types": "workspace:*",
+    "yjs": "^13.0.0"
   },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.55.2",
-    "@synap/api": "workspace:*",
     "@trpc/server": "^11.8.1",
     "typescript": "^5.9.3"
   },

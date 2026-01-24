@@ -25,7 +25,7 @@ const t = initTRPC.context<Context>().create({
 /**
  * Public procedure (no auth required)
  */
-export const publicProcedure = t.procedure;
+export const publicProcedure = t.procedure as typeof t.procedure;
 
 /**
  * Protected procedure (auth required)
@@ -54,5 +54,5 @@ export const protectedProcedure = t.procedure.use(async (opts) => {
   });
 });
 
-export const router = t.router;
-export const middleware = t.middleware;
+export const router = t.router as typeof t.router;
+export const middleware = t.middleware as typeof t.middleware;

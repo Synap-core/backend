@@ -83,9 +83,6 @@ importers:
       '@monaco-editor/react':
         specifier: ^4.6.0
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
-      '@synap/api':
-        specifier: workspace:*
-        version: link:../../packages/api
       '@tabler/icons-react':
         specifier: ^3.35.0
         version: 3.36.1(react@19.2.3)
@@ -146,10 +143,16 @@ importers:
       recharts:
         specifier: ^3.4.1
         version: 3.6.0(@types/react@19.2.8)(react-dom@19.2.3(react@19.2.3))(react-is@18.3.1)(react@19.2.3)(redux@5.0.1)
+      superjson:
+        specifier: ^2.2.6
+        version: 2.2.6
     devDependencies:
       '@eslint/js':
         specifier: ^9.39.1
         version: 9.39.2
+      '@synap-core/api-types':
+        specifier: ^1.0.45
+        version: 1.0.45(@trpc/server@11.8.1(typescript@5.9.3))
       '@types/node':
         specifier: ^24.10.0
         version: 24.10.7
@@ -387,6 +390,9 @@ importers:
       ws:
         specifier: ^8.18.3
         version: 8.19.0
+      yjs:
+        specifier: ^13.6.29
+        version: 13.6.29
       zod:
         specifier: ^4.0.0
         version: 4.3.5
@@ -406,6 +412,9 @@ importers:
       bcrypt:
         specifier: ^6.0.0
         version: 6.0.0
+      dts-bundle-generator:
+        specifier: ^9.5.1
+        version: 9.5.1
       react:
         specifier: ^19.2.3
         version: 19.2.3
@@ -421,13 +430,13 @@ importers:
       '@synap-core/types':
         specifier: workspace:*
         version: link:../types
+      yjs:
+        specifier: ^13.0.0
+        version: 13.6.29
     devDependencies:
       '@microsoft/api-extractor':
         specifier: ^7.55.2
         version: 7.55.2(@types/node@25.0.7)
-      '@synap/api':
-        specifier: workspace:*
-        version: link:../api
       '@trpc/server':
         specifier: ^11.8.1
         version: 11.8.1(typescript@5.9.3)
@@ -3511,6 +3520,11 @@ packages:
   '@standard-schema/utils@0.3.0':
     resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
 
+  '@synap-core/api-types@1.0.45':
+    resolution: {integrity: sha512-nbhk0cSGNSWn0924zJOJ+6YvnT0PmTeGfW3OtN75FgIgqpFphGH2tx6pAAQKQ61dF6pEJ/soGX8EIT7X5PC3Lg==}
+    peerDependencies:
+      '@trpc/server': ^11.0.0
+
   '@synap-core/core@1.0.0':
     resolution: {integrity: sha512-l380qnzq77Ul/whlms/IoktugD134GYL5GcENj0KqHTEIToHmitnGUWqO1IohoQ5RlEVptLXnUHxBK9PE0nrkA==}
 
@@ -4631,6 +4645,11 @@ packages:
     peerDependencies:
       drizzle-orm: ^0.45.1
       zod: ^4.0.0
+
+  dts-bundle-generator@9.5.1:
+    resolution: {integrity: sha512-DxpJOb2FNnEyOzMkG11sxO2dmxPjthoVWxfKqWYJ/bI/rT1rvTMktF5EKjAYrRZu6Z6t3NhOUZ0sZ5ZXevOfbA==}
+    engines: {node: '>=14.0.0'}
+    hasBin: true
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -10432,6 +10451,11 @@ snapshots:
 
   '@standard-schema/utils@0.3.0': {}
 
+  '@synap-core/api-types@1.0.45(@trpc/server@11.8.1(typescript@5.9.3))':
+    dependencies:
+      '@synap-core/types': link:packages/types
+      '@trpc/server': 11.8.1(typescript@5.9.3)
+
   '@synap-core/core@1.0.0(@opentelemetry/core@2.3.0(@opentelemetry/api@1.9.0))':
     dependencies:
       '@opentelemetry/api': 1.9.0
@@ -11637,6 +11661,11 @@ snapshots:
     dependencies:
       drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       zod: 4.3.5
+
+  dts-bundle-generator@9.5.1:
+    dependencies:
+      typescript: 5.9.3
+      yargs: 17.7.2
 
   dunder-proto@1.0.1:
     dependencies:

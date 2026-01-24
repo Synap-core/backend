@@ -52,6 +52,7 @@ export const UIPreferencesSchema = z
     sidebarCollapsed: z.boolean().optional(),
     panelPositions: z
       .record(
+        z.string(),
         z.object({
           x: z.number(),
           y: z.number(),
@@ -103,7 +104,9 @@ export const UpdatePreferencesInputSchema = z.object({
   customTheme: CustomThemeSchema,
   defaultTemplates: z.record(z.string(), z.string()).optional(),
   customEntityTypes: z.array(z.any()).optional(),
-  entityMetadataSchemas: z.record(z.string(), z.record(z.any())).optional(),
+  entityMetadataSchemas: z
+    .record(z.string(), z.record(z.string(), z.any()))
+    .optional(),
   uiPreferences: UIPreferencesSchema,
   graphPreferences: GraphPreferencesSchema,
   onboardingCompleted: z.boolean().optional(),

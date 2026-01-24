@@ -15,7 +15,6 @@
     "@mantine/hooks": "^7.15.4",
     "@mantine/notifications": "^7.15.4",
     "@monaco-editor/react": "^4.6.0",
-    "@synap/api": "workspace:*",
     "@tabler/icons-react": "^3.35.0",
     "@tanstack/react-query": "^5.62.13",
     "@tanstack/react-virtual": "^3.13.12",
@@ -35,10 +34,12 @@
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.2.0",
     "reactflow": "^11.11.4",
-    "recharts": "^3.4.1"
+    "recharts": "^3.4.1",
+    "superjson": "^2.2.6"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@synap-core/api-types": "^1.0.45",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",

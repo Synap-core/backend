@@ -8,7 +8,7 @@
   },
   "dtsRollup": {
     "enabled": true,
-    "untrimmedFilePath": "<projectFolder>/dist/index.bundled.d.ts"
+    "untrimmedFilePath": "<projectFolder>/dist/index.d.ts"
   },
   "apiReport": {
     "enabled": false
@@ -28,6 +28,9 @@
         "logLevel": "none"
       },
       "ae-unresolved-link": {
+        "logLevel": "none"
+      },
+      "ae-forgotten-export": {
         "logLevel": "none"
       }
     }

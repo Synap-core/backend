@@ -6,7 +6,8 @@
 
 import { createTRPCReact } from "@trpc/react-query";
 import { httpBatchLink } from "@trpc/client";
-import type { AppRouter } from "@synap/api";
+import type { AppRouter } from "@synap-core/api-types";
+import SuperJSON from "superjson";
 
 // Create tRPC React client
 // Note: TypeScript may show errors due to dynamic router registry, but types work correctly at runtime
@@ -42,4 +43,5 @@ export const trpcClient = trpc.createClient({
       },
     }),
   ],
+  transformer: SuperJSON,
 });

@@ -1,10 +1,13 @@
 {
   "name": "@synap/api",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Synap API Router - tRPC types and router for Data Pod",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -19,7 +22,8 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsup",
+    "build": "rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
+    "gen-types": "node scripts/gen-types.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -45,6 +49,7 @@
     "postgres": "^3.4.8",
     "superjson": "^2.2.6",
     "ws": "^8.18.3",
+    "yjs": "^13.6.29",
     "zod": "^4.0.0"
   },
   "devDependencies": {
@@ -53,12 +58,10 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/react": "^19.2.8",
     "bcrypt": "^6.0.0",
+    "dts-bundle-generator": "^9.5.1",
     "react": "^19.2.3",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "repository": {
     "type": "git",

@@ -1,15 +1,11 @@
 /**
- * @synap/api-types
+ * @synap-core/api-types
  *
- * Type-only exports for Synap API Router.
- * Frontend-safe package with no server dependencies.
+ * Standalone type definitions for Synap tRPC API.
  *
- * @example
- * ```typescript
- * import type { AppRouter } from '@synap/api-types';
- *
- * const trpc = createTRPCReact<AppRouter>();
- * ```
+ * The AppRouter type is extracted from @synap/api during build
+ * and included in this package with no external dependencies.
  */
 
-export type { AppRouter } from "@synap/api";
+// This will be generated during build from @synap/api
+export type { AppRouter } from "./generated.js";
