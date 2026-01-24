@@ -2193,8 +2193,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           input: {
             requestId: string;
             scope: (
-              | "notes"
               | "entities"
+              | "notes"
               | "relations"
               | "projects"
               | "preferences"
@@ -2217,8 +2217,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             [x: string]: unknown;
             token: string;
             scope: (
-              | "notes"
               | "entities"
+              | "notes"
               | "relations"
               | "projects"
               | "preferences"
@@ -2248,8 +2248,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             metadata: {
               retrievedAt: string;
               scope: (
-                | "notes"
                 | "entities"
+                | "notes"
                 | "relations"
                 | "projects"
                 | "preferences"
@@ -3607,21 +3607,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         list: import("@trpc/server").TRPCQueryProcedure<{
           input: void;
-          output: {
-            role: string;
-            joinedAt: Date;
-            name: string;
-            id: string;
-            createdAt: Date;
-            updatedAt: Date;
-            description: string | null;
-            type: string;
-            ownerId: string;
-            settings: WorkspaceSettings;
-            subscriptionTier: string | null;
-            subscriptionStatus: string | null;
-            stripeCustomerId: string | null;
-          }[];
+          output: any[];
           meta: object;
         }>;
         get: import("@trpc/server").TRPCQueryProcedure<{
@@ -4081,7 +4067,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   animations?:
                     | {
                         enabled?: boolean | undefined;
-                        speed?: "normal" | "slow" | "fast" | undefined;
+                        speed?: "slow" | "normal" | "fast" | undefined;
                       }
                     | undefined;
                 }
@@ -4173,7 +4159,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   animations?:
                     | {
                         enabled?: boolean | undefined;
-                        speed?: "normal" | "slow" | "fast" | undefined;
+                        speed?: "slow" | "normal" | "fast" | undefined;
                       }
                     | undefined;
                 }
@@ -4406,7 +4392,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   thumbnailUrl: string | null;
                   category: string;
                   yjsRoomId: string | null;
-                  document: never;
+                  document: any;
                 };
             permissions: unknown;
           };

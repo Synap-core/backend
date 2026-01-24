@@ -24,6 +24,12 @@ const EntityTypeSchema = z.enum([
   "idea",
   "note",
   "project",
+  "person",
+  "event",
+  "file",
+  "code",
+  "bookmark",
+  "company",
 ]);
 
 export const entitiesRouter = router({
@@ -113,6 +119,11 @@ export const entitiesRouter = router({
         limit: z.number().min(1).max(100).default(50),
       })
     )
+    .output(
+      z.object({
+        entities: z.array(EntitySchema),
+      })
+    )
     .query(async ({ input, ctx }) => {
       const results = await db.query.entities.findMany({
         where: and(
@@ -168,6 +179,11 @@ export const entitiesRouter = router({
         query: z.string(),
         type: EntityTypeSchema.optional(),
         limit: z.number().min(1).max(50).default(10),
+      })
+    )
+    .output(
+      z.object({
+        entities: z.array(EntitySchema),
       })
     )
     .query(async ({ input, ctx }) => {

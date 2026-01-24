@@ -9,17 +9,16 @@ export default defineConfig({
     "src/inbox/index.ts",
     "src/workspaces/index.ts",
     "src/views/index.ts",
-    "src/relations/index.ts", // NEW: Knowledge graph edges
+    "src/relations/index.ts",
     "src/preferences/index.ts",
     "src/realtime/index.ts",
     "src/events/index.ts",
-    "src/proposals/index.ts", // NEW: Universal Proposals
+    "src/proposals/index.ts",
   ],
   format: ["esm"],
   dts: {
-    resolve: ["@synap/database"],
+    resolve: true,
   },
   clean: true,
   external: ["yjs"],
-  noExternal: ["@synap/database"],
 });
