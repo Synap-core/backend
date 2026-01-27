@@ -6,9 +6,8 @@ WORKDIR /app
 # Prepare: Prune monorepo to only what 'api' needs
 # ============================================================================
 FROM base AS prepare
-RUN pnpm add -g turbo@^2
 COPY . .
-RUN turbo prune api --docker
+RUN npx --yes turbo@^2 prune api --docker
 
 # ============================================================================
 # Builder: Install dependencies and build
