@@ -14,9 +14,18 @@ importers:
 
   .:
     dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.11.4)
+      '@hono/trpc-server':
+        specifier: ^0.3.4
+        version: 0.3.4(@trpc/server@11.8.1(typescript@5.9.3))(hono@4.11.4)
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
+      hono:
+        specifier: ^4.11.4
+        version: 4.11.4
     devDependencies:
       '@commitlint/cli':
         specifier: ^20.3.1
