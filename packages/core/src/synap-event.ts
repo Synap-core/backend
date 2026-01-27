@@ -82,7 +82,7 @@ export const EventTypeSchemas = {
     title: z.string().optional(),
     type: z.string().optional(), // note | task | project
     tags: z.array(z.string()).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   }),
 
   // Entity creation confirmed
@@ -96,7 +96,7 @@ export const EventTypeSchemas = {
   // Entity update intent
   "entities.update.requested": z.object({
     entityId: z.string().uuid(),
-    changes: z.record(z.unknown()).optional(),
+    changes: z.record(z.string(), z.unknown()).optional(),
     content: z.string().optional(),
     title: z.string().optional(),
   }),
@@ -136,7 +136,7 @@ export function validateEventData<T extends EventTypeWithSchema>(
       { eventType }
     );
   }
-  return schema.parse(data);
+  return schema.parse(data) as z.infer<(typeof EventTypeSchemas)[T]>;
 }
 
 // ============================================================================
