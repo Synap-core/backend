@@ -16,6 +16,7 @@ WORKDIR /app
 # ============================================================================
 FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY .npmrc ./
 COPY turbo.json ./
 COPY packages/*/package.json ./packages/
 COPY apps/*/package.json ./apps/
@@ -41,6 +42,7 @@ RUN pnpm build --filter='!admin-ui'
 # ============================================================================
 FROM base AS prod-deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY .npmrc ./
 COPY turbo.json ./
 COPY packages/*/package.json ./packages/
 COPY apps/*/package.json ./apps/
