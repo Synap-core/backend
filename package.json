@@ -6,7 +6,7 @@
   "description": "Synap - Event-Sourced Knowledge Backend",
   "scripts": {
     "dev": "turbo run dev",
-    "build": "turbo run build",
+    "build": "turbo run build --filter='!admin-ui'",
     "test": "turbo run test",
     "test:e2e": "pnpm --filter @synap/test-e2e test",
     "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
