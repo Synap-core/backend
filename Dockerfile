@@ -17,8 +17,8 @@ FROM base AS builder
 # Copy package.json files (for Docker layer caching)
 COPY --from=prepare /app/out/json/ .
 
-# Install dependencies (cached unless lockfile changes)
-RUN pnpm install --frozen-lockfile
+# Install dependencies (allow lockfile updates for pruned workspace)
+RUN pnpm install --no-frozen-lockfile
 
 # Copy source code
 COPY --from=prepare /app/out/full/ .
