@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 import { scopedProcedure } from "../middleware/api-key-auth.js";
-import { db, eq, desc, and, sql, sqlTemplate } from "@synap/database";
+import { db, eq, desc, and, sql } from "@synap/database";
 import {
   chatThreads,
   conversationMessages,
@@ -229,8 +229,87 @@ export const hubProtocolRouter = router({
   // ============================================================================
 
   /**
-   * Search entities (delegates to search router)
+   * Unified search using Search Service (Typesense)
    * Requires: hub-protocol.read scope
+   *
+   * Replaces simple ILIKE search with Typesense for better relevance
+   */
+  search: scopedProcedure(["hub-protocol.read"])
+    .input(
+      z.object({
+        userId: z.string(),
+        query: z.string().min(1).max(500),
+        workspaceId: z.string().optional(),
+        collections: z
+          .array(
+            z.enum([
+              "entities",
+              "documents",
+              "views",
+              "projects",
+              "chat_threads",
+              "agents",
+            ])
+          )
+          .optional(),
+        limit: z.number().min(1).max(100).default(20),
+        page: z.number().min(1).default(1),
+      })
+    )
+    .query(async ({ input }) => {
+      const { searchService } = await import("@synap/search");
+
+      return await searchService.search({
+        query: input.query,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        collections: input.collections,
+        limit: input.limit,
+        page: input.page,
+      });
+    }),
+
+  /**
+   * Search within specific collection
+   * Requires: hub-protocol.read scope
+   */
+  searchCollection: scopedProcedure(["hub-protocol.read"])
+    .input(
+      z.object({
+        userId: z.string(),
+        collection: z.enum([
+          "entities",
+          "documents",
+          "views",
+          "projects",
+          "chat_threads",
+          "agents",
+        ]),
+        query: z.string().min(1).max(500),
+        workspaceId: z.string().optional(),
+        limit: z.number().min(1).max(100).default(20),
+        page: z.number().min(1).default(1),
+      })
+    )
+    .query(async ({ input }) => {
+      const { searchService } = await import("@synap/search");
+
+      return await searchService.searchCollection(
+        input.collection,
+        input.query,
+        {
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+          limit: input.limit,
+          page: input.page,
+        }
+      );
+    }),
+
+  /**
+   * Search entities (legacy - delegates to unified search)
+   * Requires: hub-protocol.read scope
+   * @deprecated Use search() instead for better relevance
    */
   searchEntities: scopedProcedure(["hub-protocol.read"])
     .input(
@@ -252,21 +331,29 @@ export const hubProtocolRouter = router({
       })
     )
     .query(async ({ input }) => {
-      // Call search.entities with proper context
-      const results = await db.query.entities.findMany({
-        where: and(
-          eq(entities.userId, input.userId),
-          input.type ? eq(entities.type, input.type) : undefined,
-          input.query
-            ? // Simple ILIKE search on title and preview
-              sqlTemplate`(${entities.title} ILIKE ${`%${input.query}%`} OR ${entities.preview} ILIKE ${`%${input.query}%`})`
-            : undefined
-        ),
-        orderBy: [desc(entities.updatedAt)],
-        limit: input.limit,
-      });
+      // Use Search Service for better relevance
+      const { searchService } = await import("@synap/search");
 
-      return { entities: results };
+      const results = await searchService.searchCollection(
+        "entities",
+        input.query,
+        {
+          userId: input.userId,
+          limit: input.limit,
+        }
+      );
+
+      // Filter by type if specified
+      let filteredResults = results.results;
+      if (input.type) {
+        filteredResults = results.results.filter(
+          (r) => r.document?.entityType === input.type
+        );
+      }
+
+      return {
+        entities: filteredResults.map((r) => r.document).filter(Boolean),
+      };
     }),
 
   /**
@@ -531,6 +618,240 @@ export const hubProtocolRouter = router({
         status: "proposed",
         proposalId: proposal.id,
         message: "Document edit proposed, awaiting approval",
+      };
+    }),
+
+  // ============================================================================
+  // NEW: Branch Operations (Phase 2)
+  // ============================================================================
+
+  /**
+   * Create branch thread
+   * Requires: hub-protocol.write scope
+   */
+  createBranch: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        parentThreadId: z.string().uuid(),
+        branchPurpose: z.string(),
+        agentId: z.string().optional(),
+        agentType: z
+          .enum([
+            "default",
+            "meta",
+            "prompting",
+            "knowledge-search",
+            "code",
+            "writing",
+            "action",
+          ])
+          .optional(),
+        agentConfig: z.record(z.string(), z.unknown()).optional(),
+        inheritContext: z.boolean().default(true),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { emitRequestEvent } = await import("../utils/emit-event.js");
+      const { randomUUID } = await import("crypto");
+
+      const threadId = randomUUID();
+
+      // Get workspaceId from parent thread
+      const parentThread = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, input.parentThreadId),
+      });
+
+      if (!parentThread) {
+        throw new Error("Parent thread not found");
+      }
+
+      await emitRequestEvent({
+        type: "chat_threads.branch.requested",
+        subjectId: input.parentThreadId,
+        subjectType: "chat_thread",
+        data: {
+          id: threadId,
+          userId: input.userId,
+          projectId: parentThread.projectId || undefined,
+          parentThreadId: input.parentThreadId,
+          branchPurpose: input.branchPurpose,
+          agentId: input.agentId,
+          agentType: input.agentType,
+          agentConfig: input.agentConfig,
+          inheritContext: input.inheritContext,
+        },
+        userId: input.userId,
+        workspaceId: parentThread.projectId || undefined,
+      });
+
+      return {
+        status: "requested",
+        threadId,
+        message: "Branch creation requested",
+      };
+    }),
+
+  /**
+   * Merge branch thread
+   * Requires: hub-protocol.write scope
+   */
+  mergeBranch: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        branchId: z.string().uuid(),
+        summary: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { emitRequestEvent } = await import("../utils/emit-event.js");
+
+      const branch = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, input.branchId),
+      });
+
+      if (!branch || branch.threadType !== "branch") {
+        throw new Error("Branch not found");
+      }
+
+      if (!branch.parentThreadId) {
+        throw new Error("Branch has no parent thread");
+      }
+
+      await emitRequestEvent({
+        type: "chat_threads.merge.requested",
+        subjectId: input.branchId,
+        subjectType: "chat_thread",
+        data: {
+          branchId: input.branchId,
+          parentThreadId: branch.parentThreadId,
+          summary: input.summary,
+          userId: input.userId,
+        },
+        userId: input.userId,
+        workspaceId: branch.projectId || undefined,
+      });
+
+      return {
+        status: "requested",
+        message: "Branch merge requested",
+      };
+    }),
+
+  /**
+   * Link entity to thread (context tracking)
+   * Requires: hub-protocol.write scope
+   * Fast-path: No validation needed (read-only context tracking)
+   */
+  linkEntity: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        threadId: z.string().uuid(),
+        entityId: z.string().uuid(),
+        relationshipType: z
+          .enum([
+            "used_as_context",
+            "created",
+            "updated",
+            "referenced",
+            "inherited_from_parent",
+          ])
+          .default("referenced"),
+        sourceMessageId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { emitRequestEvent } = await import("../utils/emit-event.js");
+
+      // Get thread to find workspaceId
+      const thread = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, input.threadId),
+      });
+
+      if (!thread) {
+        throw new Error("Thread not found");
+      }
+
+      // Fast-path event (no validation needed)
+      await emitRequestEvent({
+        type: "thread_entities.link.requested",
+        subjectId: input.threadId,
+        subjectType: "chat_thread",
+        data: {
+          threadId: input.threadId,
+          entityId: input.entityId,
+          relationshipType: input.relationshipType,
+          sourceMessageId: input.sourceMessageId,
+          userId: input.userId,
+          workspaceId: thread.projectId || input.userId,
+        },
+        userId: input.userId,
+        workspaceId: thread.projectId || undefined,
+      });
+
+      return {
+        status: "requested",
+        message: "Entity link requested",
+      };
+    }),
+
+  /**
+   * Link document to thread (context tracking)
+   * Requires: hub-protocol.write scope
+   * Fast-path: No validation needed (read-only context tracking)
+   */
+  linkDocument: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        threadId: z.string().uuid(),
+        documentId: z.string().uuid(),
+        relationshipType: z
+          .enum([
+            "used_as_context",
+            "created",
+            "updated",
+            "referenced",
+            "inherited_from_parent",
+          ])
+          .default("referenced"),
+        sourceMessageId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { emitRequestEvent } = await import("../utils/emit-event.js");
+
+      // Get thread to find workspaceId
+      const thread = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, input.threadId),
+      });
+
+      if (!thread) {
+        throw new Error("Thread not found");
+      }
+
+      // Fast-path event (no validation needed)
+      await emitRequestEvent({
+        type: "thread_documents.link.requested",
+        subjectId: input.threadId,
+        subjectType: "chat_thread",
+        data: {
+          threadId: input.threadId,
+          documentId: input.documentId,
+          relationshipType: input.relationshipType,
+          sourceMessageId: input.sourceMessageId,
+          userId: input.userId,
+          workspaceId: thread.projectId || input.userId,
+        },
+        userId: input.userId,
+        workspaceId: thread.projectId || undefined,
+      });
+
+      return {
+        status: "requested",
+        message: "Document link requested",
       };
     }),
 });

@@ -93,6 +93,7 @@ import {
   projectMembersExecutor,
   rolesExecutor,
   apiKeysExecutor,
+  threadContextExecutor,
 } from "./executors/index.js";
 
 /**
@@ -133,4 +134,5 @@ export const functions = [
   rolesExecutor,
   apiKeysExecutor,
   projectMembersExecutor,
+  threadContextExecutor,
 ];

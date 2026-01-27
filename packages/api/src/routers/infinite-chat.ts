@@ -30,8 +30,8 @@ import type { ChatThread } from "@synap/database/schema";
  */
 export const infiniteChatRouter = router({
   /**
-   * Create a new chat thread - TRUE SSOT using .omit()
-   * Now includes context inheritance for branches
+   * Create a new chat thread - Uses event sourcing for branch operations
+   * Now includes context inheritance for branches via event-sourced executor
    */
   createThread: protectedProcedure
     .input(
@@ -67,78 +67,54 @@ export const infiniteChatRouter = router({
         workspaceId = parentThread?.projectId || undefined;
       }
 
+      // If this is a branch, use event sourcing
+      if (input.parentThreadId) {
+        const { emitRequestEvent } = await import("../utils/emit-event.js");
+
+        await emitRequestEvent({
+          type: "chat_threads.branch.requested",
+          subjectId: input.parentThreadId,
+          subjectType: "chat_thread",
+          data: {
+            id: threadId,
+            userId: ctx.userId,
+            projectId: input.projectId,
+            parentThreadId: input.parentThreadId,
+            branchPurpose: input.branchPurpose,
+            agentId: input.agentId,
+            agentType: input.agentType,
+            agentConfig: input.agentConfig,
+            inheritContext: input.inheritContext,
+          },
+          userId: ctx.userId,
+          workspaceId,
+        });
+
+        // Return immediately, executor will process async
+        return {
+          threadId,
+          status: "requested",
+          message: "Branch creation requested",
+        };
+      }
+
+      // For main threads, create directly (no event sourcing needed)
       const [thread] = await db
         .insert(chatThreads)
         .values({
           id: threadId,
           userId: ctx.userId,
           projectId: input.projectId,
-          parentThreadId: input.parentThreadId,
-          branchPurpose: input.branchPurpose,
-          agentId: input.agentId,
-          agentType: input.agentType,
-          agentConfig: input.agentConfig,
-          threadType: input.parentThreadId ? "branch" : "main",
+          threadType: "main",
           status: "active",
         })
         .returning();
 
-      // Inherit context from parent if branch and inheritContext is true
-      if (input.parentThreadId && input.inheritContext && workspaceId) {
-        // Get parent's entities
-        const parentEntities = await db.query.threadEntities.findMany({
-          where: eq(threadEntities.threadId, input.parentThreadId),
-        });
-
-        // Get parent's documents
-        const parentDocuments = await db.query.threadDocuments.findMany({
-          where: eq(threadDocuments.threadId, input.parentThreadId),
-        });
-
-        // Copy entities with 'inherited_from_parent' type
-        if (parentEntities.length > 0) {
-          await db.insert(threadEntities).values(
-            parentEntities.map((e) => ({
-              threadId,
-              entityId: e.entityId,
-              relationshipType: "inherited_from_parent" as const,
-              userId: ctx.userId,
-              workspaceId,
-              sourceEventId: e.sourceEventId || undefined,
-            }))
-          );
-        }
-
-        // Copy documents with 'inherited_from_parent' type
-        if (parentDocuments.length > 0) {
-          await db.insert(threadDocuments).values(
-            parentDocuments.map((d) => ({
-              threadId,
-              documentId: d.documentId,
-              relationshipType: "inherited_from_parent" as const,
-              userId: ctx.userId,
-              workspaceId,
-              sourceEventId: d.sourceEventId || undefined,
-            }))
-          );
-        }
-      }
-
       // Emit real-time events
       ctx.socketIO?.emit("thread:created", {
         threadId,
-        parentThreadId: input.parentThreadId,
         userId: ctx.userId,
       });
-
-      // If branch, emit branch:created
-      if (input.parentThreadId) {
-        ctx.socketIO?.emit("branch:created", {
-          parentThreadId: input.parentThreadId,
-          branchThread: thread,
-          userId: ctx.userId,
-        });
-      }
 
       return { threadId, thread };
     }),
@@ -469,12 +445,13 @@ export const infiniteChatRouter = router({
     }),
 
   /**
-   * Merge branch
+   * Merge branch - Uses event sourcing
    */
   mergeBranch: protectedProcedure
     .input(
       z.object({
         branchId: z.string().uuid(),
+        summary: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -486,50 +463,32 @@ export const infiniteChatRouter = router({
         throw new Error("Branch not found");
       }
 
-      const messages = await db.query.conversationMessages.findMany({
-        where: eq(conversationMessages.threadId, input.branchId),
-        orderBy: [desc(conversationMessages.timestamp)],
-      });
-
-      const summary = `Branch: ${branch.branchPurpose}\nCompleted with ${messages.length} messages.`;
-
-      if (branch.parentThreadId) {
-        await db
-          .update(chatThreads)
-          .set({
-            contextSummary: summary,
-            updatedAt: new Date(),
-          })
-          .where(eq(chatThreads.id, branch.parentThreadId));
-
-        await db.insert(conversationMessages).values({
-          threadId: branch.parentThreadId,
-          role: "system",
-          content: `✅ ${branch.branchPurpose}: ${summary}`,
-          userId: ctx.userId,
-          previousHash: "",
-          hash: randomUUID(),
-        });
+      if (!branch.parentThreadId) {
+        throw new Error("Branch has no parent thread");
       }
 
-      await db
-        .update(chatThreads)
-        .set({
-          status: "merged",
-          mergedAt: new Date(),
-        })
-        .where(eq(chatThreads.id, input.branchId));
+      // Use event sourcing
+      const { emitRequestEvent } = await import("../utils/emit-event.js");
 
-      // Emit real-time event
-      if (branch.parentThreadId) {
-        ctx.socketIO?.emit("branch:merged", {
+      await emitRequestEvent({
+        type: "chat_threads.merge.requested",
+        subjectId: input.branchId,
+        subjectType: "chat_thread",
+        data: {
           branchId: input.branchId,
           parentThreadId: branch.parentThreadId,
+          summary: input.summary,
           userId: ctx.userId,
-        });
-      }
+        },
+        userId: ctx.userId,
+        workspaceId: branch.projectId || undefined,
+      });
 
-      return { summary };
+      // Return immediately, executor will process async
+      return {
+        status: "requested",
+        message: "Branch merge requested",
+      };
     }),
 
   /**

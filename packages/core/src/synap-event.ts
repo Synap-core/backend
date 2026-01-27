@@ -107,6 +107,90 @@ export const EventTypeSchemas = {
     previousVersion: z.number().int().nonnegative().optional(),
     newVersion: z.number().int().positive().optional(),
   }),
+
+  // Chat thread branch creation
+  "chat_threads.branch.requested": z.object({
+    parentThreadId: z.string().uuid(),
+    branchPurpose: z.string(),
+    agentId: z.string().optional(),
+    agentType: z
+      .enum([
+        "default",
+        "meta",
+        "prompting",
+        "knowledge-search",
+        "code",
+        "writing",
+        "action",
+      ])
+      .optional(),
+    agentConfig: z.record(z.string(), z.unknown()).optional(),
+    inheritContext: z.boolean().default(true),
+  }),
+
+  // Chat thread branch creation confirmed
+  "chat_threads.branch.validated": z.object({
+    threadId: z.string().uuid(),
+    parentThreadId: z.string().uuid(),
+    branchPurpose: z.string(),
+    agentId: z.string().optional(),
+  }),
+
+  // Chat thread merge
+  "chat_threads.merge.requested": z.object({
+    branchId: z.string().uuid(),
+    parentThreadId: z.string().uuid(),
+    summary: z.string().optional(),
+  }),
+
+  // Chat thread merge confirmed
+  "chat_threads.merge.validated": z.object({
+    branchId: z.string().uuid(),
+    parentThreadId: z.string().uuid(),
+    summary: z.string().optional(),
+  }),
+
+  // Chat thread archive
+  "chat_threads.archive.requested": z.object({
+    threadId: z.string().uuid(),
+  }),
+
+  // Chat thread archive confirmed
+  "chat_threads.archive.validated": z.object({
+    threadId: z.string().uuid(),
+  }),
+
+  // Thread entity linking (fast-path, no validation needed)
+  "thread_entities.link.requested": z.object({
+    threadId: z.string().uuid(),
+    entityId: z.string().uuid(),
+    relationshipType: z
+      .enum([
+        "used_as_context",
+        "created",
+        "updated",
+        "referenced",
+        "inherited_from_parent",
+      ])
+      .default("referenced"),
+    sourceMessageId: z.string().uuid().optional(),
+  }),
+
+  // Thread document linking (fast-path, no validation needed)
+  "thread_documents.link.requested": z.object({
+    threadId: z.string().uuid(),
+    documentId: z.string().uuid(),
+    relationshipType: z
+      .enum([
+        "used_as_context",
+        "created",
+        "updated",
+        "referenced",
+        "inherited_from_parent",
+      ])
+      .default("referenced"),
+    sourceMessageId: z.string().uuid().optional(),
+  }),
 } as const;
 
 /**

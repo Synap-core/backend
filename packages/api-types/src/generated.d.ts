@@ -2286,35 +2286,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             agentConfig?: Record<string, any> | undefined;
             inheritContext?: boolean | undefined;
           };
-          output: {
-            threadId: `${string}-${string}-${string}-${string}-${string}`;
-            thread: {
-              userId: string;
-              id: string;
-              status: "archived" | "active" | "merged";
-              createdAt: Date;
-              updatedAt: Date;
-              metadata: unknown;
-              title: string | null;
-              projectId: string | null;
-              threadType: "main" | "branch";
-              parentThreadId: string | null;
-              branchedFromMessageId: string | null;
-              branchPurpose: string | null;
-              agentId: string;
-              agentType:
-                | "meta"
-                | "default"
-                | "code"
-                | "prompting"
-                | "knowledge-search"
-                | "writing"
-                | "action";
-              agentConfig: unknown;
-              contextSummary: string | null;
-              mergedAt: Date | null;
-            };
-          };
+          output:
+            | {
+                threadId: `${string}-${string}-${string}-${string}-${string}`;
+                status: string;
+                message: string;
+                thread?: undefined;
+              }
+            | {
+                threadId: `${string}-${string}-${string}-${string}-${string}`;
+                thread: {
+                  userId: string;
+                  id: string;
+                  status: "archived" | "active" | "merged";
+                  createdAt: Date;
+                  updatedAt: Date;
+                  metadata: unknown;
+                  title: string | null;
+                  projectId: string | null;
+                  threadType: "main" | "branch";
+                  parentThreadId: string | null;
+                  branchedFromMessageId: string | null;
+                  branchPurpose: string | null;
+                  agentId: string;
+                  agentType:
+                    | "meta"
+                    | "default"
+                    | "code"
+                    | "prompting"
+                    | "knowledge-search"
+                    | "writing"
+                    | "action";
+                  agentConfig: unknown;
+                  contextSummary: string | null;
+                  mergedAt: Date | null;
+                };
+                status?: undefined;
+                message?: undefined;
+              };
           meta: object;
         }>;
         sendMessage: import("@trpc/server").TRPCMutationProcedure<{
@@ -2373,7 +2382,70 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             messages: {
               userId: string;
               id: string;
-              metadata: any;
+              metadata: {
+                agentState?:
+                  | {
+                      plan: {
+                        tool: string;
+                        params: Record<string, unknown>;
+                        reasoning: string;
+                      }[];
+                      executionSummaries: {
+                        tool: string;
+                        status: "error" | "success" | "skipped";
+                        result?: unknown;
+                        error?: string | undefined;
+                      }[];
+                      finalResponse: string;
+                      intentAnalysis?:
+                        | {
+                            label: string;
+                            confidence: number;
+                            reasoning?: string | undefined;
+                            needsFollowUp?: boolean | undefined;
+                          }
+                        | undefined;
+                      context?:
+                        | {
+                            retrievedNotesCount: number;
+                            retrievedFactsCount: number;
+                          }
+                        | undefined;
+                      suggestedActions?:
+                        | {
+                            type: string;
+                            description: string;
+                            params: Record<string, unknown>;
+                          }[]
+                        | undefined;
+                      model?: string | undefined;
+                      tokens?: number | undefined;
+                      latency?: number | undefined;
+                    }
+                  | undefined;
+                suggestedActions?:
+                  | {
+                      type: string;
+                      description: string;
+                      params: Record<string, unknown>;
+                    }[]
+                  | undefined;
+                executedAction?:
+                  | {
+                      type: string;
+                      result: unknown;
+                    }
+                  | undefined;
+                attachments?:
+                  | {
+                      type: string;
+                      url: string;
+                    }[]
+                  | undefined;
+                model?: string | undefined;
+                tokens?: number | undefined;
+                latency?: number | undefined;
+              } | null;
               timestamp: Date;
               content: string;
               role: "user" | "system" | "assistant";
@@ -2461,9 +2533,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         mergeBranch: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             branchId: string;
+            summary?: string | undefined;
           };
           output: {
-            summary: string;
+            status: string;
+            message: string;
           };
           meta: object;
         }>;

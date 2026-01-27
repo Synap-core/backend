@@ -165,7 +165,7 @@ export const AIMetadataSchema = z.object({
   reasoning: AIReasoningMetadataSchema.optional(),
 
   // Inferred properties (flexible)
-  inferredProperties: z.record(z.unknown()).optional(),
+  inferredProperties: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type AIMetadata = z.infer<typeof AIMetadataSchema>;

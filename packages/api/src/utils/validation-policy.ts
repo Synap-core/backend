@@ -52,6 +52,19 @@ const GLOBAL_VALIDATION_DEFAULTS: Record<
     delete: true, // Requires validation
   },
 
+  // Context linking (read-only tracking, fast-path)
+  thread_entity: {
+    create: false, // Context tracking only, no validation needed
+    update: false,
+    delete: false,
+  },
+
+  thread_document: {
+    create: false, // Context tracking only, no validation needed
+    update: false,
+    delete: false,
+  },
+
   user_entity_state: {
     create: false, // Direct write (starred/pinned)
     update: false, // Direct write

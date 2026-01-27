@@ -24,11 +24,9 @@ const configLogger = createLogger({ module: "config" });
 
 const DatabaseConfigSchema = z.object({
   dialect: z.enum(["postgres"]).default("postgres"),
-  url: z
-    .string()
-    .min(1, {
-      message: "DATABASE_URL is required (PostgreSQL connection string)",
-    }),
+  url: z.string().min(1, {
+    message: "DATABASE_URL is required (PostgreSQL connection string)",
+  }),
 });
 
 const StorageConfigSchema = z.object({
@@ -76,14 +74,12 @@ const AIOpenAIConfigSchema = z.object({
 const AIConfigSchema = z.object({
   provider: z.enum(["anthropic", "openai"]).default("anthropic"),
   streaming: z.coerce.boolean().default(false),
-  anthropic: AIAnthropicConfigSchema.default({}),
-  openai: AIOpenAIConfigSchema.default({}),
-  embeddings: z
-    .object({
-      provider: z.enum(["openai", "deterministic"]).default("openai"),
-      model: z.string().default("text-embedding-3-small"),
-    })
-    .default({}),
+  anthropic: AIAnthropicConfigSchema,
+  openai: AIOpenAIConfigSchema,
+  embeddings: z.object({
+    provider: z.enum(["openai", "deterministic"]).default("openai"),
+    model: z.string().default("text-embedding-3-small"),
+  }),
 });
 
 const AuthConfigSchema = z.object({
