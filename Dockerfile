@@ -33,7 +33,7 @@ COPY . .
 
 # pnpm workspaces use symlinks that break during COPY
 # Always reinstall to rebuild the symlink structure
-RUN pnpm install --frozen-lockfile --offline
+RUN pnpm install --frozen-lockfile
 
 RUN pnpm exec turbo run build --filter=api
 
