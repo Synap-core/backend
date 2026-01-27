@@ -69,11 +69,5 @@
   "engines": {
     "node": ">=20",
     "pnpm": ">=10"
-  },
-  "dependencies": {
-    "@hono/node-server": "^1.19.9",
-    "@hono/trpc-server": "^0.3.4",
-    "dotenv": "^17.2.3",
-    "hono": "^4.11.4"
   }
 }

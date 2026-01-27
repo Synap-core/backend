@@ -1,101 +1,60 @@
-# syntax=docker/dockerfile:1.4
-
-# Build arguments
-ARG NODE_VERSION=20
-ARG PNPM_VERSION=10.28.0
-
-# ============================================================================
-# Base stage with pnpm
-# ============================================================================
-FROM node:${NODE_VERSION}-alpine AS base
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+FROM node:20-alpine AS base
+RUN corepack enable pnpm
 WORKDIR /app
 
 # ============================================================================
-# Dependencies stage - install all dependencies
+# Prepare: Prune monorepo to only what 'api' needs
 # ============================================================================
-FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY .npmrc ./
-COPY turbo.json ./
-COPY packages/*/package.json ./packages/
-COPY apps/*/package.json ./apps/
-
-# Use BuildKit cache mount for pnpm store (install all deps including dev for build)
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-  pnpm install --frozen-lockfile
-
-# ============================================================================
-# Build stage - compile TypeScript
-# ============================================================================
-FROM deps AS build
+FROM base AS prepare
+RUN pnpm add -g turbo@^2
 COPY . .
-COPY .npmrc ./
+RUN turbo prune api --docker
 
-# pnpm workspaces use symlinks that break during COPY
-# Always reinstall to rebuild the symlink structure with hoisting enabled
+# ============================================================================
+# Builder: Install dependencies and build
+# ============================================================================
+FROM base AS builder
+
+# Copy package.json files (for Docker layer caching)
+COPY --from=prepare /app/out/json/ .
+
+# Install dependencies (cached unless lockfile changes)
 RUN pnpm install --frozen-lockfile
 
-RUN pnpm exec turbo run build --filter=api
+# Copy source code
+COPY --from=prepare /app/out/full/ .
+
+# Build the project
+RUN pnpm turbo build --filter=api
 
 # ============================================================================
-# Production dependencies - install only prod deps
+# Runner: Minimal production image
 # ============================================================================
-FROM base AS prod-deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY .npmrc ./
-COPY turbo.json ./
-COPY packages/*/package.json ./packages/
-COPY apps/*/package.json ./apps/
-
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-  pnpm install --frozen-lockfile --prod
-
-# ============================================================================
-# Runtime stage - final production image
-# ============================================================================
-FROM node:${NODE_VERSION}-alpine AS runtime
+FROM node:20-alpine AS runner
 
 # Install runtime dependencies
-RUN apk add --no-cache \
-  postgresql-client \
-  dumb-init \
-  && rm -rf /var/cache/apk/*
+RUN apk add --no-cache postgresql-client dumb-init
 
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
   adduser -S nodejs -u 10001
 
 WORKDIR /app
+USER nodejs
 
-# Copy production dependencies from build stage (has shamefully-hoist applied)
-COPY --from=build --chown=nodejs:nodejs /app/node_modules ./node_modules
-COPY --from=build --chown=nodejs:nodejs /app/package.json ./package.json
-COPY --from=build --chown=nodejs:nodejs /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+# Copy built artifacts and production node_modules
+COPY --from=builder --chown=nodejs:nodejs /app .
 
-# Copy built files
-COPY --from=build --chown=nodejs:nodejs /app/packages ./packages
-COPY --from=build --chown=nodejs:nodejs /app/apps ./apps
-
-# Copy configuration files (needed for Ory and migrations)
+# Copy configuration files needed at runtime
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 COPY --chown=nodejs:nodejs packages/database/migrations-custom ./packages/database/migrations-custom
 COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/migrations-drizzle
 COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./packages/database/drizzle.config.ts
 
-# Switch to non-root user
-USER nodejs
-
-# Expose API port
+# Expose port
 EXPOSE 3000
 
-# Set production environment
-ENV NODE_ENV=production
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
-
 # Use dumb-init to handle signals properly
-CMD ["dumb-init", "node", "apps/api/dist/index.js"]
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "apps/api/dist/index.js"]
