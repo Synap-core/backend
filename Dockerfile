@@ -3,31 +3,22 @@ RUN corepack enable pnpm
 WORKDIR /app
 
 # ============================================================================
-# Prepare: Prune monorepo to only what 'api' needs
-# ============================================================================
-FROM base AS prepare
-COPY . .
-RUN npx --yes turbo@^2 prune api --docker
-
-# ============================================================================
 # Builder: Install dependencies and build
 # ============================================================================
 FROM base AS builder
 
-# Copy package.json files (for Docker layer caching)
-COPY --from=prepare /app/out/json/ .
+# Copy all files for build
+COPY . .
 
-# Install dependencies (allow lockfile updates for pruned workspace)
-RUN pnpm install --no-frozen-lockfile
+# Install all dependencies (including dev deps for building)
+RUN pnpm install --frozen-lockfile
 
-# Copy source code
-COPY --from=prepare /app/out/full/ .
-
-# Copy root tsconfig (needed by packages that extend from it)
-COPY tsconfig.json ./
-
-# Build the project
+# Build the project using Turborepo
 RUN pnpm turbo build --filter=api
+
+# Deploy to self-contained directory with hard-linked dependencies
+# This creates a portable, production-ready package
+RUN pnpm deploy --filter=api --prod /app/deploy
 
 # ============================================================================
 # Runner: Minimal production image
@@ -44,8 +35,8 @@ RUN addgroup -g 10001 -S nodejs && \
 WORKDIR /app
 USER nodejs
 
-# Copy built artifacts and production node_modules
-COPY --from=builder --chown=nodejs:nodejs /app .
+# Copy self-contained deployment (includes hard-linked node_modules)
+COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 
 # Copy configuration files needed at runtime
 COPY --chown=nodejs:nodejs kratos ./kratos
