@@ -24,9 +24,11 @@ const configLogger = createLogger({ module: "config" });
 
 const DatabaseConfigSchema = z.object({
   dialect: z.enum(["postgres"]).default("postgres"),
-  url: z.string({
-    required_error: "DATABASE_URL is required (PostgreSQL connection string)",
-  }),
+  url: z
+    .string()
+    .min(1, {
+      message: "DATABASE_URL is required (PostgreSQL connection string)",
+    }),
 });
 
 const StorageConfigSchema = z.object({

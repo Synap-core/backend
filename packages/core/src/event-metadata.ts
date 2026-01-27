@@ -307,7 +307,7 @@ export const EventMetadataSchema = z.object({
   automation: AutomationMetadataSchema.optional(),
 
   // Extensible: any additional context
-  custom: z.record(z.unknown()).optional(),
+  custom: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type EventMetadata = z.infer<typeof EventMetadataSchema>;

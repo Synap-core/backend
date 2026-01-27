@@ -9,7 +9,7 @@ export const AgentExecutionSummarySchema = z.object({
 
 export const AgentPlannedActionSchema = z.object({
   tool: z.string(),
-  params: z.record(z.unknown()),
+  params: z.record(z.string(), z.unknown()),
   reasoning: z.string(),
 });
 
@@ -28,7 +28,7 @@ export const AgentIntentAnalysisSchema = z.object({
 export const SuggestedActionSchema = z.object({
   type: z.string(),
   description: z.string(),
-  params: z.record(z.unknown()),
+  params: z.record(z.string(), z.unknown()),
 });
 
 export const ExecutedActionSchema = z.object({

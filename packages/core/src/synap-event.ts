@@ -37,11 +37,11 @@ export const SynapEventSchema = z.object({
   subjectType: z.string().optional(), // e.g., 'tag', 'entity', 'document'
 
   // Event Data (the core payload - what happened)
-  data: z.record(z.unknown()), // Event payload (validated by specific event type schemas)
+  data: z.record(z.string(), z.unknown()), // Event payload (validated by specific event type schemas)
 
   // Event Metadata (extensible context - how/why it happened)
   // This is where AI enrichments, import context, sync info, etc. live
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 
   // Ownership
   userId: z.string().min(1), // Required for multi-tenant isolation
