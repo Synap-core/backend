@@ -1,19 +1,23 @@
 /**
  * Hub Protocol - Documents Router
  *
- * Handles document operations (get, proposals)
+ * Thin wrapper around regular API endpoints.
+ * Uses API key authentication but calls regular API internally
+ * to ensure all operations go through the same infrastructure.
  */
 
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { db, eq, and } from "@synap/database";
-import { documents, entities, proposals } from "@synap/database/schema";
+import { documentsRouter as regularDocumentsRouter } from "../documents.js";
+import { createHubProtocolCallerContext } from "./utils.js";
 
 export const documentsRouter = router({
   /**
    * Get document content by ID
    * Requires: hub-protocol.read scope
+   *
+   * Calls regular API's documents.get endpoint internally
    */
   getDocument: scopedProcedure(["hub-protocol.read"])
     .input(
@@ -22,37 +26,27 @@ export const documentsRouter = router({
         userId: z.string(),
       })
     )
-    .query(async ({ input }) => {
-      const { storage } = await import("@synap/storage");
+    .query(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        ctx.userId!,
+        ctx.scopes || []
+      );
+      const caller = regularDocumentsRouter.createCaller(callerContext);
 
-      // Get document metadata
-      const document = await db.query.documents.findFirst({
-        where: and(
-          eq(documents.id, input.documentId),
-          eq(documents.userId, input.userId)
-        ),
+      // Call regular API's get endpoint
+      const result = await caller.get({
+        documentId: input.documentId,
       });
-
-      if (!document) {
-        throw new Error("Document not found");
-      }
-
-      // Fetch content from storage
-      const contentBuffer = await storage.downloadBuffer(document.storageKey);
-      const content =
-        document.type === "pdf" || document.type === "docx"
-          ? contentBuffer.toString("base64")
-          : contentBuffer.toString("utf-8");
 
       return {
         document: {
-          id: document.id,
-          title: document.title,
-          type: document.type,
-          language: document.language,
-          content,
-          updatedAt: document.updatedAt,
-          createdAt: document.createdAt,
+          id: result.document.id,
+          title: result.document.title,
+          type: result.document.type,
+          language: result.document.language,
+          content: result.content,
+          updatedAt: result.document.updatedAt,
+          createdAt: result.document.createdAt,
         },
       };
     }),
@@ -60,6 +54,11 @@ export const documentsRouter = router({
   /**
    * Create document proposal (for AI edits)
    * Requires: hub-protocol.write scope
+   *
+   * Note: Regular API doesn't have a direct proposal creation endpoint.
+   * This is a specialized Hub Protocol operation for AI-generated proposals.
+   * We keep it as-is since it's a specialized use case, but it uses the same
+   * proposals table and follows the same proposal system.
    */
   createDocumentProposal: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -82,11 +81,17 @@ export const documentsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
+      // This is a specialized Hub Protocol operation for AI proposals
+      // It uses the same proposals system but with AI-specific metadata
+      // We keep it direct since it's a specialized use case
+      const { db, eq } = await import("@synap/database");
+      const { documents, entities, proposals } =
+        await import("@synap/database/schema");
+
       // Calculate expiration (7 days)
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
 
-      // Create proposal in DB
       // Verify document exists and get scope
       const doc = await db.query.documents.findFirst({
         where: eq(documents.id, input.documentId),

@@ -1,19 +1,23 @@
 /**
  * Hub Protocol - Branches Router
  *
- * Handles branch operations (create, merge)
+ * Thin wrapper around regular API endpoints.
+ * Uses API key authentication but calls regular API internally
+ * to ensure all operations go through the same event sourcing infrastructure.
  */
 
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { db, eq } from "@synap/database";
-import { chatThreads } from "@synap/database/schema";
+import { infiniteChatRouter } from "../infinite-chat.js";
+import { createHubProtocolCallerContext } from "./utils.js";
 
 export const branchesRouter = router({
   /**
    * Create branch thread
    * Requires: hub-protocol.write scope
+   *
+   * Calls regular API's createThread endpoint internally
    */
   createBranch: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -37,50 +41,35 @@ export const branchesRouter = router({
         inheritContext: z.boolean().default(true),
       })
     )
-    .mutation(async ({ input }) => {
-      const { emitRequestEvent } = await import("../../utils/emit-event.js");
-      const { randomUUID } = await import("crypto");
+    .mutation(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        ctx.userId!,
+        ctx.scopes || []
+      );
+      const caller = infiniteChatRouter.createCaller(callerContext);
 
-      const threadId = randomUUID();
-
-      // Get workspaceId from parent thread
-      const parentThread = await db.query.chatThreads.findFirst({
-        where: eq(chatThreads.id, input.parentThreadId),
-      });
-
-      if (!parentThread) {
-        throw new Error("Parent thread not found");
-      }
-
-      await emitRequestEvent({
-        type: "chat_threads.branch.requested",
-        subjectId: input.parentThreadId,
-        subjectType: "chat_thread",
-        data: {
-          id: threadId,
-          userId: input.userId,
-          projectId: parentThread.projectId || undefined,
-          parentThreadId: input.parentThreadId,
-          branchPurpose: input.branchPurpose,
-          agentId: input.agentId,
-          agentType: input.agentType,
-          agentConfig: input.agentConfig,
-          inheritContext: input.inheritContext,
-        },
-        userId: input.userId,
-        workspaceId: parentThread.projectId || undefined,
+      // Call regular API's createThread endpoint with branch parameters
+      const result = await caller.createThread({
+        parentThreadId: input.parentThreadId,
+        branchPurpose: input.branchPurpose,
+        agentId: input.agentId,
+        agentType: input.agentType,
+        agentConfig: input.agentConfig,
+        inheritContext: input.inheritContext,
       });
 
       return {
-        status: "requested",
-        threadId,
-        message: "Branch creation requested",
+        status: result.status,
+        threadId: result.threadId,
+        message: result.message || "Branch creation requested",
       };
     }),
 
   /**
    * Merge branch thread
    * Requires: hub-protocol.write scope
+   *
+   * Calls regular API's mergeBranch endpoint internally
    */
   mergeBranch: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -90,38 +79,22 @@ export const branchesRouter = router({
         summary: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
-      const { emitRequestEvent } = await import("../../utils/emit-event.js");
+    .mutation(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        ctx.userId!,
+        ctx.scopes || []
+      );
+      const caller = infiniteChatRouter.createCaller(callerContext);
 
-      const branch = await db.query.chatThreads.findFirst({
-        where: eq(chatThreads.id, input.branchId),
-      });
-
-      if (!branch || branch.threadType !== "branch") {
-        throw new Error("Branch not found");
-      }
-
-      if (!branch.parentThreadId) {
-        throw new Error("Branch has no parent thread");
-      }
-
-      await emitRequestEvent({
-        type: "chat_threads.merge.requested",
-        subjectId: input.branchId,
-        subjectType: "chat_thread",
-        data: {
-          branchId: input.branchId,
-          parentThreadId: branch.parentThreadId,
-          summary: input.summary,
-          userId: input.userId,
-        },
-        userId: input.userId,
-        workspaceId: branch.projectId || undefined,
+      // Call regular API's mergeBranch endpoint
+      const result = await caller.mergeBranch({
+        branchId: input.branchId,
+        summary: input.summary,
       });
 
       return {
-        status: "requested",
-        message: "Branch merge requested",
+        status: result.status,
+        message: result.message || "Branch merge requested",
       };
     }),
 });

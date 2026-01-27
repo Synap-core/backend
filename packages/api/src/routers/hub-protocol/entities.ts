@@ -11,35 +11,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
-import { getDb } from "@synap/database";
-import type { Context } from "../../types/context.js";
-
-/**
- * Create a tRPC caller for regular entities router
- * This allows Hub Protocol to call regular API endpoints
- */
-async function createEntitiesCaller(userId: string, scopes: string[]) {
-  const db = await getDb();
-
-  // Create context matching API key middleware structure
-  const ctx: Context & {
-    scopes?: string[];
-    apiKeyId?: string;
-    apiKeyName?: string;
-  } = {
-    db,
-    authenticated: true,
-    userId,
-    scopes,
-    apiKeyId: "hub-protocol",
-    apiKeyName: "Hub Protocol",
-    req: null as any,
-    user: null,
-    session: null,
-  };
-
-  return regularEntitiesRouter.createCaller(ctx);
-}
+import { createHubProtocolCallerContext } from "./utils.js";
 
 export const entitiesRouter = router({
   /**
@@ -57,7 +29,11 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const caller = await createEntitiesCaller(ctx.userId!, ctx.scopes || []);
+      const callerContext = await createHubProtocolCallerContext(
+        ctx.userId!,
+        ctx.scopes || []
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
 
       // Call regular API's list endpoint
       const result = await caller.list({
@@ -93,7 +69,11 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const caller = await createEntitiesCaller(ctx.userId!, ctx.scopes || []);
+      const callerContext = await createHubProtocolCallerContext(
+        ctx.userId!,
+        ctx.scopes || []
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
 
       // Call regular API's create endpoint
       // Note: Regular API doesn't have aiMetadata, but we can add it to the event
@@ -129,7 +109,11 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const caller = await createEntitiesCaller(ctx.userId!, ctx.scopes || []);
+      const callerContext = await createHubProtocolCallerContext(
+        ctx.userId!,
+        ctx.scopes || []
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
 
       // Call regular API's update endpoint
       // Note: Regular API doesn't have metadata parameter in update,

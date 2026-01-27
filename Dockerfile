@@ -35,7 +35,7 @@ COPY . .
 # pnpm workspaces create symlinks that may not survive COPY
 RUN ls -la /app/node_modules/@types/node || (echo "node_modules missing, reinstalling..." && pnpm install --frozen-lockfile)
 
-RUN pnpm build
+RUN pnpm exec turbo run build --filter=api
 
 # ============================================================================
 # Production dependencies - install only prod deps
