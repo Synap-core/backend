@@ -67,10 +67,10 @@ RUN addgroup -g 10001 -S nodejs && \
 
 WORKDIR /app
 
-# Copy production dependencies
-COPY --from=prod-deps --chown=nodejs:nodejs /app/node_modules ./node_modules
-COPY --from=prod-deps --chown=nodejs:nodejs /app/package.json ./package.json
-COPY --from=prod-deps --chown=nodejs:nodejs /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+# Copy production dependencies from build stage (has shamefully-hoist applied)
+COPY --from=build --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --from=build --chown=nodejs:nodejs /app/package.json ./package.json
+COPY --from=build --chown=nodejs:nodejs /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 
 # Copy built files
 COPY --from=build --chown=nodejs:nodejs /app/packages ./packages
