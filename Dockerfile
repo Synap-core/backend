@@ -31,9 +31,9 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 FROM deps AS build
 COPY . .
 
-# Verify node_modules are accessible and rebuild if needed
-# pnpm workspaces create symlinks that may not survive COPY
-RUN ls -la /app/node_modules/@types/node || (echo "node_modules missing, reinstalling..." && pnpm install --frozen-lockfile)
+# pnpm workspaces use symlinks that break during COPY
+# Always reinstall to rebuild the symlink structure
+RUN pnpm install --frozen-lockfile --offline
 
 RUN pnpm exec turbo run build --filter=api
 
