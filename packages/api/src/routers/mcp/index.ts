@@ -47,7 +47,11 @@ export function createMCPServer() {
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    return await resources.read(request.params.uri);
+    // TODO: Extract userId and scopes from MCP authentication context
+    const userId = process.env.MCP_USER_ID || "placeholder";
+    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") || ["mcp.read"];
+
+    return await resources.read(request.params.uri, userId, apiKeyScopes);
   });
 
   // Register tool handlers
@@ -58,9 +62,19 @@ export function createMCPServer() {
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    // TODO: Extract userId and scopes from MCP authentication context
+    // For now, this is a placeholder - MCP auth will be implemented separately
+    const userId = process.env.MCP_USER_ID || "placeholder";
+    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") || [
+      "mcp.read",
+      "mcp.write",
+    ];
+
     return await tools.execute(
       request.params.name,
-      request.params.arguments ?? {}
+      request.params.arguments ?? {},
+      userId,
+      apiKeyScopes
     );
   });
 

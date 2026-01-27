@@ -125,6 +125,9 @@ export const API_KEY_SCOPES = [
   // Hub Protocol scopes (for Intelligence Hub)
   "hub-protocol.read", // Read context from Data Pod
   "hub-protocol.write", // Write results back to Data Pod
+  // MCP scopes (for external AI tools)
+  "mcp.read", // Read resources via MCP
+  "mcp.write", // Execute tools via MCP
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
