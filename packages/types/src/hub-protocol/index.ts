@@ -150,18 +150,36 @@ export enum AIStepType {
 }
 
 /**
- * AI thinking step - shows what the AI is doing
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
  */
 export interface AIStep {
   id: string;
   type: AIStepType | string;
   content: string;
+
+  // Tool-related fields (for tool_call and tool_result types)
   toolName?: string;
   toolInput?: unknown;
   toolOutput?: unknown;
+
+  // Timing
   timestamp: string;
   duration?: number;
+
+  // Error handling
   error?: string;
+
+  // Optional UX fields for better frontend display
+  title?: string; // Short title for the step (e.g., "Assembling context")
+  description?: string; // Longer description (optional)
+  status?: "pending" | "running" | "complete" | "error"; // For tool calls
 }
 
 // =============================================================================

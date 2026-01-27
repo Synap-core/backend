@@ -37,6 +37,26 @@ export type {
   NewConversationMessageRow as NewChatMessage,
 } from "../../../database/src/schema/index.js";
 
+/**
+ * Thread entities (context tracking)
+ *
+ * Generated from database schema - DO NOT manually define
+ */
+export type {
+  ThreadEntity,
+  NewThreadEntity,
+} from "../../../database/src/schema/index.js";
+
+/**
+ * Thread documents (context tracking)
+ *
+ * Generated from database schema - DO NOT manually define
+ */
+export type {
+  ThreadDocument,
+  NewThreadDocument,
+} from "../../../database/src/schema/index.js";
+
 // =============================================================================
 // UI State Types
 // =============================================================================

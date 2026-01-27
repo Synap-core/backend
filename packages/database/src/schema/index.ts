@@ -21,6 +21,8 @@ export * from "./webhook_subscriptions.js";
 
 // New schemas for chat system
 export * from "./chat-threads.js";
+export * from "./thread-entities.js";
+export * from "./thread-documents.js";
 export * from "./agents.js";
 export * from "./projects.js";
 export * from "./roles.js";

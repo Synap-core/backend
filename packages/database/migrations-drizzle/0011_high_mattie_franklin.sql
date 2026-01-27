@@ -1,0 +1,1 @@
+ALTER TABLE "entity_templates" ADD COLUMN "schema" jsonb;

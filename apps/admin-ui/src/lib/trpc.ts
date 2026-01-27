@@ -25,6 +25,7 @@ export const trpcClient = trpc.createClient({
   links: [
     httpBatchLink({
       url: `${API_URL}/trpc`,
+      transformer: SuperJSON,
       headers() {
         const headers: Record<string, string> = {};
 
@@ -43,5 +44,4 @@ export const trpcClient = trpc.createClient({
       },
     }),
   ],
-  transformer: SuperJSON,
 });

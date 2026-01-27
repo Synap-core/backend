@@ -10,21 +10,28 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, eq, desc, and } from "@synap/database";
-import { chatThreads, conversationMessages } from "@synap/database/schema";
+import { db, eq, desc, and, or, lt, inArray } from "@synap/database";
+import {
+  chatThreads,
+  conversationMessages,
+  threadEntities,
+  threadDocuments,
+} from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import type { AIStep, HubResponse } from "@synap-core/types";
+import type { ChatThread } from "@synap/database/schema";
 
 /**
  * Infinite Chat Router (Week 2 implementation)
  *
  * Uses insertChatThreadSchema from database for true SSOT.
  */
-export const infiniteChatRouter: ReturnType<typeof router> = router({
+export const infiniteChatRouter = router({
   /**
    * Create a new chat thread - TRUE SSOT using .omit()
+   * Now includes context inheritance for branches
    */
   createThread: protectedProcedure
     .input(
@@ -45,10 +52,20 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
           ])
           .optional(),
         agentConfig: z.record(z.string(), z.any()).optional(),
+        inheritContext: z.boolean().default(true), // NEW: Inherit parent context
       })
     )
     .mutation(async ({ input, ctx }) => {
       const threadId = randomUUID();
+
+      // Get workspaceId from parent thread if branch, otherwise from projectId
+      let workspaceId: string | undefined = input.projectId || undefined;
+      if (input.parentThreadId) {
+        const parentThread = await db.query.chatThreads.findFirst({
+          where: eq(chatThreads.id, input.parentThreadId),
+        });
+        workspaceId = parentThread?.projectId || undefined;
+      }
 
       const [thread] = await db
         .insert(chatThreads)
@@ -59,12 +76,69 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
           parentThreadId: input.parentThreadId,
           branchPurpose: input.branchPurpose,
           agentId: input.agentId,
-          agentType: input.agentType, // NEW: Agent type for multi-agent routing
-          agentConfig: input.agentConfig, // NEW: Custom agent configuration
+          agentType: input.agentType,
+          agentConfig: input.agentConfig,
           threadType: input.parentThreadId ? "branch" : "main",
           status: "active",
         })
         .returning();
+
+      // Inherit context from parent if branch and inheritContext is true
+      if (input.parentThreadId && input.inheritContext && workspaceId) {
+        // Get parent's entities
+        const parentEntities = await db.query.threadEntities.findMany({
+          where: eq(threadEntities.threadId, input.parentThreadId),
+        });
+
+        // Get parent's documents
+        const parentDocuments = await db.query.threadDocuments.findMany({
+          where: eq(threadDocuments.threadId, input.parentThreadId),
+        });
+
+        // Copy entities with 'inherited_from_parent' type
+        if (parentEntities.length > 0) {
+          await db.insert(threadEntities).values(
+            parentEntities.map((e) => ({
+              threadId,
+              entityId: e.entityId,
+              relationshipType: "inherited_from_parent" as const,
+              userId: ctx.userId,
+              workspaceId,
+              sourceEventId: e.sourceEventId || undefined,
+            }))
+          );
+        }
+
+        // Copy documents with 'inherited_from_parent' type
+        if (parentDocuments.length > 0) {
+          await db.insert(threadDocuments).values(
+            parentDocuments.map((d) => ({
+              threadId,
+              documentId: d.documentId,
+              relationshipType: "inherited_from_parent" as const,
+              userId: ctx.userId,
+              workspaceId,
+              sourceEventId: d.sourceEventId || undefined,
+            }))
+          );
+        }
+      }
+
+      // Emit real-time events
+      ctx.socketIO?.emit("thread:created", {
+        threadId,
+        parentThreadId: input.parentThreadId,
+        userId: ctx.userId,
+      });
+
+      // If branch, emit branch:created
+      if (input.parentThreadId) {
+        ctx.socketIO?.emit("branch:created", {
+          parentThreadId: input.parentThreadId,
+          branchThread: thread,
+          userId: ctx.userId,
+        });
+      }
 
       return { threadId, thread };
     }),
@@ -224,6 +298,7 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
       // Create entities via event chain for consistency
       const createdEntities = [];
       const entities = hubResponse?.entities || [];
+
       if (entities.length > 0) {
         const { inngest } = await import("@synap/jobs");
 
@@ -246,8 +321,32 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
             title: entity.title,
             status: "requested",
           });
+
+          // Link entity to thread once it's created (will be done by worker)
+          // For now, we'll link it when the entity is actually created
+          // This will be handled by the entity creation worker
         }
       }
+
+      // Emit real-time event for new message
+      ctx.socketIO?.emit("chat:message", {
+        threadId,
+        message: {
+          id: assistantMessageId,
+          threadId,
+          role: "assistant",
+          content: fullContent,
+          userId: ctx.userId,
+          timestamp: new Date(),
+          previousHash: userMessageHash,
+          hash: assistantMessageHash,
+          metadata: {
+            aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
+            tokens: hubResponse?.usage?.totalTokens,
+          },
+        },
+        userId: ctx.userId,
+      });
 
       // Create branch if decided
       let branchThread = undefined;
@@ -289,26 +388,34 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
     }),
 
   /**
-   * Get messages for a thread
+   * Get messages for a thread (with cursor pagination)
    */
   getMessages: protectedProcedure
     .input(
       z.object({
         threadId: z.string().uuid(),
+        cursor: z.string().uuid().optional(), // Message ID for pagination
         limit: z.number().min(1).max(100).default(50),
       })
     )
     .query(async ({ input }) => {
       const messages = await db.query.conversationMessages.findMany({
-        where: eq(conversationMessages.threadId, input.threadId),
+        where: and(
+          eq(conversationMessages.threadId, input.threadId),
+          input.cursor
+            ? lt(conversationMessages.id, input.cursor) // Cursor-based pagination
+            : undefined
+        ),
         orderBy: [desc(conversationMessages.timestamp)],
-        limit: input.limit + 1,
+        limit: input.limit + 1, // Fetch one extra to check if there's more
       });
 
       const hasMore = messages.length > input.limit;
+      const nextCursor = hasMore ? messages[input.limit - 1].id : undefined;
 
       return {
         messages: hasMore ? messages.slice(0, -1) : messages,
+        nextCursor,
         hasMore,
       };
     }),
@@ -413,6 +520,301 @@ export const infiniteChatRouter: ReturnType<typeof router> = router({
         })
         .where(eq(chatThreads.id, input.branchId));
 
+      // Emit real-time event
+      if (branch.parentThreadId) {
+        ctx.socketIO?.emit("branch:merged", {
+          branchId: input.branchId,
+          parentThreadId: branch.parentThreadId,
+          userId: ctx.userId,
+        });
+      }
+
       return { summary };
     }),
+
+  /**
+   * Get single thread with optional context and branches
+   */
+  getThread: protectedProcedure
+    .input(
+      z.object({
+        threadId: z.string().uuid(),
+        includeContext: z.boolean().default(true), // Include entities/documents
+        includeBranches: z.boolean().default(false), // Include branch tree
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      // Get thread
+      const thread = await db.query.chatThreads.findFirst({
+        where: and(
+          eq(chatThreads.id, input.threadId),
+          eq(chatThreads.userId, ctx.userId)
+        ),
+      });
+
+      if (!thread) {
+        throw new Error("Thread not found");
+      }
+
+      // Get context (entities/documents) if requested
+      let entities: (typeof threadEntities.$inferSelect)[] = [];
+      let documents: (typeof threadDocuments.$inferSelect)[] = [];
+
+      if (input.includeContext) {
+        entities = await db.query.threadEntities.findMany({
+          where: eq(threadEntities.threadId, input.threadId),
+        });
+
+        documents = await db.query.threadDocuments.findMany({
+          where: eq(threadDocuments.threadId, input.threadId),
+        });
+      }
+
+      // Get branch tree if requested
+      let branchTree: any = null;
+      if (input.includeBranches) {
+        const allBranches = await db.query.chatThreads.findMany({
+          where: or(
+            eq(chatThreads.id, input.threadId),
+            eq(chatThreads.parentThreadId, input.threadId)
+          ),
+        });
+
+        // Build tree structure
+        branchTree = buildBranchTree(allBranches, input.threadId);
+      }
+
+      return {
+        thread,
+        entities: input.includeContext ? entities : undefined,
+        documents: input.includeContext ? documents : undefined,
+        branchTree: input.includeBranches ? branchTree : undefined,
+      };
+    }),
+
+  /**
+   * Update thread metadata
+   */
+  updateThread: protectedProcedure
+    .input(
+      z.object({
+        threadId: z.string().uuid(),
+        title: z.string().optional(),
+        agentId: z.string().optional(),
+        agentType: z
+          .enum([
+            "meta",
+            "default",
+            "prompting",
+            "knowledge-search",
+            "code",
+            "writing",
+            "action",
+          ])
+          .optional(),
+        agentConfig: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Verify thread exists and user owns it
+      const thread = await db.query.chatThreads.findFirst({
+        where: and(
+          eq(chatThreads.id, input.threadId),
+          eq(chatThreads.userId, ctx.userId)
+        ),
+      });
+
+      if (!thread) {
+        throw new Error("Thread not found");
+      }
+
+      // Update thread directly (simple operation, no event sourcing needed)
+      await db
+        .update(chatThreads)
+        .set({
+          title: input.title,
+          agentId: input.agentId,
+          agentType: input.agentType,
+          agentConfig: input.agentConfig,
+          updatedAt: new Date(),
+        })
+        .where(eq(chatThreads.id, input.threadId));
+
+      // Emit real-time event
+      ctx.socketIO?.emit("thread:updated", {
+        threadId: input.threadId,
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "updated",
+        threadId: input.threadId,
+      };
+    }),
+
+  /**
+   * Archive thread (soft delete)
+   */
+  archiveThread: protectedProcedure
+    .input(
+      z.object({
+        threadId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Verify thread exists and user owns it
+      const thread = await db.query.chatThreads.findFirst({
+        where: and(
+          eq(chatThreads.id, input.threadId),
+          eq(chatThreads.userId, ctx.userId)
+        ),
+      });
+
+      if (!thread) {
+        throw new Error("Thread not found");
+      }
+
+      // Update status to archived
+      await db
+        .update(chatThreads)
+        .set({
+          status: "archived",
+          updatedAt: new Date(),
+        })
+        .where(eq(chatThreads.id, input.threadId));
+
+      // Emit real-time event
+      ctx.socketIO?.emit("thread:archived", {
+        threadId: input.threadId,
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "archived",
+        threadId: input.threadId,
+      };
+    }),
+
+  /**
+   * Get branch tree structure (not flat list)
+   */
+  getBranchTree: protectedProcedure
+    .input(
+      z.object({
+        rootThreadId: z.string().uuid(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      // Get all threads in the tree (root + all descendants)
+      const allThreads = await db.query.chatThreads.findMany({
+        where: and(
+          or(
+            eq(chatThreads.id, input.rootThreadId),
+            eq(chatThreads.parentThreadId, input.rootThreadId)
+          ),
+          eq(chatThreads.userId, ctx.userId)
+        ),
+      });
+
+      // Build tree structure
+      const tree = buildBranchTree(allThreads, input.rootThreadId);
+
+      // Categorize branches
+      const activeBranches = allThreads.filter(
+        (t) => t.status === "active" && t.threadType === "branch"
+      );
+      const mergedBranches = allThreads.filter(
+        (t) => t.status === "merged" && t.threadType === "branch"
+      );
+
+      return {
+        tree,
+        flatBranches: allThreads.filter((t) => t.threadType === "branch"),
+        activeBranches,
+        mergedBranches,
+      };
+    }),
+
+  /**
+   * Get thread context (entities and documents)
+   */
+  getThreadContext: protectedProcedure
+    .input(
+      z.object({
+        threadId: z.string().uuid(),
+        relationshipTypes: z
+          .array(
+            z.enum([
+              "used_as_context",
+              "created",
+              "updated",
+              "referenced",
+              "inherited_from_parent",
+            ])
+          )
+          .optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      // Verify thread exists and user owns it
+      const thread = await db.query.chatThreads.findFirst({
+        where: and(
+          eq(chatThreads.id, input.threadId),
+          eq(chatThreads.userId, ctx.userId)
+        ),
+      });
+
+      if (!thread) {
+        throw new Error("Thread not found");
+      }
+
+      // Build where clause
+      const whereClause = and(
+        eq(threadEntities.threadId, input.threadId),
+        input.relationshipTypes
+          ? inArray(threadEntities.relationshipType, input.relationshipTypes)
+          : undefined
+      );
+
+      // Get entities
+      const entities = await db.query.threadEntities.findMany({
+        where: whereClause,
+      });
+
+      // Get documents
+      const documents = await db.query.threadDocuments.findMany({
+        where: and(
+          eq(threadDocuments.threadId, input.threadId),
+          input.relationshipTypes
+            ? inArray(threadDocuments.relationshipType, input.relationshipTypes)
+            : undefined
+        ),
+      });
+
+      return {
+        entities,
+        documents,
+      };
+    }),
 });
+
+/**
+ * Helper function to build branch tree structure
+ */
+function buildBranchTree(
+  threads: ChatThread[],
+  rootId: string
+): { thread: ChatThread; children: any[] } | null {
+  const root = threads.find((t) => t.id === rootId);
+  if (!root) return null;
+
+  const children = threads
+    .filter((t) => t.parentThreadId === rootId)
+    .map((child) => buildBranchTree(threads, child.id))
+    .filter(Boolean) as any[];
+
+  return {
+    thread: root,
+    children,
+  };
+}

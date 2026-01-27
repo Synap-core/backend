@@ -45,7 +45,7 @@ const InboxItemSchema = z.object({
   preview: z.string().optional(),
   timestamp: z.coerce.date(),
   deepLink: z.string().optional(),
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
 });
 
 /**
