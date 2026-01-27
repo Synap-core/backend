@@ -191,6 +191,124 @@ export const EventTypeSchemas = {
       .default("referenced"),
     sourceMessageId: z.string().uuid().optional(),
   }),
+
+  // Skill creation intent
+  "skills.create.requested": z.object({
+    userId: z.string(),
+    workspaceId: z.string().uuid().optional(),
+    name: z.string().min(1).max(255),
+    description: z.string().optional(),
+    code: z.string().min(1),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    category: z.string().optional(),
+    executionMode: z.enum(["sync", "async"]).default("sync"),
+    timeoutSeconds: z.number().min(1).max(300).default(30),
+  }),
+
+  // Skill creation confirmed
+  "skills.create.validated": z.object({
+    skillId: z.string().uuid(),
+    userId: z.string(),
+    workspaceId: z.string().uuid().optional(),
+    name: z.string(),
+    description: z.string().optional(),
+    code: z.string(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    category: z.string().optional(),
+    executionMode: z.enum(["sync", "async"]),
+    timeoutSeconds: z.number(),
+  }),
+
+  // Skill update intent
+  "skills.update.requested": z.object({
+    skillId: z.string().uuid(),
+    name: z.string().min(1).max(255).optional(),
+    description: z.string().optional(),
+    code: z.string().min(1).optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    category: z.string().optional(),
+    executionMode: z.enum(["sync", "async"]).optional(),
+    timeoutSeconds: z.number().min(1).max(300).optional(),
+  }),
+
+  // Skill update confirmed
+  "skills.update.validated": z.object({
+    skillId: z.string().uuid(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    code: z.string().optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    category: z.string().optional(),
+    executionMode: z.enum(["sync", "async"]).optional(),
+    timeoutSeconds: z.number().optional(),
+  }),
+
+  // Skill deletion intent
+  "skills.delete.requested": z.object({
+    skillId: z.string().uuid(),
+  }),
+
+  // Skill deletion confirmed
+  "skills.delete.validated": z.object({
+    skillId: z.string().uuid(),
+  }),
+
+  // Background task creation intent
+  "background_tasks.create.requested": z.object({
+    userId: z.string(),
+    workspaceId: z.string().uuid().optional(),
+    name: z.string().min(1).max(255),
+    description: z.string().optional(),
+    type: z.enum(["cron", "event", "interval"]),
+    schedule: z.string().optional(),
+    action: z.string().min(1),
+    context: z.record(z.string(), z.unknown()).optional(),
+  }),
+
+  // Background task creation confirmed
+  "background_tasks.create.validated": z.object({
+    taskId: z.string().uuid(),
+    userId: z.string(),
+    workspaceId: z.string().uuid().optional(),
+    name: z.string(),
+    description: z.string().optional(),
+    type: z.enum(["cron", "event", "interval"]),
+    schedule: z.string().optional(),
+    action: z.string(),
+    context: z.record(z.string(), z.unknown()).optional(),
+  }),
+
+  // Background task update intent
+  "background_tasks.update.requested": z.object({
+    taskId: z.string().uuid(),
+    name: z.string().min(1).max(255).optional(),
+    description: z.string().optional(),
+    schedule: z.string().optional(),
+    action: z.string().min(1).optional(),
+    context: z.record(z.string(), z.unknown()).optional(),
+    status: z.enum(["active", "paused", "error"]).optional(),
+  }),
+
+  // Background task update confirmed
+  "background_tasks.update.validated": z.object({
+    taskId: z.string().uuid(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    schedule: z.string().optional(),
+    action: z.string().optional(),
+    context: z.record(z.string(), z.unknown()).optional(),
+    status: z.enum(["active", "paused", "error"]).optional(),
+  }),
+
+  // Background task deletion intent
+  "background_tasks.delete.requested": z.object({
+    taskId: z.string().uuid(),
+  }),
+
+  // Background task deletion confirmed
+  "background_tasks.delete.validated": z.object({
+    taskId: z.string().uuid(),
+  }),
 } as const;
 
 /**

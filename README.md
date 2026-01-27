@@ -1,285 +1,225 @@
 # Synap Backend
 
-Self-hosted intelligence infrastructure for sovereign data pods.
+**Open-source, self-hostable knowledge management and AI-powered workspace platform.**
 
-## Quick Start (30 seconds)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/synap/backend)
+[![Discord](https://img.shields.io/discord/YOUR_DISCORD_ID?color=7289da&label=Discord&logo=discord&logoColor=white)](https://discord.gg/synap)
+
+---
+
+## 🚀 Quick Start
+
+Deploy your own Synap instance in 5 minutes:
 
 ```bash
-# 1. Start infrastructure
-./start.sh
-
-# 2. Start API server
-pnpm dev
-
-# 3. Start frontend (in synap-app directory)
-cd ../synap-app
-pnpm dev
-
-# 4. Open browser
-open http://localhost:3000/setup
+curl -fsSL https://get.synap.live/install.sh | bash
 ```
 
-That's it! The setup wizard will guide you through creating your admin account.
+That's it! Follow the interactive prompts to configure your instance.
 
----
+## ✨ Features
 
-## Service Health & Quality
+- **🧠 AI-Powered Intelligence**: Built-in AI agents with OpenAI, Anthropic, and Google AI support
+- **📊 Knowledge Graph**: Automatic relationship discovery and entity management
+- **🔍 Semantic Search**: Powered by Typesense for lightning-fast full-text search
+- **🔐 Enterprise Auth**: Ory Kratos + Hydra for secure authentication and OAuth2
+- **📁 File Storage**: MinIO-based object storage with S3 compatibility
+- **⚡ Real-time Collaboration**: Server-Sent Events for live updates
+- **🔄 Background Jobs**: Inngest-powered job processing
+- **🐳 Docker-First**: One-command deployment with Docker Compose
 
-We enforce strict quality gates. Before pushing code, ensure you pass the CI suite:
+## 📋 Requirements
+
+- **Server**: Linux (Ubuntu 22.04+ recommended)
+- **Resources**: 4GB RAM minimum, 20GB disk space
+- **Software**: Docker & Docker Compose
+- **Domain**: With DNS access for SSL
+- **API Key**: OpenAI API key (required for AI features)
+
+## 📚 Documentation
+
+- **[Self-Hosting Guide](./deploy/README.md)** - Complete installation and setup
+- **[Configuration Reference](./deploy/docs/configuration.md)** - All configuration options
+- **[Backup & Restore](./deploy/docs/backups.md)** - Data protection strategies
+- **[Troubleshooting](./deploy/docs/troubleshooting.md)** - Common issues and solutions
+- **[API Documentation](https://docs.synap.live/api)** - API reference
+- **[Architecture](./ARCHITECTURE.md)** - System architecture overview
+- **[Developer Guide](./DEVELOPER_GUIDE.md)** - Contributing and development
+
+## 🛠️ Management
+
+Use the `synap-cli` tool to manage your instance:
 
 ```bash
-# Run full CI suite (Lint, Typecheck, Test, Build)
-pnpm run-ci
+cd /opt/synap  # or your installation directory
 
-# Run specific checks
-pnpm lint       # Check for code style & errors
-pnpm typecheck  # Strict TypeScript validation
-pnpm test       # Run unit & integration tests
+# Check system health
+./synap-cli health
+
+# View logs
+./synap-cli logs
+
+# Create backup
+./synap-cli backup
+
+# Update to latest version
+./synap-cli update
 ```
 
----
+## 🏗️ Architecture
 
-## What Just Happened?
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Synap Backend                        │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │   Backend    │  │ Intelligence │  │   Realtime   │ │
+│  │   (tRPC)     │  │   Service    │  │     (SSE)    │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │  PostgreSQL  │  │    Redis     │  │    MinIO     │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
+│  │  Typesense   │  │ Ory Kratos   │  │  Ory Hydra   │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘ │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │         Caddy (Reverse Proxy + SSL)             │  │
+│  └─────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
 
-The `start.sh` script:
+## 🔐 Security
 
-- ✅ Starts Docker services (Postgres, MinIO, Kratos)
-- ✅ Waits for all services to be healthy
-- ✅ Runs database migrations automatically
-- ✅ Verifies everything is ready
+- **Automatic SSL**: Let's Encrypt certificates auto-provisioned and renewed
+- **Secure Secrets**: All secrets auto-generated during installation
+- **Isolated Network**: Services communicate via internal Docker network
+- **Security Headers**: Enforced by Caddy reverse proxy
+- **OAuth2 Ready**: Built-in OAuth2 provider via Ory Hydra
 
----
+## 🆙 Updates
 
-## Services
+Update to the latest version with one command:
 
-| Service        | Port      | Purpose                                |
-| -------------- | --------- | -------------------------------------- |
-| **PostgreSQL** | 5432      | Main database (TimescaleDB + pgvector) |
-| **MinIO**      | 9000/9001 | S3-compatible object storage           |
-| **Kratos**     | 4433/4434 | Authentication & identity management   |
-| **Inngest**    | 8288      | Background job processing (optional)   |
-| **n8n**        | 5678      | Workflow automation (optional)         |
+```bash
+./synap-cli update
+```
 
----
+This automatically:
 
-## Architecture
+1. Creates a backup
+2. Pulls latest Docker images
+3. Restarts services
+4. Runs database migrations
+
+## 💾 Backups
+
+```bash
+# Create backup
+./synap-cli backup
+
+# Restore from backup
+./synap-cli restore backups/backup-20260127.tar.gz
+
+# Automated daily backups (add to crontab)
+0 2 * * * cd /opt/synap && ./synap-cli backup
+```
+
+## 🌐 Connect Your Frontend
+
+Point your Synap frontend to your self-hosted backend:
+
+```env
+# In your frontend .env
+NEXT_PUBLIC_API_URL=https://your-domain.com/trpc
+NEXT_PUBLIC_REALTIME_URL=https://your-domain.com/realtime
+```
+
+## 🧑‍💻 Development
+
+### Local Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Set up environment
+cp .env.example .env
+# Edit .env with your configuration
+
+# Start development services
+docker compose -f docker-compose.yml up -d postgres redis minio typesense
+
+# Run database migrations
+cd packages/database
+pnpm db:push
+
+# Start backend
+pnpm dev
+```
+
+### Project Structure
 
 ```
 synap-backend/
+├── apps/
+│   ├── api/              # Main tRPC API server
+│   └── admin-ui/         # Admin dashboard
 ├── packages/
-│   ├── api/           # tRPC API server
-│   ├── database/      # Drizzle ORM schema & migrations
-│   ├── core/          # Shared utilities & logging
-│   ├── auth/          # Kratos integration
-│   ├── realtime/      # WebSocket server
-│   ├── jobs/          # Inngest background jobs
-│   └── storage/       # MinIO client
-├── docker/            # Docker configuration & scripts
-├── kratos/            # Kratos configuration
-└── start.sh           # Automated startup script
+│   ├── database/         # Prisma schema & migrations
+│   ├── api/              # tRPC routers
+│   ├── core/             # Core utilities
+│   ├── jobs/             # Background jobs (Inngest)
+│   ├── search/           # Typesense integration
+│   └── realtime/         # SSE server
+├── deploy/               # Self-hosting deployment files
+│   ├── install.sh        # One-command installer
+│   ├── synap-cli         # Management CLI
+│   ├── docker-compose.yml
+│   └── docs/             # Documentation
+└── docs/                 # Development documentation
 ```
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+### Development Workflow
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+## 📄 License
+
+MIT License - see [LICENSE](./LICENSE) for details.
+
+## 💬 Community & Support
+
+- **Documentation**: [docs.synap.live](https://docs.synap.live)
+- **Discord**: [discord.gg/synap](https://discord.gg/synap)
+- **GitHub Issues**: [Report bugs](https://github.com/synap-labs/synap-backend/issues)
+- **GitHub Discussions**: [Ask questions](https://github.com/synap-labs/synap-backend/discussions)
+
+## 🙏 Acknowledgments
+
+Built with:
+
+- [tRPC](https://trpc.io/) - End-to-end typesafe APIs
+- [Prisma](https://www.prisma.io/) - Next-generation ORM
+- [Ory](https://www.ory.sh/) - Authentication & authorization
+- [Typesense](https://typesense.org/) - Fast search engine
+- [Inngest](https://www.inngest.com/) - Background jobs
+- [Caddy](https://caddyserver.com/) - Automatic HTTPS
 
 ---
 
-## Manual Setup (If You Need Control)
+**Made with ❤️ by the Synap team**
 
-### 1. Environment Variables
-
-Copy `.env.example` to `.env`:
-
-```bash
-cp .env.example .env
-```
-
-Customize if needed (defaults work for local development).
-
-### 2. Start Docker Services
-
-```bash
-docker compose --profile auth up -d
-```
-
-**Profiles**:
-
-- `auth` - Adds Kratos for authentication
-- `jobs` - Adds Inngest for background jobs
-- `workflows` - Adds n8n for automation
-
-### 3. Run Migrations
-
-```bash
-cd packages/database
-pnpm run db:push
-```
-
-This creates all tables in your database.
-
-### 4. Start Development Servers
-
-```bash
-# Backend APIs (Concurrent start via Turbo)
-pnpm dev
-# Starts: api, realtime, jobs
-
-# Frontend (in synap-app directory)
-cd ../synap-app
-pnpm dev
-```
-
----
-
-## First-Time Setup
-
-1. **Access Setup Wizard**: http://localhost:3000/setup
-2. **Create Admin Account**: Email, name, and password
-3. **Automatic Workspace**: System creates your first workspace
-4. **You're Live**: Start using Synap!
-
----
-
-## Troubleshooting
-
-### Docker Services Won't Start
-
-```bash
-# Check Docker is running
-docker info
-
-# View logs
-docker logs synap-postgres
-docker logs synap-kratos
-
-# Hard reset (WARNING: Deletes all data)
-docker compose --profile auth down -v
-./start.sh
-```
-
-### Kratos Not Responding
-
-```bash
-# Check health
-curl http://localhost:4433/health/ready
-
-# Should return: {"status":"ok"}
-
-# If not, check logs
-docker logs synap-kratos --tail 50
-```
-
-### Database Connection Errors
-
-```bash
-# Verify databases exist
-docker exec synap-postgres psql -U postgres -c "\l"
-
-# Should show: synap, kratos_db
-
-# Test connection
-docker exec synap-postgres psql -U postgres -d synap -c "SELECT 1;"
-```
-
-### Migration Errors
-
-```bash
-# Reset and re-run
-cd packages/database
-pnpm run db:drop    # Drops all tables
-pnpm run db:push    # Recreates schema
-```
-
----
-
-## Development
-
-### Quality Gates (CI)
-
-We assume strict type safety and cleaner code.
-
-```bash
-# Run everything (recommended before push)
-pnpm run-ci
-```
-
-### Running Tests
-
-```bash
-# All tests
-pnpm test
-
-# Specific package
-pnpm --filter @synap/database test
-
-# With coverage
-pnpm --filter @synap/database test:coverage
-```
-
-### Database Tools
-
-```bash
-cd packages/database
-
-# Generate migration files (when schema changes)
-pnpm run db:generate
-
-# Push schema directly to database (dev only)
-pnpm run db:push
-
-# Launch Drizzle Studio (database UI)
-pnpm run db:studio
-```
-
-### API Development
-
-```bash
-# Watch mode with auto-reload
-pnpm --filter api dev
-
-# Run specific service
-pnpm --filter @synap/realtime dev
-```
-
----
-
-## Production Deployment
-
-> **Note**: Production deployment guide coming soon. Current setup optimized for local development.
-
-Key differences for production:
-
-- Disable Kratos `--dev` mode
-- Use proper secrets (not defaults)
-- Enable TLS for Kratos
-- Set up email delivery (replace mailslurper)
-- Configure backups for PostgreSQL
-- Use managed services (RDS, S3) or hardened self-hosted
-
----
-
-## Tech Stack
-
-- **Database**: PostgreSQL 16 + TimescaleDB + pgvector
-- **ORM**: Drizzle ORM
-- **API**: tRPC + Fastify
-- **Auth**: Ory Kratos
-- **Storage**: MinIO (S3-compatible)
-- **Jobs**: Inngest
-- **Real-time**: Socket.IO
-- **Monorepo**: Turborepo + pnpm workspaces
-
----
-
-## License
-
-See [LICENSE](../LICENSE)
-
----
-
-## Support
-
-- Documentation: https://docs.synap.sh (coming soon)
-- Issues: https://github.com/yourusername/synap/issues
-- Discord: https://discord.gg/synap (coming soon)
-
----
-
-**Built with ❤️ for sovereign data ownership**
+[⭐ Star us on GitHub](https://github.com/synap-labs/synap-backend) | [🐦 Follow on Twitter](https://twitter.com/synap_live)

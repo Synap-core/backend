@@ -65,3 +65,9 @@ export * from "./proposals.js";
 
 // NEW: Entity Templates
 export * from "./entity-templates.js";
+
+// NEW: Skills (user-created AI capabilities)
+export * from "./skills.js";
+
+// NEW: Background Tasks (proactive AI automation)
+export * from "./background-tasks.js";

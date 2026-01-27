@@ -1,0 +1,313 @@
+#!/bin/bash
+# Synap CLI - Management tool for self-hosted Synap instances
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Get installation directory
+INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$INSTALL_DIR"
+
+# Check if docker-compose.yml exists
+if [ ! -f "docker-compose.yml" ]; then
+    echo -e "${RED}Error: docker-compose.yml not found${NC}"
+    echo "Are you in the Synap installation directory?"
+    exit 1
+fi
+
+# Commands
+cmd_health() {
+    echo -e "${BLUE}🏥 Synap Health Check${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # Check if services are running
+    if ! docker compose ps | grep -q "Up"; then
+        echo -e "${RED}❌ No services running${NC}"
+        echo ""
+        echo "Start Synap with: docker compose up -d"
+        exit 1
+    fi
+
+    # Check each service
+    check_service() {
+        local service=$1
+        local name=$2
+        
+        if docker compose ps "$service" | grep -q "Up"; then
+            echo -e "${GREEN}✅ ${name}${NC}"
+        else
+            echo -e "${RED}❌ ${name}${NC}"
+        fi
+    }
+
+    check_service "backend" "Backend API"
+    check_service "intelligence-service" "Intelligence Service"
+    check_service "postgres" "Database"
+    check_service "redis" "Redis"
+    check_service "minio" "Storage"
+    check_service "typesense" "Search"
+    check_service "kratos" "Authentication"
+    check_service "hydra" "OAuth2"
+    check_service "caddy" "Reverse Proxy"
+
+    echo ""
+    
+    # Check backend health endpoint
+    if docker compose exec -T backend wget -q -O- http://localhost:4000/health &>/dev/null; then
+        echo -e "${GREEN}✅ Backend responding${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Backend not responding${NC}"
+    fi
+
+    echo ""
+    echo -e "${BLUE}Overall Status: ${GREEN}HEALTHY${NC}"
+}
+
+cmd_logs() {
+    local service=${1:-}
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}📊 Viewing all logs (Ctrl+C to exit)${NC}"
+        docker compose logs -f
+    else
+        echo -e "${BLUE}📊 Viewing logs for: ${service}${NC}"
+        docker compose logs -f "$service"
+    fi
+}
+
+cmd_restart() {
+    local service=${1:-}
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🔄 Restarting all services...${NC}"
+        docker compose restart
+        echo -e "${GREEN}✅ All services restarted${NC}"
+    else
+        echo -e "${BLUE}🔄 Restarting ${service}...${NC}"
+        docker compose restart "$service"
+        echo -e "${GREEN}✅ ${service} restarted${NC}"
+    fi
+}
+
+cmd_stop() {
+    echo -e "${YELLOW}⏸️  Stopping Synap...${NC}"
+    docker compose stop
+    echo -e "${GREEN}✅ Synap stopped${NC}"
+}
+
+cmd_start() {
+    echo -e "${BLUE}▶️  Starting Synap...${NC}"
+    docker compose up -d
+    echo -e "${GREEN}✅ Synap started${NC}"
+}
+
+cmd_update() {
+    echo -e "${BLUE}🔄 Checking for updates...${NC}"
+    echo ""
+    
+    # Get current version
+    CURRENT_VERSION=$(docker compose exec -T backend node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
+    echo -e "Current version: ${YELLOW}${CURRENT_VERSION}${NC}"
+    
+    # Pull latest images
+    echo ""
+    echo -e "${BLUE}📥 Pulling latest images...${NC}"
+    docker compose pull
+    
+    # Backup before update
+    echo ""
+    echo -e "${BLUE}💾 Creating backup before update...${NC}"
+    cmd_backup "pre-update-$(date +%Y%m%d-%H%M%S)"
+    
+    # Update
+    echo ""
+    echo -e "${BLUE}🔄 Updating services...${NC}"
+    docker compose up -d
+    
+    # Run migrations
+    echo ""
+    echo -e "${BLUE}🔄 Running database migrations...${NC}"
+    docker compose exec -T backend sh -c 'cd packages/database && pnpm db:push' || true
+    
+    # Get new version
+    sleep 5
+    NEW_VERSION=$(docker compose exec -T backend node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
+    
+    echo ""
+    echo -e "${GREEN}✅ Update complete!${NC}"
+    echo -e "New version: ${GREEN}${NEW_VERSION}${NC}"
+}
+
+cmd_backup() {
+    local backup_name=${1:-"backup-$(date +%Y%m%d-%H%M%S)"}
+    local backup_dir="./backups"
+    
+    mkdir -p "$backup_dir"
+    
+    echo -e "${BLUE}💾 Creating backup: ${backup_name}${NC}"
+    echo ""
+    
+    # Backup database
+    echo -e "${BLUE}Backing up database...${NC}"
+    docker compose exec -T postgres pg_dump -U synap synap > "$backup_dir/${backup_name}-database.sql"
+    echo -e "${GREEN}✓ Database backed up${NC}"
+    
+    # Backup .env
+    echo -e "${BLUE}Backing up configuration...${NC}"
+    cp .env "$backup_dir/${backup_name}.env"
+    echo -e "${GREEN}✓ Configuration backed up${NC}"
+    
+    # Create tarball
+    echo -e "${BLUE}Creating archive...${NC}"
+    tar -czf "$backup_dir/${backup_name}.tar.gz" \
+        -C "$backup_dir" \
+        "${backup_name}-database.sql" \
+        "${backup_name}.env"
+    
+    # Cleanup individual files
+    rm "$backup_dir/${backup_name}-database.sql" "$backup_dir/${backup_name}.env"
+    
+    echo ""
+    echo -e "${GREEN}✅ Backup created: ${backup_dir}/${backup_name}.tar.gz${NC}"
+    echo -e "${YELLOW}⚠️  Store this backup securely!${NC}"
+}
+
+cmd_restore() {
+    local backup_file=$1
+    
+    if [ -z "$backup_file" ]; then
+        echo -e "${RED}Error: Backup file required${NC}"
+        echo "Usage: $0 restore <backup-file.tar.gz>"
+        exit 1
+    fi
+    
+    if [ ! -f "$backup_file" ]; then
+        echo -e "${RED}Error: Backup file not found: $backup_file${NC}"
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}⚠️  WARNING: This will overwrite current data!${NC}"
+    read -p "Continue? (yes/no): " CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then
+        echo "Restore cancelled"
+        exit 0
+    fi
+    
+    echo -e "${BLUE}📦 Restoring from backup...${NC}"
+    echo ""
+    
+    # Extract backup
+    local temp_dir=$(mktemp -d)
+    tar -xzf "$backup_file" -C "$temp_dir"
+    
+    # Stop services
+    echo -e "${BLUE}Stopping services...${NC}"
+    docker compose stop backend
+    
+    # Restore database
+    echo -e "${BLUE}Restoring database...${NC}"
+    cat "$temp_dir"/*-database.sql | docker compose exec -T postgres psql -U synap synap
+    echo -e "${GREEN}✓ Database restored${NC}"
+    
+    # Restore .env
+    if [ -f "$temp_dir"/*.env ]; then
+        echo -e "${BLUE}Restoring configuration...${NC}"
+        cp "$temp_dir"/*.env .env
+        echo -e "${GREEN}✓ Configuration restored${NC}"
+    fi
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    
+    # Restart services
+    echo -e "${BLUE}Restarting services...${NC}"
+    docker compose up -d
+    
+    echo ""
+    echo -e "${GREEN}✅ Restore complete!${NC}"
+}
+
+cmd_shell() {
+    local service=${1:-backend}
+    echo -e "${BLUE}🐚 Opening shell in ${service}...${NC}"
+    docker compose exec "$service" sh
+}
+
+cmd_help() {
+    cat << EOF
+${BLUE}Synap CLI - Management Tool${NC}
+
+${YELLOW}Usage:${NC}
+  synap-cli <command> [options]
+
+${YELLOW}Commands:${NC}
+  ${GREEN}health${NC}              Check system health
+  ${GREEN}logs${NC} [service]      View logs (all or specific service)
+  ${GREEN}restart${NC} [service]   Restart services (all or specific)
+  ${GREEN}start${NC}               Start all services
+  ${GREEN}stop${NC}                Stop all services
+  ${GREEN}update${NC}              Update to latest version
+  ${GREEN}backup${NC} [name]       Create backup
+  ${GREEN}restore${NC} <file>      Restore from backup
+  ${GREEN}shell${NC} [service]     Open shell in container
+  ${GREEN}help${NC}                Show this help
+
+${YELLOW}Examples:${NC}
+  synap-cli health
+  synap-cli logs backend
+  synap-cli restart
+  synap-cli backup my-backup
+  synap-cli restore backups/backup-20260127.tar.gz
+
+${YELLOW}Documentation:${NC}
+  https://docs.synap.live
+
+EOF
+}
+
+# Main command router
+case "${1:-help}" in
+    health)
+        cmd_health
+        ;;
+    logs)
+        cmd_logs "${2:-}"
+        ;;
+    restart)
+        cmd_restart "${2:-}"
+        ;;
+    start)
+        cmd_start
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    update)
+        cmd_update
+        ;;
+    backup)
+        cmd_backup "${2:-}"
+        ;;
+    restore)
+        cmd_restore "${2:-}"
+        ;;
+    shell)
+        cmd_shell "${2:-backend}"
+        ;;
+    help|--help|-h)
+        cmd_help
+        ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}"
+        echo ""
+        cmd_help
+        exit 1
+        ;;
+esac

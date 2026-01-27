@@ -20,6 +20,8 @@ import { entitiesRouter } from "./entities.js";
 import { documentsRouter } from "./documents.js";
 import { branchesRouter } from "./branches.js";
 import { linkingRouter } from "./linking.js";
+import { skillsRouter } from "./skills.js";
+import { backgroundTasksRouter } from "./background-tasks.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -36,4 +38,6 @@ export const hubProtocolRouter = router({
   documents: documentsRouter,
   branches: branchesRouter,
   linking: linkingRouter,
+  skills: skillsRouter,
+  backgroundTasks: backgroundTasksRouter,
 });

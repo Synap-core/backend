@@ -1,0 +1,58 @@
+{$DOMAIN} {
+    # Automatic HTTPS with Let's Encrypt
+    email {$EMAIL}
+
+    # Backend API
+    handle /trpc/* {
+        reverse_proxy backend:4000
+    }
+
+    handle /api/* {
+        reverse_proxy backend:4000
+    }
+
+    # Realtime SSE
+    handle /realtime/* {
+        reverse_proxy backend:4000
+    }
+
+    # Ory Kratos (Authentication)
+    handle /.ory/kratos/* {
+        reverse_proxy kratos:4433
+    }
+
+    # Ory Hydra (OAuth2)
+    handle /.ory/hydra/* {
+        reverse_proxy hydra:4444
+    }
+
+    # MinIO (Object Storage) - Admin UI
+    handle /storage/* {
+        reverse_proxy minio:9001
+    }
+
+    # Health check
+    handle /health {
+        reverse_proxy backend:4000
+    }
+
+    # Default: Return API info
+    handle {
+        respond "Synap Backend API - https://docs.synap.live" 200
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}

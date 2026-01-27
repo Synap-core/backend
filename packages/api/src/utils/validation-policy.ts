@@ -126,6 +126,18 @@ const GLOBAL_VALIDATION_DEFAULTS: Record<
     delete: true,
   },
 
+  skill: {
+    create: true, // User-created code, requires validation
+    update: true, // Code updates require validation
+    delete: true, // Deletions require validation
+  },
+
+  background_task: {
+    create: true, // Scheduled tasks require validation
+    update: true, // Task updates require validation
+    delete: true, // Deletions require validation
+  },
+
   // Default for unlisted tables
   _default: {
     create: true,

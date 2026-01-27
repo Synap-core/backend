@@ -28,6 +28,8 @@ import { rolesRouter } from "./routers/roles.js";
 import { sharingRouter } from "./routers/sharing.js";
 import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
+import { skillsRouter } from "./routers/skills.js";
+import { backgroundTasksRouter } from "./routers/background-tasks.js";
 
 /**
  * Core API Router
@@ -62,6 +64,8 @@ export const coreRouter = router({
   sharing: sharingRouter,
   templates: templatesRouter,
   whiteboards: whiteboardsRouter,
+  skills: skillsRouter,
+  backgroundTasks: backgroundTasksRouter,
 });
 
 export type AppRouter = typeof coreRouter;

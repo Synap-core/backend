@@ -1,0 +1,292 @@
+version: "3.8"
+
+services:
+  # ============================================================================
+  # BACKEND API
+  # ============================================================================
+  backend:
+    image: synap/backend:latest
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      JWT_SECRET: ${JWT_SECRET}
+      KRATOS_PUBLIC_URL: http://kratos:4433
+      KRATOS_ADMIN_URL: http://kratos:4434
+      KRATOS_SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE}
+      KRATOS_SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
+      KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
+      HYDRA_PUBLIC_URL: http://hydra:4444
+      HYDRA_ADMIN_URL: http://hydra:4445
+      STORAGE_PROVIDER: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: synap-storage
+      MINIO_USE_SSL: false
+      TYPESENSE_HOST: typesense
+      TYPESENSE_PORT: 8108
+      TYPESENSE_PROTOCOL: http
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY}
+      TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      INTELLIGENCE_HUB_URL: http://intelligence-service:3001
+      INTELLIGENCE_API_KEY: ${INTELLIGENCE_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:4000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - synap-net
+
+  # ============================================================================
+  # INTELLIGENCE SERVICE
+  # ============================================================================
+  intelligence-service:
+    image: synap/intelligence-service:latest
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      API_KEY: ${INTELLIGENCE_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
+      BACKEND_URL: http://backend:4000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - synap-net
+
+  # ============================================================================
+  # POSTGRESQL
+  # ============================================================================
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: synap
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: synap
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synap"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # REDIS
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ============================================================================
+  # MINIO (Object Storage)
+  # ============================================================================
+  minio:
+    image: minio/minio:latest
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ============================================================================
+  # TYPESENSE (Search)
+  # ============================================================================
+  typesense:
+    image: typesense/typesense:0.25.2
+    restart: always
+    command: "--data-dir /data --api-key=${TYPESENSE_API_KEY} --enable-cors"
+    volumes:
+      - typesense_data:/data
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # ORY KRATOS (Authentication)
+  # ============================================================================
+  kratos-migrate:
+    image: oryd/kratos:v1.3.1
+    environment:
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - synap-net
+
+  kratos:
+    image: oryd/kratos:v1.3.1
+    restart: always
+    environment:
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+      SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE}
+      SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
+      SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
+      SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    networks:
+      - synap-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "--quiet",
+          "http://localhost:4433/health/ready",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # ORY HYDRA (OAuth2)
+  # ============================================================================
+  hydra-migrate:
+    image: oryd/hydra:v2.3.0
+    environment:
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - synap-net
+
+  hydra:
+    image: oryd/hydra:v2.3.0
+    restart: always
+    environment:
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+      URLS_SELF_ISSUER: https://${DOMAIN}
+      URLS_CONSENT: https://${DOMAIN}/consent
+      URLS_LOGIN: https://${DOMAIN}/login
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    networks:
+      - synap-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "--quiet",
+          "http://localhost:4445/health/ready",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # INNGEST (Background Jobs)
+  # ============================================================================
+  inngest:
+    image: inngest/inngest:latest
+    restart: always
+    command: inngest dev
+    environment:
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+    networks:
+      - synap-net
+
+  # ============================================================================
+  # CADDY (Reverse Proxy + SSL)
+  # ============================================================================
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+      EMAIL: ${LETSENCRYPT_EMAIL}
+    networks:
+      - synap-net
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  typesense_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  synap-net:
+    driver: bridge
