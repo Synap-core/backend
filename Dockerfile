@@ -23,6 +23,9 @@ RUN pnpm install --no-frozen-lockfile
 # Copy source code
 COPY --from=prepare /app/out/full/ .
 
+# Copy root tsconfig (needed by packages that extend from it)
+COPY tsconfig.json ./
+
 # Build the project
 RUN pnpm turbo build --filter=api
 
