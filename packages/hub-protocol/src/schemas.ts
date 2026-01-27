@@ -34,7 +34,7 @@ export const ActionSchema = z.object({
   /**
    * Event data (must correspond to the eventType schema)
    */
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
 
   /**
    * If true, the action requires user confirmation before execution
@@ -51,7 +51,7 @@ export const ActionSchema = z.object({
   /**
    * Action-specific metadata
    */
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type Action = z.infer<typeof ActionSchema>;
@@ -187,7 +187,7 @@ export const HubInsightSchema = z.object({
   /**
    * Additional metadata
    */
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type HubInsight = z.infer<typeof HubInsightSchema>;
