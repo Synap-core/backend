@@ -14,7 +14,7 @@ import { z } from "zod";
 /**
  * Base metadata schema - always JSONB, always optional
  */
-export const MetadataSchema = z.record(z.unknown()).optional();
+export const MetadataSchema = z.record(z.string(), z.unknown()).optional();
 
 /**
  * Request context - for tracking async operations
@@ -270,5 +270,5 @@ export function validatePayload<T extends GeneratedPayloadSchemaType>(
   payload: unknown
 ): z.infer<(typeof GeneratedPayloadSchemas)[T]> {
   const schema = GeneratedPayloadSchemas[eventType];
-  return schema.parse(payload);
+  return schema.parse(payload) as z.infer<(typeof GeneratedPayloadSchemas)[T]>;
 }
