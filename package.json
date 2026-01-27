@@ -69,5 +69,8 @@
   "engines": {
     "node": ">=20",
     "pnpm": ">=10"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3"
   }
 }

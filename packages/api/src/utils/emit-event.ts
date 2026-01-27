@@ -38,6 +38,9 @@ export interface EmitEventInput {
 
   /** User role (for policy checks) */
   userRole?: string;
+
+  /** Event source override (default: "api") */
+  source?: string;
 }
 
 /**
