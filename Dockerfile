@@ -18,7 +18,7 @@ RUN pnpm turbo build --filter=api
 
 # Deploy to self-contained directory with hard-linked dependencies
 # This creates a portable, production-ready package
-RUN pnpm deploy --filter=api --prod /app/deploy
+RUN pnpm deploy --filter=api --prod --legacy /app/deploy
 
 # ============================================================================
 # Runner: Minimal production image
