@@ -30,9 +30,10 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 # ============================================================================
 FROM deps AS build
 COPY . .
+COPY .npmrc ./
 
 # pnpm workspaces use symlinks that break during COPY
-# Always reinstall to rebuild the symlink structure
+# Always reinstall to rebuild the symlink structure with hoisting enabled
 RUN pnpm install --frozen-lockfile
 
 RUN pnpm exec turbo run build --filter=api
