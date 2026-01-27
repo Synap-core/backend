@@ -50,4 +50,5 @@ EXPOSE 3000
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "apps/api/dist/index.js"]
+# pnpm deploy puts the package files directly in the deploy directory
+CMD ["node", "dist/index.js"]
