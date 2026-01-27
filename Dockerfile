@@ -35,7 +35,7 @@ COPY . .
 # pnpm workspaces create symlinks that may not survive COPY
 RUN ls -la /app/node_modules/@types/node || (echo "node_modules missing, reinstalling..." && pnpm install --frozen-lockfile)
 
-RUN pnpm build --filter='!admin-ui'
+RUN pnpm build
 
 # ============================================================================
 # Production dependencies - install only prod deps
