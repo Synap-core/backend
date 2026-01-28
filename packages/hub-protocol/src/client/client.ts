@@ -16,7 +16,19 @@ import {
   TRPCClientError,
 } from "@trpc/client";
 import type { HubInsight } from "../schemas.js";
-import { createLogger } from "@synap-core/core";
+// Simple logger to avoid depending on @synap-core/core
+const createLogger = (context: { module: string }) => {
+  return {
+    debug: (msg: string | object, ...args: any[]) =>
+      console.debug(`[DEBUG] [${context.module}]`, msg, ...args),
+    info: (msg: string | object, ...args: any[]) =>
+      console.info(`[INFO] [${context.module}]`, msg, ...args),
+    warn: (msg: string | object, ...args: any[]) =>
+      console.warn(`[WARN] [${context.module}]`, msg, ...args),
+    error: (msg: string | object, ...args: any[]) =>
+      console.error(`[ERROR] [${context.module}]`, msg, ...args),
+  };
+};
 import type {
   HubProtocolClientConfig,
   HubScope,
