@@ -373,7 +373,7 @@ cd "$INSTALL_DIR"
 echo ""
 echo -e "${BLUE}📥 Downloading Synap files...${NC}"
 
-REPO_URL="https://raw.githubusercontent.com/synap-labs/synap-backend/main/deploy"
+REPO_URL="https://raw.githubusercontent.com/Synap-core/backend/main/deploy"
 
 curl -fsSL "${REPO_URL}/docker-compose.yml" -o docker-compose.yml
 curl -fsSL "${REPO_URL}/Caddyfile" -o Caddyfile
