@@ -25,6 +25,9 @@
 // Export schemas
 export { HubInsightSchema, ActionSchema, AnalysisSchema } from "./schemas.js";
 
+// Export types from @synap-core/types (re-export for convenience when bundled)
+export * from "@synap-core/types";
+
 // Export types
 export type { HubInsight, Action, Analysis } from "./schemas.js";
 
