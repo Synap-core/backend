@@ -36,6 +36,11 @@
         reverse_proxy backend:4000
     }
 
+    # Intelligence Service (for demo/co-located setup)
+    handle /intelligence/* {
+        reverse_proxy intelligence-service:3001
+    }
+
     # Default: Return API info
     handle {
         respond "Synap Backend API - https://docs.synap.live" 200

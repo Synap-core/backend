@@ -384,6 +384,9 @@ echo -e "${BLUE}📝 Creating configuration...${NC}"
 cat > .env <<EOF
 # Synap Backend Configuration
 # Generated: $(date)
+# 
+# Docker Compose Project Name (prevents conflicts)
+COMPOSE_PROJECT_NAME=synap-backend
 
 # ============================================================================
 # DOMAIN & SSL
