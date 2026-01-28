@@ -5,6 +5,9 @@ services:
   # BACKEND API
   # ============================================================================
   backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
     image: synap/backend:latest
     restart: always
     environment:

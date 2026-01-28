@@ -296,18 +296,42 @@ fi
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Download deployment files
+# Setup Source Code
 echo ""
-echo -e "${BLUE}📥 Downloading Synap files...${NC}"
+echo -e "${BLUE}📥 Setting up Synap source code...${NC}"
 
-REPO_URL="https://raw.githubusercontent.com/Synap-core/backend/main/deploy"
+# Detect if running from local repo
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+IS_LOCAL_REPO=false
+if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    if [ -f "$SCRIPT_DIR/../package.json" ]; then
+         IS_LOCAL_REPO=true
+         REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    fi
+fi
 
-curl -fsSL "${REPO_URL}/docker-compose.yml" -o docker-compose.yml
-curl -fsSL "${REPO_URL}/Caddyfile" -o Caddyfile
-curl -fsSL "${REPO_URL}/synap-cli" -o synap-cli
-chmod +x synap-cli
+if [ "$IS_LOCAL_REPO" = true ]; then
+    echo -e "${GREEN}✓ Cloning from local repository: $REPO_ROOT${NC}"
+    git clone "$REPO_ROOT" .
+else 
+    echo -e "${BLUE}⬇️ Cloning from GitHub...${NC}"
+    git clone https://github.com/Synap-core/backend.git .
+fi
 
-echo -e "${GREEN}✓ Files downloaded${NC}"
+# Enter deploy directory
+if [ -d "deploy" ]; then
+    cd deploy
+    # Ensure CLI is executable
+    if [ -f "synap-cli" ]; then
+        chmod +x synap-cli
+    fi
+else
+    echo -e "${RED}Error: 'deploy' directory missing in source!${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Source code ready${NC}"
 
 # Create .env file
 echo ""
@@ -369,7 +393,7 @@ chmod 600 .env
 echo -e "${GREEN}✓ Configuration created${NC}"
 
 # Save secrets backup
-cat > .secrets-backup.txt <<EOF
+cat > ../.secrets-backup.txt <<EOF
 # CRITICAL: Save this file securely and delete from server!
 # Synap Secrets Backup
 # Generated: $(date)
@@ -390,7 +414,7 @@ ANTHROPIC_KEY=${ANTHROPIC_KEY}
 GOOGLE_AI_KEY=${GOOGLE_AI_KEY}
 EOF
 
-chmod 600 .secrets-backup.txt
+chmod 600 ../.secrets-backup.txt
 
 # Start services
 echo ""
