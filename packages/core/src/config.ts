@@ -216,7 +216,10 @@ function loadConfig(): Config {
           },
         },
         embeddings: {
-          provider: process.env.EMBEDDING_PROVIDER,
+          // Auto-detect: use deterministic if no OpenAI key, otherwise default to openai
+          provider:
+            process.env.EMBEDDING_PROVIDER ||
+            (process.env.OPENAI_API_KEY ? "openai" : "deterministic"),
           model:
             process.env.EMBEDDING_MODEL ?? process.env.OPENAI_EMBEDDING_MODEL,
         },

@@ -99,21 +99,78 @@ while [ -z "$EMAIL" ]; do
     read -p "Enter your email: " EMAIL
 done
 
-# OpenAI API Key
+# AI Configuration (Optional)
 echo ""
-echo -e "${BLUE}🤖 AI Configuration${NC}"
-echo "Get your OpenAI API key from: https://platform.openai.com/api-keys"
-read -p "OpenAI API Key: " OPENAI_KEY
-while [ -z "$OPENAI_KEY" ]; do
-    echo -e "${RED}OpenAI API key is required!${NC}"
-    read -p "OpenAI API Key: " OPENAI_KEY
-done
+echo -e "${BLUE}🤖 AI Configuration (Optional)${NC}"
+echo ""
+echo "Choose AI provider:"
+echo "  [1] Skip AI features (basic deployment, search only)"
+echo "  [2] Use Anthropic (recommended for chat)"
+echo "  [3] Use OpenAI"
+echo "  [4] Use both Anthropic and OpenAI"
+echo ""
+read -p "Choice [1-4]: " AI_CHOICE
 
-# Optional: Anthropic
-read -p "Anthropic API Key (optional, press Enter to skip): " ANTHROPIC_KEY
+OPENAI_KEY=""
+ANTHROPIC_KEY=""
+GOOGLE_AI_KEY=""
+AI_PROVIDER="anthropic"
+EMBEDDING_PROVIDER="deterministic"
 
-# Optional: Google AI
-read -p "Google AI API Key (optional, press Enter to skip): " GOOGLE_AI_KEY
+case $AI_CHOICE in
+    1)
+        echo -e "${GREEN}✓ AI features disabled. Search will use deterministic embeddings.${NC}"
+        AI_PROVIDER=""
+        ;;
+    2)
+        echo ""
+        echo "Get your Anthropic API key from: https://console.anthropic.com/"
+        read -p "Anthropic API Key: " ANTHROPIC_KEY
+        while [ -z "$ANTHROPIC_KEY" ]; do
+            echo -e "${RED}Anthropic API key is required!${NC}"
+            read -p "Anthropic API Key: " ANTHROPIC_KEY
+        done
+        AI_PROVIDER="anthropic"
+        ;;
+    3)
+        echo ""
+        echo "Get your OpenAI API key from: https://platform.openai.com/api-keys"
+        read -p "OpenAI API Key: " OPENAI_KEY
+        while [ -z "$OPENAI_KEY" ]; do
+            echo -e "${RED}OpenAI API key is required!${NC}"
+            read -p "OpenAI API Key: " OPENAI_KEY
+        done
+        AI_PROVIDER="openai"
+        EMBEDDING_PROVIDER="openai"
+        ;;
+    4)
+        echo ""
+        echo "Get your Anthropic API key from: https://console.anthropic.com/"
+        read -p "Anthropic API Key: " ANTHROPIC_KEY
+        while [ -z "$ANTHROPIC_KEY" ]; do
+            echo -e "${RED}Anthropic API key is required!${NC}"
+            read -p "Anthropic API Key: " ANTHROPIC_KEY
+        done
+        echo ""
+        echo "Get your OpenAI API key from: https://platform.openai.com/api-keys"
+        read -p "OpenAI API Key: " OPENAI_KEY
+        while [ -z "$OPENAI_KEY" ]; do
+            echo -e "${RED}OpenAI API key is required!${NC}"
+            read -p "OpenAI API Key: " OPENAI_KEY
+        done
+        AI_PROVIDER="anthropic"
+        EMBEDDING_PROVIDER="openai"
+        ;;
+    *)
+        echo -e "${RED}Invalid choice. Defaulting to no AI.${NC}"
+        AI_PROVIDER=""
+        ;;
+esac
+
+# Optional: Google AI (only if using AI)
+if [ -n "$AI_PROVIDER" ]; then
+    read -p "Google AI API Key (optional, press Enter to skip): " GOOGLE_AI_KEY
+fi
 
 # Generate secrets
 echo ""
@@ -214,6 +271,8 @@ INNGEST_SIGNING_KEY=${INNGEST_SIGNING_KEY}
 # ============================================================================
 # AI
 # ============================================================================
+AI_PROVIDER=${AI_PROVIDER}
+EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER}
 INTELLIGENCE_API_KEY=${INTELLIGENCE_KEY}
 OPENAI_API_KEY=${OPENAI_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
