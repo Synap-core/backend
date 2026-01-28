@@ -303,8 +303,56 @@ INTELLIGENCE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
 echo -e "${GREEN}✓ Secrets generated${NC}"
 
 # Create installation directory
-INSTALL_DIR="/opt/synap"
+# ADD THIS ENTIRE BLOCK OF CODE
+
+# --- Path Selection ---
 echo ""
+echo -e "${BLUE}📁 Installation Path${NC}"
+echo "The default installation path is /opt/synap."
+echo "This requires sudo privileges to create."
+echo ""
+read -p "Do you want to use a custom installation path? (y/N): " USE_CUSTOM_PATH
+
+INSTALL_DIR="/opt/synap" # Set default value
+
+if [[ "$USE_CUSTOM_PATH" =~ ^[Yy]$ ]]; then
+    # User wants a custom path
+    echo ""
+    echo "Please provide an absolute path for the installation."
+    echo "e.g., /home/youruser/synap or ~/pkm_stacks/synap"
+    # Use realpath to resolve ~ and other relative paths to an absolute path
+    read -p "Enter custom installation path: " CUSTOM_PATH
+    
+    # Loop until a non-empty path is provided
+    while [ -z "$CUSTOM_PATH" ]; do
+        echo -e "${RED}Path cannot be empty!${NC}"
+        read -p "Enter custom installation path: " CUSTOM_PATH
+    done
+
+    # Resolve potential ~ character to full home directory path
+    # Using eval is generally risky, but here it's safe for a simple tilde expansion.
+    # A safer method is used below if available.
+    if command -v realpath &> /dev/null; then
+        INSTALL_DIR=$(realpath -m "$CUSTOM_PATH")
+    else
+        # Fallback for systems without realpath, less robust
+        INSTALL_DIR=$(eval echo "$CUSTOM_PATH")
+    fi
+    
+    echo -e "${GREEN}✓ Using custom path: ${INSTALL_DIR}${NC}"
+else
+    # User wants the default path
+    echo -e "${GREEN}✓ Using default path: ${INSTALL_DIR}${NC}"
+    # Check for sudo if using the default /opt path
+    if [ ! -w "/opt" ] && [ "$EUID" -ne 0 ]; then
+        echo ""
+        echo -e "${YELLOW}⚠️  The default path /opt/synap requires root privileges to create.${NC}"
+        echo "Please re-run the script with 'sudo' or choose a custom path in your home directory."
+        exit 1
+    fi
+fi
+# --- End of Path Selection ---
+
 echo -e "${BLUE}📁 Creating installation directory: ${INSTALL_DIR}${NC}"
 
 if [ -d "$INSTALL_DIR" ]; then
