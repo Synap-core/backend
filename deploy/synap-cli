@@ -116,10 +116,17 @@ cmd_update() {
     CURRENT_VERSION=$(docker compose exec -T backend node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
     echo -e "Current version: ${YELLOW}${CURRENT_VERSION}${NC}"
     
-    # Pull latest images
+    # Pull latest source and images
     echo ""
-    echo -e "${BLUE}📥 Pulling latest images...${NC}"
-    docker compose pull
+    echo -e "${BLUE}📥 Getting latest updates...${NC}"
+    
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Pulling source code..."
+        git pull
+    fi
+    
+    # Pull base images (ignore failures for built images)
+    docker compose pull --ignore-pull-failures
     
     # Backup before update
     echo ""
@@ -129,7 +136,7 @@ cmd_update() {
     # Update
     echo ""
     echo -e "${BLUE}🔄 Updating services...${NC}"
-    docker compose up -d
+    docker compose up -d --build
     
     # Run migrations
     echo ""
