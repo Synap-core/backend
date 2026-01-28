@@ -82,22 +82,133 @@ echo -e "${GREEN}✅ All prerequisites met!${NC}"
 echo ""
 
 # Prompt for configuration
-echo -e "${BLUE}📝 Configuration${NC}"
+echo -e "${BLUE}📝 Deployment Configuration${NC}"
 echo ""
 
-# Domain
-read -p "Enter your domain (e.g., synap.example.com): " DOMAIN
-while [ -z "$DOMAIN" ]; do
-    echo -e "${RED}Domain is required!${NC}"
-    read -p "Enter your domain: " DOMAIN
-done
+# Deployment Type Choice
+echo "Choose deployment type:"
+echo "  [1] Custom domain (you manage DNS)"
+echo "  [2] Synap subdomain (*.synap.live) ⭐ RECOMMENDED"
+echo "  [3] Localhost only (no SSL, for testing)"
+echo ""
+read -p "Choice [1-3]: " DEPLOYMENT_TYPE
 
-# Email for SSL
-read -p "Enter your email (for SSL certificates): " EMAIL
-while [ -z "$EMAIL" ]; do
-    echo -e "${RED}Email is required!${NC}"
-    read -p "Enter your email: " EMAIL
-done
+DOMAIN=""
+EMAIL=""
+USE_SSL="true"
+
+case $DEPLOYMENT_TYPE in
+    1)
+        # Custom domain flow
+        echo ""
+        read -p "Enter your domain (e.g., synap.example.com): " DOMAIN
+        while [ -z "$DOMAIN" ]; do
+            echo -e "${RED}Domain is required!${NC}"
+            read -p "Enter your domain: " DOMAIN
+        done
+        
+        read -p "Enter your email (for SSL certificates): " EMAIL
+        while [ -z "$EMAIL" ]; do
+            echo -e "${RED}Email is required!${NC}"
+            read -p "Enter your email: " EMAIL
+        done
+        ;;
+    2)
+        # Synap subdomain flow
+        echo ""
+        echo -e "${BLUE}🌐 Synap Subdomain Provisioning${NC}"
+        echo ""
+        echo "You'll get a free subdomain like: happy-cloud-123.synap.live"
+        echo "Or upgrade for custom subdomain like: yourname.synap.live"
+        echo ""
+        echo "⚠️  This feature requires authentication at synap.live"
+        echo ""
+        read -p "Continue? (y/N): " CONTINUE_SYNAP
+        
+        if [[ ! "$CONTINUE_SYNAP" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Switching to localhost mode...${NC}"
+            DEPLOYMENT_TYPE=3
+        else
+            echo ""
+            echo "Visit: https://synap.live/self-hosting"
+            echo "1. Log in or create account"
+            echo "2. Click 'Get Subdomain'"
+            echo "3. Copy your provisioning token"
+            echo ""
+            read -p "Paste your provisioning token: " PROVISION_TOKEN
+            
+            while [ -z "$PROVISION_TOKEN" ]; do
+                echo -e "${RED}Provisioning token is required!${NC}"
+                read -p "Paste your provisioning token: " PROVISION_TOKEN
+            done
+            
+            # Get server public IP
+            echo ""
+            echo -e "${BLUE}🔍 Detecting server IP...${NC}"
+            PUBLIC_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipecho.net/plain)
+            
+            if [ -z "$PUBLIC_IP" ]; then
+                echo -e "${RED}❌ Could not detect public IP${NC}"
+                read -p "Enter your server's public IP: " PUBLIC_IP
+            else
+                echo -e "${GREEN}✓ Detected IP: ${PUBLIC_IP}${NC}"
+            fi
+            
+            # Call control plane API
+            echo ""
+            echo -e "${BLUE}🚀 Provisioning subdomain...${NC}"
+            
+            RESPONSE=$(curl -s -X POST https://api.synap.live/v1/self-hosting/provision \
+              -H "Authorization: Bearer $PROVISION_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"ip\": \"$PUBLIC_IP\"}")
+            
+            DOMAIN=$(echo $RESPONSE | grep -o '"domain":"[^"]*"' | cut -d'"' -f4)
+            
+            if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
+                echo -e "${RED}❌ Provisioning failed${NC}"
+                ERROR_MSG=$(echo $RESPONSE | grep -o '"message":"[^"]*"' | cut -d'"' -f4)
+                echo "Error: $ERROR_MSG"
+                echo ""
+                echo "Falling back to localhost mode..."
+                DEPLOYMENT_TYPE=3
+            else
+                echo -e "${GREEN}✅ Reserved: ${DOMAIN}${NC}"
+                echo ""
+                echo "⏳ Waiting for DNS propagation (60 seconds)..."
+                sleep 60
+                
+                # Email for SSL
+                read -p "Enter your email (for SSL certificates): " EMAIL
+                while [ -z "$EMAIL" ]; do
+                    echo -e "${RED}Email is required!${NC}"
+                    read -p "Enter your email: " EMAIL
+                done
+            fi
+        fi
+        ;;
+    3)
+        # Localhost flow
+        echo ""
+        echo -e "${YELLOW}⚠️  Localhost mode: No SSL, HTTP only${NC}"
+        DOMAIN="localhost"
+        EMAIL="noreply@localhost"
+        USE_SSL="false"
+        ;;
+    *)
+        echo -e "${RED}Invalid choice. Defaulting to localhost.${NC}"
+        DOMAIN="localhost"
+        EMAIL="noreply@localhost"
+        USE_SSL="false"
+        ;;
+esac
+
+# If we ended up in localhost mode from failed Synap provisioning
+if [ "$DEPLOYMENT_TYPE" = "3" ]; then
+    DOMAIN="localhost"
+    EMAIL="noreply@localhost"
+    USE_SSL="false"
+fi
 
 # AI Configuration (Optional)
 echo ""
@@ -330,21 +441,57 @@ echo -e "${GREEN}✅ Synap is installed!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BLUE}📍 Installation Directory:${NC} ${INSTALL_DIR}"
-echo -e "${BLUE}🌐 Domain:${NC} https://${DOMAIN}"
+
+if [ "$USE_SSL" = "true" ]; then
+    echo -e "${BLUE}🌐 Domain:${NC} https://${DOMAIN}"
+else
+    echo -e "${BLUE}🌐 Access:${NC} http://${DOMAIN}:4000"
+fi
+
 echo ""
 echo -e "${YELLOW}⚠️  IMPORTANT NEXT STEPS:${NC}"
 echo ""
-echo "1. Configure DNS:"
-echo "   Add an A record pointing ${DOMAIN} to this server's IP"
-echo ""
-echo "2. Backup your secrets:"
-echo "   scp ${INSTALL_DIR}/.secrets-backup.txt your-local-machine:~/"
-echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
-echo ""
-echo "3. Wait for SSL certificate (1-2 minutes after DNS propagates)"
-echo ""
-echo "4. Access Synap:"
-echo "   https://${DOMAIN}"
+
+if [ "$DEPLOYMENT_TYPE" = "1" ]; then
+    # Custom domain
+    echo "1. Configure DNS:"
+    echo "   Add an A record pointing ${DOMAIN} to this server's IP"
+    echo ""
+    echo "2. Backup your secrets:"
+    echo "   scp ${INSTALL_DIR}/.secrets-backup.txt your-local-machine:~/"
+    echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
+    echo ""
+    echo "3. Wait for SSL certificate (1-2 minutes after DNS propagates)"
+    echo ""
+    echo "4. Access Synap:"
+    echo "   https://${DOMAIN}"
+elif [ "$DEPLOYMENT_TYPE" = "2" ]; then
+    # Synap subdomain
+    echo "1. Backup your secrets:"
+    echo "   scp ${INSTALL_DIR}/.secrets-backup.txt your-local-machine:~/"
+    echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
+    echo ""
+    echo "2. Your Synap instance is ready!"
+    echo "   https://${DOMAIN}"
+    echo ""
+    echo "3. Manage your instance:"
+    echo "   https://synap.live/dashboard/instances"
+    echo ""
+    echo "✅ DNS is already configured!"
+    echo "✅ SSL certificate will be auto-provisioned!"
+else
+    # Localhost
+    echo "1. Backup your secrets:"
+    echo "   cp ${INSTALL_DIR}/.secrets-backup.txt ~/synap-secrets.txt"
+    echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
+    echo ""
+    echo "2. Access Synap (HTTP only, no SSL):"
+    echo "   http://localhost:4000"
+    echo ""
+    echo "⚠️  Localhost mode is for testing only!"
+    echo "   For production, use a custom domain or Synap subdomain."
+fi
+
 echo ""
 echo -e "${BLUE}📚 Documentation:${NC} https://docs.synap.live"
 echo -e "${BLUE}💬 Community:${NC} https://discord.gg/synap"
