@@ -7,7 +7,7 @@ services:
   backend:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/Dockerfile
     image: synap/backend:latest
     restart: always
     environment:
