@@ -324,6 +324,12 @@ if [ -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}⚠️  Directory already exists${NC}"
     read -p "Overwrite? This will delete existing data! (y/N): " OVERWRITE
     if [[ "$OVERWRITE" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}🧹 Wiping existing Docker volumes...${NC}"
+        if [ -f "$INSTALL_DIR/deploy/docker-compose.yml" ]; then
+            (cd "$INSTALL_DIR/deploy" && docker compose down -v 2>/dev/null || true)
+        elif [ -f "$INSTALL_DIR/docker-compose.yml" ]; then
+             (cd "$INSTALL_DIR" && docker compose down -v 2>/dev/null || true)
+        fi
         rm -rf "$INSTALL_DIR"
     else
         echo -e "${RED}Installation cancelled${NC}"
