@@ -616,8 +616,8 @@ importers:
   packages/hub-protocol:
     dependencies:
       '@synap-core/types':
-        specifier: ^1.2.6
-        version: 1.2.6(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
+        specifier: workspace:*
+        version: link:../types
       '@trpc/client':
         specifier: ^11.7.1
         version: 11.8.1(@trpc/server@11.8.1(typescript@5.9.3))(typescript@5.9.3)
@@ -3546,11 +3546,6 @@ packages:
 
   '@synap-core/types@1.2.16':
     resolution: {integrity: sha512-nt3Q0qvcmVt/9d/3jRl1O7iVNpVrKklHDMiz31zXzdYYZ5EN6bt/iVqkEW46BA29JtZVgCE0vvw4NM0lZ3Lm8g==}
-
-  '@synap-core/types@1.2.6':
-    resolution: {integrity: sha512-4jBMQ4Frg9p+RHbx15HbUccyUYUt8d9v1fdGGlT06rviLfLuCoUMehgUo0HxZRpnOQP5K17L+fSm9Vd7h37U+Q==}
-    peerDependencies:
-      '@synap/database': workspace:*
 
   '@tabler/icons-react@3.36.1':
     resolution: {integrity: sha512-/8nOXeNeMoze9xY/QyEKG65wuvRhkT3q9aytaur6Gj8bYU2A98YVJyLc9MRmc5nVvpy+bRlrrwK/Ykr8WGyUWg==}
@@ -10688,43 +10683,6 @@ snapshots:
       '@trpc/server': 11.8.1(typescript@5.9.3)
 
   '@synap-core/types@1.2.16(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
-    dependencies:
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
-      drizzle-zod: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
-      yjs: 13.6.29
-      zod: 4.3.6
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@synap-core/types@1.2.6(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
     dependencies:
       drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       drizzle-zod: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)

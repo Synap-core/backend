@@ -22,7 +22,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@synap-core/types": "^1.2.6",
+    "@synap-core/types": "workspace:*",
     "@trpc/client": "^11.7.1",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
