@@ -93,6 +93,17 @@ echo "  [3] Localhost only (no SSL, for testing)"
 echo ""
 read -p "Choice [1-3]: " DEPLOYMENT_TYPE
 
+# Load existing config
+DEFAULT_DOMAIN=""
+DEFAULT_EMAIL=""
+
+if [ -f .env ]; then
+    DEFAULT_DOMAIN=$(grep "^DOMAIN=" .env | cut -d'=' -f2-)
+    DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" .env | cut -d'=' -f2-)
+    echo -e "${YELLOW}👉 Found existing configuration. Defaults loaded.${NC}"
+fi
+
+DEPLOYMENT_TYPE=""
 DOMAIN=""
 EMAIL=""
 USE_SSL="true"
@@ -101,13 +112,17 @@ case $DEPLOYMENT_TYPE in
     1)
         # Custom domain flow
         echo ""
-        read -p "Enter your domain (e.g., synap.example.com): " DOMAIN
+        read -p "Enter your domain (e.g., synap.example.com) [${DEFAULT_DOMAIN}]: " DOMAIN
+        DOMAIN=${DOMAIN:-$DEFAULT_DOMAIN}
+        
         while [ -z "$DOMAIN" ]; do
             echo -e "${RED}Domain is required!${NC}"
             read -p "Enter your domain: " DOMAIN
         done
         
-        read -p "Enter your email (for SSL certificates): " EMAIL
+        read -p "Enter your email (for SSL certificates) [${DEFAULT_EMAIL}]: " EMAIL
+        EMAIL=${EMAIL:-$DEFAULT_EMAIL}
+
         while [ -z "$EMAIL" ]; do
             echo -e "${RED}Email is required!${NC}"
             read -p "Enter your email: " EMAIL
@@ -214,20 +229,44 @@ fi
 echo ""
 echo -e "${BLUE}🔐 Generating secure secrets...${NC}"
 
-POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-JWT_SECRET=$(openssl rand -base64 64 | tr -d "=+/" | cut -c1-64)
-KRATOS_COOKIE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-KRATOS_CIPHER=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-KRATOS_WEBHOOK=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-MINIO_ACCESS_KEY="minioadmin"
-MINIO_SECRET_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-TYPESENSE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-INNGEST_EVENT_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-INNGEST_SIGNING_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-INTELLIGENCE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+# Helper to get secret or generate new
+get_secret() {
+    local var_name=$1
+    local existing=""
+    
+    if [ -f .env ]; then
+        existing=$(grep "^${var_name}=" .env | cut -d'=' -f2-)
+    fi
+    
+    if [ -n "$existing" ]; then
+        echo "$existing"
+    else
+        openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
+    fi
+}
 
-echo -e "${GREEN}✓ Secrets generated${NC}"
+# Helper for 64 char secret
+get_secret_64() {
+    local var_name=$1
+    local existing=""
+    if [ -f .env ]; then existing=$(grep "^${var_name}=" .env | cut -d'=' -f2-); fi
+    if [ -n "$existing" ]; then echo "$existing"; else openssl rand -base64 64 | tr -d "=+/" | cut -c1-64; fi
+}
+
+POSTGRES_PASSWORD=$(get_secret POSTGRES_PASSWORD)
+JWT_SECRET=$(get_secret_64 JWT_SECRET)
+KRATOS_COOKIE=$(get_secret KRATOS_SECRETS_COOKIE)
+KRATOS_CIPHER=$(get_secret KRATOS_SECRETS_CIPHER)
+KRATOS_WEBHOOK=$(get_secret KRATOS_WEBHOOK_SECRET)
+MINIO_ACCESS_KEY="minioadmin"
+MINIO_SECRET_KEY=$(get_secret MINIO_SECRET_KEY)
+TYPESENSE_KEY=$(get_secret TYPESENSE_API_KEY)
+TYPESENSE_ADMIN_KEY=$(get_secret TYPESENSE_ADMIN_API_KEY)
+INNGEST_EVENT_KEY=$(get_secret INNGEST_EVENT_KEY)
+INNGEST_SIGNING_KEY=$(get_secret INNGEST_SIGNING_KEY)
+INTELLIGENCE_KEY=$(get_secret INTELLIGENCE_API_KEY)
+
+echo -e "${GREEN}✓ Secrets loaded/generated${NC}"
 
 # Create installation directory
 # ADD THIS ENTIRE BLOCK OF CODE
