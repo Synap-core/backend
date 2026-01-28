@@ -89,7 +89,7 @@ export const backgroundTasksRouter = router({
         failureCount: z.number().optional(),
         errorMessage: z.string().optional(),
         status: z.enum(["active", "paused", "error"]).optional(),
-        metadata: z.record(z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

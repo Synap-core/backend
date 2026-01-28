@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, backgroundTasks, eq, and, desc } from "@synap/database";
+import { backgroundTasks, eq, and, desc } from "@synap/database";
 import { requireUserId } from "../utils/user-scoped.js";
 import { emitRequestEvent } from "../utils/emit-event.js";
 
@@ -95,16 +95,21 @@ export const backgroundTasksRouter = router({
         type: z.enum(["cron", "event", "interval"]),
         schedule: z.string().optional(), // Cron expression, event pattern, or interval
         action: z.string().min(1),
-        context: z.record(z.unknown()).optional(),
+        context: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const { randomUUID } = await import("crypto");
+      const taskId = randomUUID();
 
       // Emit event for task creation
       await emitRequestEvent({
         type: "background_tasks.create.requested",
+        subjectId: taskId,
+        subjectType: "background_task",
         data: {
+          id: taskId,
           userId,
           workspaceId: input.workspaceId,
           name: input.name,
@@ -115,9 +120,11 @@ export const backgroundTasksRouter = router({
           context: input.context || {},
         },
         userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
+        id: taskId,
         success: true,
         message: "Background task creation requested",
       };
@@ -135,7 +142,7 @@ export const backgroundTasksRouter = router({
         description: z.string().optional(),
         schedule: z.string().optional(),
         action: z.string().min(1).optional(),
-        context: z.record(z.unknown()).optional(),
+        context: z.record(z.string(), z.unknown()).optional(),
         status: z.enum(["active", "paused", "error"]).optional(),
       })
     )
@@ -161,11 +168,14 @@ export const backgroundTasksRouter = router({
       // Emit event for task update
       await emitRequestEvent({
         type: "background_tasks.update.requested",
+        subjectId: id,
+        subjectType: "background_task",
         data: {
           taskId: id,
           ...updateData,
         },
         userId,
+        workspaceId: existingTask.workspaceId || undefined,
       });
 
       return {
@@ -205,10 +215,13 @@ export const backgroundTasksRouter = router({
       // Emit event for task deletion
       await emitRequestEvent({
         type: "background_tasks.delete.requested",
+        subjectId: input.id,
+        subjectType: "background_task",
         data: {
           taskId: input.id,
         },
         userId,
+        workspaceId: existingTask.workspaceId || undefined,
       });
 
       return {

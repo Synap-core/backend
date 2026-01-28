@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, skills, eq, and, desc } from "@synap/database";
+import { skills, eq, and, desc } from "@synap/database";
 import { requireUserId } from "../utils/user-scoped.js";
 import { emitRequestEvent } from "../utils/emit-event.js";
 
@@ -85,7 +85,7 @@ export const skillsRouter = router({
         name: z.string().min(1).max(255),
         description: z.string().optional(),
         code: z.string().min(1),
-        parameters: z.record(z.unknown()).optional(),
+        parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
@@ -135,7 +135,7 @@ export const skillsRouter = router({
         name: z.string().min(1).max(255).optional(),
         description: z.string().optional(),
         code: z.string().min(1).optional(),
-        parameters: z.record(z.unknown()).optional(),
+        parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).optional(),
         timeoutSeconds: z.number().min(1).max(300).optional(),
@@ -160,11 +160,14 @@ export const skillsRouter = router({
       // Emit event for skill update
       await emitRequestEvent({
         type: "skills.update.requested",
+        subjectId: id,
+        subjectType: "skill",
         data: {
           skillId: id,
           ...updateData,
         },
         userId,
+        workspaceId: existingSkill.workspaceId || undefined,
       });
 
       return {
@@ -201,10 +204,13 @@ export const skillsRouter = router({
       // Emit event for skill deletion
       await emitRequestEvent({
         type: "skills.delete.requested",
+        subjectId: input.id,
+        subjectType: "skill",
         data: {
           skillId: input.id,
         },
         userId,
+        workspaceId: existingSkill.workspaceId || undefined,
       });
 
       return {
