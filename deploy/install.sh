@@ -103,7 +103,6 @@ if [ -f .env ]; then
     echo -e "${YELLOW}👉 Found existing configuration. Defaults loaded.${NC}"
 fi
 
-DEPLOYMENT_TYPE=""
 DOMAIN=""
 EMAIL=""
 USE_SSL="true"
