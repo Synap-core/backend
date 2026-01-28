@@ -32,11 +32,6 @@ services:
       TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
-      INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
-      INTELLIGENCE_API_KEY: ${INTELLIGENCE_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,35 +51,6 @@ services:
       start_period: 60s
     networks:
       - synap-net
-
-  # ============================================================================
-  # INTELLIGENCE SERVICE (OPTIONAL - Currently disabled)
-  # ============================================================================
-  # Uncomment this section if you want AI features and have the image available
-  # intelligence-service:
-  #   image: synap/intelligence-service:latest
-  #   restart: always
-  #   environment:
-  #     NODE_ENV: production
-  #     PORT: 3001
-  #     API_KEY: ${INTELLIGENCE_API_KEY}
-  #     OPENAI_API_KEY: ${OPENAI_API_KEY}
-  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-  #     GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY}
-  #     BACKEND_URL: http://backend:4000
-  #   healthcheck:
-  #     test:
-  #       [
-  #         "CMD",
-  #         "node",
-  #         "-e",
-  #         "require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
-  #       ]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #   networks:
-  #     - synap-net
 
   # ============================================================================
   # POSTGRESQL
