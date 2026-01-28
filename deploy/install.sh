@@ -420,8 +420,8 @@ chmod 600 ../.secrets-backup.txt
 echo ""
 echo -e "${BLUE}🚀 Starting Synap...${NC}"
 
-docker compose pull
-docker compose up -d
+# Build and start services
+docker compose up -d --build
 
 # Wait for services to be healthy
 echo ""
@@ -497,8 +497,8 @@ echo -e "${BLUE}💬 Community:${NC} https://discord.gg/synap"
 echo -e "${BLUE}🐛 Issues:${NC} https://github.com/synap-labs/synap-backend/issues"
 echo ""
 echo -e "${BLUE}🛠️  Management Commands:${NC}"
-echo "  ${INSTALL_DIR}/synap-cli health    # Check system health"
-echo "  ${INSTALL_DIR}/synap-cli logs      # View logs"
-echo "  ${INSTALL_DIR}/synap-cli update    # Update Synap"
-echo "  ${INSTALL_DIR}/synap-cli backup    # Backup data"
+echo "  ${INSTALL_DIR}/deploy/synap-cli health    # Check system health"
+echo "  ${INSTALL_DIR}/deploy/synap-cli logs      # View logs"
+echo "  ${INSTALL_DIR}/deploy/synap-cli update    # Update Synap"
+echo "  ${INSTALL_DIR}/deploy/synap-cli backup    # Backup data"
 echo ""
