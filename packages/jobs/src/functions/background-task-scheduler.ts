@@ -119,7 +119,7 @@ function calculateNextRunTime(
         // Parse cron expression (e.g., "0 9 * * *" = daily at 9 AM)
         const cronParts = task.schedule.split(" ");
         if (cronParts.length === 5) {
-          const [minute, hour, day, month, weekday] = cronParts;
+          const [minute, hour] = cronParts;
 
           // Simple implementation: if hour is specified, set it
           if (hour !== "*") {

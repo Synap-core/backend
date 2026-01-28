@@ -6,7 +6,7 @@
  */
 
 import { inngest } from "../client.js";
-import { db, skills, eq, and } from "@synap/database";
+import { db, skills, eq } from "@synap/database";
 import { randomUUID } from "crypto";
 
 export const skillsExecutor = inngest.createFunction(
