@@ -12,7 +12,7 @@ beforeAll(async () => {
   console.log("🧪 Setting up test environment...");
 
   // Clean any existing test data
-  await sql`DELETE FROM events_timescale WHERE user_id LIKE 'test-%'`;
+  await sql`DELETE FROM events WHERE user_id LIKE 'test-%'`;
   await sql`DELETE FROM entities WHERE user_id LIKE 'test-%'`;
   await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
 
@@ -23,7 +23,7 @@ beforeAll(async () => {
 afterAll(async () => {
   console.log("🧹 Cleaning up test data...");
 
-  await sql`DELETE FROM events_timescale WHERE user_id LIKE 'test-%'`;
+  await sql`DELETE FROM events WHERE user_id LIKE 'test-%'`;
   await sql`DELETE FROM entities WHERE user_id LIKE 'test-%'`;
   await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
 

@@ -18,7 +18,6 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 import { entities } from "./entities.js";
-import { events } from "./events.js";
 
 // ============================================================================
 // ENTITY ENRICHMENTS TABLE
@@ -47,9 +46,7 @@ export const entityEnrichments = pgTable(
     }).notNull(),
 
     // Source event (for traceability - can rebuild from events)
-    sourceEventId: uuid("source_event_id")
-      .notNull()
-      .references(() => events.id),
+    sourceEventId: uuid("source_event_id").notNull(),
 
     // AI metadata
     agentId: text("agent_id").notNull(),
@@ -126,9 +123,7 @@ export const entityRelationships = pgTable(
     }).notNull(),
 
     // AI metadata
-    sourceEventId: uuid("source_event_id")
-      .notNull()
-      .references(() => events.id),
+    sourceEventId: uuid("source_event_id").notNull(),
     agentId: text("agent_id").notNull(),
     confidence: decimal("confidence", { precision: 3, scale: 2 }).notNull(),
 
@@ -190,9 +185,7 @@ export const reasoningTraces = pgTable(
     subjectId: uuid("subject_id").notNull(),
 
     // Source event
-    sourceEventId: uuid("source_event_id")
-      .notNull()
-      .references(() => events.id),
+    sourceEventId: uuid("source_event_id").notNull(),
 
     // The agent that did the reasoning
     agentId: text("agent_id").notNull(),

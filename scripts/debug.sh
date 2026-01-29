@@ -63,7 +63,7 @@ case "$1" in
     echo -e "${GREEN}📅 Recent events (last 20):${NC}"
     docker exec synap-postgres psql -U "$DB_USER" "$DB_NAME" -c \
       "SELECT id, event_type, user_id, timestamp 
-       FROM events_timescale 
+       FROM events 
        ORDER BY timestamp DESC 
        LIMIT 20"
     ;;

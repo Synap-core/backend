@@ -73,7 +73,7 @@ export const healthRouter = router({
    */
   metrics: publicProcedure.query(async () => {
     const [eventCount, entityCount] = await Promise.allSettled([
-      sql`SELECT COUNT(*) as count FROM events_timescale WHERE timestamp > NOW() - INTERVAL '24 hours'`,
+      sql`SELECT COUNT(*) as count FROM events WHERE timestamp > NOW() - INTERVAL '24 hours'`,
       sql`SELECT COUNT(*) as count FROM entities`,
     ]);
 

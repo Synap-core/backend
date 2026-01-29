@@ -52,7 +52,7 @@ describe("EventRepository", () => {
       await Promise.all(events.map((e) => eventRepository.append(e)));
 
       const stored = await sql`
-        SELECT * FROM events_timescale WHERE user_id = ${userId}
+        SELECT * FROM events WHERE user_id = ${userId}
       `;
 
       expect(stored.length).toBe(10);
@@ -83,9 +83,9 @@ describe("EventRepository", () => {
       });
 
       const user1Events =
-        await sql`SELECT * FROM events_timescale WHERE user_id = ${user1}`;
+        await sql`SELECT * FROM events WHERE user_id = ${user1}`;
       const user2Events =
-        await sql`SELECT * FROM events_timescale WHERE user_id = ${user2}`;
+        await sql`SELECT * FROM events WHERE user_id = ${user2}`;
 
       expect(user1Events.length).toBe(1);
       expect(user2Events.length).toBe(1);
@@ -111,7 +111,7 @@ describe("EventRepository", () => {
       await eventRepository.append(event);
 
       const [stored] = await sql`
-        SELECT * FROM events_timescale WHERE id = ${event.id}
+        SELECT * FROM events WHERE id = ${event.id}
       `;
 
       expect(stored.timestamp).toBeDefined();
@@ -136,7 +136,7 @@ describe("EventRepository", () => {
       await eventRepository.append(event);
 
       const [stored] = await sql`
-        SELECT * FROM events_timescale WHERE id = ${event.id}
+        SELECT * FROM events WHERE id = ${event.id}
       `;
 
       expect(stored.data.content).toBe(largeText);
@@ -166,7 +166,7 @@ describe("EventRepository", () => {
       await eventRepository.append(event);
 
       const [stored] = await sql`
-        SELECT * FROM events_timescale WHERE id = ${event.id}
+        SELECT * FROM events WHERE id = ${event.id}
       `;
 
       expect(stored.data).toEqual(specialData);
@@ -211,7 +211,7 @@ describe("EventRepository", () => {
       await eventRepository.append(event);
 
       const [stored] = await sql`
-        SELECT * FROM events_timescale WHERE id = ${event.id}
+        SELECT * FROM events WHERE id = ${event.id}
       `;
 
       expect(stored.data).toEqual(complexData);
@@ -240,7 +240,7 @@ describe("EventRepository", () => {
       }
 
       const fetched = await sql`
-        SELECT * FROM events_timescale 
+        SELECT * FROM events 
         WHERE user_id = ${userId}
         ORDER BY timestamp ASC
       `;
@@ -254,7 +254,7 @@ describe("EventRepository", () => {
       const userId = generateTestUserId();
 
       const events = await sql`
-        SELECT * FROM events_timescale WHERE user_id = ${userId}
+        SELECT * FROM events WHERE user_id = ${userId}
       `;
 
       expect(events.length).toBe(0);

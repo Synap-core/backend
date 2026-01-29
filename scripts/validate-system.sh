@@ -48,14 +48,14 @@ else
   fi
 fi
 
-# 4. Check events_timescale table
-echo -e "\n${BLUE}4. Checking events_timescale table...${NC}"
-if docker exec synap-postgres psql -U postgres synap -c "\d events_timescale" > /dev/null 2>&1; then
-  EVENT_COUNT=$(docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events_timescale" 2>/dev/null | tr -d ' ')
-  echo -e "  ${GREEN}✅ events_timescale table exists${NC}"
+# 4. Check events table
+echo -e "\n${BLUE}4. Checking events table...${NC}"
+if docker exec synap-postgres psql -U postgres synap -c "\d events" > /dev/null 2>&1; then
+  EVENT_COUNT=$(docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events" 2>/dev/null | tr -d ' ')
+  echo -e "  ${GREEN}✅ events table exists${NC}"
   echo -e "    Total events: $EVENT_COUNT"
 else
-  echo -e "  ${RED}❌ events_timescale table not found${NC}"
+  echo -e "  ${RED}❌ events table not found${NC}"
   exit 1
 fi
 

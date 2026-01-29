@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS "workspace_invites" (
 -- 3. EVENT SOURCING
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS "events" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"id" uuid DEFAULT gen_random_uuid() NOT NULL,
 	"timestamp" timestamp with time zone DEFAULT now() NOT NULL,
 	"type" text NOT NULL,
     "subject_id" text NOT NULL,
@@ -72,8 +72,13 @@ CREATE TABLE IF NOT EXISTS "events" (
     "metadata" jsonb,
 	"source" text DEFAULT 'api',
 	"correlation_id" uuid,
-	"user_id" text NOT NULL
+	"user_id" text NOT NULL,
+    PRIMARY KEY (id, timestamp)
 );
+
+-- Convert to hypertable for TimescaleDB performance
+-- We do this before creating indices for better efficiency
+SELECT create_hypertable('events', 'timestamp', if_not_exists => TRUE);
 
 CREATE INDEX "idx_events_subject" ON "events" ("subject_type", "subject_id", "timestamp");
 CREATE INDEX "idx_events_user_type" ON "events" ("user_id", "type");

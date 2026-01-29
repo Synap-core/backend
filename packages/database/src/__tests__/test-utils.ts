@@ -11,7 +11,7 @@ import crypto from "crypto";
  * Clean test data for a specific user pattern
  */
 export async function cleanTestData(userIdPattern = "test-%") {
-  await sql`DELETE FROM events_timescale WHERE user_id LIKE ${userIdPattern}`;
+  await sql`DELETE FROM events WHERE user_id LIKE ${userIdPattern}`;
   await sql`DELETE FROM entities WHERE user_id LIKE ${userIdPattern}`;
   await sql`DELETE FROM entity_vectors WHERE user_id LIKE ${userIdPattern}`;
   await sql`DELETE FROM knowledge_facts WHERE user_id LIKE ${userIdPattern}`;

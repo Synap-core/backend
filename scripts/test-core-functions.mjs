@@ -203,7 +203,7 @@ const tests = {
       const execAsync = promisify(exec);
 
       const { stdout, stderr } = await execAsync(
-        `docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events_timescale WHERE user_id = '${TEST_USER}' AND timestamp > NOW() - INTERVAL '5 minutes'"`
+        `docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events WHERE user_id = '${TEST_USER}' AND timestamp > NOW() - INTERVAL '5 minutes'"`
       );
 
       if (stderr) {
@@ -214,7 +214,7 @@ const tests = {
       log.info(`Recent events for ${TEST_USER}: ${count}`);
 
       if (count > 0) {
-        log.success("Events being stored in events_timescale");
+        log.success("Events being stored in events");
         return { passed: true, count };
       } else {
         log.warn(
