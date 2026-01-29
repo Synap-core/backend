@@ -196,16 +196,21 @@ async function runMigrations() {
     console.log("STEP 1: Drizzle Migrations (Auto-Generated)");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    // Resolve paths - robust handling for Dev (ts-node/tsx) vs Prod (compiled dist)
+    // Resolve paths - robust handling for Docker, Dev (ts-node/tsx), and Prod (compiled dist)
     const possibleDrizzlePaths = [
-      path.join(__dirname, "../migrations-drizzle"), // Dev
-      path.join(__dirname, "../../migrations-drizzle"), // Prod
+      "/app/migrations-drizzle", // Docker absolute path
+      path.join(__dirname, "../migrations-drizzle"), // Dev: packages/database/migrations-drizzle
+      path.join(__dirname, "../../migrations-drizzle"), // Prod: packages/database/dist/scripts/../../ migrations-drizzle
+      path.join(process.cwd(), "migrations-drizzle"), // CWD fallback
     ];
     console.log(`Debug: Checking Drizzle paths:`, possibleDrizzlePaths);
 
     const drizzleDir =
-      possibleDrizzlePaths.find((p) => existsSync(p)) ||
-      possibleDrizzlePaths[0];
+      possibleDrizzlePaths.find((p) => {
+        const exists = existsSync(p);
+        if (exists) console.log(`  ✅ Path exists: ${p}`);
+        return exists;
+      }) || possibleDrizzlePaths[0];
 
     console.log(`📂 Drizzle Migrations Dir: ${drizzleDir}`);
 
@@ -221,11 +226,17 @@ async function runMigrations() {
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     const possibleCustomPaths = [
+      "/app/migrations-custom",
       path.join(__dirname, "../migrations-custom"),
       path.join(__dirname, "../../migrations-custom"),
+      path.join(process.cwd(), "migrations-custom"),
     ];
     const customDir =
-      possibleCustomPaths.find((p) => existsSync(p)) || possibleCustomPaths[0];
+      possibleCustomPaths.find((p) => {
+        const exists = existsSync(p);
+        if (exists) console.log(`  ✅ Path exists: ${p}`);
+        return exists;
+      }) || possibleCustomPaths[0];
 
     const customCount = await applyMigrationsFromDir(
       "custom",
