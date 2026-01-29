@@ -21,8 +21,7 @@
     }
 
     # Ory Kratos (Authentication)
-    handle /.ory/kratos/* {
-        uri strip_prefix /.ory/kratos
+    handle_path /.ory/kratos/* {
         reverse_proxy kratos:4433
     }
 
