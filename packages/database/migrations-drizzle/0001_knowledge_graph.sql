@@ -43,13 +43,6 @@ CREATE TABLE IF NOT EXISTS "entities" (
     -- Link to Document Content (Optional 1:1)
     "document_id" uuid REFERENCES "documents"("id") ON DELETE set null,
 
-    -- File Metadata (if type='file')
-	"file_url" text,
-	"file_path" text,
-	"file_size" integer,
-	"file_type" text,
-	"checksum" text,
-	
     "version" integer DEFAULT 1 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,

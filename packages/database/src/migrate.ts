@@ -17,6 +17,9 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+console.log(`Debug: CWD = ${process.cwd()}`);
+console.log(`Debug: __dirname = ${__dirname}`);
+
 // Get DATABASE_URL from environment
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -195,9 +198,10 @@ async function runMigrations() {
 
     // Resolve paths - robust handling for Dev (ts-node/tsx) vs Prod (compiled dist)
     const possibleDrizzlePaths = [
-      path.join(__dirname, "../migrations-drizzle"), // Dev: src/../migrations-drizzle
-      path.join(__dirname, "../../migrations-drizzle"), // Prod: dist/scripts/../../migrations-drizzle
+      path.join(__dirname, "../migrations-drizzle"), // Dev
+      path.join(__dirname, "../../migrations-drizzle"), // Prod
     ];
+    console.log(`Debug: Checking Drizzle paths:`, possibleDrizzlePaths);
 
     const drizzleDir =
       possibleDrizzlePaths.find((p) => existsSync(p)) ||

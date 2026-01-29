@@ -44,7 +44,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 # Copy configuration files needed at runtime
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
-COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/migrations-drizzle
+COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/dist/migrations-drizzle
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./packages/database/dist/scripts
 COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./packages/database/drizzle.config.ts
 
