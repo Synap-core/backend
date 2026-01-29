@@ -67,6 +67,7 @@ services:
       POSTGRES_DB: synap
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - synap-net
     healthcheck:
@@ -140,7 +141,7 @@ services:
         delay: 5s
         max_attempts: 5
     environment:
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
     command: migrate sql -e --yes
     depends_on:
       postgres:
@@ -152,7 +153,7 @@ services:
     image: oryd/kratos:v1.3.1
     restart: always
     environment:
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
       SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE}
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
@@ -183,7 +184,7 @@ services:
   hydra-migrate:
     image: oryd/hydra:v2.3.0
     environment:
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/hydra?sslmode=disable
     command: migrate sql -e --yes
     depends_on:
       postgres:
@@ -195,7 +196,7 @@ services:
     image: oryd/hydra:v2.3.0
     restart: always
     environment:
-      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
+      DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/hydra?sslmode=disable
       URLS_SELF_ISSUER: https://${DOMAIN}
       URLS_CONSENT: https://${DOMAIN}/consent
       URLS_LOGIN: https://${DOMAIN}/login
