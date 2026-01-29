@@ -224,7 +224,9 @@ if [ "$DEPLOYMENT_TYPE" = "3" ]; then
     USE_SSL="false"
 fi
 
-# Intelligence Service
+# ============================================================================
+# INTELLIGENCE SERVICE CONFIGURATION (Server 2)
+# ============================================================================
 echo ""
 echo -e "${BLUE}🧠 Synap Intelligence Service${NC}"
 echo "Enter the details from your Intelligence Service installation (Server 2)."
@@ -237,14 +239,41 @@ INTELLIGENCE_URL=${INTELLIGENCE_URL:-http://localhost:3001}
 read -p "Intelligence API Key: " INTELLIGENCE_KEY
 if [ -z "$INTELLIGENCE_KEY" ]; then
     echo -e "${YELLOW}⚠️  No API Key provided. Use 'synap-cli secrets update' later to set it.${NC}"
-    INTELLIGENCE_KEY=$(get_secret INTELLIGENCE_API_KEY) # Fallback to random if empty
+    # We do NOT generate a random one here because it must match Server 2.
+    INTELLIGENCE_KEY=""
 else 
     echo -e "${GREEN}✓ Key recorded${NC}"
 fi
 
-# Generate other secrets
+# ============================================================================
+# Generate secrets
+# ============================================================================
 echo ""
 echo -e "${BLUE}🔐 Generating secure secrets...${NC}"
+
+# Helper to get secret or generate new
+get_secret() {
+    local var_name=$1
+    local existing=""
+    
+    if [ -f .env ]; then
+        existing=$(grep "^${var_name}=" .env | cut -d'=' -f2-)
+    fi
+    
+    if [ -n "$existing" ]; then
+        echo "$existing"
+    else
+        openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
+    fi
+}
+
+# Helper for 64 char secret
+get_secret_64() {
+    local var_name=$1
+    local existing=""
+    if [ -f .env ]; then existing=$(grep "^${var_name}=" .env | cut -d'=' -f2-); fi
+    if [ -n "$existing" ]; then echo "$existing"; else openssl rand -base64 64 | tr -d "=+/" | cut -c1-64; fi
+}
 
 POSTGRES_PASSWORD=$(get_secret POSTGRES_PASSWORD)
 JWT_SECRET=$(get_secret_64 JWT_SECRET)
@@ -259,9 +288,6 @@ INNGEST_EVENT_KEY=$(get_secret INNGEST_EVENT_KEY)
 INNGEST_SIGNING_KEY=$(get_secret INNGEST_SIGNING_KEY)
 
 echo -e "${GREEN}✓ Secrets loaded/generated${NC}"
-
-# Create installation directory
-# ADD THIS ENTIRE BLOCK OF CODE
 
 # --- Path Selection ---
 echo ""
@@ -288,8 +314,6 @@ if [[ "$USE_CUSTOM_PATH" =~ ^[Yy]$ ]]; then
     done
 
     # Resolve potential ~ character to full home directory path
-    # Using eval is generally risky, but here it's safe for a simple tilde expansion.
-    # A safer method is used below if available.
     if command -v realpath &> /dev/null; then
         INSTALL_DIR=$(realpath -m "$CUSTOM_PATH")
     else
@@ -419,13 +443,14 @@ INNGEST_EVENT_KEY=${INNGEST_EVENT_KEY}
 INNGEST_SIGNING_KEY=${INNGEST_SIGNING_KEY}
 
 # ============================================================================
-# AI
+# AI & INTELLIGENCE
 # ============================================================================
 AI_PROVIDER=${AI_PROVIDER}
 EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER}
+INTELLIGENCE_HUB_URL=${INTELLIGENCE_URL}
 INTELLIGENCE_API_KEY=${INTELLIGENCE_KEY}
 OPENAI_API_KEY=${OPENAI_KEY}
-ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 GOOGLE_AI_API_KEY=${GOOGLE_AI_KEY}
 EOF
 
