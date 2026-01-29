@@ -193,7 +193,18 @@ async function runMigrations() {
     console.log("STEP 1: Drizzle Migrations (Auto-Generated)");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    const drizzleDir = path.join(__dirname, "../migrations-drizzle");
+    // Resolve paths - robust handling for Dev (ts-node/tsx) vs Prod (compiled dist)
+    const possibleDrizzlePaths = [
+      path.join(__dirname, "../migrations-drizzle"), // Dev: src/../migrations-drizzle
+      path.join(__dirname, "../../migrations-drizzle"), // Prod: dist/scripts/../../migrations-drizzle
+    ];
+
+    const drizzleDir =
+      possibleDrizzlePaths.find((p) => existsSync(p)) ||
+      possibleDrizzlePaths[0];
+
+    console.log(`📂 Drizzle Migrations Dir: ${drizzleDir}`);
+
     const drizzleCount = await applyMigrationsFromDir(
       "drizzle",
       drizzleDir,
@@ -205,7 +216,13 @@ async function runMigrations() {
     console.log("STEP 2: Custom Migrations (Manual SQL)");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    const customDir = path.join(__dirname, "../migrations-custom");
+    const possibleCustomPaths = [
+      path.join(__dirname, "../migrations-custom"),
+      path.join(__dirname, "../../migrations-custom"),
+    ];
+    const customDir =
+      possibleCustomPaths.find((p) => existsSync(p)) || possibleCustomPaths[0];
+
     const customCount = await applyMigrationsFromDir(
       "custom",
       customDir,
