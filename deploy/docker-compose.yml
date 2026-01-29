@@ -288,6 +288,9 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
+      # IMPORTANT: Use absolute path or ensure docker compose is run from deploy/ directory
+      # Relative path ./Caddyfile requires running: cd deploy && docker compose up
+      # For production, consider using absolute path: /srv/synap/synap-backend/deploy/Caddyfile
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
