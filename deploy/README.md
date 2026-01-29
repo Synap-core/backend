@@ -67,6 +67,32 @@ If you prefer to install manually:
 - [Troubleshooting](./docs/troubleshooting.md)
 - [API Reference](https://docs.synap.live/api)
 
+  [API Reference](https://docs.synap.live/api)
+
+## 👀 Monitoring & Debugging
+
+For better observability of your self-hosted instance, we recommend the following tools:
+
+### Dozzle (Log Viewer)
+
+We include a pre-configured [Dozzle](https://dozzle.dev/) instance in our Docker Compose setup. It provides a real-time log viewer for all your containers.
+
+To enable it, run:
+
+```bash
+docker compose --profile monitoring up -d
+```
+
+Access the dashboard at `http://your-server-ip:8888`.
+
+### Dockge (Management UI)
+
+For a complete management interface for your Docker Compose stacks, we highly recommend [Dockge](https://dockge.kuma.pet/). It's a lightweight, reactive alternative to Portainer that works perfectly with our `compose.yaml` file structure.
+
+1. Install Dockge following their [official guide](https://github.com/louislam/dockge#install).
+2. Point it to your `synap-backend/deploy` directory.
+3. You'll get a full UI to manage, update, and monitor your Synap stack.
+
 ## 🔧 Management
 
 Use the `synap-cli` tool to manage your instance:

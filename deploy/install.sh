@@ -310,12 +310,12 @@ echo -e "${GREEN}✓ Secrets loaded/generated${NC}"
 # --- Path Selection ---
 echo ""
 echo -e "${BLUE}📁 Installation Path${NC}"
-echo "The default installation path is /opt/synap."
+echo "The default installation path is /opt/synap-backend."
 echo "This requires sudo privileges to create."
 echo ""
 read -p "Do you want to use a custom installation path? (y/N): " USE_CUSTOM_PATH
 
-INSTALL_DIR="/opt/synap" # Set default value
+INSTALL_DIR="/opt/synap-backend" # Set default value
 
 if [[ "$USE_CUSTOM_PATH" =~ ^[Yy]$ ]]; then
     # User wants a custom path
@@ -346,7 +346,7 @@ else
     # Check for sudo if using the default /opt path
     if [ ! -w "/opt" ] && [ "$EUID" -ne 0 ]; then
         echo ""
-        echo -e "${YELLOW}⚠️  The default path /opt/synap requires root privileges to create.${NC}"
+        echo -e "${YELLOW}⚠️  The default path /opt/synap-backend requires root privileges to create.${NC}"
         echo "Please re-run the script with 'sudo' or choose a custom path in your home directory."
         exit 1
     fi
@@ -477,7 +477,7 @@ chmod 600 .env
 echo -e "${GREEN}✓ Configuration created${NC}"
 
 # Save secrets backup
-cat > ../.secrets-backup.txt <<EOF
+cat > ../synap-backend-secrets.txt <<EOF
 # CRITICAL: Save this file securely and delete from server!
 # Synap Secrets Backup
 # Generated: $(date)
@@ -499,7 +499,7 @@ GOOGLE_AI_KEY=${GOOGLE_AI_KEY}
 HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
 EOF
 
-chmod 600 ../.secrets-backup.txt
+chmod 600 ../synap-backend-secrets.txt
 
 # Start services
 echo ""
@@ -540,8 +540,8 @@ if [ "$DEPLOYMENT_TYPE" = "1" ]; then
     echo "   Add an A record pointing ${DOMAIN} to this server's IP"
     echo ""
     echo "2. Backup your secrets:"
-    echo "   scp ${INSTALL_DIR}/.secrets-backup.txt your-local-machine:~/"
-    echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
+    echo "   scp ${INSTALL_DIR}/synap-backend-secrets.txt your-local-machine:~/"
+    echo "   rm ${INSTALL_DIR}/synap-backend-secrets.txt"
     echo ""
     echo "3. Wait for SSL certificate (1-2 minutes after DNS propagates)"
     echo ""
@@ -550,8 +550,8 @@ if [ "$DEPLOYMENT_TYPE" = "1" ]; then
 elif [ "$DEPLOYMENT_TYPE" = "2" ]; then
     # Synap subdomain
     echo "1. Backup your secrets:"
-    echo "   scp ${INSTALL_DIR}/.secrets-backup.txt your-local-machine:~/"
-    echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
+    echo "   scp ${INSTALL_DIR}/synap-backend-secrets.txt your-local-machine:~/"
+    echo "   rm ${INSTALL_DIR}/synap-backend-secrets.txt"
     echo ""
     echo "2. Your Synap instance is ready!"
     echo "   https://${DOMAIN}"
@@ -564,8 +564,8 @@ elif [ "$DEPLOYMENT_TYPE" = "2" ]; then
 else
     # Localhost
     echo "1. Backup your secrets:"
-    echo "   cp ${INSTALL_DIR}/.secrets-backup.txt ~/synap-secrets.txt"
-    echo "   rm ${INSTALL_DIR}/.secrets-backup.txt"
+    echo "   cp ${INSTALL_DIR}/synap-backend-secrets.txt ~/synap-secrets.txt"
+    echo "   rm ${INSTALL_DIR}/synap-backend-secrets.txt"
     echo ""
     echo "2. Access Synap (HTTP only, no SSL):"
     echo "   http://localhost:4000"

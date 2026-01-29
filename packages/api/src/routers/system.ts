@@ -14,6 +14,7 @@ import { publicProcedure, router } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
+import { testConnection } from "@synap/search";
 import { dynamicToolRegistry } from "@synap/ai";
 import { dynamicRouterRegistry } from "../router-registry.js";
 import { createSynapEvent } from "@synap-core/core";
@@ -655,4 +656,118 @@ export const systemRouter = router({
       const rows = await db.execute(query);
       return rows as any[];
     }),
+
+  /**
+   * Get service health status
+   *
+   * Checks the connectivity and health of all dependent services:
+   * - Postgres (Database)
+   * - Typesense (Search)
+   * - MinIO (Storage)
+   * - Hydra (OAuth Provider)
+   * - Kratos (Identity Provider)
+   */
+  getServiceHealth: publicProcedure.query(async () => {
+    const services: Array<{
+      name: string;
+      status: "healthy" | "unhealthy" | "degraded";
+      message?: string;
+      latency?: number;
+    }> = [];
+
+    // 1. Postgres Check
+    try {
+      const start = Date.now();
+      await db.execute(sqlDrizzle`SELECT 1`);
+      services.push({
+        name: "Postgres",
+        status: "healthy",
+        latency: Date.now() - start,
+      });
+    } catch (e) {
+      services.push({
+        name: "Postgres",
+        status: "unhealthy",
+        message: String(e),
+      });
+    }
+
+    // 2. Typesense Check
+    try {
+      const start = Date.now();
+      const isConnected = await testConnection();
+      if (!isConnected) throw new Error("Connection failed");
+      services.push({
+        name: "Typesense",
+        status: "healthy",
+        latency: Date.now() - start,
+      });
+    } catch (e) {
+      services.push({
+        name: "Typesense",
+        status: "unhealthy",
+        message: String(e),
+      });
+    }
+
+    // 3. MinIO Check
+    try {
+      const start = Date.now();
+      const endpoint = process.env.MINIO_ENDPOINT || "http://minio:9000";
+      // We check minio/health/live
+      const res = await fetch(`${endpoint}/minio/health/live`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      services.push({
+        name: "MinIO",
+        status: "healthy",
+        latency: Date.now() - start,
+      });
+    } catch (e) {
+      services.push({
+        name: "MinIO",
+        status: "unhealthy",
+        message: String(e),
+      });
+    }
+
+    // 4. Hydra Check
+    try {
+      const start = Date.now();
+      const endpoint = process.env.HYDRA_ADMIN_URL || "http://hydra:4445";
+      const res = await fetch(`${endpoint}/health/ready`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      services.push({
+        name: "Hydra",
+        status: "healthy",
+        latency: Date.now() - start,
+      });
+    } catch (e) {
+      services.push({
+        name: "Hydra",
+        status: "unhealthy",
+        message: String(e),
+      });
+    }
+
+    // 5. Kratos Check
+    try {
+      const start = Date.now();
+      const endpoint = process.env.KRATOS_ADMIN_URL || "http://kratos:4434";
+      const res = await fetch(`${endpoint}/health/ready`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      services.push({
+        name: "Kratos",
+        status: "healthy",
+        latency: Date.now() - start,
+      });
+    } catch (e) {
+      services.push({
+        name: "Kratos",
+        status: "unhealthy",
+        message: String(e),
+      });
+    }
+
+    return services;
+  }),
 });
