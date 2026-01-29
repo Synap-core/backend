@@ -1,5 +1,5 @@
 FROM node:20-alpine AS base
-RUN corepack enable pnpm
+RUN npm install -g pnpm@10.28.0
 WORKDIR /app
 
 # ============================================================================
@@ -11,7 +11,8 @@ FROM base AS builder
 COPY . .
 
 # Install all dependencies (including dev deps for building)
-RUN pnpm install --frozen-lockfile
+# Install all dependencies with retry mechanism
+RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
 
 # Build the project using Turborepo
 RUN pnpm turbo build --filter=api

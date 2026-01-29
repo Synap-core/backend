@@ -395,7 +395,7 @@ if [ "$IS_LOCAL_REPO" = true ]; then
     git clone "$REPO_ROOT" .
 else 
     echo -e "${BLUE}⬇️ Cloning from GitHub...${NC}"
-    git clone https://github.com/Synap-core/backend.git .
+    git clone https://github.com/synap-labs/synap-backend.git .
 fi
 
 # Enter deploy directory
