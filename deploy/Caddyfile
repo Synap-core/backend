@@ -21,13 +21,15 @@
     }
 
     # Ory Kratos (Authentication)
-    # Route public API: /.ory/kratos/public/* -> kratos:4433 (strips /.ory/kratos/public prefix)
+    # Route public API: /.ory/kratos/public/* -> kratos:4433
+    # Kratos serves internally at /self-service/... (not /public/self-service/...)
+    # So we strip /.ory/kratos/public and forward the rest
     handle /.ory/kratos/public/* {
         uri strip_prefix /.ory/kratos/public
         reverse_proxy kratos:4433
     }
     
-    # Route admin API: /.ory/kratos/admin/* -> kratos:4434 (strips /.ory/kratos/admin prefix)
+    # Route admin API: /.ory/kratos/admin/* -> kratos:4434
     handle /.ory/kratos/admin/* {
         uri strip_prefix /.ory/kratos/admin
         reverse_proxy kratos:4434
