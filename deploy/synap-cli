@@ -48,7 +48,7 @@ cmd_health() {
     }
 
     check_service "backend" "Backend API"
-    check_service "intelligence-service" "Intelligence Service"
+    # Intelligence Service is external/separate, skipping local check
     check_service "postgres" "Database"
     check_service "redis" "Redis"
     check_service "minio" "Storage"

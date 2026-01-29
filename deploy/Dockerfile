@@ -16,6 +16,9 @@ RUN pnpm install --frozen-lockfile
 # Build the project using Turborepo
 RUN pnpm turbo build --filter=api
 
+# Build migration script independently
+RUN cd packages/database && pnpm build:migrate
+
 # Deploy to self-contained directory with hard-linked dependencies
 # This creates a portable, production-ready package
 RUN rm -rf /app/deploy && pnpm deploy --filter=api --prod --legacy /app/deploy
@@ -43,6 +46,7 @@ COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 COPY --chown=nodejs:nodejs packages/database/migrations-custom ./packages/database/migrations-custom
 COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/migrations-drizzle
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./packages/database/dist/scripts
 COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./packages/database/drizzle.config.ts
 
 # Expose port

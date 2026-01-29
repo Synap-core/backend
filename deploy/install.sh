@@ -493,10 +493,8 @@ echo ""
 echo -e "${BLUE}⏳ Waiting for services to start (this may take 1-2 minutes)...${NC}"
 sleep 30
 
-# Run database migrations
-echo ""
-echo -e "${BLUE}🔄 Running database migrations...${NC}"
-docker compose exec -T backend sh -c 'cd packages/database && pnpm db:push' || true
+# Database migrations are handled automatically by the backend-migrate service
+# configured in docker-compose.yml. The backend service waits for it to complete.
 
 # Success message
 echo ""

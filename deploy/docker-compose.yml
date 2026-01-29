@@ -40,6 +40,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -52,6 +54,28 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    networks:
+      - synap-net
+
+  # ============================================================================
+  # CODE MIGRATION SERVICE
+  # ============================================================================
+  backend-migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: synap/backend:latest
+    environment:
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+    command: node packages/database/dist/scripts/migrate.js
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - synap-net
 
