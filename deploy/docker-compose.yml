@@ -61,9 +61,6 @@ services:
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
     image: synap/backend:latest
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
