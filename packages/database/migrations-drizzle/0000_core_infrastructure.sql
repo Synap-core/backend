@@ -66,11 +66,18 @@ CREATE TABLE IF NOT EXISTS "events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"timestamp" timestamp with time zone DEFAULT now() NOT NULL,
 	"type" text NOT NULL,
+    "subject_id" text NOT NULL,
+    "subject_type" text NOT NULL,
 	"data" jsonb NOT NULL,
+    "metadata" jsonb,
 	"source" text DEFAULT 'api',
 	"correlation_id" uuid,
 	"user_id" text NOT NULL
 );
+
+CREATE INDEX "idx_events_subject" ON "events" ("subject_type", "subject_id", "timestamp");
+CREATE INDEX "idx_events_user_type" ON "events" ("user_id", "type");
+CREATE INDEX "idx_events_timestamp" ON "events" ("timestamp");
 
 -- ============================================================================
 -- 4. JOB QUEUE & BACKGROUND TASKS

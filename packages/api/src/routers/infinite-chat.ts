@@ -10,7 +10,16 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, eq, desc, and, or, lt, inArray } from "@synap/database";
+import {
+  db,
+  eq,
+  desc,
+  and,
+  or,
+  lt,
+  inArray,
+  arrayContains,
+} from "@synap/database";
 import {
   chatThreads,
   conversationMessages,
@@ -64,7 +73,7 @@ export const infiniteChatRouter = router({
         const parentThread = await db.query.chatThreads.findFirst({
           where: eq(chatThreads.id, input.parentThreadId),
         });
-        workspaceId = parentThread?.projectId || undefined;
+        workspaceId = parentThread?.projectIds?.[0] || undefined;
       }
 
       // If this is a branch, use event sourcing
@@ -104,7 +113,7 @@ export const infiniteChatRouter = router({
         .values({
           id: threadId,
           userId: ctx.userId,
-          projectId: input.projectId,
+          projectIds: input.projectId ? [input.projectId] : [],
           threadType: "main",
           status: "active",
         })
@@ -160,7 +169,7 @@ export const infiniteChatRouter = router({
       // Resolve intelligence service dynamically
       const resolvedService = await resolveIntelligenceService({
         userId: ctx.userId,
-        workspaceId: thread.projectId ?? undefined,
+        workspaceId: thread.projectIds?.[0] ?? undefined,
         capability: "chat",
       });
 
@@ -176,7 +185,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
           agentId: thread.agentId ?? "orchestrator",
           agentType: thread.agentType ?? "meta",
-          projectId: thread.projectId ?? undefined,
+          projectId: thread.projectIds?.[0] ?? undefined,
         });
 
         for await (const chunk of stream) {
@@ -245,7 +254,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
           agentId: thread.agentId ?? "orchestrator",
           agentType: thread.agentType ?? "meta",
-          projectId: thread.projectId ?? undefined,
+          projectId: thread.projectIds?.[0] ?? undefined,
         });
 
         fullContent = hubResponse.content || "";
@@ -334,7 +343,7 @@ export const infiniteChatRouter = router({
           .values({
             id: branchId,
             userId: ctx.userId,
-            projectId: thread.projectId,
+            projectIds: thread.projectIds,
             parentThreadId: threadId,
             branchedFromMessageId: assistantMessageId,
             branchPurpose:
@@ -412,7 +421,7 @@ export const infiniteChatRouter = router({
         where: and(
           eq(chatThreads.userId, ctx.userId),
           input.projectId
-            ? eq(chatThreads.projectId, input.projectId)
+            ? arrayContains(chatThreads.projectIds, [input.projectId])
             : undefined,
           input.threadType
             ? eq(chatThreads.threadType, input.threadType)
@@ -481,7 +490,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
         },
         userId: ctx.userId,
-        workspaceId: branch.projectId || undefined,
+        workspaceId: branch.projectIds?.[0] || undefined,
       });
 
       // Return immediately, executor will process async

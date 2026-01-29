@@ -55,7 +55,7 @@ export class DocumentRepository extends BaseRepository<
         storageKey: data.storageKey,
         size: data.size,
         mimeType: data.mimeType,
-        projectId: data.projectId,
+        projectIds: data.projectId ? [data.projectId] : [],
         metadata: data.metadata,
         currentVersion: 1,
       } as NewDocument)

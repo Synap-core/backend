@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, arrayContains } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { chatThreads, type ChatThread } from "../schema/chat-threads.js";
 import { EventRepository } from "./event-repository.js";
@@ -59,7 +59,7 @@ export class ChatThreadRepository {
       .values({
         id: threadId,
         userId: data.userId,
-        projectId: data.projectId,
+        projectIds: data.projectId ? [data.projectId] : [],
         title: data.title,
         threadType: data.threadType || "main",
         parentThreadId: data.parentThreadId,
@@ -143,7 +143,9 @@ export class ChatThreadRepository {
     const conditions = [eq(chatThreads.userId, userId)];
 
     if (filters?.projectId) {
-      conditions.push(eq(chatThreads.projectId, filters.projectId));
+      conditions.push(
+        arrayContains(chatThreads.projectIds, [filters.projectId])
+      );
     }
     if (filters?.status) {
       conditions.push(eq(chatThreads.status, filters.status));

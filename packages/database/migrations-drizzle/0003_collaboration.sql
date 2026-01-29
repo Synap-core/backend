@@ -99,6 +99,7 @@ CREATE INDEX "idx_proposals_target" ON "proposals" ("target_type", "target_id");
 CREATE TABLE IF NOT EXISTS "inbox_items" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"workspace_id" uuid NOT NULL,
+    "project_ids" uuid[], -- Optional: items can be related to projects
 	"user_id" text NOT NULL,
 	
     "type" text NOT NULL, -- 'mention', 'assignment', 'proposal_review'

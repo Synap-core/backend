@@ -106,7 +106,8 @@ export const documentsRouter = router({
         where: eq(entities.documentId, input.documentId),
       });
 
-      const workspaceId = entity?.workspaceId || doc.projectId || input.userId;
+      const workspaceId =
+        entity?.workspaceId || doc.projectIds?.[0] || input.userId;
 
       // Create proposal in DB
       const [proposal] = await db
@@ -115,8 +116,8 @@ export const documentsRouter = router({
           workspaceId: workspaceId,
           targetType: "document",
           targetId: input.documentId,
-          request: {
-            proposalType: input.proposalType,
+          proposalType: input.proposalType,
+          data: {
             proposedBy: "ai",
             changes: input.changes,
             originalContent: input.originalContent,
@@ -138,6 +139,7 @@ export const documentsRouter = router({
         status: "proposed",
         proposalId: proposal.id,
         message: "Document edit proposed, awaiting approval",
+        requestId: proposal.id, // Return proposalId as requestId for consistency
       };
     }),
 });

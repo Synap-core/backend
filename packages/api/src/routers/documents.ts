@@ -19,6 +19,7 @@ import {
   documents,
   documentVersions,
   documentSessions,
+  arrayContains,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
@@ -421,7 +422,7 @@ export const documentsRouter = router({
 
       const conditions = [eq(documents.userId, userId)];
       if (input.projectId)
-        conditions.push(eq(documents.projectId, input.projectId));
+        conditions.push(arrayContains(documents.projectIds, [input.projectId]));
       if (input.type) conditions.push(eq(documents.type, input.type));
 
       const docs = await db

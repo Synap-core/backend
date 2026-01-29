@@ -58,6 +58,7 @@ export {
   // Array operators
   inArray,
   notInArray,
+  arrayContains,
   // String operators
   like,
   notLike,

@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS "entity_tags" (
 CREATE TABLE IF NOT EXISTS "entity_templates" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     "workspace_id" uuid NOT NULL,
+    "project_ids" uuid[], -- Optional: templates can be scoped to projects
 	"name" text NOT NULL,
 	"description" text,
 	"icon" text,

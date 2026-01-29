@@ -10,7 +10,6 @@ export * from "./entities.js";
 export * from "./entity-vectors.js";
 export * from "./documents.js";
 export * from "./relations.js";
-export * from "./task_details.js";
 export * from "./tags.js";
 export * from "./entity_tags.js";
 export * from "./conversation-messages.js";

@@ -89,7 +89,7 @@ export const proposalsRouter = router({
 
       // 1. Emit the VALIDATED event
       // We reconstruct the event from the stored request
-      const request = proposal.request as any;
+      const request = proposal.data as any;
       const { inngest } = await import("@synap/jobs");
 
       // Construct event name: e.g. "documents.create.validated"

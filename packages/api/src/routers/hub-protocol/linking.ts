@@ -57,10 +57,10 @@ export const linkingRouter = router({
           relationshipType: input.relationshipType,
           sourceMessageId: input.sourceMessageId,
           userId: input.userId,
-          workspaceId: thread.projectId || input.userId,
+          workspaceId: thread.projectIds?.[0] || input.userId,
         },
         userId: input.userId,
-        workspaceId: thread.projectId || undefined,
+        workspaceId: thread.projectIds?.[0] || undefined,
       });
 
       return {
@@ -115,10 +115,10 @@ export const linkingRouter = router({
           relationshipType: input.relationshipType,
           sourceMessageId: input.sourceMessageId,
           userId: input.userId,
-          workspaceId: thread.projectId || input.userId,
+          workspaceId: thread.projectIds?.[0] || input.userId,
         },
         userId: input.userId,
-        workspaceId: thread.projectId || undefined,
+        workspaceId: thread.projectIds?.[0] || undefined,
       });
 
       return {

@@ -101,26 +101,61 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
       {},
       {}
     >;
-    projectId: import("drizzle-orm/pg-core").PgColumn<
+    projectIds: import("drizzle-orm/pg-core").PgColumn<
       {
-        name: "project_id";
+        name: "project_ids";
         tableName: "chat_threads";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
+        dataType: "array";
+        columnType: "PgArray";
+        data: string[];
+        driverParam: string | string[];
         notNull: false;
         hasDefault: false;
         isPrimaryKey: false;
         isAutoincrement: false;
         hasRuntimeDefault: false;
         enumValues: undefined;
-        baseColumn: never;
+        baseColumn: import("drizzle-orm").Column<
+          {
+            name: "project_ids";
+            tableName: "chat_threads";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+          },
+          {},
+          {}
+        >;
         identity: undefined;
         generated: undefined;
       },
       {},
-      {}
+      {
+        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
+          {
+            name: "project_ids";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            enumValues: undefined;
+          },
+          {},
+          {},
+          import("drizzle-orm").ColumnBuilderExtraConfig
+        >;
+        size: undefined;
+      }
     >;
     title: import("drizzle-orm/pg-core").PgColumn<
       {
@@ -254,7 +289,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
         tableName: "chat_threads";
         dataType: "string";
         columnType: "PgText";
-        data: "active" | "archived" | "merged";
+        data: "active" | "merged" | "archived";
         driverParam: string;
         notNull: true;
         hasDefault: true;
@@ -2278,10 +2313,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "meta"
               | "default"
               | "code"
+              | "action"
               | "prompting"
               | "knowledge-search"
               | "writing"
-              | "action"
               | undefined;
             agentConfig?: Record<string, any> | undefined;
             inheritContext?: boolean | undefined;
@@ -2303,7 +2338,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   metadata: unknown;
                   title: string | null;
-                  projectId: string | null;
+                  projectIds: string[] | null;
                   threadType: "main" | "branch";
                   parentThreadId: string | null;
                   branchedFromMessageId: string | null;
@@ -2313,10 +2348,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "meta"
                     | "default"
                     | "code"
+                    | "action"
                     | "prompting"
                     | "knowledge-search"
-                    | "writing"
-                    | "action";
+                    | "writing";
                   agentConfig: unknown;
                   contextSummary: string | null;
                   mergedAt: Date | null;
@@ -2349,7 +2384,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   metadata: unknown;
                   title: string | null;
-                  projectId: string | null;
+                  projectIds: string[] | null;
                   threadType: "main" | "branch";
                   parentThreadId: string | null;
                   branchedFromMessageId: string | null;
@@ -2359,10 +2394,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "meta"
                     | "default"
                     | "code"
+                    | "action"
                     | "prompting"
                     | "knowledge-search"
-                    | "writing"
-                    | "action";
+                    | "writing";
                   agentConfig: unknown;
                   contextSummary: string | null;
                   mergedAt: Date | null;
@@ -2475,7 +2510,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               metadata: unknown;
               title: string | null;
-              projectId: string | null;
+              projectIds: string[] | null;
               threadType: "main" | "branch";
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
@@ -2485,10 +2520,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "meta"
                 | "default"
                 | "code"
+                | "action"
                 | "prompting"
                 | "knowledge-search"
-                | "writing"
-                | "action";
+                | "writing";
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2509,7 +2544,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               metadata: unknown;
               title: string | null;
-              projectId: string | null;
+              projectIds: string[] | null;
               threadType: "main" | "branch";
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
@@ -2519,10 +2554,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "meta"
                 | "default"
                 | "code"
+                | "action"
                 | "prompting"
                 | "knowledge-search"
-                | "writing"
-                | "action";
+                | "writing";
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2556,7 +2591,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               metadata: unknown;
               title: string | null;
-              projectId: string | null;
+              projectIds: string[] | null;
               threadType: "main" | "branch";
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
@@ -2566,10 +2601,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "meta"
                 | "default"
                 | "code"
+                | "action"
                 | "prompting"
                 | "knowledge-search"
-                | "writing"
-                | "action";
+                | "writing";
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2589,7 +2624,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "updated"
                     | "referenced"
                     | "inherited_from_parent";
-                  conflictStatus: "none" | "pending" | "resolved";
+                  conflictStatus: "pending" | "none" | "resolved";
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2608,7 +2643,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "updated"
                     | "referenced"
                     | "inherited_from_parent";
-                  conflictStatus: "none" | "pending" | "resolved";
+                  conflictStatus: "pending" | "none" | "resolved";
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2625,10 +2660,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "meta"
               | "default"
               | "code"
+              | "action"
               | "prompting"
               | "knowledge-search"
               | "writing"
-              | "action"
               | undefined;
             agentConfig?: Record<string, unknown> | undefined;
           };
@@ -2665,7 +2700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               metadata: unknown;
               title: string | null;
-              projectId: string | null;
+              projectIds: string[] | null;
               threadType: "main" | "branch";
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
@@ -2675,10 +2710,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "meta"
                 | "default"
                 | "code"
+                | "action"
                 | "prompting"
                 | "knowledge-search"
-                | "writing"
-                | "action";
+                | "writing";
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2691,7 +2726,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               metadata: unknown;
               title: string | null;
-              projectId: string | null;
+              projectIds: string[] | null;
               threadType: "main" | "branch";
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
@@ -2701,10 +2736,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "meta"
                 | "default"
                 | "code"
+                | "action"
                 | "prompting"
                 | "knowledge-search"
-                | "writing"
-                | "action";
+                | "writing";
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2717,7 +2752,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               metadata: unknown;
               title: string | null;
-              projectId: string | null;
+              projectIds: string[] | null;
               threadType: "main" | "branch";
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
@@ -2727,10 +2762,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "meta"
                 | "default"
                 | "code"
+                | "action"
                 | "prompting"
                 | "knowledge-search"
-                | "writing"
-                | "action";
+                | "writing";
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2766,7 +2801,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "updated"
                 | "referenced"
                 | "inherited_from_parent";
-              conflictStatus: "none" | "pending" | "resolved";
+              conflictStatus: "pending" | "none" | "resolved";
               sourceEventId: string | null;
             }[];
             documents: {
@@ -2783,7 +2818,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "updated"
                 | "referenced"
                 | "inherited_from_parent";
-              conflictStatus: "none" | "pending" | "resolved";
+              conflictStatus: "pending" | "none" | "resolved";
               sourceEventId: string | null;
             }[];
           };
@@ -2815,16 +2850,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           output: {
             proposals: {
               id: string;
+              data: unknown;
               status: string;
               createdAt: Date;
               updatedAt: Date;
               workspaceId: string;
               targetType: string;
               targetId: string;
-              request: unknown;
+              proposalType: string;
               reviewedBy: string | null;
               reviewedAt: Date | null;
               rejectionReason: string | null;
+              comments: unknown;
             }[];
           };
           meta: object;
@@ -3516,7 +3553,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               lastSavedVersion: number;
               workingState: string | null;
               workingStateUpdatedAt: Date | null;
-              projectId: string | null;
               metadata: unknown;
               createdAt: Date;
               updatedAt: Date;
@@ -3645,7 +3681,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               lastSavedVersion: number;
               workingState: string | null;
               workingStateUpdatedAt: Date | null;
-              projectId: string | null;
               metadata: unknown;
               createdAt: Date;
               updatedAt: Date;
@@ -5908,6 +5943,161 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           output: {
             success: boolean;
+          };
+          meta: object;
+        }>;
+      }>
+    >;
+    skills: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        list: import("@trpc/server").TRPCQueryProcedure<{
+          input:
+            | {
+                workspaceId?: string | undefined;
+                status?: "error" | "active" | "inactive" | "all" | undefined;
+                limit?: number | undefined;
+                offset?: number | undefined;
+              }
+            | undefined;
+          output: {
+            skills: any;
+          };
+          meta: object;
+        }>;
+        get: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            skill: any;
+          };
+          meta: object;
+        }>;
+        create: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            name: string;
+            code: string;
+            workspaceId?: string | undefined;
+            description?: string | undefined;
+            parameters?: Record<string, unknown> | undefined;
+            category?: string | undefined;
+            executionMode?: "sync" | "async" | undefined;
+            timeoutSeconds?: number | undefined;
+          };
+          output: {
+            id: `${string}-${string}-${string}-${string}-${string}`;
+            success: boolean;
+            message: string;
+          };
+          meta: object;
+        }>;
+        update: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+            name?: string | undefined;
+            description?: string | undefined;
+            code?: string | undefined;
+            parameters?: Record<string, unknown> | undefined;
+            category?: string | undefined;
+            executionMode?: "sync" | "async" | undefined;
+            timeoutSeconds?: number | undefined;
+          };
+          output: {
+            success: boolean;
+            message: string;
+          };
+          meta: object;
+        }>;
+        delete: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            success: boolean;
+            message: string;
+          };
+          meta: object;
+        }>;
+      }>
+    >;
+    backgroundTasks: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        list: import("@trpc/server").TRPCQueryProcedure<{
+          input:
+            | {
+                workspaceId?: string | undefined;
+                status?: "error" | "active" | "paused" | "all" | undefined;
+                type?: "event" | "cron" | "interval" | undefined;
+                limit?: number | undefined;
+                offset?: number | undefined;
+              }
+            | undefined;
+          output: {
+            tasks: any;
+          };
+          meta: object;
+        }>;
+        get: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            task: any;
+          };
+          meta: object;
+        }>;
+        create: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            name: string;
+            type: "event" | "cron" | "interval";
+            action: string;
+            workspaceId?: string | undefined;
+            description?: string | undefined;
+            schedule?: string | undefined;
+            context?: Record<string, unknown> | undefined;
+          };
+          output: {
+            id: `${string}-${string}-${string}-${string}-${string}`;
+            success: boolean;
+            message: string;
+          };
+          meta: object;
+        }>;
+        update: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+            name?: string | undefined;
+            description?: string | undefined;
+            schedule?: string | undefined;
+            action?: string | undefined;
+            context?: Record<string, unknown> | undefined;
+            status?: "error" | "active" | "paused" | undefined;
+          };
+          output: {
+            success: boolean;
+            message: string;
+          };
+          meta: object;
+        }>;
+        delete: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            success: boolean;
+            message: string;
           };
           meta: object;
         }>;
