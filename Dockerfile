@@ -41,8 +41,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 # Copy configuration files needed at runtime
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
-COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/migrations-drizzle
-COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./packages/database/drizzle.config.ts
+# Database files are included in the deployed package in node_modules
+# COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/migrations-drizzle
+# COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./packages/database/drizzle.config.ts
 
 # Expose port
 EXPOSE 3000
