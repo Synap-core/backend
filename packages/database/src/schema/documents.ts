@@ -51,7 +51,6 @@ export const documents = pgTable(
     }),
 
     // Relationships
-    projectId: text("project_id"), // DEPRECATED: Use projectIds array instead
 
     // Metadata
     metadata: jsonb("metadata"), // Custom metadata
@@ -67,7 +66,6 @@ export const documents = pgTable(
   },
   (table) => ({
     userIdIdx: index("documents_user_id_idx").on(table.userId),
-    projectIdIdx: index("documents_project_id_idx").on(table.projectId),
     typeIdx: index("documents_type_idx").on(table.type),
   })
 );

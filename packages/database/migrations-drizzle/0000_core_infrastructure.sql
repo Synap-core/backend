@@ -1,6 +1,8 @@
 -- Migration: Core Infrastructure
 -- Description: Establishes the fundamental system tables for Identity, Tenancy, Events, and Jobs.
 
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- ============================================================================
 -- 1. IDENTITY (Users)
 -- ============================================================================

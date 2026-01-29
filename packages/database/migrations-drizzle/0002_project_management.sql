@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS "project_members" (
 CREATE TABLE IF NOT EXISTS "views" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"workspace_id" uuid NOT NULL,
-    "project_id" uuid REFERENCES "projects"("id") ON DELETE cascade,
+    "project_ids" uuid[], -- Optional: views can be scoped to projects
 	"user_id" text NOT NULL,
 	"name" text NOT NULL,
 	"type" text NOT NULL, -- 'kanban', 'list', 'calendar', 'graph'

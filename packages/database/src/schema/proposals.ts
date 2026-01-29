@@ -26,9 +26,9 @@ export const proposals = pgTable(
     targetType: text("target_type").notNull(), // 'document', 'entity', 'whiteboard', etc.
     targetId: text("target_id").notNull(),
 
-    // The Proposal Content
-    // Stores the full UpdateRequest object
-    request: jsonb("request").notNull(),
+    // Proposal Concept
+    proposalType: text("proposal_type").notNull(), // 'edit', 'comment', 'review_request'
+    data: jsonb("data").notNull(), // Payload (was 'request')
 
     // Status Tracking
     status: text("status").notNull().default("pending"), // 'pending' | 'validated' | 'rejected'
@@ -37,6 +37,7 @@ export const proposals = pgTable(
     reviewedBy: text("reviewed_by"),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     rejectionReason: text("rejection_reason"),
+    comments: jsonb("comments").default("[]"),
 
     // Timestamps
     createdAt: timestamp("created_at", { withTimezone: true })
