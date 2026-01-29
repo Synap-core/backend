@@ -21,8 +21,14 @@
     }
 
     # Ory Kratos (Authentication)
-    handle_path /.ory/kratos/* {
+    # Route public API: /.ory/kratos/public/* -> kratos:4433 (strips /.ory/kratos/public prefix)
+    handle_path /.ory/kratos/public/* {
         reverse_proxy kratos:4433
+    }
+    
+    # Route admin API: /.ory/kratos/admin/* -> kratos:4434 (strips /.ory/kratos/admin prefix)
+    handle_path /.ory/kratos/admin/* {
+        reverse_proxy kratos:4434
     }
 
     # Ory Hydra (OAuth2)
