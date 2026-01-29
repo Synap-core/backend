@@ -9,9 +9,13 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     SELECT 'CREATE DATABASE synap'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'synap')\gexec
     
-    -- Check and create kratos_db database
-    SELECT 'CREATE DATABASE kratos_db'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos_db')\gexec
+    -- Check and create kratos database (Ory Kratos)
+    SELECT 'CREATE DATABASE kratos'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec
+    
+    -- Check and create hydra database (Ory Hydra)
+    SELECT 'CREATE DATABASE hydra'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec
 
     -- Check and create synap_test database
     SELECT 'CREATE DATABASE synap_test'
