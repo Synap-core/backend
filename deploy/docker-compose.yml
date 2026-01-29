@@ -245,6 +245,7 @@ services:
       URLS_SELF_ISSUER: https://${DOMAIN}
       URLS_CONSENT: https://${DOMAIN}/consent
       URLS_LOGIN: https://${DOMAIN}/login
+      SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
     depends_on:
       hydra-migrate:
         condition: service_completed_successfully

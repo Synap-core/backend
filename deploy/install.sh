@@ -246,6 +246,23 @@ else
 fi
 
 # ============================================================================
+# AI CONFIGURATION (Optional)
+# ============================================================================
+echo ""
+echo -e "${BLUE}🤖 AI Service Configuration (Optional)${NC}"
+echo "These can be configured later in the setup wizard."
+echo ""
+
+read -p "Default AI Provider (openai/anthropic/none) [none]: " AI_PROVIDER
+AI_PROVIDER=${AI_PROVIDER:-none}
+
+if [ "$AI_PROVIDER" = "openai" ]; then
+    read -p "OpenAI API Key: " OPENAI_KEY
+elif [ "$AI_PROVIDER" = "anthropic" ]; then
+    read -p "Anthropic API Key: " ANTHROPIC_KEY
+fi
+
+# ============================================================================
 # Generate secrets
 # ============================================================================
 echo ""
@@ -286,6 +303,7 @@ TYPESENSE_KEY=$(get_secret TYPESENSE_API_KEY)
 TYPESENSE_ADMIN_KEY=$(get_secret TYPESENSE_ADMIN_API_KEY)
 INNGEST_EVENT_KEY=$(get_secret INNGEST_EVENT_KEY)
 INNGEST_SIGNING_KEY=$(get_secret INNGEST_SIGNING_KEY)
+HYDRA_SECRETS_SYSTEM=$(get_secret ORY_HYDRA_SECRETS_SYSTEM)
 
 echo -e "${GREEN}✓ Secrets loaded/generated${NC}"
 
@@ -450,8 +468,9 @@ EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER}
 INTELLIGENCE_HUB_URL=${INTELLIGENCE_URL}
 INTELLIGENCE_API_KEY=${INTELLIGENCE_KEY}
 OPENAI_API_KEY=${OPENAI_KEY}
-ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 GOOGLE_AI_API_KEY=${GOOGLE_AI_KEY}
+ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
 EOF
 
 chmod 600 .env
@@ -477,6 +496,7 @@ INTELLIGENCE_KEY=${INTELLIGENCE_KEY}
 OPENAI_KEY=${OPENAI_KEY}
 ANTHROPIC_KEY=${ANTHROPIC_KEY}
 GOOGLE_AI_KEY=${GOOGLE_AI_KEY}
+HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
 EOF
 
 chmod 600 ../.secrets-backup.txt
