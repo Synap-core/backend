@@ -3,7 +3,7 @@
  * Tests all critical API endpoints to validate system readiness
  */
 
-const API_URL = process.env.API_URL || "http://localhost:3000";
+const API_URL = process.env.API_URL || "http://localhost:4000";
 const TEST_USER = "test-validation-user";
 
 // Colors for output
@@ -202,8 +202,9 @@ const tests = {
       const { promisify } = await import("util");
       const execAsync = promisify(exec);
 
+      const PROJECT = process.env.COMPOSE_PROJECT_NAME || "synap-backend";
       const { stdout, stderr } = await execAsync(
-        `docker exec synap-postgres psql -U postgres synap -t -c "SELECT COUNT(*) FROM events WHERE user_id = '${TEST_USER}' AND timestamp > NOW() - INTERVAL '5 minutes'"`
+        `docker exec ${PROJECT}-postgres-1 psql -U synap synap -t -c "SELECT COUNT(*) FROM events WHERE user_id = '${TEST_USER}' AND timestamp > NOW() - INTERVAL '5 minutes'"`
       );
 
       if (stderr) {
