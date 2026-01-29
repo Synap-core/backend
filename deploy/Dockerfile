@@ -44,9 +44,16 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 # Copy configuration files needed at runtime
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
-COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./packages/database/dist/migrations-drizzle
-COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./packages/database/dist/scripts
-COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./packages/database/drizzle.config.ts
+
+# Copy migrations to locations where the migration script expects them (relative to dist/scripts/migrate.js)
+COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./node_modules/@synap/database/migrations-drizzle
+COPY --chown=nodejs:nodejs packages/database/migrations-custom ./node_modules/@synap/database/migrations-custom
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./node_modules/@synap/database/dist/scripts
+
+# Also copy to a standard location for direct execution if needed
+COPY --chown=nodejs:nodejs packages/database/migrations-drizzle ./migrations-drizzle
+COPY --chown=nodejs:nodejs packages/database/migrations-custom ./migrations-custom
+COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./drizzle.config.ts
 
 # Expose port
 EXPOSE 3000

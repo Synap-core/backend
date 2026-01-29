@@ -36,6 +36,7 @@ services:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ORY_HYDRA_SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,6 +95,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
     networks:
       - synap-net
     healthcheck:
@@ -113,6 +116,8 @@ services:
       - redis_data:/data
     networks:
       - synap-net
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -133,6 +138,9 @@ services:
       - minio_data:/data
     networks:
       - synap-net
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
@@ -150,6 +158,8 @@ services:
       - typesense_data:/data
     networks:
       - synap-net
+    ports:
+      - "8108:8108"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
       interval: 30s
@@ -184,6 +194,9 @@ services:
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
+      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://${DOMAIN}/login
+      IDENTITY_SCHEMAS_0_ID: default
+      IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
     command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
     volumes:
       - ../kratos:/etc/config/kratos
@@ -192,6 +205,9 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+    ports:
+      - "4433:4433"
+      - "4434:4434"
     networks:
       - synap-net
     healthcheck:
@@ -236,6 +252,9 @@ services:
         condition: service_healthy
     networks:
       - synap-net
+    ports:
+      - "4444:4444"
+      - "4445:4445"
     healthcheck:
       test:
         [

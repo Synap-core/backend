@@ -1,6 +1,10 @@
+{
+    # Global options
+    email {$EMAIL}
+}
+
 {$DOMAIN} {
     # Automatic HTTPS with Let's Encrypt
-    email {$EMAIL}
 
     # Backend API
     handle /trpc/* {
