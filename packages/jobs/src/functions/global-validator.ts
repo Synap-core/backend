@@ -182,7 +182,8 @@ export const globalValidator = inngest.createFunction(
           workspaceId: workspaceId || "personal",
           targetType: singularType,
           targetId,
-          request: {
+          proposalType: action as string,
+          data: {
             requestId: randomUUID(),
             source: source,
             sourceId: userId,
