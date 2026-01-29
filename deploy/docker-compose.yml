@@ -67,6 +67,7 @@ services:
     image: synap/backend:latest
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      NODE_PATH: /app/node_modules
     command: node packages/database/dist/scripts/migrate.js
     deploy:
       restart_policy:
