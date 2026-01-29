@@ -134,6 +134,11 @@ services:
   # ============================================================================
   kratos-migrate:
     image: oryd/kratos:v1.3.1
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
     environment:
       DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?sslmode=disable
     command: migrate sql -e --yes

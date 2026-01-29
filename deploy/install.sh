@@ -224,33 +224,27 @@ if [ "$DEPLOYMENT_TYPE" = "3" ]; then
     USE_SSL="false"
 fi
 
-# Generate secrets
+# Intelligence Service
+echo ""
+echo -e "${BLUE}🧠 Synap Intelligence Service${NC}"
+echo "Enter the details from your Intelligence Service installation (Server 2)."
+echo "If you haven't installed it yet, you can configure this later."
+echo ""
+
+read -p "Intelligence Hub URL [http://localhost:3001]: " INTELLIGENCE_URL
+INTELLIGENCE_URL=${INTELLIGENCE_URL:-http://localhost:3001}
+
+read -p "Intelligence API Key: " INTELLIGENCE_KEY
+if [ -z "$INTELLIGENCE_KEY" ]; then
+    echo -e "${YELLOW}⚠️  No API Key provided. Use 'synap-cli secrets update' later to set it.${NC}"
+    INTELLIGENCE_KEY=$(get_secret INTELLIGENCE_API_KEY) # Fallback to random if empty
+else 
+    echo -e "${GREEN}✓ Key recorded${NC}"
+fi
+
+# Generate other secrets
 echo ""
 echo -e "${BLUE}🔐 Generating secure secrets...${NC}"
-
-# Helper to get secret or generate new
-get_secret() {
-    local var_name=$1
-    local existing=""
-    
-    if [ -f .env ]; then
-        existing=$(grep "^${var_name}=" .env | cut -d'=' -f2-)
-    fi
-    
-    if [ -n "$existing" ]; then
-        echo "$existing"
-    else
-        openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
-    fi
-}
-
-# Helper for 64 char secret
-get_secret_64() {
-    local var_name=$1
-    local existing=""
-    if [ -f .env ]; then existing=$(grep "^${var_name}=" .env | cut -d'=' -f2-); fi
-    if [ -n "$existing" ]; then echo "$existing"; else openssl rand -base64 64 | tr -d "=+/" | cut -c1-64; fi
-}
 
 POSTGRES_PASSWORD=$(get_secret POSTGRES_PASSWORD)
 JWT_SECRET=$(get_secret_64 JWT_SECRET)
@@ -263,7 +257,6 @@ TYPESENSE_KEY=$(get_secret TYPESENSE_API_KEY)
 TYPESENSE_ADMIN_KEY=$(get_secret TYPESENSE_ADMIN_API_KEY)
 INNGEST_EVENT_KEY=$(get_secret INNGEST_EVENT_KEY)
 INNGEST_SIGNING_KEY=$(get_secret INNGEST_SIGNING_KEY)
-INTELLIGENCE_KEY=$(get_secret INTELLIGENCE_API_KEY)
 
 echo -e "${GREEN}✓ Secrets loaded/generated${NC}"
 
