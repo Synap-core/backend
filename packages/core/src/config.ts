@@ -363,8 +363,8 @@ export function validateConfig(
       const { provider, anthropic, openai, embeddings } = config.ai;
 
       if (provider === "anthropic" && !anthropic.apiKey) {
-        throw new Error(
-          "Anthropic provider requires ANTHROPIC_API_KEY environment variable"
+        configLogger.warn(
+          "ANTHROPIC_API_KEY is missing. AI features using Anthropic will not work."
         );
       }
 

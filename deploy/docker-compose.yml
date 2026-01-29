@@ -35,6 +35,7 @@ services:
       TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,6 +184,9 @@ services:
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+    volumes:
+      - ../kratos:/etc/config/kratos
     depends_on:
       kratos-migrate:
         condition: service_completed_successfully
