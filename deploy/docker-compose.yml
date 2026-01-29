@@ -302,14 +302,6 @@ services:
     depends_on:
       - backend
 
-volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
-  typesense_data:
-  caddy_data:
-  caddy_config:
-
   # ============================================================================
   # MONITORING (Dozzle)
   # ============================================================================
@@ -325,6 +317,14 @@ volumes:
       - synap-net
     profiles:
       - monitoring
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  typesense_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   synap-net:
