@@ -13,10 +13,22 @@
 Deploy your own Synap instance in 5 minutes:
 
 ```bash
-curl -fsSL https://get.synap.live/install.sh | bash
+# Download and run the installer
+curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh -o install.sh
+chmod +x install.sh
+./install.sh
 ```
 
-That's it! Follow the interactive prompts to configure your instance.
+Or clone and run:
+
+```bash
+git clone https://github.com/Synap-core/backend.git
+cd backend/deploy
+chmod +x install.sh
+./install.sh
+```
+
+Follow the interactive prompts to configure your instance.
 
 ## ✨ Features
 
@@ -170,7 +182,7 @@ synap-backend/
 │   ├── api/              # Main tRPC API server
 │   └── admin-ui/         # Admin dashboard
 ├── packages/
-│   ├── database/         # Prisma schema & migrations
+│   ├── database/         # Drizzle ORM schema & migrations
 │   ├── api/              # tRPC routers
 │   ├── core/             # Core utilities
 │   ├── jobs/             # Background jobs (Inngest)
@@ -212,11 +224,15 @@ MIT License - see [LICENSE](./LICENSE) for details.
 Built with:
 
 - [tRPC](https://trpc.io/) - End-to-end typesafe APIs
-- [Prisma](https://www.prisma.io/) - Next-generation ORM
-- [Ory](https://www.ory.sh/) - Authentication & authorization
+- [Drizzle ORM](https://orm.drizzle.team/) - TypeScript ORM
+- [Ory](https://www.ory.sh/) - Authentication & authorization (Kratos + Hydra)
 - [Typesense](https://typesense.org/) - Fast search engine
 - [Inngest](https://www.inngest.com/) - Background jobs
 - [Caddy](https://caddyserver.com/) - Automatic HTTPS
+- [Hono](https://hono.dev/) - Web framework
+- [PostgreSQL](https://www.postgresql.org/) - Database (with TimescaleDB & pgvector)
+- [MinIO](https://min.io/) - Object storage
+- [Redis](https://redis.io/) - Caching & sessions
 
 ---
 

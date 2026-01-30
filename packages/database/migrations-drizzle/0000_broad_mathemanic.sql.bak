@@ -1,3 +1,6 @@
+-- Migration: Core Infrastructure
+-- Description: Establishes the fundamental system tables for Identity, Tenancy, Events, and Jobs.
+
 CREATE TABLE "user_preferences" (
 	"user_id" text PRIMARY KEY NOT NULL,
 	"theme" text DEFAULT 'system' NOT NULL,
@@ -583,16 +586,7 @@ CREATE TABLE "background_tasks" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "admin_invitations" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-	"email" text NOT NULL,
-	"token_hash" text NOT NULL,
-	"expires_at" timestamp with time zone NOT NULL,
-	"used_at" timestamp with time zone,
-	"backend_domain" text NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "admin_invitations_token_hash_unique" UNIQUE("token_hash")
-);
+-- admin_invitations table moved to 0008_admin_invitations.sql to avoid duplication
 --> statement-breakpoint
 ALTER TABLE "entities" ADD CONSTRAINT "entities_document_id_documents_id_fk" FOREIGN KEY ("document_id") REFERENCES "public"."documents"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "entity_vectors" ADD CONSTRAINT "entity_vectors_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -690,6 +684,5 @@ CREATE INDEX "background_tasks_user_id_idx" ON "background_tasks" USING btree ("
 CREATE INDEX "background_tasks_workspace_id_idx" ON "background_tasks" USING btree ("workspace_id");--> statement-breakpoint
 CREATE INDEX "background_tasks_status_idx" ON "background_tasks" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "background_tasks_type_idx" ON "background_tasks" USING btree ("type");--> statement-breakpoint
-CREATE INDEX "background_tasks_next_run_at_idx" ON "background_tasks" USING btree ("next_run_at");--> statement-breakpoint
-CREATE INDEX "idx_admin_invitations_email" ON "admin_invitations" USING btree ("email");--> statement-breakpoint
-CREATE INDEX "idx_admin_invitations_token_hash" ON "admin_invitations" USING btree ("token_hash");
+CREATE INDEX "background_tasks_next_run_at_idx" ON "background_tasks" USING btree ("next_run_at");
+-- admin_invitations indexes moved to 0008_admin_invitations.sql to avoid duplication

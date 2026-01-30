@@ -4,6 +4,8 @@ Deploy your own Synap instance in 5 minutes.
 
 ## 🚀 Quick Start
 
+**Deploy your own Synap instance in 5 minutes:**
+
 **Recommended: Download first, then execute (most reliable):**
 
 ```bash
@@ -26,15 +28,9 @@ chmod +x install.sh
 ./install.sh
 ```
 
-**Quick method (piping - less reliable, but works):**
+> ⚠️ **Note**: Piping (`curl ... | bash`) can sometimes cause parsing issues. If you encounter errors, download the script first instead.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
-```
-
-> ⚠️ **Note**: Piping can sometimes cause parsing issues. If you encounter errors, download the script first instead.
-
-That's it! Follow the interactive prompts.
+That's it! Follow the interactive prompts to configure your instance.
 
 ## 📋 Requirements
 
