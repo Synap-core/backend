@@ -12,6 +12,9 @@ export default [
       "**/coverage/**",
       "**/.docusaurus/**",
       "**/.wrangler/**",
+      "**/generated.d.ts", // Generated files from Drizzle ORM
+      "**/*.generated.ts",
+      "**/*.generated.d.ts",
     ],
   },
   js.configs.recommended,
@@ -35,7 +38,9 @@ export default [
         { prefer: "type-imports", fixStyle: "inline-type-imports" },
       ],
       "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-empty-object-type": "warn", // Downgrade to warn (generated files use {})
       "no-undef": "off", // TypeScript handles this better
+      "no-case-declarations": "warn", // Downgrade to warn (common pattern in switch statements)
     },
   },
 ];

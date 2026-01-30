@@ -19,6 +19,8 @@
     "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run",
     "lint": "eslint . --cache",
     "lint:fix": "eslint . --fix --cache",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
     "run-ci": "run-s lint typecheck test build"
   },
   "lint-staged": {
