@@ -242,7 +242,7 @@ if [ -z "$INTELLIGENCE_KEY" ]; then
     echo -e "${YELLOW}⚠️  No API Key provided. Use 'synap-cli secrets update' later to set it.${NC}"
     # We do NOT generate a random one here because it must match Server 2.
     INTELLIGENCE_KEY=""
-else 
+else
     echo -e "${GREEN}✓ Key recorded${NC}"
 fi
 
@@ -256,6 +256,12 @@ echo ""
 
 read -p "Default AI Provider (openai/anthropic/none) [none]: " AI_PROVIDER
 AI_PROVIDER=${AI_PROVIDER:-none}
+
+# Initialize AI keys as empty
+OPENAI_KEY=""
+ANTHROPIC_KEY=""
+GOOGLE_AI_API_KEY=""
+EMBEDDING_PROVIDER=""
 
 if [ "$AI_PROVIDER" = "openai" ]; then
     read -p "OpenAI API Key: " OPENAI_KEY
