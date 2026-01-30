@@ -7,7 +7,7 @@ services:
     # If image doesn't exist, falls back to building from source
     # Set BACKEND_VERSION in .env to pin a specific version (e.g., v1.2.3)
     # Defaults to 'latest' if not set
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${BACKEND_VERSION:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
     # Build fallback: if image pull fails, build from source
     build:
       context: ..
@@ -67,7 +67,7 @@ services:
   # ============================================================================
   backend-migrate:
     # Use same image as backend service (pulls or builds same way)
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${BACKEND_VERSION:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
     # Build fallback: if image pull fails, build from source
     build:
       context: ..

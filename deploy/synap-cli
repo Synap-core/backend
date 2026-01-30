@@ -120,14 +120,14 @@ cmd_update() {
     
     # Determine target image
     if [ "$version" = "latest" ]; then
-        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:latest"
+        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:latest"
         echo -e "Target: ${BLUE}latest${NC}"
     elif [[ "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]]; then
         # Ensure version starts with v
         if [[ ! "$version" =~ ^v ]]; then
             version="v${version}"
         fi
-        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${version}"
+        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${version}"
         echo -e "Target: ${BLUE}${version}${NC}"
     else
         echo -e "${RED}❌ Invalid version format. Use 'latest' or semantic version (e.g., v1.2.3)${NC}"
@@ -187,7 +187,7 @@ cmd_update() {
         fi
         
         # Update docker-compose.yml to use the new version
-        sed -i.bak "s|ghcr.io/.*/backend:.*|ghcr.io/${REPO}/backend:${version}|g" docker-compose.yml
+        sed -i.bak "s|ghcr.io/.*/backend:.*|ghcr.io/${REPO}:${version}|g" docker-compose.yml
         rm -f docker-compose.yml.bak
     fi
     
