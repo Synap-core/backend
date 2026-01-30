@@ -11,6 +11,74 @@ fi
 # Usage: curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
 # Or: git clone https://github.com/Synap-core/backend.git && cd backend/deploy && ./install.sh
 
+# ============================================================================
+# INSTALLER DIRECTORY DETECTION
+# ============================================================================
+# Detect the directory where this installer script is located
+# This allows us to save/load .env file in the same directory as the installer
+INSTALLER_DIR=""
+if [ -n "${BASH_SOURCE[0]}" ]; then
+    # Script is being executed directly
+    INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+elif [ -n "$0" ] && [ "$0" != "bash" ]; then
+    # Fallback for piped execution
+    INSTALLER_DIR="$(pwd)"
+else
+    # Last resort: use current directory
+    INSTALLER_DIR="$(pwd)"
+fi
+INSTALLER_ENV_FILE="${INSTALLER_DIR}/.env"
+
+# ============================================================================
+# HELPER FUNCTIONS FOR .ENV FILE MANAGEMENT
+# ============================================================================
+
+# Safely load a variable from .env file (prevents code execution)
+load_env_var() {
+    local var_name=$1
+    local default_value=$2
+    
+    if [ -f "$INSTALLER_ENV_FILE" ]; then
+        # Use grep to find the line, then extract value safely
+        # This prevents execution of any code in the .env file
+        local value=$(grep "^${var_name}=" "$INSTALLER_ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//;s/"$//' | sed "s/^'//;s/'$//")
+        if [ -n "$value" ]; then
+            echo "$value"
+            return
+        fi
+    fi
+    
+    echo "$default_value"
+}
+
+# Save a variable to .env file
+save_env_var() {
+    local var_name=$1
+    local var_value=$2
+    
+    # Create .env file if it doesn't exist
+    if [ ! -f "$INSTALLER_ENV_FILE" ]; then
+        echo "# Synap Backend Installer Configuration" > "$INSTALLER_ENV_FILE"
+        echo "# This file stores your installation preferences" >> "$INSTALLER_ENV_FILE"
+        echo "# Generated: $(date)" >> "$INSTALLER_ENV_FILE"
+        echo "" >> "$INSTALLER_ENV_FILE"
+    fi
+    
+    # Remove existing entry if it exists
+    if grep -q "^${var_name}=" "$INSTALLER_ENV_FILE" 2>/dev/null; then
+        # Use sed to update in-place (works on macOS and Linux)
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "/^${var_name}=/d" "$INSTALLER_ENV_FILE"
+        else
+            sed -i "/^${var_name}=/d" "$INSTALLER_ENV_FILE"
+        fi
+    fi
+    
+    # Append new entry (escape special characters in value)
+    local escaped_value=$(echo "$var_value" | sed 's/[\/&]/\\&/g')
+    echo "${var_name}=${escaped_value}" >> "$INSTALLER_ENV_FILE"
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -88,6 +156,29 @@ echo ""
 echo -e "${GREEN}✅ All prerequisites met!${NC}"
 echo ""
 
+# ============================================================================
+# LOAD EXISTING CONFIGURATION FROM INSTALLER .ENV FILE
+# ============================================================================
+if [ -f "$INSTALLER_ENV_FILE" ]; then
+    echo -e "${YELLOW}👉 Found existing configuration in ${INSTALLER_ENV_FILE}${NC}"
+    echo -e "${YELLOW}   Defaults will be loaded from this file.${NC}"
+    echo ""
+fi
+
+# Load all defaults from installer .env file
+DEFAULT_DEPLOYMENT_TYPE=$(load_env_var "DEPLOYMENT_TYPE" "")
+DEFAULT_DOMAIN=$(load_env_var "DOMAIN" "")
+DEFAULT_EMAIL=$(load_env_var "LETSENCRYPT_EMAIL" "")
+DEFAULT_ADMIN_EMAIL=$(load_env_var "ADMIN_EMAIL" "")
+DEFAULT_ADMIN_NAME=$(load_env_var "ADMIN_NAME" "")
+DEFAULT_INTELLIGENCE_URL=$(load_env_var "INTELLIGENCE_HUB_URL" "http://localhost:3001")
+DEFAULT_INTELLIGENCE_KEY=$(load_env_var "INTELLIGENCE_API_KEY" "")
+DEFAULT_AI_PROVIDER=$(load_env_var "AI_PROVIDER" "none")
+DEFAULT_OPENAI_KEY=$(load_env_var "OPENAI_API_KEY" "")
+DEFAULT_ANTHROPIC_KEY=$(load_env_var "ANTHROPIC_API_KEY" "")
+DEFAULT_GOOGLE_AI_KEY=$(load_env_var "GOOGLE_AI_API_KEY" "")
+DEFAULT_INSTALL_DIR=$(load_env_var "INSTALL_DIR" "/opt/synap-backend")
+
 # Prompt for configuration
 echo -e "${BLUE}📝 Deployment Configuration${NC}"
 echo ""
@@ -97,17 +188,13 @@ echo "Choose deployment type:"
 echo "  [1] Custom domain (you manage DNS)"
 echo "  [2] Synap subdomain (*.synap.live) ⭐ RECOMMENDED"
 echo "  [3] Localhost only (no SSL, for testing)"
+if [ -n "$DEFAULT_DEPLOYMENT_TYPE" ]; then
+    echo ""
+    read -p "Choice [1-3] [${DEFAULT_DEPLOYMENT_TYPE}]: " DEPLOYMENT_TYPE
+    DEPLOYMENT_TYPE=${DEPLOYMENT_TYPE:-$DEFAULT_DEPLOYMENT_TYPE}
+else
 echo ""
 read -p "Choice [1-3]: " DEPLOYMENT_TYPE
-
-# Load existing config
-DEFAULT_DOMAIN=""
-DEFAULT_EMAIL=""
-
-if [ -f .env ]; then
-    DEFAULT_DOMAIN=$(grep "^DOMAIN=" .env | cut -d'=' -f2-)
-    DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" .env | cut -d'=' -f2-)
-    echo -e "${YELLOW}👉 Found existing configuration. Defaults loaded.${NC}"
 fi
 
 DOMAIN=""
@@ -133,6 +220,11 @@ case $DEPLOYMENT_TYPE in
             echo -e "${RED}Email is required!${NC}"
             read -p "Enter your email: " EMAIL
         done
+        
+        # Save to installer .env
+        save_env_var "DEPLOYMENT_TYPE" "$DEPLOYMENT_TYPE"
+        save_env_var "DOMAIN" "$DOMAIN"
+        save_env_var "LETSENCRYPT_EMAIL" "$EMAIL"
         ;;
     2)
         # Synap subdomain flow
@@ -200,11 +292,17 @@ case $DEPLOYMENT_TYPE in
                 sleep 60
                 
                 # Email for SSL
-                read -p "Enter your email (for SSL certificates): " EMAIL
+                read -p "Enter your email (for SSL certificates) [${DEFAULT_EMAIL}]: " EMAIL
+                EMAIL=${EMAIL:-$DEFAULT_EMAIL}
                 while [ -z "$EMAIL" ]; do
                     echo -e "${RED}Email is required!${NC}"
                     read -p "Enter your email: " EMAIL
                 done
+                
+                # Save to installer .env
+                save_env_var "DEPLOYMENT_TYPE" "$DEPLOYMENT_TYPE"
+                save_env_var "DOMAIN" "$DOMAIN"
+                save_env_var "LETSENCRYPT_EMAIL" "$EMAIL"
             fi
         fi
         ;;
@@ -215,12 +313,19 @@ case $DEPLOYMENT_TYPE in
         DOMAIN="localhost"
         EMAIL="noreply@localhost"
         USE_SSL="false"
+        save_env_var "DEPLOYMENT_TYPE" "$DEPLOYMENT_TYPE"
+        save_env_var "DOMAIN" "$DOMAIN"
+        save_env_var "LETSENCRYPT_EMAIL" "$EMAIL"
         ;;
     *)
         echo -e "${RED}Invalid choice. Defaulting to localhost.${NC}"
         DOMAIN="localhost"
         EMAIL="noreply@localhost"
         USE_SSL="false"
+        DEPLOYMENT_TYPE="3"
+        save_env_var "DEPLOYMENT_TYPE" "$DEPLOYMENT_TYPE"
+        save_env_var "DOMAIN" "$DOMAIN"
+        save_env_var "LETSENCRYPT_EMAIL" "$EMAIL"
         ;;
 esac
 
@@ -240,11 +345,13 @@ echo "For self-hosted installations, you need to create an admin account."
 echo "This account will have full access to your Synap backend."
 echo ""
 
-read -p "Admin email: " ADMIN_EMAIL
+read -p "Admin email [${DEFAULT_ADMIN_EMAIL}]: " ADMIN_EMAIL
+ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
 if [ -z "$ADMIN_EMAIL" ]; then
     echo -e "${RED}❌ Admin email is required${NC}"
     exit 1
 fi
+save_env_var "ADMIN_EMAIL" "$ADMIN_EMAIL"
 
 # Basic email validation
 if [[ ! "$ADMIN_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -269,7 +376,11 @@ if [ ${#ADMIN_PASSWORD} -lt 8 ]; then
     fi
 fi
 
-read -p "Admin name (optional): " ADMIN_NAME
+read -p "Admin name (optional) [${DEFAULT_ADMIN_NAME}]: " ADMIN_NAME
+ADMIN_NAME=${ADMIN_NAME:-$DEFAULT_ADMIN_NAME}
+if [ -n "$ADMIN_NAME" ]; then
+    save_env_var "ADMIN_NAME" "$ADMIN_NAME"
+fi
 
 # ============================================================================
 # INTELLIGENCE SERVICE CONFIGURATION (Server 2)
@@ -284,16 +395,21 @@ echo ""
 INTELLIGENCE_URL=""
 INTELLIGENCE_KEY=""
 
-read -p "Intelligence Hub URL [http://localhost:3001]: " INTELLIGENCE_URL
-INTELLIGENCE_URL=${INTELLIGENCE_URL:-http://localhost:3001}
+read -p "Intelligence Hub URL [${DEFAULT_INTELLIGENCE_URL}]: " INTELLIGENCE_URL
+INTELLIGENCE_URL=${INTELLIGENCE_URL:-$DEFAULT_INTELLIGENCE_URL}
+save_env_var "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
 
-read -p "Intelligence API Key: " INTELLIGENCE_KEY || true
+read -p "Intelligence API Key [${DEFAULT_INTELLIGENCE_KEY:0:10}...]: " INTELLIGENCE_KEY || true
 if [ -z "$INTELLIGENCE_KEY" ]; then
-    echo -e "${YELLOW}⚠️  No API Key provided. Use 'synap-cli secrets update' later to set it.${NC}"
-    # We do NOT generate a random one here because it must match Server 2.
-    INTELLIGENCE_KEY=""
+    INTELLIGENCE_KEY=${DEFAULT_INTELLIGENCE_KEY:-""}
+    if [ -z "$INTELLIGENCE_KEY" ]; then
+        echo -e "${YELLOW}⚠️  No API Key provided. Use 'synap-cli secrets update' later to set it.${NC}"
+    else
+        echo -e "${GREEN}✓ Using saved API Key${NC}"
+    fi
 else
     echo -e "${GREEN}✓ Key recorded${NC}"
+    save_env_var "INTELLIGENCE_API_KEY" "$INTELLIGENCE_KEY"
 fi
 
 # ============================================================================
@@ -304,19 +420,28 @@ echo -e "${BLUE}🤖 AI Service Configuration (Optional)${NC}"
 echo "These can be configured later in the setup wizard."
 echo ""
 
-read -p "Default AI Provider (openai/anthropic/none) [none]: " AI_PROVIDER
-AI_PROVIDER=${AI_PROVIDER:-none}
+read -p "Default AI Provider (openai/anthropic/none) [${DEFAULT_AI_PROVIDER}]: " AI_PROVIDER
+AI_PROVIDER=${AI_PROVIDER:-$DEFAULT_AI_PROVIDER}
+save_env_var "AI_PROVIDER" "$AI_PROVIDER"
 
-# Initialize AI keys as empty
-OPENAI_KEY=""
-ANTHROPIC_KEY=""
-GOOGLE_AI_API_KEY=""
+# Initialize AI keys from defaults
+OPENAI_KEY="$DEFAULT_OPENAI_KEY"
+ANTHROPIC_KEY="$DEFAULT_ANTHROPIC_KEY"
+GOOGLE_AI_API_KEY="$DEFAULT_GOOGLE_AI_KEY"
 EMBEDDING_PROVIDER=""
 
 if [ "$AI_PROVIDER" = "openai" ]; then
-    read -p "OpenAI API Key: " OPENAI_KEY
+    read -p "OpenAI API Key [${DEFAULT_OPENAI_KEY:0:10}...]: " OPENAI_KEY
+    OPENAI_KEY=${OPENAI_KEY:-$DEFAULT_OPENAI_KEY}
+    if [ -n "$OPENAI_KEY" ]; then
+        save_env_var "OPENAI_API_KEY" "$OPENAI_KEY"
+    fi
 elif [ "$AI_PROVIDER" = "anthropic" ]; then
-    read -p "Anthropic API Key: " ANTHROPIC_KEY
+    read -p "Anthropic API Key [${DEFAULT_ANTHROPIC_KEY:0:10}...]: " ANTHROPIC_KEY
+    ANTHROPIC_KEY=${ANTHROPIC_KEY:-$DEFAULT_ANTHROPIC_KEY}
+    if [ -n "$ANTHROPIC_KEY" ]; then
+        save_env_var "ANTHROPIC_API_KEY" "$ANTHROPIC_KEY"
+    fi
 fi
 
 # ============================================================================
@@ -370,44 +495,69 @@ echo -e "${BLUE}📁 Installation Path${NC}"
 echo "The default installation path is /opt/synap-backend."
 echo "This requires sudo privileges to create."
 echo ""
-read -p "Do you want to use a custom installation path? (y/N): " USE_CUSTOM_PATH
 
-INSTALL_DIR="/opt/synap-backend" # Set default value
-
-if [[ "$USE_CUSTOM_PATH" =~ ^[Yy]$ ]]; then
-    # User wants a custom path
-    echo ""
-    echo "Please provide an absolute path for the installation."
-    echo "e.g., /home/youruser/synap or ~/pkm_stacks/synap"
-    # Use realpath to resolve ~ and other relative paths to an absolute path
-    read -p "Enter custom installation path: " CUSTOM_PATH
-    
-    # Loop until a non-empty path is provided
-    while [ -z "$CUSTOM_PATH" ]; do
-        echo -e "${RED}Path cannot be empty!${NC}"
-        read -p "Enter custom installation path: " CUSTOM_PATH
-    done
-
-    # Resolve potential ~ character to full home directory path
-    if command -v realpath &> /dev/null; then
-        INSTALL_DIR=$(realpath -m "$CUSTOM_PATH")
+# Check if we have a saved install directory
+if [ -n "$DEFAULT_INSTALL_DIR" ] && [ "$DEFAULT_INSTALL_DIR" != "/opt/synap-backend" ]; then
+    echo -e "${YELLOW}👉 Found saved installation path: ${DEFAULT_INSTALL_DIR}${NC}"
+    read -p "Use saved path? (Y/n): " USE_SAVED_PATH
+    if [[ ! "$USE_SAVED_PATH" =~ ^[Nn]$ ]]; then
+        INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+        echo -e "${GREEN}✓ Using saved path: ${INSTALL_DIR}${NC}"
     else
-        # Fallback for systems without realpath, less robust
-        INSTALL_DIR=$(eval echo "$CUSTOM_PATH")
+        read -p "Do you want to use a custom installation path? (y/N): " USE_CUSTOM_PATH
+        INSTALL_DIR="/opt/synap-backend"
+        if [[ "$USE_CUSTOM_PATH" =~ ^[Yy]$ ]]; then
+            echo ""
+            echo "Please provide an absolute path for the installation."
+            echo "e.g., /home/youruser/synap or ~/pkm_stacks/synap"
+            read -p "Enter custom installation path: " CUSTOM_PATH
+            while [ -z "$CUSTOM_PATH" ]; do
+                echo -e "${RED}Path cannot be empty!${NC}"
+                read -p "Enter custom installation path: " CUSTOM_PATH
+            done
+            if command -v realpath &> /dev/null; then
+                INSTALL_DIR=$(realpath -m "$CUSTOM_PATH")
+            else
+                INSTALL_DIR=$(eval echo "$CUSTOM_PATH")
+            fi
+            echo -e "${GREEN}✓ Using custom path: ${INSTALL_DIR}${NC}"
+        else
+            echo -e "${GREEN}✓ Using default path: ${INSTALL_DIR}${NC}"
+        fi
     fi
-    
-    echo -e "${GREEN}✓ Using custom path: ${INSTALL_DIR}${NC}"
 else
-    # User wants the default path
-    echo -e "${GREEN}✓ Using default path: ${INSTALL_DIR}${NC}"
-    # Check for sudo if using the default /opt path
-    if [ ! -w "/opt" ] && [ "$EUID" -ne 0 ]; then
+    read -p "Do you want to use a custom installation path? (y/N): " USE_CUSTOM_PATH
+    INSTALL_DIR="/opt/synap-backend"
+    if [[ "$USE_CUSTOM_PATH" =~ ^[Yy]$ ]]; then
         echo ""
-        echo -e "${YELLOW}⚠️  The default path /opt/synap-backend requires root privileges to create.${NC}"
-        echo "Please re-run the script with 'sudo' or choose a custom path in your home directory."
-        exit 1
+        echo "Please provide an absolute path for the installation."
+        echo "e.g., /home/youruser/synap or ~/pkm_stacks/synap"
+        read -p "Enter custom installation path: " CUSTOM_PATH
+        while [ -z "$CUSTOM_PATH" ]; do
+            echo -e "${RED}Path cannot be empty!${NC}"
+            read -p "Enter custom installation path: " CUSTOM_PATH
+        done
+        if command -v realpath &> /dev/null; then
+            INSTALL_DIR=$(realpath -m "$CUSTOM_PATH")
+        else
+            INSTALL_DIR=$(eval echo "$CUSTOM_PATH")
+        fi
+        echo -e "${GREEN}✓ Using custom path: ${INSTALL_DIR}${NC}"
+    else
+        echo -e "${GREEN}✓ Using default path: ${INSTALL_DIR}${NC}"
     fi
 fi
+
+# Check for sudo if using the default /opt path
+if [ "$INSTALL_DIR" = "/opt/synap-backend" ] && [ ! -w "/opt" ] && [ "$EUID" -ne 0 ]; then
+    echo ""
+    echo -e "${YELLOW}⚠️  The default path /opt/synap-backend requires root privileges to create.${NC}"
+    echo "Please re-run the script with 'sudo' or choose a custom path in your home directory."
+    exit 1
+fi
+
+# Save installation path
+save_env_var "INSTALL_DIR" "$INSTALL_DIR"
 # --- End of Path Selection ---
 
 echo -e "${BLUE}📁 Creating installation directory: ${INSTALL_DIR}${NC}"
@@ -719,3 +869,8 @@ echo "  ${INSTALL_DIR}/deploy/synap-cli logs      # View logs"
 echo "  ${INSTALL_DIR}/deploy/synap-cli update    # Update Synap"
 echo "  ${INSTALL_DIR}/deploy/synap-cli backup    # Backup data"
 echo ""
+if [ -f "$INSTALLER_ENV_FILE" ]; then
+    echo -e "${GREEN}💾 Configuration saved to:${NC} ${INSTALLER_ENV_FILE}"
+    echo -e "${YELLOW}   Next time you run the installer, it will use these values as defaults.${NC}"
+    echo ""
+fi
