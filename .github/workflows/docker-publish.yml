@@ -10,8 +10,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_BACKEND: ${{ github.repository }}/backend
-  IMAGE_NAME_INTELLIGENCE: ${{ github.repository }}/intelligence-service
+  # Convert repository names to lowercase (required for Docker registry)
+  # Format: owner/repo-name (lowercase)
+  IMAGE_NAME_BACKEND: ${{ github.repository_owner }}/${{ github.event.repository.name }}
+  IMAGE_NAME_INTELLIGENCE: ${{ github.repository_owner }}/intelligence-service
 
 jobs:
   build-and-push-backend:
@@ -34,11 +36,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Convert repository name to lowercase
+        id: repo
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
+          echo "name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "full=${REPO_OWNER}/${REPO_NAME}" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_BACKEND }}
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -83,11 +94,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Convert intelligence repo name to lowercase
+        id: intel-repo
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
+          echo "full=${REPO_OWNER}/intelligence-service" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_INTELLIGENCE }}
+          images: ${{ env.REGISTRY }}/${{ steps.intel-repo.outputs.full }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
