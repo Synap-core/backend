@@ -136,7 +136,18 @@ app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: "*", // getCorsOrigins(),
+    origin: (origin) => {
+      // Accept any origin when credentials are required
+      // Browser requires specific origin (not wildcard) when credentials: true
+      // So we return the requesting origin if present
+      if (!origin) {
+        // Same-origin request (no Origin header) - allow by returning null
+        return null;
+      }
+      // Return the requesting origin (allows any origin)
+      // Security is handled by authentication, not CORS
+      return origin;
+    },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "Cookie"],

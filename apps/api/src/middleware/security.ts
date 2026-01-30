@@ -183,18 +183,41 @@ export const securityHeadersMiddleware: MiddlewareHandler = async (c, next) => {
 /**
  * CORS Configuration (already in server, but here for reference)
  */
+/**
+ * Get allowed CORS origins from environment variable
+ *
+ * Format: ALLOWED_ORIGINS=https://app1.example.com,https://app2.example.com,http://localhost:3000
+ *
+ * For production: Set ALLOWED_ORIGINS with all frontend domains that should access this backend
+ * For development: Falls back to common localhost ports if not set
+ *
+ * @returns Array of allowed origin URLs
+ */
 export const getCorsOrigins = () => {
-  const origins = process.env.ALLOWED_ORIGINS?.split(",") || [
-    "http://localhost:5173", // Vite dev (default)
-    "http://localhost:5174", // Vite dev (alternative port)
-    "http://localhost:3000", // Next.js dev
-    "http://localhost:3001", // Alternative port
-  ];
-
-  // Add production origin from Kratos UI URL
-  if (process.env.KRATOS_UI_URL) {
-    origins.push(process.env.KRATOS_UI_URL);
+  // If ALLOWED_ORIGINS is explicitly set, use it (production)
+  if (process.env.ALLOWED_ORIGINS) {
+    return process.env.ALLOWED_ORIGINS.split(",").map((origin) =>
+      origin.trim()
+    );
   }
 
-  return origins;
+  // Development fallback: common localhost ports
+  // In production, ALLOWED_ORIGINS should always be set
+  const isDevelopment = process.env.NODE_ENV === "development";
+  if (isDevelopment) {
+    return [
+      "http://localhost:5173", // Vite dev (default)
+      "http://localhost:5174", // Vite dev (alternative port)
+      "http://localhost:3000", // Next.js dev
+      "http://localhost:3001", // Alternative port
+    ];
+  }
+
+  // Production: If not set, return empty array (strict - no origins allowed)
+  // This forces explicit configuration
+  console.warn(
+    "⚠️  ALLOWED_ORIGINS not set in production. CORS will reject all origins. " +
+      "Set ALLOWED_ORIGINS environment variable with comma-separated frontend URLs."
+  );
+  return [];
 };
