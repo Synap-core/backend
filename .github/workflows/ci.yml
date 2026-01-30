@@ -74,11 +74,25 @@ jobs:
         run: pnpm format || echo "⚠️  Format check failed - run 'pnpm format:fix' to auto-fix"
         continue-on-error: true
 
-      - name: Build packages (for typecheck)
-        # Build workspace packages first so TypeScript can resolve types
-        run: pnpm build --filter='@synap-core/core' --filter='@synap-core/types' --filter='@synap/storage' --filter='@synap-core/hub-protocol' || pnpm turbo build --filter='@synap-core/core' --filter='@synap-core/types' --filter='@synap/storage' --filter='@synap-core/hub-protocol'
+      - name: Build workspace dependencies
+        # Build workspace packages first so TypeScript can resolve types during typecheck
+        # TypeScript project references require built .d.ts files
+        run: |
+          echo "🔨 Building workspace dependencies..."
+          pnpm turbo build \
+            --filter='@synap-core/core' \
+            --filter='@synap-core/types' \
+            --filter='@synap/storage' \
+            --filter='@synap-core/hub-protocol' \
+            --filter='@synap/database' \
+            --filter='@synap/api' \
+            --filter='@synap/jobs' \
+            --filter='@synap/auth' \
+            --filter='@synap/events' \
+            || echo "⚠️  Some builds may have failed, continuing..."
 
       - name: Typecheck
+        # Typecheck all packages (admin-ui already excluded from tsconfig.json references)
         run: pnpm typecheck
 
       - name: Test

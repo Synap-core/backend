@@ -3196,6 +3196,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           output: any[];
           meta: object;
         }>;
+        getServiceHealth: import("@trpc/server").TRPCQueryProcedure<{
+          input: void;
+          output: {
+            name: string;
+            status: "healthy" | "unhealthy" | "degraded";
+            message?: string;
+            latency?: number;
+          }[];
+          meta: object;
+        }>;
       }>
     >;
     hub: import("@trpc/server").TRPCBuiltRouter<

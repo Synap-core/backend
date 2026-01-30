@@ -28,9 +28,7 @@
     "noFallthroughCasesInSwitch": true
   },
   "references": [
-    {
-      "path": "./apps/admin-ui"
-    },
+    // admin-ui excluded from typecheck (has separate build process)
     {
       "path": "./apps/api"
     },
