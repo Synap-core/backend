@@ -114,29 +114,61 @@ cmd_update() {
     echo -e "${BLUE}🔄 Checking for updates...${NC}"
     echo ""
     
-    # Get current image version from docker-compose.yml
-    CURRENT_IMAGE=$(grep -E "^\s*image:" docker-compose.yml | grep backend | head -1 | sed 's/.*backend://' | tr -d ' ' || echo "unknown")
+    # Safely read .env file (without executing commands)
+    # Only read KEY=VALUE pairs, ignore comments and empty lines
+    GITHUB_REPOSITORY=""
+    BACKEND_VERSION=""
+    GITHUB_TOKEN=""
+    GITHUB_USER=""
+    
+    if [ -f .env ]; then
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+            # Skip empty lines, comments, and lines without =
+            [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+            [[ ! "$key" =~ ^[A-Z_]+$ ]] && continue
+            
+            # Remove quotes from value if present and trim whitespace
+            value=$(echo "$value" | sed "s/^['\"]//;s/['\"]$//" | xargs)
+            
+            # Store specific variables we need (safely, without export)
+            case "$key" in
+                GITHUB_REPOSITORY)
+                    GITHUB_REPOSITORY="$value"
+                    ;;
+                BACKEND_VERSION)
+                    BACKEND_VERSION="$value"
+                    ;;
+                GITHUB_TOKEN)
+                    GITHUB_TOKEN="$value"
+                    ;;
+                GITHUB_USER)
+                    GITHUB_USER="$value"
+                    ;;
+            esac
+        done < <(grep -E "^[A-Z_]+=" .env 2>/dev/null || true)
+    fi
+    
+    # Get current image version from .env (docker-compose.yml uses variables)
+    if [ -n "$BACKEND_VERSION" ]; then
+        CURRENT_IMAGE="$BACKEND_VERSION"
+    else
+        CURRENT_IMAGE="latest"
+    fi
+    
     echo -e "Current image: ${YELLOW}${CURRENT_IMAGE}${NC}"
     
     # Determine target image
     if [ "$version" = "latest" ]; then
-        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:latest"
         echo -e "Target: ${BLUE}latest${NC}"
     elif [[ "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]]; then
         # Ensure version starts with v
         if [[ ! "$version" =~ ^v ]]; then
             version="v${version}"
         fi
-        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${version}"
         echo -e "Target: ${BLUE}${version}${NC}"
     else
         echo -e "${RED}❌ Invalid version format. Use 'latest' or semantic version (e.g., v1.2.3)${NC}"
         exit 1
-    fi
-    
-    # Check if .env exists and has GITHUB_REPOSITORY
-    if [ -f .env ]; then
-        source .env
     fi
     
     # Use GITHUB_REPOSITORY from .env or default
@@ -158,42 +190,50 @@ cmd_update() {
         echo -e "${YELLOW}⚠️  GITHUB_TOKEN not set. Attempting to pull public image...${NC}"
     fi
     
-    # Pull new image
+    # Update .env file with new BACKEND_VERSION first
+    # (Docker Compose reads this automatically)
     echo ""
-    echo -e "${BLUE}📥 Pulling image: ${TARGET_IMAGE}${NC}"
-    if ! docker pull "$TARGET_IMAGE"; then
+    echo -e "${BLUE}📝 Updating configuration...${NC}"
+    if [ -f .env ]; then
+        # Backup .env
+        cp .env .env.backup
+        
+        # Update or add BACKEND_VERSION in .env
+        if grep -q "^BACKEND_VERSION=" .env 2>/dev/null; then
+            # Update existing BACKEND_VERSION
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS sed requires -i '' for in-place editing
+                sed -i '' "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${version}|" .env
+            else
+                # Linux sed
+                sed -i "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${version}|" .env
+            fi
+        else
+            # Add BACKEND_VERSION to .env
+            echo "BACKEND_VERSION=${version}" >> .env
+        fi
+    else
+        echo -e "${YELLOW}⚠️  .env file not found. Creating it...${NC}"
+        echo "BACKEND_VERSION=${version}" > .env
+        echo "GITHUB_REPOSITORY=${REPO}" >> .env
+    fi
+    
+    # Use standard Docker Compose commands
+    # This is the standard way to update Docker Compose deployments
+    echo ""
+    echo -e "${BLUE}📥 Pulling new image (standard: docker compose pull)...${NC}"
+    if ! docker compose pull backend; then
         echo -e "${RED}❌ Failed to pull image. Check:${NC}"
         echo -e "  1. Image exists: https://github.com/${REPO}/pkgs/container/backend"
         echo -e "  2. GITHUB_TOKEN is set in .env (for private repos)"
         echo -e "  3. Version tag is correct: ${version}"
+        echo -e "  4. You can manually run: docker compose pull backend"
         exit 1
     fi
     
-    # Update docker-compose.yml with new image
+    # Update services using standard Docker Compose command
     echo ""
-    echo -e "${BLUE}📝 Updating docker-compose.yml...${NC}"
-    if [ -f docker-compose.yml ]; then
-        # Backup docker-compose.yml
-        cp docker-compose.yml docker-compose.yml.backup
-        
-        # Update image tag in docker-compose.yml
-        if grep -q "BACKEND_VERSION" .env 2>/dev/null; then
-            # Update .env file
-            sed -i.bak "s/BACKEND_VERSION=.*/BACKEND_VERSION=${version}/" .env
-            rm -f .env.bak
-        else
-            # Add to .env
-            echo "BACKEND_VERSION=${version}" >> .env
-        fi
-        
-        # Update docker-compose.yml to use the new version
-        sed -i.bak "s|ghcr.io/.*/backend:.*|ghcr.io/${REPO}:${version}|g" docker-compose.yml
-        rm -f docker-compose.yml.bak
-    fi
-    
-    # Update services
-    echo ""
-    echo -e "${BLUE}🔄 Updating services...${NC}"
+    echo -e "${BLUE}🔄 Updating services (standard: docker compose up -d)...${NC}"
     docker compose up -d backend
     
     # Wait for backend to be healthy
@@ -217,12 +257,23 @@ cmd_update() {
         echo -e "  ${BLUE}./synap-cli logs backend${NC}"
     fi
     
-    # Get new version info
-    NEW_IMAGE=$(grep -E "^\s*image:" docker-compose.yml | grep backend | head -1 | sed 's/.*backend://' | tr -d ' ')
+    # Get new version info from .env
+    NEW_VERSION=$(grep "^BACKEND_VERSION=" .env 2>/dev/null | cut -d'=' -f2- | xargs || echo "$version")
     
     echo ""
     echo -e "${GREEN}✅ Update complete!${NC}"
-    echo -e "New image: ${GREEN}${NEW_IMAGE}${NC}"
+    echo -e "New version: ${GREEN}${NEW_VERSION}${NC}"
+    echo -e "Image: ${GREEN}ghcr.io/${REPO}/backend:${NEW_VERSION}${NC}"
+    echo ""
+    echo -e "${BLUE}📚 Standard Docker Compose commands (for reference):${NC}"
+    echo -e "  ${YELLOW}# Update to latest:${NC}"
+    echo -e "  ${GREEN}docker compose pull backend${NC}"
+    echo -e "  ${GREEN}docker compose up -d backend${NC}"
+    echo -e ""
+    echo -e "  ${YELLOW}# Update to specific version:${NC}"
+    echo -e "  ${GREEN}echo 'BACKEND_VERSION=v1.2.3' >> .env${NC}"
+    echo -e "  ${GREEN}docker compose pull backend${NC}"
+    echo -e "  ${GREEN}docker compose up -d backend${NC}"
     echo ""
     echo -e "${YELLOW}💡 To rollback:${NC}"
     echo -e "  ${BLUE}./synap-cli update <previous-version>${NC}"
