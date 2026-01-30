@@ -70,3 +70,9 @@ export * from "./skills.js";
 
 // NEW: Background Tasks (proactive AI automation)
 export * from "./background-tasks.js";
+
+// NEW: Admin Invitations (for control plane flow)
+export * from "./admin-invitations.js";
+
+// NEW: Provisioning Tokens (one-time tokens for control-plane-provisioned backends)
+export * from "./provisioning-tokens.js";

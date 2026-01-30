@@ -56,11 +56,13 @@ export async function syncUserFromKratos(identityId: string): Promise<void> {
 /**
  * Create default workspace for new user
  * Called by webhook when identity is created
+ *
+ * @returns Workspace ID and assigned role (admin or owner)
  */
 export async function createDefaultWorkspace(
   userId: string,
   traits: { name?: string; email: string }
-): Promise<void> {
+): Promise<{ id: string; role: "admin" | "owner" }> {
   const db = await getDb();
 
   try {
@@ -86,17 +88,26 @@ export async function createDefaultWorkspace(
       "Created default workspace"
     );
 
-    // Add user as workspace owner
+    // Check if this is admin email
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const isAdmin =
+      adminEmail &&
+      (traits.email as string).toLowerCase() === adminEmail.toLowerCase();
+    const role = isAdmin ? "admin" : "owner";
+
+    // Add user as workspace member with appropriate role
     await db.insert(workspaceMembers).values({
       workspaceId: workspace.id,
       userId,
-      role: "owner",
+      role,
     });
 
     logger.info(
-      { workspaceId: workspace.id, userId },
-      "Added user as workspace owner"
+      { workspaceId: workspace.id, userId, role },
+      `Added user as workspace ${role}`
     );
+
+    return { id: workspace.id, role };
   } catch (error) {
     logger.error({ err: error, userId }, "Failed to create default workspace");
     throw error;

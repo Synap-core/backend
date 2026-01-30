@@ -39,6 +39,15 @@ OPENAI_API_KEY=${OPENAI_API_KEY:-}
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
 GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-}
 
+# Admin credentials (for self-hosted)
+ADMIN_EMAIL=${ADMIN_EMAIL:-}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+ADMIN_NAME=${ADMIN_NAME:-}
+
+# Provisioning token (for control-plane-provisioned backends only)
+# This is a one-time token that allows the control plane to create the first admin invitation
+PROVISIONING_TOKEN=${PROVISIONING_TOKEN:-}
+
 # Validate required variables
 if [ -z "$DOMAIN" ]; then
     echo "ERROR|DOMAIN environment variable is required"
@@ -198,6 +207,17 @@ OPENAI_API_KEY=${OPENAI_API_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY}
 ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
+
+# ============================================================================
+# ADMIN (Self-Hosted)
+# ============================================================================
+ADMIN_EMAIL=${ADMIN_EMAIL:-}
+
+# ============================================================================
+# PROVISIONING (Control-Plane-Provisioned Backends Only)
+# ============================================================================
+# This token allows the control plane to create the first admin invitation (one-time use)
+PROVISIONING_TOKEN=${PROVISIONING_TOKEN:-}
 EOF
 
 chmod 600 .env
@@ -244,6 +264,27 @@ done
 
 if [ $ELAPSED -ge $MAX_WAIT ]; then
     echo "WARN|Backend health check timeout (services may still be starting)"
+fi
+
+# ============================================================================
+# Create Admin User (if credentials provided)
+# ============================================================================
+
+if [ -n "$ADMIN_EMAIL" ] && [ -n "$ADMIN_PASSWORD" ]; then
+  echo "INFO|Creating admin user..."
+  docker compose exec -T backend \
+    ADMIN_EMAIL="$ADMIN_EMAIL" \
+    ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    ADMIN_NAME="$ADMIN_NAME" \
+    node scripts/create-admin-cli.js
+  
+  if [ $? -eq 0 ]; then
+    echo "INFO|Admin user created successfully"
+  else
+    echo "WARN|Failed to create admin user"
+  fi
+else
+  echo "INFO|No admin credentials provided. Admin can be created via registration."
 fi
 
 # ============================================================================

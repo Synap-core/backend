@@ -232,6 +232,46 @@ if [ "$DEPLOYMENT_TYPE" = "3" ]; then
 fi
 
 # ============================================================================
+# ADMIN ACCOUNT CONFIGURATION (Self-Hosted)
+# ============================================================================
+echo ""
+echo -e "${BLUE}👤 Admin Account Setup${NC}"
+echo "For self-hosted installations, you need to create an admin account."
+echo "This account will have full access to your Synap backend."
+echo ""
+
+read -p "Admin email: " ADMIN_EMAIL
+if [ -z "$ADMIN_EMAIL" ]; then
+    echo -e "${RED}❌ Admin email is required${NC}"
+    exit 1
+fi
+
+# Basic email validation
+if [[ ! "$ADMIN_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+    echo -e "${YELLOW}⚠️  Email format looks invalid. Continuing anyway...${NC}"
+fi
+
+read -sp "Admin password: " ADMIN_PASSWORD
+echo ""
+read -sp "Confirm admin password: " ADMIN_PASSWORD_CONFIRM
+echo ""
+
+if [ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]; then
+    echo -e "${RED}❌ Passwords do not match${NC}"
+    exit 1
+fi
+
+if [ ${#ADMIN_PASSWORD} -lt 8 ]; then
+    echo -e "${YELLOW}⚠️  Password should be at least 8 characters${NC}"
+    read -p "Continue anyway? (y/N): " CONTINUE
+    if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+read -p "Admin name (optional): " ADMIN_NAME
+
+# ============================================================================
 # INTELLIGENCE SERVICE CONFIGURATION (Server 2)
 # ============================================================================
 echo ""
@@ -496,6 +536,11 @@ OPENAI_API_KEY=${OPENAI_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 GOOGLE_AI_API_KEY=${GOOGLE_AI_KEY}
 ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
+
+# ============================================================================
+# ADMIN (Self-Hosted)
+# ============================================================================
+ADMIN_EMAIL=${ADMIN_EMAIL}
 EOF
 
 chmod 600 .env
@@ -548,8 +593,44 @@ echo ""
 echo -e "${BLUE}⏳ Waiting for services to start (this may take 1-2 minutes)...${NC}"
 sleep 30
 
+# Wait for backend to be healthy
+echo -e "${BLUE}⏳ Waiting for backend to be ready...${NC}"
+MAX_WAIT=120
+WAIT_COUNT=0
+while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+  if docker compose exec -T backend curl -f http://localhost:4000/health > /dev/null 2>&1; then
+    echo -e "${GREEN}✅ Backend is ready${NC}"
+    break
+  fi
+  echo -n "."
+  sleep 2
+  WAIT_COUNT=$((WAIT_COUNT + 2))
+done
+
+if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+  echo -e "${YELLOW}⚠️  Backend health check timeout. Continuing anyway...${NC}"
+fi
+
 # Database migrations are handled automatically by the backend-migrate service
 # configured in docker-compose.yml. The backend service waits for it to complete.
+
+# Create admin user if credentials provided
+if [ -n "$ADMIN_EMAIL" ] && [ -n "$ADMIN_PASSWORD" ]; then
+  echo ""
+  echo -e "${BLUE}👤 Creating admin user...${NC}"
+  docker compose exec -T backend \
+    ADMIN_EMAIL="$ADMIN_EMAIL" \
+    ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    ADMIN_NAME="$ADMIN_NAME" \
+    node scripts/create-admin-cli.js
+  
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✅ Admin user created successfully${NC}"
+    echo -e "${GREEN}   You can now login with: ${ADMIN_EMAIL}${NC}"
+  else
+    echo -e "${YELLOW}⚠️  Failed to create admin user. You can create it manually later via registration.${NC}"
+  fi
+fi
 
 # Success message
 echo ""

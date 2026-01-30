@@ -17,6 +17,8 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-} # For self-hosted: admin email
+      PROVISIONING_TOKEN: ${PROVISIONING_TOKEN:-} # For control-plane-provisioned: one-time token for admin invitation
       JWT_SECRET: ${JWT_SECRET}
       KRATOS_PUBLIC_URL: http://kratos:4433
       KRATOS_ADMIN_URL: http://kratos:4434

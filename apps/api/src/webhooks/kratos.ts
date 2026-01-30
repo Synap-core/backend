@@ -60,15 +60,20 @@ kratosWebhookRouter.post("/", async (c) => {
     if (event.type === "identity.created" && event.identity) {
       const identityId = event.identity.id;
       const traits = event.identity.traits || {};
+      const email = traits.email as string;
 
       // Sync user to database
       await syncUserFromKratos(identityId);
 
-      // Create default workspace for new user
-      await createDefaultWorkspace(identityId, traits);
+      // Create default workspace (returns workspace + role)
+      // Role is determined by checking if email matches ADMIN_EMAIL
+      const { id: workspaceId, role } = await createDefaultWorkspace(
+        identityId,
+        traits
+      );
 
       logger.info(
-        { identityId },
+        { identityId, workspaceId, role, email },
         "Successfully processed identity.created event"
       );
     }

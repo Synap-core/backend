@@ -38,12 +38,43 @@ if [ -f "$TEMPLATE_FILE" ] && ([ ! -f "$OUTPUT_FILE" ] || [ "$TEMPLATE_FILE" -nt
     fi
   done
   
+  # Determine cookie domain and same_site settings
+  if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+    # Production: use the backend domain, SameSite=None for cross-origin
+    COOKIE_DOMAIN="$DOMAIN"
+    SAME_SITE="None"
+    SECURE="true"
+    echo "✅ Using production cookie settings: domain=$COOKIE_DOMAIN, same_site=$SAME_SITE, secure=$SECURE"
+  else
+    # Development: use localhost, SameSite=Lax for same-origin
+    COOKIE_DOMAIN="localhost"
+    SAME_SITE="Lax"
+    SECURE="false"
+    echo "✅ Using development cookie settings: domain=$COOKIE_DOMAIN, same_site=$SAME_SITE, secure=$SECURE"
+  fi
+  
   # Generate kratos.yml from template
-  # Replace the placeholder with actual origins
+  # Replace placeholders with actual values
   # Use awk for more reliable replacement
-  awk -v origins="$YAML_ORIGINS" '
+  awk -v origins="$YAML_ORIGINS" \
+      -v cookie_domain="$COOKIE_DOMAIN" \
+      -v same_site="$SAME_SITE" \
+      -v secure="$SECURE" \
+      -v domain="$DOMAIN" '
     /# {{ALLOWED_ORIGINS}}/ {
       gsub(/# {{ALLOWED_ORIGINS}}/, origins)
+    }
+    /\${DOMAIN}/ {
+      gsub(/\${DOMAIN}/, domain)
+    }
+    /domain: localhost/ {
+      gsub(/domain: localhost/, "domain: " cookie_domain)
+    }
+    /same_site: Lax/ {
+      gsub(/same_site: Lax/, "same_site: " same_site)
+    }
+    /secure: false/ {
+      gsub(/secure: false/, "secure: " secure)
     }
     { print }
   ' "$TEMPLATE_FILE" > "$OUTPUT_FILE.tmp" && mv "$OUTPUT_FILE.tmp" "$OUTPUT_FILE"

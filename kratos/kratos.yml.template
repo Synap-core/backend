@@ -86,8 +86,9 @@ identity:
       url: file:///etc/config/kratos/identity.schema.json
 session:
   cookie:
-    domain: localhost
-    same_site: Lax
+    domain: localhost  # Will be replaced by entrypoint script
+    same_site: Lax     # Will be replaced by entrypoint script
+    secure: false      # Will be replaced by entrypoint script
 courier:
   smtp:
     connection_uri: smtps://test:test@mailslurper:1025/?skip_ssl_verify=true

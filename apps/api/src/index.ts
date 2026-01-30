@@ -306,6 +306,10 @@ app.use("/trpc/*", async (c, next) => {
   return authMiddleware(c, next);
 });
 
+// Admin routes (public API for invitations)
+import { adminRouter } from "./routers/admin.js";
+app.route("/api/admin", adminRouter);
+
 // Webhook routes (before auth - uses webhook secret auth)
 // app.route("/webhooks", webhookRouter);
 
