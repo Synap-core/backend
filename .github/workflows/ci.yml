@@ -74,6 +74,10 @@ jobs:
         run: pnpm format || echo "⚠️  Format check failed - run 'pnpm format:fix' to auto-fix"
         continue-on-error: true
 
+      - name: Build packages (for typecheck)
+        # Build workspace packages first so TypeScript can resolve types
+        run: pnpm build --filter='@synap-core/core' --filter='@synap-core/types' --filter='@synap/storage' --filter='@synap-core/hub-protocol' || pnpm turbo build --filter='@synap-core/core' --filter='@synap-core/types' --filter='@synap/storage' --filter='@synap-core/hub-protocol'
+
       - name: Typecheck
         run: pnpm typecheck
 
