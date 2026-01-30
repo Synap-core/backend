@@ -208,6 +208,7 @@ services:
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     command:
       [
+        "kratos",
         "serve",
         "-c",
         "/etc/config/kratos/kratos.yml",
