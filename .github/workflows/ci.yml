@@ -13,7 +13,6 @@ concurrency:
 
 env:
   NODE_VERSION: "20"
-  PNPM_VERSION: "10"
 
 jobs:
   quality:
@@ -47,8 +46,7 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
+        # Version is automatically detected from package.json "packageManager" field
 
       - name: Get pnpm store directory
         shell: bash
