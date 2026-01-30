@@ -9,5 +9,5 @@
     "noEmit": false // Override root tsconfig to allow declaration generation
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/migrate.ts"]
+  "exclude": ["node_modules", "dist"]
 }

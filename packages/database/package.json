@@ -18,7 +18,6 @@
   },
   "files": [
     "dist",
-    "migrations-custom",
     "migrations-drizzle"
   ],
   "scripts": {

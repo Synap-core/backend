@@ -46,17 +46,15 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 
-# Copy migrations to locations where the migration script expects them (relative to dist/scripts/migrate.js)
-# Exclude .bak files (backup files should not be migrated)
-COPY --chown=nodejs:nodejs packages/database/migrations-drizzle/*.sql ./node_modules/@synap/database/migrations-drizzle/
-COPY --chown=nodejs:nodejs packages/database/migrations-custom ./node_modules/@synap/database/migrations-custom
+# Copy migration script (compiled from builder)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./node_modules/@synap/database/dist/scripts
 
-# Also copy to a standard location for direct execution if needed
+# Copy migrations to primary location (checked first by migration script)
 # Exclude .bak files (backup files should not be migrated)
 COPY --chown=nodejs:nodejs packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
-COPY --chown=nodejs:nodejs packages/database/migrations-custom ./migrations-custom
-COPY --chown=nodejs:nodejs packages/database/drizzle.config.ts ./drizzle.config.ts
+
+# Note: migrations-custom directory is optional
+# The migration script handles missing directories gracefully (see scripts/migrate.ts)
 
 # Expose port
 EXPOSE 3000

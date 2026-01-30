@@ -11,7 +11,7 @@
     "test:e2e": "pnpm --filter @synap/test-e2e test",
     "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
     "test:system": "pnpm build && tsx scripts/test-system.ts",
-    "db:migrate": "tsx packages/database/src/migrate.ts",
+    "db:migrate": "tsx packages/database/scripts/migrate.ts",
     "db:studio": "cd packages/database && pnpm drizzle-kit studio",
     "create:hub-client": "tsx scripts/create-hub-client.ts",
     "typecheck": "tsc -b --pretty false",
