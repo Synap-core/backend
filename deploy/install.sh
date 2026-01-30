@@ -1,5 +1,11 @@
 #!/bin/bash
+# Exit on error, but allow certain commands to fail
 set -e
+# Ensure we're using bash, not sh
+if [ -z "$BASH_VERSION" ]; then
+    echo "This script requires bash. Please run with: bash install.sh"
+    exit 1
+fi
 
 # Synap Backend - One-Command Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
@@ -234,10 +240,14 @@ echo "Enter the details from your Intelligence Service installation (Server 2)."
 echo "If you haven't installed it yet, you can configure this later."
 echo ""
 
+# Initialize intelligence variables
+INTELLIGENCE_URL=""
+INTELLIGENCE_KEY=""
+
 read -p "Intelligence Hub URL [http://localhost:3001]: " INTELLIGENCE_URL
 INTELLIGENCE_URL=${INTELLIGENCE_URL:-http://localhost:3001}
 
-read -p "Intelligence API Key: " INTELLIGENCE_KEY
+read -p "Intelligence API Key: " INTELLIGENCE_KEY || true
 if [ -z "$INTELLIGENCE_KEY" ]; then
     echo -e "${YELLOW}⚠️  No API Key provided. Use 'synap-cli secrets update' later to set it.${NC}"
     # We do NOT generate a random one here because it must match Server 2.

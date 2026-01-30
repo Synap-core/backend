@@ -4,13 +4,20 @@ Deploy your own Synap instance in 5 minutes.
 
 ## 🚀 Quick Start
 
-**One-command install:**
+**Recommended: Download first, then execute (most reliable):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
+# Download the installer
+curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh -o install.sh
+
+# Make it executable
+chmod +x install.sh
+
+# Run it
+./install.sh
 ```
 
-**Or clone and run:**
+**Or clone and run (best for development):**
 
 ```bash
 git clone https://github.com/Synap-core/backend.git
@@ -18,6 +25,14 @@ cd backend/deploy
 chmod +x install.sh
 ./install.sh
 ```
+
+**Quick method (piping - less reliable, but works):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
+```
+
+> ⚠️ **Note**: Piping can sometimes cause parsing issues. If you encounter errors, download the script first instead.
 
 That's it! Follow the interactive prompts.
 
