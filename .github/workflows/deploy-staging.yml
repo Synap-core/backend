@@ -57,8 +57,22 @@ jobs:
           docker pull ${{ env.REGISTRY }}/${IMAGE_NAME}:latest || \
           echo "⚠️  Image not found, deployment will skip"
 
+      - name: Check if staging secrets are configured
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.STAGING_HOST }}" ]; then
+            echo "staging_configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "staging_configured=false" >> $GITHUB_OUTPUT
+          fi
+          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            echo "slack_configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "slack_configured=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Deploy to staging
-        if: secrets.STAGING_HOST != ''
+        if: steps.check-secrets.outputs.staging_configured == 'true'
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.STAGING_HOST }}
@@ -77,13 +91,13 @@ jobs:
             docker compose exec -T backend node node_modules/@synap/database/dist/scripts/migrate.js || true
 
       - name: Wait for health check
-        if: secrets.STAGING_HOST != ''
+        if: steps.check-secrets.outputs.staging_configured == 'true'
         run: |
           sleep 10
           curl -f https://staging.synap.app/health || exit 1
 
       - name: Run smoke tests
-        if: secrets.STAGING_HOST != ''
+        if: steps.check-secrets.outputs.staging_configured == 'true'
         run: |
           if [ -f "tests/postman/smoke-tests.json" ]; then
             npx newman run tests/postman/smoke-tests.json \
@@ -94,7 +108,7 @@ jobs:
           fi
 
       - name: Rollback on failure
-        if: failure() && secrets.STAGING_HOST != ''
+        if: failure() && steps.check-secrets.outputs.staging_configured == 'true'
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.STAGING_HOST }}
@@ -115,7 +129,7 @@ jobs:
             fi
 
       - name: Notify deployment
-        if: always() && secrets.SLACK_WEBHOOK_URL != ''
+        if: always() && steps.check-secrets.outputs.slack_configured == 'true'
         uses: 8398a7/action-slack@v3
         with:
           status: ${{ job.status }}

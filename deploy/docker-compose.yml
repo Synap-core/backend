@@ -3,10 +3,15 @@ services:
   # BACKEND API
   # ============================================================================
   backend:
-    # Use pre-built image from GitHub Container Registry
+    # Try to use pre-built image from GitHub Container Registry first
+    # If image doesn't exist, falls back to building from source
     # Set BACKEND_VERSION in .env to pin a specific version (e.g., v1.2.3)
     # Defaults to 'latest' if not set
     image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${BACKEND_VERSION:-latest}
+    # Build fallback: if image pull fails, build from source
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     restart: always
     environment:
       NODE_ENV: production
@@ -61,7 +66,12 @@ services:
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
-    image: synap/backend:latest
+    # Use same image as backend service (pulls or builds same way)
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${BACKEND_VERSION:-latest}
+    # Build fallback: if image pull fails, build from source
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       NODE_PATH: /app/node_modules

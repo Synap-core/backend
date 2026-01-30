@@ -530,10 +530,17 @@ chmod 600 ../synap-backend-secrets.txt
 echo ""
 echo -e "${BLUE}🚀 Starting Synap...${NC}"
 
-# Pull images and start services
-# Note: For first install, images may need to be built if not available
-# After CI/CD is set up, images will be pre-built in GHCR
+# Try to pull images first (fast, if available)
+# If pull fails, docker-compose will build from source automatically
+echo -e "${BLUE}📥 Pulling Docker images (if available)...${NC}"
 docker compose pull --ignore-pull-failures || true
+
+# Build any images that couldn't be pulled (fallback)
+echo -e "${BLUE}🔨 Building images (if needed)...${NC}"
+docker compose build --pull || true
+
+# Start all services
+echo -e "${BLUE}▶️  Starting services...${NC}"
 docker compose up -d
 
 # Wait for services to be healthy
