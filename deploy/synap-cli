@@ -172,8 +172,10 @@ cmd_update() {
     fi
     
     # Use GITHUB_REPOSITORY from .env or default
+    # Note: GITHUB_REPOSITORY should be in format "owner/repo-name" (e.g., "synap-core/backend")
+    # The image name is just the repo name, not repo-name/backend
     REPO="${GITHUB_REPOSITORY:-synap-core/backend}"
-    TARGET_IMAGE="ghcr.io/${REPO}/backend:${version}"
+    TARGET_IMAGE="ghcr.io/${REPO}:${version}"
     
     # Backup before update
     echo ""
@@ -263,7 +265,7 @@ cmd_update() {
     echo ""
     echo -e "${GREEN}✅ Update complete!${NC}"
     echo -e "New version: ${GREEN}${NEW_VERSION}${NC}"
-    echo -e "Image: ${GREEN}ghcr.io/${REPO}/backend:${NEW_VERSION}${NC}"
+    echo -e "Image: ${GREEN}ghcr.io/${REPO}:${NEW_VERSION}${NC}"
     echo ""
     echo -e "${BLUE}📚 Standard Docker Compose commands (for reference):${NC}"
     echo -e "  ${YELLOW}# Update to latest:${NC}"
