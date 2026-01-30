@@ -65,17 +65,27 @@ kratosWebhookRouter.post("/", async (c) => {
       // Sync user to database
       await syncUserFromKratos(identityId);
 
-      // Create default workspace (returns workspace + role)
-      // Role is determined by checking if email matches ADMIN_EMAIL
-      const { id: workspaceId, role } = await createDefaultWorkspace(
-        identityId,
-        traits
-      );
+      try {
+        // Create/join workspace (returns workspace + role)
+        // Security: Only allows if user has pending invite OR is admin
+        const { id: workspaceId, role } = await createDefaultWorkspace(
+          identityId,
+          traits
+        );
 
-      logger.info(
-        { identityId, workspaceId, role, email },
-        "Successfully processed identity.created event"
-      );
+        logger.info(
+          { identityId, workspaceId, role, email },
+          "Successfully processed identity.created event"
+        );
+      } catch (error: any) {
+        // Registration rejected due to security check
+        logger.warn(
+          { identityId, email, error: error.message },
+          "Registration rejected: No invite and not admin"
+        );
+        // Note: User account is still created in Kratos, but they won't have workspace access
+        // This is acceptable - they can contact admin to get invited
+      }
     }
 
     // Handle identity.updated event
