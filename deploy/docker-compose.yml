@@ -192,9 +192,21 @@ services:
       SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://${DOMAIN}/login
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
-    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+      # Pass ALLOWED_ORIGINS for dynamic CORS configuration
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      DOMAIN: ${DOMAIN}
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    command:
+      [
+        "serve",
+        "-c",
+        "/etc/config/kratos/kratos.yml",
+        "--dev",
+        "--watch-courier",
+      ]
     volumes:
       - ../kratos:/etc/config/kratos
+      - ./kratos-entrypoint.sh:/entrypoint.sh:ro
     depends_on:
       kratos-migrate:
         condition: service_completed_successfully
