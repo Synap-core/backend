@@ -318,6 +318,133 @@ cmd_restore() {
     echo -e "${GREEN}✅ Restore complete!${NC}"
 }
 
+cmd_config() {
+    local action=${1:-list}
+    local key=${2:-}
+    local value=${3:-}
+
+    case "$action" in
+        list)
+            if [ -f .env ]; then
+                echo -e "${BLUE}📝 Current Configuration:${NC}"
+                # Show all but mask known secrets
+                while IFS='=' read -r k v; do
+                    # Skip empty lines or comments
+                    [[ -z "$k" || "$k" =~ ^# ]] && continue
+                    
+                    if [[ "$k" == *"SECRET"* ]] || [[ "$k" == *"KEY"* ]] || [[ "$k" == *"PASSWORD"* ]] || [[ "$k" == *"CIPHER"* ]] || [[ "$k" == *"COOKIE"* ]]; then
+                        echo "$k=********"
+                    else
+                        echo "$k=$v"
+                    fi
+                done < .env
+            else
+                echo -e "${RED}No .env file found.${NC}"
+            fi
+            ;;
+        edit)
+            # Create backup before edit
+            cp .env .env.bak
+            
+            # Try nano, then vi
+            if command -v nano >/dev/null; then
+                nano .env
+            else
+                vi .env
+            fi
+            
+            echo -e "${GREEN}✓ Configuration saved.${NC}"
+            echo -e "${YELLOW}ℹ️  Restart services to apply changes: ./synap-cli restart${NC}"
+            ;;
+        set)
+            if [ -z "$key" ] || [ -z "$value" ]; then
+                echo "Usage: synap-cli config set KEY VALUE"
+                exit 1
+            fi
+            
+            # Create backup
+            cp .env .env.bak
+            
+            if grep -q "^$key=" .env; then
+                # Update existing
+                # Use a temp file to safely handle sed on different platforms
+                awk -v k="$key" -v v="$value" 'BEGIN{FS="=";OFS="="} $1==k {$2=v} 1' .env > .env.tmp && mv .env.tmp .env
+            else
+                # Append new
+                echo "$key=$value" >> .env
+            fi
+            echo -e "${GREEN}✓ Updated $key=$value${NC}"
+            echo -e "${YELLOW}ℹ️  Restart services to apply changes.${NC}"
+            ;;
+        get)
+             if [ -z "$key" ]; then
+                echo "Usage: synap-cli config get KEY"
+                exit 1
+            fi
+            grep "^$key=" .env | cut -d'=' -f2-
+            ;;
+        *)
+            echo "Usage: synap-cli config [list|edit|set|get]"
+            ;;
+    esac
+}
+
+cmd_domain() {
+    echo -e "${BLUE}🌐 Domain Configuration Wizard${NC}"
+    echo "This will update your Synap instance to use a different domain."
+    echo ""
+    
+    local CURRENT_DOMAIN=$(grep '^DOMAIN=' .env | cut -d'=' -f2-)
+    echo -e "Current Domain: ${YELLOW}${CURRENT_DOMAIN}${NC}"
+    echo ""
+    
+    echo "Enter new domain (e.g., synap.example.com)"
+    echo "For localhost, type 'localhost'"
+    read -p "New Domain: " NEW_DOMAIN
+    
+    if [ -z "$NEW_DOMAIN" ]; then
+        echo -e "${RED}Cancelled.${NC}"
+        exit 1
+    fi
+    
+    local NEW_EMAIL=""
+    if [ "$NEW_DOMAIN" != "localhost" ]; then
+        local CURRENT_EMAIL=$(grep '^LETSENCRYPT_EMAIL=' .env | cut -d'=' -f2-)
+        read -p "Enter email for SSL [${CURRENT_EMAIL}]: " NEW_EMAIL
+        NEW_EMAIL=${NEW_EMAIL:-$CURRENT_EMAIL}
+        
+        while [ -z "$NEW_EMAIL" ]; do
+             echo -e "${RED}Email is required for SSL!${NC}"
+             read -p "Enter email: " NEW_EMAIL
+        done
+    else
+        NEW_EMAIL="noreply@localhost"
+    fi
+    
+    # Backup
+    cmd_backup "pre-domain-change-$(date +%Y%m%d)"
+    
+    # Update config
+    echo -e "${BLUE}📝 Updating configuration...${NC}"
+    cmd_config set DOMAIN "$NEW_DOMAIN"
+    cmd_config set LETSENCRYPT_EMAIL "$NEW_EMAIL"
+    
+    echo ""
+    echo -e "${GREEN}✓ Configuration updated${NC}"
+    
+    # Restart
+    echo -e "${BLUE}🔄 Restarting services to apply changes...${NC}"
+    cmd_restart
+    
+    echo ""
+    echo -e "${GREEN}✅ Domain changed to: ${NEW_DOMAIN}${NC}"
+    if [ "$NEW_DOMAIN" != "localhost" ]; then
+        echo -e "Access at: https://${NEW_DOMAIN}"
+    else
+        echo -e "Access at: http://localhost:4000"
+    fi
+}
+
 cmd_shell() {
     local service=${1:-backend}
     echo -e "${BLUE}🐚 Opening shell in ${service}...${NC}"
@@ -333,24 +460,25 @@ ${YELLOW}Usage:${NC}
 
 ${YELLOW}Commands:${NC}
   ${GREEN}health${NC}              Check system health
+  ${GREEN}config${NC} [action]     Manage configuration (list, edit, set, get)
+  ${GREEN}domain${NC}              Change domain (wizard)
   ${GREEN}logs${NC} [service]      View logs (all or specific service)
   ${GREEN}restart${NC} [service]   Restart services (all or specific)
   ${GREEN}start${NC}               Start all services
   ${GREEN}stop${NC}                Stop all services
   ${GREEN}update${NC} [version]    Update to latest or specific version (e.g., v1.2.3)
-  ${GREEN}backup${NC} [name]       Create backup
+  ${GREEN}backup${NC} [name]       Create backup (DB + Config)
   ${GREEN}restore${NC} <file>      Restore from backup
   ${GREEN}shell${NC} [service]     Open shell in container
   ${GREEN}help${NC}                Show this help
 
 ${YELLOW}Examples:${NC}
-  synap-cli health
+  synap-cli config list         # View current config
+  synap-cli config edit         # Edit .env file
+  synap-cli domain              # Change domain wizard
   synap-cli logs backend
-  synap-cli restart
   synap-cli update              # Update to latest
-  synap-cli update v1.2.3        # Update to specific version
   synap-cli backup my-backup
-  synap-cli restore backups/backup-20260127.tar.gz
 
 ${YELLOW}Documentation:${NC}
   https://docs.synap.live
@@ -362,6 +490,13 @@ EOF
 case "${1:-help}" in
     health)
         cmd_health
+        ;;
+    config|env)
+        shift
+        cmd_config "$@"
+        ;;
+    domain)
+        cmd_domain
         ;;
     logs)
         cmd_logs "${2:-}"

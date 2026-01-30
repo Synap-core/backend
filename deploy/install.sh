@@ -597,16 +597,34 @@ elif [ "$DEPLOYMENT_TYPE" = "2" ]; then
     echo "✅ DNS is already configured!"
     echo "✅ SSL certificate will be auto-provisioned!"
 else
-    # Localhost
+    # Get local network IP for better display
+    # Try hostname -I (linux), then ip route, then ifconfig
+    LOCAL_IP=""
+    if command -v hostname &> /dev/null; then
+        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    
+    if [ -z "$LOCAL_IP" ] && command -v ip &> /dev/null; then
+        LOCAL_IP=$(ip route get 1 2>/dev/null | awk '{print $7}')
+    fi
+    
+    # Fallback to localhost if detection fails
+    DISPLAY_HOST=${LOCAL_IP:-localhost}
+
     echo "1. Backup your secrets:"
     echo "   cp ${INSTALL_DIR}/synap-backend-secrets.txt ~/synap-secrets.txt"
     echo "   rm ${INSTALL_DIR}/synap-backend-secrets.txt"
     echo ""
-    echo "2. Access Synap (HTTP only, no SSL):"
-    echo "   http://localhost:4000"
+    echo "2. Connect your Frontend App:"
+    echo "   Use this URL in the Synap Setup page:"
+    echo -e "   ${GREEN}http://${DISPLAY_HOST}:4000${NC}"
     echo ""
-    echo "⚠️  Localhost mode is for testing only!"
-    echo "   For production, use a custom domain or Synap subdomain."
+    echo "   (Or locally: http://localhost:4000)"
+    echo ""
+    echo "3. Verify Installation:"
+    echo "   Health Check: http://${DISPLAY_HOST}:4000/health"
+    echo ""
+    echo "⚠️  This is the Backend API only. You need 'synap-app' (Frontend) to use the UI."
 fi
 
 echo ""
