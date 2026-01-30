@@ -83,6 +83,12 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Test Docker Build
+        run: |
+          docker build -t synap-backend:test -f deploy/Dockerfile .
+          docker run --rm synap-backend:test node --version
+          docker rmi synap-backend:test
+
       - name: Security Audit
         run: pnpm audit --prod --audit-level=high
         continue-on-error: false

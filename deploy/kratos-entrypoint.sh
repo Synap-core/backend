@@ -1,8 +1,6 @@
 #!/bin/sh
 # Kratos entrypoint that generates kratos.yml from template with dynamic CORS origins
 
-set -e
-
 KRATOS_CONFIG_DIR="/etc/config/kratos"
 TEMPLATE_FILE="${KRATOS_CONFIG_DIR}/kratos.yml.template"
 OUTPUT_FILE="${KRATOS_CONFIG_DIR}/kratos.yml"
@@ -42,10 +40,26 @@ if [ -f "$TEMPLATE_FILE" ] && ([ ! -f "$OUTPUT_FILE" ] || [ "$TEMPLATE_FILE" -nt
   
   # Generate kratos.yml from template
   # Replace the placeholder with actual origins
-  sed "s|# {{ALLOWED_ORIGINS}}|$(printf "$YAML_ORIGINS")|g" "$TEMPLATE_FILE" > "$OUTPUT_FILE"
-  echo "✅ Generated ${OUTPUT_FILE} with dynamic CORS origins"
+  # Use awk for more reliable replacement
+  awk -v origins="$YAML_ORIGINS" '
+    /# {{ALLOWED_ORIGINS}}/ {
+      gsub(/# {{ALLOWED_ORIGINS}}/, origins)
+    }
+    { print }
+  ' "$TEMPLATE_FILE" > "$OUTPUT_FILE.tmp" && mv "$OUTPUT_FILE.tmp" "$OUTPUT_FILE"
+  
+  if [ $? -eq 0 ]; then
+    echo "✅ Generated ${OUTPUT_FILE} with dynamic CORS origins"
+  else
+    echo "❌ Failed to generate config, using template as-is"
+    cp "$TEMPLATE_FILE" "$OUTPUT_FILE"
+  fi
 else
-  echo "ℹ️  Using existing kratos.yml (template not found or config is up to date)"
+  if [ ! -f "$OUTPUT_FILE" ]; then
+    echo "⚠️  No kratos.yml found and template not available, Kratos may fail to start"
+  else
+    echo "ℹ️  Using existing kratos.yml (template not found or config is up to date)"
+  fi
 fi
 
 # Execute the original Kratos command

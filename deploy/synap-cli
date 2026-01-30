@@ -109,47 +109,124 @@ cmd_start() {
 }
 
 cmd_update() {
+    local version=${1:-latest}
+    
     echo -e "${BLUE}🔄 Checking for updates...${NC}"
     echo ""
     
-    # Get current version
-    CURRENT_VERSION=$(docker compose exec -T backend node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
-    echo -e "Current version: ${YELLOW}${CURRENT_VERSION}${NC}"
+    # Get current image version from docker-compose.yml
+    CURRENT_IMAGE=$(grep -E "^\s*image:" docker-compose.yml | grep backend | head -1 | sed 's/.*backend://' | tr -d ' ' || echo "unknown")
+    echo -e "Current image: ${YELLOW}${CURRENT_IMAGE}${NC}"
     
-    # Pull latest source and images
-    echo ""
-    echo -e "${BLUE}📥 Getting latest updates...${NC}"
-    
-    if git rev-parse --git-dir > /dev/null 2>&1; then
-        echo "Pulling source code..."
-        git pull
+    # Determine target image
+    if [ "$version" = "latest" ]; then
+        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:latest"
+        echo -e "Target: ${BLUE}latest${NC}"
+    elif [[ "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        # Ensure version starts with v
+        if [[ ! "$version" =~ ^v ]]; then
+            version="v${version}"
+        fi
+        TARGET_IMAGE="ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${version}"
+        echo -e "Target: ${BLUE}${version}${NC}"
+    else
+        echo -e "${RED}❌ Invalid version format. Use 'latest' or semantic version (e.g., v1.2.3)${NC}"
+        exit 1
     fi
     
-    # Pull base images (ignore failures for built images)
-    docker compose pull --ignore-pull-failures
+    # Check if .env exists and has GITHUB_REPOSITORY
+    if [ -f .env ]; then
+        source .env
+    fi
+    
+    # Use GITHUB_REPOSITORY from .env or default
+    REPO="${GITHUB_REPOSITORY:-synap-core/backend}"
+    TARGET_IMAGE="ghcr.io/${REPO}/backend:${version}"
     
     # Backup before update
     echo ""
     echo -e "${BLUE}💾 Creating backup before update...${NC}"
     cmd_backup "pre-update-$(date +%Y%m%d-%H%M%S)"
     
-    # Update
+    # Login to GHCR if needed
+    echo ""
+    echo -e "${BLUE}🔐 Authenticating with GitHub Container Registry...${NC}"
+    if [ -n "$GITHUB_TOKEN" ]; then
+        echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin 2>/dev/null || \
+        echo -e "${YELLOW}⚠️  Could not login to GHCR. Public images may still be accessible.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  GITHUB_TOKEN not set. Attempting to pull public image...${NC}"
+    fi
+    
+    # Pull new image
+    echo ""
+    echo -e "${BLUE}📥 Pulling image: ${TARGET_IMAGE}${NC}"
+    if ! docker pull "$TARGET_IMAGE"; then
+        echo -e "${RED}❌ Failed to pull image. Check:${NC}"
+        echo -e "  1. Image exists: https://github.com/${REPO}/pkgs/container/backend"
+        echo -e "  2. GITHUB_TOKEN is set in .env (for private repos)"
+        echo -e "  3. Version tag is correct: ${version}"
+        exit 1
+    fi
+    
+    # Update docker-compose.yml with new image
+    echo ""
+    echo -e "${BLUE}📝 Updating docker-compose.yml...${NC}"
+    if [ -f docker-compose.yml ]; then
+        # Backup docker-compose.yml
+        cp docker-compose.yml docker-compose.yml.backup
+        
+        # Update image tag in docker-compose.yml
+        if grep -q "BACKEND_VERSION" .env 2>/dev/null; then
+            # Update .env file
+            sed -i.bak "s/BACKEND_VERSION=.*/BACKEND_VERSION=${version}/" .env
+            rm -f .env.bak
+        else
+            # Add to .env
+            echo "BACKEND_VERSION=${version}" >> .env
+        fi
+        
+        # Update docker-compose.yml to use the new version
+        sed -i.bak "s|ghcr.io/.*/backend:.*|ghcr.io/${REPO}/backend:${version}|g" docker-compose.yml
+        rm -f docker-compose.yml.bak
+    fi
+    
+    # Update services
     echo ""
     echo -e "${BLUE}🔄 Updating services...${NC}"
-    docker compose up -d --build
+    docker compose up -d backend
+    
+    # Wait for backend to be healthy
+    echo ""
+    echo -e "${BLUE}⏳ Waiting for backend to be healthy...${NC}"
+    sleep 10
     
     # Run migrations
     echo ""
     echo -e "${BLUE}🔄 Running database migrations...${NC}"
-    docker compose exec -T backend sh -c 'cd packages/database && pnpm db:push' || true
-    
-    # Get new version
+    docker compose up -d backend-migrate 2>/dev/null || true
     sleep 5
-    NEW_VERSION=$(docker compose exec -T backend node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
+    
+    # Health check
+    echo ""
+    echo -e "${BLUE}🏥 Health check...${NC}"
+    if docker compose exec -T backend node -e "require('http').get('http://localhost:4000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))" 2>/dev/null; then
+        echo -e "${GREEN}✅ Backend is healthy${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Backend health check failed. Check logs:${NC}"
+        echo -e "  ${BLUE}./synap-cli logs backend${NC}"
+    fi
+    
+    # Get new version info
+    NEW_IMAGE=$(grep -E "^\s*image:" docker-compose.yml | grep backend | head -1 | sed 's/.*backend://' | tr -d ' ')
     
     echo ""
     echo -e "${GREEN}✅ Update complete!${NC}"
-    echo -e "New version: ${GREEN}${NEW_VERSION}${NC}"
+    echo -e "New image: ${GREEN}${NEW_IMAGE}${NC}"
+    echo ""
+    echo -e "${YELLOW}💡 To rollback:${NC}"
+    echo -e "  ${BLUE}./synap-cli update <previous-version>${NC}"
+    echo -e "  ${BLUE}Or restore from backup: ./synap-cli restore backups/pre-update-*.tar.gz${NC}"
 }
 
 cmd_backup() {
@@ -260,7 +337,7 @@ ${YELLOW}Commands:${NC}
   ${GREEN}restart${NC} [service]   Restart services (all or specific)
   ${GREEN}start${NC}               Start all services
   ${GREEN}stop${NC}                Stop all services
-  ${GREEN}update${NC}              Update to latest version
+  ${GREEN}update${NC} [version]    Update to latest or specific version (e.g., v1.2.3)
   ${GREEN}backup${NC} [name]       Create backup
   ${GREEN}restore${NC} <file>      Restore from backup
   ${GREEN}shell${NC} [service]     Open shell in container
@@ -270,6 +347,8 @@ ${YELLOW}Examples:${NC}
   synap-cli health
   synap-cli logs backend
   synap-cli restart
+  synap-cli update              # Update to latest
+  synap-cli update v1.2.3        # Update to specific version
   synap-cli backup my-backup
   synap-cli restore backups/backup-20260127.tar.gz
 

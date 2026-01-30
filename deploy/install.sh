@@ -2,7 +2,8 @@
 set -e
 
 # Synap Backend - One-Command Installer
-# Usage: curl -fsSL https://get.synap.live/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
+# Or: git clone https://github.com/Synap-core/backend.git && cd backend/deploy && ./install.sh
 
 # Colors
 RED='\033[0;31m'
@@ -420,6 +421,14 @@ cat > .env <<EOF
 # Synap Backend Configuration
 # Generated: $(date)
 # 
+# GitHub Repository (for Docker images)
+# Change this if using a fork or private registry
+GITHUB_REPOSITORY=synap-core/backend
+
+# Backend Version (pin to specific version or use 'latest')
+# Examples: latest, v1.2.3, main
+BACKEND_VERSION=latest
+
 # Docker Compose Project Name (prevents conflicts)
 COMPOSE_PROJECT_NAME=synap-backend
 
@@ -505,8 +514,11 @@ chmod 600 ../synap-backend-secrets.txt
 echo ""
 echo -e "${BLUE}🚀 Starting Synap...${NC}"
 
-# Build and start services
-docker compose up -d --build
+# Pull images and start services
+# Note: For first install, images may need to be built if not available
+# After CI/CD is set up, images will be pre-built in GHCR
+docker compose pull --ignore-pull-failures || true
+docker compose up -d
 
 # Wait for services to be healthy
 echo ""

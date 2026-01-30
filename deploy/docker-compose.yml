@@ -3,10 +3,10 @@ services:
   # BACKEND API
   # ============================================================================
   backend:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    image: synap/backend:latest
+    # Use pre-built image from GitHub Container Registry
+    # Set BACKEND_VERSION in .env to pin a specific version (e.g., v1.2.3)
+    # Defaults to 'latest' if not set
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}/backend:${BACKEND_VERSION:-latest}
     restart: always
     environment:
       NODE_ENV: production
