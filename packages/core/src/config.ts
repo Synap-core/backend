@@ -72,12 +72,12 @@ const AIOpenAIConfigSchema = z.object({
 });
 
 const AIConfigSchema = z.object({
-  provider: z.enum(["anthropic", "openai"]).default("anthropic"),
+  provider: z.enum(["anthropic", "openai"]).optional(),
   streaming: z.coerce.boolean().default(false),
   anthropic: AIAnthropicConfigSchema,
   openai: AIOpenAIConfigSchema,
   embeddings: z.object({
-    provider: z.enum(["openai", "deterministic"]).default("openai"),
+    provider: z.enum(["openai", "deterministic"]).default("deterministic"), // Default to deterministic (no API key needed)
     model: z.string().default("text-embedding-3-small"),
   }),
 });
@@ -188,7 +188,13 @@ function loadConfig(): Config {
         minioPublicUrl: process.env.MINIO_PUBLIC_URL,
       },
       ai: {
-        provider: process.env.AI_PROVIDER,
+        // Only set provider if it's a valid value, otherwise undefined (AI disabled)
+        provider:
+          process.env.AI_PROVIDER &&
+          (process.env.AI_PROVIDER === "anthropic" ||
+            process.env.AI_PROVIDER === "openai")
+            ? (process.env.AI_PROVIDER as "anthropic" | "openai")
+            : undefined,
         streaming: process.env.AI_STREAMING,
         anthropic: {
           apiKey: process.env.ANTHROPIC_API_KEY,
@@ -216,7 +222,7 @@ function loadConfig(): Config {
           },
         },
         embeddings: {
-          // Auto-detect: use deterministic if no OpenAI key, otherwise default to openai
+          // Auto-detect: use deterministic if no OpenAI key or provider, otherwise default to openai
           provider:
             process.env.EMBEDDING_PROVIDER ||
             (process.env.OPENAI_API_KEY ? "openai" : "deterministic"),
@@ -362,6 +368,14 @@ export function validateConfig(
     case "ai": {
       const { provider, anthropic, openai, embeddings } = config.ai;
 
+      // If no provider is set, AI features are disabled (this is OK)
+      if (!provider) {
+        configLogger.info(
+          "AI provider not configured. AI features will be disabled."
+        );
+        break;
+      }
+
       if (provider === "anthropic" && !anthropic.apiKey) {
         configLogger.warn(
           "ANTHROPIC_API_KEY is missing. AI features using Anthropic will not work."
@@ -369,14 +383,14 @@ export function validateConfig(
       }
 
       if (provider === "openai" && !openai.apiKey) {
-        throw new Error(
-          "OpenAI provider requires OPENAI_API_KEY environment variable"
+        configLogger.warn(
+          "OPENAI_API_KEY is missing. AI features using OpenAI will not work."
         );
       }
 
       if (embeddings.provider === "openai" && !openai.apiKey) {
-        throw new Error(
-          "OpenAI embeddings require OPENAI_API_KEY environment variable"
+        configLogger.warn(
+          "OPENAI_API_KEY is missing. OpenAI embeddings will not work. Falling back to deterministic embeddings."
         );
       }
 

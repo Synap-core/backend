@@ -179,31 +179,77 @@ app.get("/metrics", async (c) => {
 // Ory Kratos routes (PostgreSQL only)
 // Kratos handles its own routes via public API
 // We proxy the necessary endpoints for browser-based flows
+// This matches Caddy routing in production: /.ory/kratos/public/* -> Kratos
 if (isPostgres) {
-  // Proxy Kratos self-service flows
-  app.get("/self-service/*", async (c) => {
-    const path = c.req.path.replace("/self-service", "");
+  const kratosPublicUrl =
+    process.env.KRATOS_PUBLIC_URL || "http://localhost:4433";
+
+  // Proxy function for Kratos requests
+  const proxyKratosRequest = async (c: any, kratosPath: string) => {
     try {
       // Forward request to Kratos public API
-      const response = await fetch(
-        `${process.env.KRATOS_PUBLIC_URL || "http://localhost:4433"}${path}`,
-        {
-          method: c.req.method,
-          headers: {
-            Cookie: c.req.header("cookie") || "",
-          },
+      const targetUrl = `${kratosPublicUrl}${kratosPath}`;
+
+      // Prepare headers - forward cookies and other important headers
+      const headers: HeadersInit = {
+        Cookie: c.req.header("cookie") || "",
+      };
+
+      // Forward content-type if present
+      const contentType = c.req.header("content-type");
+      if (contentType) {
+        headers["Content-Type"] = contentType;
+      }
+
+      // Get request body for POST/PUT/PATCH
+      let body: BodyInit | undefined;
+      if (["POST", "PUT", "PATCH"].includes(c.req.method)) {
+        const contentType = c.req.header("content-type");
+        if (contentType?.includes("application/json")) {
+          body = JSON.stringify(await c.req.json());
+        } else {
+          body = await c.req.text();
         }
-      );
+      }
+
+      const response = await fetch(targetUrl, {
+        method: c.req.method,
+        headers,
+        body,
+      });
+
+      // Get all response headers
+      const responseHeaders = new Headers();
+      response.headers.forEach((value, key) => {
+        responseHeaders.set(key, value);
+      });
 
       // Return Response object (Hono accepts this)
       return new Response(response.body, {
         status: response.status,
-        headers: response.headers,
-      }) as any; //TODO: fix type
+        headers: responseHeaders,
+      }) as any;
     } catch (error) {
-      apiLogger.error({ err: error, path }, "Error proxying Kratos request");
+      apiLogger.error(
+        { err: error, path: kratosPath },
+        "Error proxying Kratos request"
+      );
       return c.json({ error: "Internal server error" }, 500);
     }
+  };
+
+  // Production route: /.ory/kratos/public/* (matches Caddy routing)
+  // This allows the frontend middleware to always use the same path
+  app.all("/.ory/kratos/public/*", async (c) => {
+    // Remove /.ory/kratos/public prefix, keep the rest
+    const kratosPath = c.req.path.replace("/.ory/kratos/public", "");
+    return proxyKratosRequest(c, kratosPath);
+  });
+
+  // Legacy route: /self-service/* (for backward compatibility)
+  app.all("/self-service/*", async (c) => {
+    const kratosPath = c.req.path.replace("/self-service", "");
+    return proxyKratosRequest(c, kratosPath);
   });
 
   // Token Exchange endpoint (for websites with external providers)

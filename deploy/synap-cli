@@ -111,11 +111,15 @@ cmd_start() {
 cmd_update() {
     local version="latest"
     local force_build="false"
+    local local_build="false"
     
-    # Parse arguments: handle --build flag and version
+    # Parse arguments: handle --build, --local flags and version
     for arg in "$@"; do
         if [ "$arg" = "--build" ] || [ "$arg" = "-b" ]; then
             force_build="true"
+        elif [ "$arg" = "--local" ] || [ "$arg" = "-l" ]; then
+            local_build="true"
+            force_build="true"  # Local build implies source build
         elif [[ "$arg" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] || [ "$arg" = "latest" ]; then
             version="$arg"
         fi
@@ -235,23 +239,61 @@ cmd_update() {
     echo ""
     
     if [ "$force_build" = "true" ]; then
-        # Force build from source (development, testing, or when you want latest code)
-        echo -e "${BLUE}🔨 Building from source (--build flag)...${NC}"
-        echo -e "${YELLOW}ℹ️  This will build from the repository in the parent directory${NC}"
-        echo ""
-        
-        # Check if source code exists
-        if [ ! -d "../packages" ] && [ ! -d "../apps" ]; then
-            echo -e "${RED}❌ Source code not found. Expected repository in parent directory.${NC}"
+        if [ "$local_build" = "true" ]; then
+            # Local build: build from current directory (including uncommitted changes)
+            echo -e "${BLUE}🔨 Building from local source (--local flag)...${NC}"
+            echo -e "${YELLOW}ℹ️  This will build from the current directory (including uncommitted changes)${NC}"
+            echo -e "${YELLOW}ℹ️  Bypasses GitHub Actions - no code pushed to GitHub${NC}"
+            echo ""
+            
+            # Check if we're in the right directory structure
+            if [ ! -d "../packages" ] && [ ! -d "../apps" ]; then
+                echo -e "${RED}❌ Source code not found in parent directory.${NC}"
+                echo -e ""
+                echo -e "${YELLOW}Expected structure:${NC}"
+                echo -e "  /opt/synap-backend/          (repository root)"
+                echo -e "    ├── packages/             (source code)"
+                echo -e "    ├── apps/                 (source code)"
+                echo -e "    └── deploy/               (this directory)"
+                echo -e "        └── synap-cli         (this script)"
+                echo ""
+                echo -e "${YELLOW}Make sure you're in the deploy/ directory and repository is cloned above it.${NC}"
+                exit 1
+            fi
+            
+            # Build with local context (no git, no registry)
+            echo -e "${BLUE}Building Docker image from local source...${NC}"
+            if ! docker compose build backend; then
+                echo -e "${RED}❌ Failed to build from local source.${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ Built from local source successfully${NC}"
+            echo -e "${GREEN}✅ Image includes all local changes (uncommitted)${NC}"
+        else
+            # Standard source build (from git repository)
+            echo -e "${BLUE}🔨 Building from source (--build flag)...${NC}"
+            echo -e "${YELLOW}ℹ️  This will build from the repository in the parent directory${NC}"
+            echo ""
+            echo -e "${YELLOW}Note:${NC}"
+            echo -e "   This builds from the current source code (including uncommitted changes)"
             echo -e "   For image-based deployment, remove --build flag"
-            echo -e "   For source-based deployment, ensure repository is cloned"
-            exit 1
-        fi
-        
-        # Build from source
-        if ! docker compose build backend; then
-            echo -e "${RED}❌ Failed to build from source.${NC}"
-            exit 1
+            echo -e "   For local-only build (bypass GitHub), use --local flag"
+            echo ""
+            
+            # Check if source code exists
+            if [ ! -d "../packages" ] && [ ! -d "../apps" ]; then
+                echo -e "${RED}❌ Source code not found. Expected repository in parent directory.${NC}"
+                echo -e "   For image-based deployment, remove --build flag"
+                echo -e "   For source-based deployment, ensure repository is cloned"
+                exit 1
+            fi
+            
+            # Build from source
+            if ! docker compose build backend; then
+                echo -e "${RED}❌ Failed to build from source.${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ Built from source successfully${NC}"
         fi
     else
         # Try to pull image first (standard, fast, production-ready)
@@ -593,6 +635,7 @@ ${YELLOW}Commands:${NC}
   ${GREEN}stop${NC}                Stop all services
   ${GREEN}update${NC} [version]    Update to latest or specific version (e.g., v1.2.3)
   ${GREEN}update --build${NC}       Force build from source (skips image pull)
+  ${GREEN}update --local${NC}       Build from local source (bypasses GitHub, includes uncommitted changes)
   ${GREEN}backup${NC} [name]       Create backup (DB + Config)
   ${GREEN}restore${NC} <file>      Restore from backup
   ${GREEN}shell${NC} [service]     Open shell in container
@@ -605,6 +648,7 @@ ${YELLOW}Examples:${NC}
   synap-cli logs backend
   synap-cli update              # Update to latest (pulls image, falls back to build)
   synap-cli update --build      # Force build from source (skips pull)
+  synap-cli update --local      # Build from local source (bypasses GitHub, includes uncommitted)
   synap-cli update v1.2.3       # Update to specific version (pulls image)
   synap-cli backup my-backup
 

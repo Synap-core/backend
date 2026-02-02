@@ -43,3 +43,9 @@ coverage/
 deploy/.env
 deploy/.secrets-backup.txt
 deploy/backups/
+
+# Kratos template (we now use kratos.yml directly)
+kratos/kratos.yml.template
+
+# Generated Kratos config (generated from template)
+kratos/kratos.yml

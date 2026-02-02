@@ -169,6 +169,34 @@ This will:
 3. Restart services
 4. Run database migrations
 
+### Update Options
+
+**Standard update** (pulls image from registry):
+
+```bash
+./synap-cli update
+```
+
+**Build from source** (if image not available):
+
+```bash
+./synap-cli update --build
+```
+
+**Local build** (bypass GitHub, includes uncommitted changes):
+
+```bash
+./synap-cli update --local
+```
+
+**Update to specific version**:
+
+```bash
+./synap-cli update v1.2.3
+```
+
+See [Local Builds Guide](./docs/LOCAL_BUILDS.md) for building without GitHub Actions.
+
 ## 💾 Backups
 
 ### Automatic Backups

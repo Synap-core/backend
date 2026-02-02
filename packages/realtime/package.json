@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/server.ts",
+    "dev": "tsx watch --env-file=../../.env.development.local src/server.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
