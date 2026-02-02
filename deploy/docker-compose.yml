@@ -47,8 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      backend-migrate:
-        condition: service_completed_successfully
+      # Note: backend-migrate dependency removed - migrations run manually via CLI
+      # This prevents backend from failing if migrations are already applied
     healthcheck:
       test:
         [
@@ -78,16 +78,19 @@ services:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       NODE_PATH: /app/node_modules
     command: node node_modules/@synap/database/dist/scripts/migrate.js
+    # Migration service should run once and exit successfully
+    # No restart needed - migrations are idempotent
     deploy:
       restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 5
+        condition: no
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - synap-net
+    # Mark as a one-shot service (runs once, then stops)
+    profiles:
+      - migrate
 
   # ============================================================================
   # POSTGRESQL

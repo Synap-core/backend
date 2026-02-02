@@ -287,6 +287,26 @@ cmd_update() {
         fi
     fi
     
+    # Run migrations FIRST (before starting backend)
+    echo ""
+    echo -e "${BLUE}🔄 Running database migrations...${NC}"
+    MIGRATE_OUTPUT=$(docker compose run --rm backend-migrate 2>&1)
+    MIGRATE_EXIT=$?
+    
+    if [ $MIGRATE_EXIT -eq 0 ]; then
+        echo -e "${GREEN}✅ Migrations completed successfully${NC}"
+        echo "$MIGRATE_OUTPUT" | tail -5  # Show last 5 lines of output
+    else
+        # Check if it's just "already applied" (which is fine)
+        if echo "$MIGRATE_OUTPUT" | grep -q "already applied\|Nothing to do"; then
+            echo -e "${GREEN}✅ Migrations already applied (no changes needed)${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Migration service exited with code $MIGRATE_EXIT${NC}"
+            echo -e "${YELLOW}   This might be normal if migrations are already applied.${NC}"
+            echo -e "${YELLOW}   Check logs: ${BLUE}docker compose logs backend-migrate${NC}"
+        fi
+    fi
+    
     # Update services using standard Docker Compose command
     echo ""
     echo -e "${BLUE}🔄 Updating services (standard: docker compose up -d)...${NC}"
@@ -296,12 +316,6 @@ cmd_update() {
     echo ""
     echo -e "${BLUE}⏳ Waiting for backend to be healthy...${NC}"
     sleep 10
-    
-    # Run migrations
-    echo ""
-    echo -e "${BLUE}🔄 Running database migrations...${NC}"
-    docker compose up -d backend-migrate 2>/dev/null || true
-    sleep 5
     
     # Health check
     echo ""

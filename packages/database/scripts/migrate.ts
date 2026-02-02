@@ -291,10 +291,18 @@ async function runMigrations() {
 runMigrations()
   .then(() => {
     console.log("✅ Migration complete!\n");
+    // Always exit with 0 on success (even if no migrations were needed)
     process.exit(0);
   })
   .catch((error) => {
     console.error("❌ Fatal error:");
     console.error(error);
+    // Only exit with 1 on actual errors
     process.exit(1);
+  })
+  .finally(() => {
+    // Ensure database connection is closed
+    sql.end().catch(() => {
+      // Ignore errors on close
+    });
   });
