@@ -311,7 +311,8 @@ import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);
 
 // Webhook routes (before auth - uses webhook secret auth)
-// app.route("/webhooks", webhookRouter);
+import { webhookRouter } from "./webhooks/index.js";
+app.route("/webhooks", webhookRouter);
 
 // tRPC endpoint
 app.use(
