@@ -191,7 +191,7 @@ if (isPostgres) {
       const targetUrl = `${kratosPublicUrl}${kratosPath}`;
 
       // Prepare headers - forward cookies and other important headers
-      const headers: HeadersInit = {
+      const headers: Record<string, string> = {
         Cookie: c.req.header("cookie") || "",
       };
 
@@ -202,7 +202,7 @@ if (isPostgres) {
       }
 
       // Get request body for POST/PUT/PATCH
-      let body: BodyInit | undefined;
+      let body: string | undefined;
       if (["POST", "PUT", "PATCH"].includes(c.req.method)) {
         const contentType = c.req.header("content-type");
         if (contentType?.includes("application/json")) {
