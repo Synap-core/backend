@@ -87,9 +87,15 @@ If you prefer to install manually:
 - [Configuration Options](./docs/configuration.md)
 - [Backup & Restore](./docs/backups.md)
 - [Troubleshooting](./docs/troubleshooting.md)
+- [DevOps Guide](./docs/DEVOPS.md) - **Complete deployment and operations guide**
 - [API Reference](https://docs.synap.live/api)
 
-  [API Reference](https://docs.synap.live/api)
+### DevOps & Architecture
+
+- **[DevOps Guide](./docs/DEVOPS.md)** - Complete guide to deployment, updates, and operations
+- **[Complete DevOps Guide](../../DEVOPS_COMPLETE_GUIDE.md)** - System-wide DevOps documentation (all services)
+- **[GitHub Actions Audit](../../GITHUB_ACTIONS_AUDIT.md)** - CI/CD workflow optimization
+- **[DevOps Improvements](../../DEVOPS_IMPROVEMENTS.md)** - Migration fixes and improvements
 
 ## 👀 Monitoring & Debugging
 

@@ -4,9 +4,11 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - main # Build on main for latest tag
   workflow_dispatch:
+  # Note: Removed automatic build on main branch pushes
+  # This prevents building Docker images on every commit
+  # Images are built only on version tags (releases) or manual dispatch
+  # Use workflow_dispatch to manually trigger builds when needed
 
 env:
   REGISTRY: ghcr.io

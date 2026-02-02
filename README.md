@@ -52,12 +52,18 @@ Follow the interactive prompts to configure your instance.
 ## 📚 Documentation
 
 - **[Self-Hosting Guide](./deploy/README.md)** - Complete installation and setup
+- **[DevOps Guide](./deploy/docs/DEVOPS.md)** - Deployment, updates, and operations
 - **[Configuration Reference](./deploy/docs/configuration.md)** - All configuration options
 - **[Backup & Restore](./deploy/docs/backups.md)** - Data protection strategies
 - **[Troubleshooting](./deploy/docs/troubleshooting.md)** - Common issues and solutions
 - **[API Documentation](https://docs.synap.live/api)** - API reference
 - **[Architecture](./ARCHITECTURE.md)** - System architecture overview
 - **[Developer Guide](./DEVELOPER_GUIDE.md)** - Contributing and development
+
+### System-Wide DevOps
+
+- **[Complete DevOps Guide](../DEVOPS_COMPLETE_GUIDE.md)** - All services (backend, app, intelligence, control plane)
+- **[GitHub Actions Audit](../GITHUB_ACTIONS_AUDIT.md)** - CI/CD optimization and best practices
 
 ## 🛠️ Management
 

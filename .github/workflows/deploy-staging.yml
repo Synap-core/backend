@@ -2,8 +2,13 @@ name: Deploy to Staging
 
 on:
   push:
-    branches: [main]
+    tags:
+      - "v*"
   workflow_dispatch:
+  # Note: Removed automatic deployment on main branch pushes
+  # This prevents deploying on every commit
+  # Deployments happen only on version tags (releases) or manual dispatch
+  # Use workflow_dispatch to manually trigger deployments when needed
 
 env:
   REGISTRY: ghcr.io
