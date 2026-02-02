@@ -2,13 +2,23 @@ name: Publish Docker Images
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths:
+      # Only build if relevant files changed (saves CI minutes)
+      - "packages/**"
+      - "apps/**"
+      - "deploy/**"
+      - "Dockerfile"
+      - ".github/workflows/docker-publish.yml"
   workflow_dispatch:
-  # Note: Removed automatic build on main branch pushes
-  # This prevents building Docker images on every commit
-  # Images are built only on version tags (releases) or manual dispatch
-  # Use workflow_dispatch to manually trigger builds when needed
+  # Builds automatically on:
+  # - Every push to main (if relevant files changed)
+  # - Version tags (v*)
+  # - Manual dispatch
+  # Images are tagged with: latest, main, sha-{commit}, and version tags
 
 env:
   REGISTRY: ghcr.io
@@ -53,13 +63,18 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
+            # Always tag with commit SHA for traceability
+            type=sha,prefix={{branch}}-
+            # Tag main branch as 'latest' and 'main'
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            # Version tags (semver)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            # PR and branch tags (for testing)
+            type=ref,event=branch
+            type=ref,event=pr
 
       - name: Build and push Backend image
         uses: docker/build-push-action@v5
@@ -109,13 +124,18 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.intel-repo.outputs.full }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
+            # Always tag with commit SHA for traceability
+            type=sha,prefix={{branch}}-
+            # Tag main branch as 'latest' and 'main'
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            # Version tags (semver)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            # PR and branch tags (for testing)
+            type=ref,event=branch
+            type=ref,event=pr
 
       - name: Build and push Intelligence Service image
         uses: docker/build-push-action@v5
