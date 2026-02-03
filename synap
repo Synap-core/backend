@@ -42,11 +42,67 @@ get_deploy_dir() {
 }
 
 # ============================================================================
+# HELPER: Generate secrets and create .env
+# ============================================================================
+
+generate_and_create_env() {
+    local domain=$1
+    local email=$2
+    local from_source=$3
+    
+    # Generate secrets
+    echo -e "${BLUE}🔐 Generating secrets...${NC}"
+    
+    local POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local JWT_SECRET=$(openssl rand -base64 64 | tr -d "=+/" | cut -c1-64)
+    local KRATOS_COOKIE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local KRATOS_CIPHER=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local KRATOS_WEBHOOK=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local MINIO_SECRET_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local TYPESENSE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local INNGEST_EVENT_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local INNGEST_SIGNING_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local HYDRA_SECRETS_SYSTEM=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    
+    local backend_version="latest"
+    if [ "$from_source" = "true" ]; then
+        backend_version="local"
+    fi
+    
+    cat > .env <<EOF
+# Synap Backend Configuration
+# Generated: $(date)
+
+GITHUB_REPOSITORY=synap-core/backend
+BACKEND_VERSION=${backend_version}
+COMPOSE_PROJECT_NAME=synap-backend
+
+DOMAIN=${domain}
+LETSENCRYPT_EMAIL=${email:-noreply@localhost}
+
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+KRATOS_SECRETS_COOKIE=${KRATOS_COOKIE}
+KRATOS_SECRETS_CIPHER=${KRATOS_CIPHER}
+KRATOS_WEBHOOK_SECRET=${KRATOS_WEBHOOK}
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+TYPESENSE_API_KEY=${TYPESENSE_KEY}
+TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
+INNGEST_EVENT_KEY=${INNGEST_EVENT_KEY}
+INNGEST_SIGNING_KEY=${INNGEST_SIGNING_KEY}
+ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
+EOF
+    
+    chmod 600 .env
+}
+
+# ============================================================================
 # INSTALL COMMAND
 # ============================================================================
 
 cmd_install() {
-    local CLONE_REPO=""  # Empty = auto-detect
     local FROM_IMAGE=""
     local FROM_SOURCE=""
     local INSTALL_DIR=""
@@ -55,17 +111,15 @@ cmd_install() {
     local REPO_URL="https://github.com/synap-core/backend.git"
     local INTERACTIVE=true
     
+    # Auto-detect if we're in a git repo
+    local IN_GIT_REPO=false
+    if is_git_repo; then
+        IN_GIT_REPO=true
+    fi
+    
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --clone)
-                CLONE_REPO=true
-                shift
-                ;;
-            --no-clone|--use-repo)
-                CLONE_REPO=false
-                shift
-                ;;
             --from-image)
                 FROM_IMAGE=true
                 shift
@@ -101,26 +155,35 @@ ${BLUE}Synap Install${NC}
 ${YELLOW}Usage:${NC}
   synap install [options]
 
+${YELLOW}Auto-Detection:${NC}
+  - If in git repository: Uses existing repo, defaults to --from-source
+  - If not in git repository: Clones repo, defaults to --from-image
+  - Default clone location: Current directory + "synap-backend"
+
 ${YELLOW}Options:${NC}
-  ${GREEN}--clone${NC}              Clone repository (default if not in repo)
-  ${GREEN}--no-clone${NC}           Use existing repository (skip cloning)
-  ${GREEN}--from-image <tag>${NC}   Use Docker image (default: latest)
-  ${GREEN}--from-source${NC}        Build from source code
-  ${GREEN}--dir <path>${NC}         Installation directory (default: /opt/synap-backend)
-  ${GREEN}--domain <domain>${NC}    Domain name (required for production)
+  ${GREEN}--from-image${NC}        Use Docker image (default when cloning)
+  ${GREEN}--from-source${NC}        Build from source code (default when in git repo)
+  ${GREEN}--dir <path>${NC}         Installation directory (default: ./synap-backend when cloning)
+  ${GREEN}--domain <domain>${NC}    Domain name (required)
   ${GREEN}--email <email>${NC}     Email for SSL certificates (required for production)
   ${GREEN}--repo-url <url>${NC}    Repository URL (default: synap-core/backend)
   ${GREEN}--non-interactive${NC}   Automated mode (no prompts)
 
 ${YELLOW}Examples:${NC}
-  # Clone and install from image (production)
-  synap install --clone --from-image latest --domain example.com --email me@example.com
+  # In git repo: build from source (default)
+  synap install --domain localhost
 
-  # Use existing repo and build from source (development)
-  synap install --no-clone --from-source --domain localhost
+  # Not in git repo: clone and use image (default)
+  synap install --domain example.com --email me@example.com
 
-  # Automated installation
-  synap install --clone --from-image latest --domain example.com --email me@example.com --non-interactive
+  # Force image even in git repo
+  synap install --from-image --domain example.com --email me@example.com
+
+  # Force source build when cloning
+  synap install --from-source --domain localhost
+
+  # Custom installation directory
+  synap install --dir /opt/synap --domain example.com --email me@example.com
 
 EOF
                 exit 0
@@ -133,34 +196,51 @@ EOF
         esac
     done
     
-    # Auto-detect if we should clone (if not explicitly set)
-    if [ -z "$CLONE_REPO" ]; then
-        if is_git_repo; then
-            CLONE_REPO=false
-            echo -e "${GREEN}✓ Detected git repository, using existing repo${NC}"
-        else
-            CLONE_REPO=true
-            echo -e "${BLUE}ℹ️  Not in git repository, will clone${NC}"
-        fi
+    # Determine if we need to clone
+    local NEEDS_CLONE=false
+    if [ "$IN_GIT_REPO" = false ]; then
+        NEEDS_CLONE=true
+        echo -e "${BLUE}ℹ️  Not in git repository, will clone${NC}"
+    else
+        echo -e "${GREEN}✓ Detected git repository, using existing repo${NC}"
     fi
     
     # Determine installation directory
     if [ -z "$INSTALL_DIR" ]; then
-        if [ "$CLONE_REPO" = false ]; then
+        if [ "$NEEDS_CLONE" = true ]; then
+            # Default to current directory + "synap-backend"
+            INSTALL_DIR="$(pwd)/synap-backend"
+            
+            # Propose to change if interactive
+            if [ "$INTERACTIVE" = true ]; then
+                echo -e "${BLUE}📁 Installation directory: ${INSTALL_DIR}${NC}"
+                read -p "Change installation directory? (y/N): " CHANGE_DIR
+                if [ "$CHANGE_DIR" = "y" ] || [ "$CHANGE_DIR" = "Y" ]; then
+                    read -p "Enter installation directory: " INSTALL_DIR
+                    INSTALL_DIR=${INSTALL_DIR:-$(pwd)/synap-backend}
+                fi
+            fi
+        else
             # Use repo root as install directory
             INSTALL_DIR=$(get_repo_root)
             if [ -z "$INSTALL_DIR" ]; then
-                INSTALL_DIR="/opt/synap-backend"
+                echo -e "${RED}Error: Could not determine repository root${NC}"
+                exit 1
             fi
-        else
-            INSTALL_DIR="/opt/synap-backend"
         fi
     fi
     
-    # Determine deployment method
+    # Determine deployment method (smart defaults)
     if [ -z "$FROM_IMAGE" ] && [ -z "$FROM_SOURCE" ]; then
-        # Default to image if nothing specified
-        FROM_IMAGE=true
+        if [ "$NEEDS_CLONE" = true ]; then
+            # When cloning: default to image
+            FROM_IMAGE=true
+            echo -e "${BLUE}ℹ️  Defaulting to --from-image (use --from-source to build)${NC}"
+        else
+            # When in git repo: default to source
+            FROM_SOURCE=true
+            echo -e "${BLUE}ℹ️  Defaulting to --from-source (use --from-image to use pre-built image)${NC}"
+        fi
     fi
     
     # Interactive prompts (if not automated)
@@ -187,9 +267,20 @@ EOF
     fi
     
     # Create installation directory if cloning
-    if [ "$CLONE_REPO" = true ]; then
+    if [ "$NEEDS_CLONE" = true ]; then
         echo -e "${BLUE}📁 Creating installation directory: ${INSTALL_DIR}${NC}"
-        mkdir -p "$INSTALL_DIR"
+        if [ -d "$INSTALL_DIR" ]; then
+            echo -e "${YELLOW}⚠️  Directory already exists: ${INSTALL_DIR}${NC}"
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "Continue? (y/N): " CONTINUE
+                if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+                    echo "Installation cancelled"
+                    exit 0
+                fi
+            fi
+        else
+            mkdir -p "$INSTALL_DIR"
+        fi
         cd "$INSTALL_DIR"
         
         # Clone repository
@@ -198,7 +289,6 @@ EOF
     else
         # Use existing repo
         echo -e "${GREEN}✓ Using existing repository${NC}"
-        INSTALL_DIR=$(get_repo_root)
         cd "$INSTALL_DIR"
     fi
     
@@ -210,56 +300,78 @@ EOF
     
     cd deploy
     
-    # Generate secrets
-    echo -e "${BLUE}🔐 Generating secrets...${NC}"
-    
-    # Generate secure secrets
-    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    JWT_SECRET=$(openssl rand -base64 64 | tr -d "=+/" | cut -c1-64)
-    KRATOS_COOKIE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    KRATOS_CIPHER=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    KRATOS_WEBHOOK=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    MINIO_SECRET_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    TYPESENSE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    INNGEST_EVENT_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    INNGEST_SIGNING_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    HYDRA_SECRETS_SYSTEM=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    
-    # Create .env file
-    echo -e "${BLUE}📝 Creating configuration...${NC}"
-    
-    local backend_version="latest"
-    if [ "$FROM_SOURCE" = true ]; then
-        backend_version="local"
+    # Handle .env file (preserve existing or create new)
+    if [ -f .env ]; then
+        echo -e "${YELLOW}⚠️  .env file already exists${NC}"
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "Overwrite .env? (y/N): " OVERWRITE
+            if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
+                echo -e "${BLUE}ℹ️  Using existing .env file${NC}"
+                # Just update domain/email if needed
+                if [ -n "$DOMAIN" ]; then
+                    if grep -q "^DOMAIN=" .env; then
+                        sed -i.bak "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
+                    else
+                        echo "DOMAIN=${DOMAIN}" >> .env
+                    fi
+                fi
+                if [ -n "$EMAIL" ]; then
+                    if grep -q "^LETSENCRYPT_EMAIL=" .env; then
+                        sed -i.bak "s|^LETSENCRYPT_EMAIL=.*|LETSENCRYPT_EMAIL=${EMAIL}|" .env
+                    else
+                        echo "LETSENCRYPT_EMAIL=${EMAIL}" >> .env
+                    fi
+                fi
+                # Update backend version based on method
+                local backend_version="latest"
+                if [ "$FROM_SOURCE" = true ]; then
+                    backend_version="local"
+                fi
+                if grep -q "^BACKEND_VERSION=" .env; then
+                    sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${backend_version}|" .env
+                else
+                    echo "BACKEND_VERSION=${backend_version}" >> .env
+                fi
+                rm -f .env.bak
+            else
+                # Overwrite .env
+                echo -e "${BLUE}📝 Creating new configuration...${NC}"
+                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE"
+            fi
+        else
+            # Non-interactive: preserve existing
+            echo -e "${BLUE}ℹ️  Preserving existing .env file${NC}"
+            # Just update domain/email/version if provided
+            if [ -n "$DOMAIN" ]; then
+                if grep -q "^DOMAIN=" .env; then
+                    sed -i.bak "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
+                else
+                    echo "DOMAIN=${DOMAIN}" >> .env
+                fi
+            fi
+            if [ -n "$EMAIL" ]; then
+                if grep -q "^LETSENCRYPT_EMAIL=" .env; then
+                    sed -i.bak "s|^LETSENCRYPT_EMAIL=.*|LETSENCRYPT_EMAIL=${EMAIL}|" .env
+                else
+                    echo "LETSENCRYPT_EMAIL=${EMAIL}" >> .env
+                fi
+            fi
+            local backend_version="latest"
+            if [ "$FROM_SOURCE" = true ]; then
+                backend_version="local"
+            fi
+            if grep -q "^BACKEND_VERSION=" .env; then
+                sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${backend_version}|" .env
+            else
+                echo "BACKEND_VERSION=${backend_version}" >> .env
+            fi
+            rm -f .env.bak
+        fi
+    else
+        # No .env file, create new
+        echo -e "${BLUE}📝 Creating configuration...${NC}"
+        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE"
     fi
-    
-    cat > .env <<EOF
-# Synap Backend Configuration
-# Generated: $(date)
-
-GITHUB_REPOSITORY=synap-core/backend
-BACKEND_VERSION=${backend_version}
-COMPOSE_PROJECT_NAME=synap-backend
-
-DOMAIN=${DOMAIN}
-LETSENCRYPT_EMAIL=${EMAIL:-noreply@localhost}
-
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-JWT_SECRET=${JWT_SECRET}
-KRATOS_SECRETS_COOKIE=${KRATOS_COOKIE}
-KRATOS_SECRETS_CIPHER=${KRATOS_CIPHER}
-KRATOS_WEBHOOK_SECRET=${KRATOS_WEBHOOK}
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
-TYPESENSE_API_KEY=${TYPESENSE_KEY}
-TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
-INNGEST_EVENT_KEY=${INNGEST_EVENT_KEY}
-INNGEST_SIGNING_KEY=${INNGEST_SIGNING_KEY}
-ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
-EOF
-    
-    chmod 600 .env
     
     # Start services
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
@@ -350,15 +462,27 @@ cmd_update() {
     
     cd "$deploy_dir"
     
+    # Auto-detect if we're in a git repo (for smart defaults)
+    local IN_GIT_REPO=false
+    local repo_root=$(get_repo_root)
+    if [ -n "$repo_root" ] && [ "$(cd "$deploy_dir" && pwd)" = "$(cd "$repo_root/deploy" 2>/dev/null && pwd)" ]; then
+        IN_GIT_REPO=true
+    fi
+    
     local version="latest"
     local force_build=false
+    local force_image=false
     local local_build=false
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --build|-b)
+            --build|-b|--from-source)
                 force_build=true
+                shift
+                ;;
+            --from-image)
+                force_image=true
                 shift
                 ;;
             --local|-l)
@@ -381,14 +505,25 @@ cmd_update() {
     
     echo -e "${BLUE}🔄 Updating Synap...${NC}"
     
+    # Smart default: if in git repo and no flags, default to build
+    # If not in git repo or --from-image specified, use image
+    if [ "$force_build" = false ] && [ "$force_image" = false ]; then
+        if [ "$IN_GIT_REPO" = true ]; then
+            force_build=true
+            echo -e "${BLUE}ℹ️  In git repository, defaulting to --from-source${NC}"
+        fi
+    fi
+    
     if [ "$force_build" = true ]; then
         echo -e "${BLUE}🔨 Building from source...${NC}"
         docker compose build backend
+        version="local"
     else
         echo -e "${BLUE}📥 Pulling image...${NC}"
         docker compose pull backend || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
             docker compose build backend
+            version="local"
         }
     fi
     
@@ -396,6 +531,7 @@ cmd_update() {
     if [ -f .env ]; then
         if grep -q "^BACKEND_VERSION=" .env; then
             sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${version}|" .env
+            rm -f .env.bak
         else
             echo "BACKEND_VERSION=${version}" >> .env
         fi
@@ -599,15 +735,19 @@ ${YELLOW}Management:${NC}
   synap config [action]          Manage configuration
 
 ${YELLOW}Examples:${NC}
-  # Install (clone repo, use image)
-  synap install --clone --from-image latest --domain example.com --email me@example.com
+  # Install (auto-detects: clone if not in repo, use image by default)
+  synap install --domain example.com --email me@example.com
 
-  # Install (use existing repo, build from source)
-  synap install --no-clone --from-source --domain localhost
+  # Install in git repo (auto-detects: uses repo, builds from source by default)
+  synap install --domain localhost
 
-  # Update
+  # Force image even in git repo
+  synap install --from-image --domain example.com --email me@example.com
+
+  # Update (auto-detects: builds if in git repo, pulls image otherwise)
   synap update
-  synap update --build
+  synap update --from-image
+  synap update --from-source
   synap update v1.2.3
 
   # Management
