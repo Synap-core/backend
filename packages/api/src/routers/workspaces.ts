@@ -124,11 +124,19 @@ export const workspacesRouter = router({
         ctx.userId
       );
 
-      // Log for debugging (can be removed in production)
+      // Log for debugging
+      console.log(
+        `[workspaces.get] ensureDefaultWhiteboard result:`,
+        whiteboardResult.status,
+        whiteboardResult.message,
+        whiteboardResult.whiteboardId
+      );
+
       if (whiteboardResult.status === "error") {
         console.error(
           `[workspaces.get] Failed to ensure default whiteboard for workspace ${input.id}:`,
-          whiteboardResult.message
+          whiteboardResult.message,
+          whiteboardResult.error
         );
       }
 
@@ -138,6 +146,10 @@ export const workspacesRouter = router({
           where: eq(workspaces.id, input.id),
         });
         if (updatedWorkspace) {
+          console.log(
+            `[workspaces.get] Whiteboard created, returning updated workspace with mainWhiteboardId:`,
+            (updatedWorkspace.settings as any)?.mainWhiteboardId
+          );
           return { ...updatedWorkspace, role: membership.role };
         }
       }

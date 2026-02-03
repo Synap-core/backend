@@ -16,9 +16,11 @@ export const workspacesHandler = async ({
   const eventRepo = new EventRepository(db as any);
   const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
+  let workspace;
+
   if (action === "create") {
-    await step.run("create-workspace", async () => {
-      await workspaceRepo.create(
+    workspace = await step.run("create-workspace", async () => {
+      return await workspaceRepo.create(
         {
           id: data.id,
           name: data.name,
@@ -29,9 +31,18 @@ export const workspacesHandler = async ({
         userId
       );
     });
+
+    // Emit completed event to Inngest so other functions (like whiteboard creation) can react
+    await step.run("emit-completed-event", async () => {
+      await inngest.send({
+        name: "workspaces.create.completed",
+        data: workspace,
+        user: { id: userId },
+      });
+    });
   } else if (action === "update") {
-    await step.run("update-workspace", async () => {
-      await workspaceRepo.update(
+    workspace = await step.run("update-workspace", async () => {
+      return await workspaceRepo.update(
         data.id,
         {
           name: data.name,
@@ -41,9 +52,27 @@ export const workspacesHandler = async ({
         userId
       );
     });
+
+    // Emit completed event to Inngest
+    await step.run("emit-completed-event", async () => {
+      await inngest.send({
+        name: "workspaces.update.completed",
+        data: workspace,
+        user: { id: userId },
+      });
+    });
   } else if (action === "delete") {
     await step.run("delete-workspace", async () => {
       await workspaceRepo.delete(data.id, userId);
+    });
+
+    // Emit completed event to Inngest
+    await step.run("emit-completed-event", async () => {
+      await inngest.send({
+        name: "workspaces.delete.completed",
+        data: { id: data.id },
+        user: { id: userId },
+      });
     });
   }
 

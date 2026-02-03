@@ -218,6 +218,16 @@ export async function ensureDefaultWhiteboard(
       documentId: document.id,
     };
   } catch (error: any) {
+    console.error(
+      `[ensureDefaultWhiteboard] Error creating whiteboard for workspace ${workspaceId}:`,
+      {
+        error: error.message,
+        stack: error.stack,
+        code: error.code,
+        detail: error.detail,
+        constraint: error.constraint,
+      }
+    );
     return {
       status: "error",
       message: `Failed to create default whiteboard: ${error.message}`,
