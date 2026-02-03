@@ -21,6 +21,11 @@ export * from "./repositories/index.js";
 
 // Utilities
 export * from "./utils/preferences.js";
+// Explicit export for ensureDefaultWhiteboard to ensure TypeScript picks it up
+export {
+  ensureDefaultWhiteboard,
+  type CreateDefaultWhiteboardResult,
+} from "./utils/create-default-whiteboard.js";
 
 // Database client
 export * from "./client.js";

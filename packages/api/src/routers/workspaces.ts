@@ -117,12 +117,20 @@ export const workspacesRouter = router({
 
       // Ensure default whiteboard exists (for existing workspaces created before this feature)
       // This is a one-time operation per workspace
-      const { ensureDefaultWhiteboard } =
-        await import("../utils/create-default-whiteboard.js");
+      // Use static import for better type safety (database package is always available)
+      const { ensureDefaultWhiteboard } = await import("@synap/database");
       const whiteboardResult = await ensureDefaultWhiteboard(
         input.id,
         ctx.userId
       );
+
+      // Log for debugging (can be removed in production)
+      if (whiteboardResult.status === "error") {
+        console.error(
+          `[workspaces.get] Failed to ensure default whiteboard for workspace ${input.id}:`,
+          whiteboardResult.message
+        );
+      }
 
       // If whiteboard was just created, refetch workspace to get updated settings
       if (whiteboardResult.status === "created") {

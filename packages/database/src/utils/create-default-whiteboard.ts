@@ -4,18 +4,19 @@
  * This is used both:
  * 1. By the executor when a new workspace is created
  * 2. As a fallback in workspaces.get when fetching an existing workspace without a main whiteboard
+ *
+ * Located in @synap/database to avoid circular dependencies (both @synap/api and @synap/jobs can use it)
  */
 
 import { randomUUID } from "crypto";
-import { getDb } from "@synap/database";
+import { getDb } from "../client-pg.js";
 import {
   documents,
   documentVersions,
   views,
   workspaces,
-} from "@synap/database/schema";
-import { eq } from "@synap/database";
-import { getViewCategory } from "@synap-core/types";
+} from "../schema/index.js";
+import { eq } from "drizzle-orm";
 
 export interface CreateDefaultWhiteboardResult {
   status: "created" | "skipped" | "error";
@@ -102,7 +103,8 @@ export async function ensureDefaultWhiteboard(
 
     // 3. Create view (whiteboard type)
     const viewId = randomUUID();
-    const category = getViewCategory("whiteboard");
+    // Use 'canvas' category for whiteboard (from @synap-core/types)
+    const category = "canvas";
     const [view] = await db
       .insert(views)
       .values({
@@ -121,6 +123,11 @@ export async function ensureDefaultWhiteboard(
         },
       } as any)
       .returning();
+
+    // Verify view was created
+    if (!view) {
+      throw new Error("Failed to create whiteboard view");
+    }
 
     // 4. Update workspace settings to include mainWhiteboardId
     const currentSettings = (workspace.settings || {}) as any;

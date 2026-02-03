@@ -6,7 +6,7 @@
  */
 
 import { inngest } from "../client.js";
-import { ensureDefaultWhiteboard } from "@synap/api";
+import { ensureDefaultWhiteboard } from "@synap/database";
 
 /**
  * Create default whiteboard for a newly created workspace
