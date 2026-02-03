@@ -207,6 +207,7 @@ services:
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
+      KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     # Note: --dev flag removed for production security
     # Add --dev back only for local development
