@@ -442,35 +442,110 @@ EOF
         fi
     fi
     
+    # Check for existing .env file in deploy directory to load defaults
+    # We need to do this before prompts, but after we know the install directory
+    local deploy_env_path=""
+    if [ -n "$INSTALL_DIR" ]; then
+        deploy_env_path="$INSTALL_DIR/deploy/.env"
+    fi
+    
+    # Load existing .env values as defaults (if .env exists)
+    local DEFAULT_DOMAIN=""
+    local DEFAULT_EMAIL=""
+    local DEFAULT_OPENAI_KEY=""
+    local DEFAULT_ANTHROPIC_KEY=""
+    local DEFAULT_GOOGLE_KEY=""
+    local DEFAULT_ADMIN_EMAIL=""
+    
+    if [ -n "$deploy_env_path" ] && [ -f "$deploy_env_path" ]; then
+        DEFAULT_DOMAIN=$(grep "^DOMAIN=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_GOOGLE_KEY=$(grep "^GOOGLE_AI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_ADMIN_EMAIL=$(grep "^ADMIN_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+    fi
+    
     # Interactive prompts (if not automated)
-    # Note: We'll load .env defaults after entering deploy directory
     if [ "$INTERACTIVE" = true ]; then
         if [ -z "$DOMAIN" ]; then
-            read -p "Enter domain (or 'localhost' for testing): " DOMAIN
-            DOMAIN=${DOMAIN:-localhost}
+            local prompt="Enter domain (or 'localhost' for testing)"
+            if [ -n "$DEFAULT_DOMAIN" ]; then
+                prompt="$prompt [${DEFAULT_DOMAIN}]: "
+            else
+                prompt="$prompt: "
+            fi
+            read -p "$prompt" DOMAIN
+            DOMAIN=${DOMAIN:-${DEFAULT_DOMAIN:-localhost}}
         fi
         
         if [ "$DOMAIN" != "localhost" ] && [ -z "$EMAIL" ]; then
-            read -p "Enter email for SSL certificates: " EMAIL
+            local prompt="Enter email for SSL certificates"
+            if [ -n "$DEFAULT_EMAIL" ]; then
+                prompt="$prompt [${DEFAULT_EMAIL}]: "
+            else
+                prompt="$prompt: "
+            fi
+            read -p "$prompt" EMAIL
+            EMAIL=${EMAIL:-$DEFAULT_EMAIL}
         fi
         
-        # Ask for OpenAI API key (required for AI features)
+        # Ask for admin email (for self-hosted instances) - BEFORE AI config
+        if [ -z "$ADMIN_EMAIL" ]; then
+            echo ""
+            echo -e "${BLUE}👤 Admin Configuration${NC}"
+            local prompt="Enter admin email (for first admin user, optional)"
+            if [ -n "$DEFAULT_ADMIN_EMAIL" ]; then
+                prompt="$prompt [${DEFAULT_ADMIN_EMAIL}]: "
+            else
+                prompt="$prompt: "
+            fi
+            read -p "$prompt" ADMIN_EMAIL
+            ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
+        fi
+        
+        # AI Configuration - all in one section
         echo ""
         echo -e "${BLUE}🤖 AI Configuration${NC}"
-        echo "OpenAI API key is required for AI features."
-        read -p "Enter OpenAI API key (or press Enter to skip): " OPENAI_API_KEY
+        echo "Configure AI provider API keys (optional, but required for AI features)."
+        
+        # Ask for OpenAI API key
         if [ -z "$OPENAI_API_KEY" ]; then
-            echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
+            local prompt="Enter OpenAI API key"
+            if [ -n "$DEFAULT_OPENAI_KEY" ]; then
+                prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...] (press Enter to skip): "
+            else
+                prompt="$prompt (press Enter to skip): "
+            fi
+            read -p "$prompt" OPENAI_API_KEY
+            OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
+            if [ -z "$OPENAI_API_KEY" ]; then
+                echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
+            fi
         fi
         
         # Ask for optional AI providers
-        read -p "Enter Anthropic API key (optional, press Enter to skip): " ANTHROPIC_API_KEY
-        read -p "Enter Google AI API key (optional, press Enter to skip): " GOOGLE_AI_API_KEY
+        if [ -z "$ANTHROPIC_API_KEY" ]; then
+            local prompt="Enter Anthropic API key"
+            if [ -n "$DEFAULT_ANTHROPIC_KEY" ]; then
+                prompt="$prompt [${DEFAULT_ANTHROPIC_KEY:0:10}...] (optional, press Enter to skip): "
+            else
+                prompt="$prompt (optional, press Enter to skip): "
+            fi
+            read -p "$prompt" ANTHROPIC_API_KEY
+            ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$DEFAULT_ANTHROPIC_KEY}
+        fi
         
-        # Ask for admin email (for self-hosted instances)
-        echo ""
-        echo -e "${BLUE}👤 Admin Configuration${NC}"
-        read -p "Enter admin email (for first admin user, optional): " ADMIN_EMAIL
+        if [ -z "$GOOGLE_AI_API_KEY" ]; then
+            local prompt="Enter Google AI API key"
+            if [ -n "$DEFAULT_GOOGLE_KEY" ]; then
+                prompt="$prompt [${DEFAULT_GOOGLE_KEY:0:10}...] (optional, press Enter to skip): "
+            else
+                prompt="$prompt (optional, press Enter to skip): "
+            fi
+            read -p "$prompt" GOOGLE_AI_API_KEY
+            GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-$DEFAULT_GOOGLE_KEY}
+        fi
     fi
     
     # Validate required parameters
@@ -518,105 +593,10 @@ EOF
     
     cd deploy
     
-    # Load existing .env values as defaults (if .env exists)
-    local DEFAULT_DOMAIN=""
-    local DEFAULT_EMAIL=""
-    local DEFAULT_OPENAI_KEY=""
-    local DEFAULT_ANTHROPIC_KEY=""
-    local DEFAULT_GOOGLE_KEY=""
-    local DEFAULT_ADMIN_EMAIL=""
-    
-    if [ -f .env ]; then
-        DEFAULT_DOMAIN=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        DEFAULT_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        DEFAULT_ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        DEFAULT_GOOGLE_KEY=$(grep "^GOOGLE_AI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        DEFAULT_ADMIN_EMAIL=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
-        
-        # If interactive and we have defaults, re-prompt with defaults
-        if [ "$INTERACTIVE" = true ] && [ -n "$DEFAULT_DOMAIN" ]; then
-            echo -e "${BLUE}ℹ️  Found existing .env file, using as defaults${NC}"
-            echo ""
-            
-            # Re-prompt with defaults if values not provided
-            if [ -z "$DOMAIN" ]; then
-                local prompt="Enter domain (or 'localhost' for testing)"
-                if [ -n "$DEFAULT_DOMAIN" ]; then
-                    prompt="$prompt [${DEFAULT_DOMAIN}]: "
-                else
-                    prompt="$prompt: "
-                fi
-                read -p "$prompt" DOMAIN
-                DOMAIN=${DOMAIN:-${DEFAULT_DOMAIN:-localhost}}
-            fi
-            
-            if [ "$DOMAIN" != "localhost" ] && [ -z "$EMAIL" ]; then
-                local prompt="Enter email for SSL certificates"
-                if [ -n "$DEFAULT_EMAIL" ]; then
-                    prompt="$prompt [${DEFAULT_EMAIL}]: "
-                else
-                    prompt="$prompt: "
-                fi
-                read -p "$prompt" EMAIL
-                EMAIL=${EMAIL:-$DEFAULT_EMAIL}
-            fi
-            
-            # Ask for OpenAI API key with default
-            if [ -z "$OPENAI_API_KEY" ]; then
-                echo ""
-                echo -e "${BLUE}🤖 AI Configuration${NC}"
-                echo "OpenAI API key is required for AI features."
-                local prompt="Enter OpenAI API key"
-                if [ -n "$DEFAULT_OPENAI_KEY" ]; then
-                    prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...]: "
-                else
-                    prompt="$prompt (or press Enter to skip): "
-                fi
-                read -p "$prompt" OPENAI_API_KEY
-                OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
-                if [ -z "$OPENAI_API_KEY" ]; then
-                    echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
-                fi
-            fi
-            
-            # Ask for optional AI providers with defaults
-            if [ -z "$ANTHROPIC_API_KEY" ]; then
-                local prompt="Enter Anthropic API key"
-                if [ -n "$DEFAULT_ANTHROPIC_KEY" ]; then
-                    prompt="$prompt [${DEFAULT_ANTHROPIC_KEY:0:10}...] (optional, press Enter to skip): "
-                else
-                    prompt="$prompt (optional, press Enter to skip): "
-                fi
-                read -p "$prompt" ANTHROPIC_API_KEY
-                ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$DEFAULT_ANTHROPIC_KEY}
-            fi
-            
-            if [ -z "$GOOGLE_AI_API_KEY" ]; then
-                local prompt="Enter Google AI API key"
-                if [ -n "$DEFAULT_GOOGLE_KEY" ]; then
-                    prompt="$prompt [${DEFAULT_GOOGLE_KEY:0:10}...] (optional, press Enter to skip): "
-                else
-                    prompt="$prompt (optional, press Enter to skip): "
-                fi
-                read -p "$prompt" GOOGLE_AI_API_KEY
-                GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-$DEFAULT_GOOGLE_KEY}
-            fi
-            
-            # Ask for admin email with default
-            if [ -z "$ADMIN_EMAIL" ]; then
-                echo ""
-                echo -e "${BLUE}👤 Admin Configuration${NC}"
-                local prompt="Enter admin email (for first admin user, optional)"
-                if [ -n "$DEFAULT_ADMIN_EMAIL" ]; then
-                    prompt="$prompt [${DEFAULT_ADMIN_EMAIL}]: "
-                else
-                    prompt="$prompt: "
-                fi
-                read -p "$prompt" ADMIN_EMAIL
-                ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
-            fi
-        fi
+    # If we loaded defaults earlier and they were used, we're done with prompts
+    # Otherwise, if .env exists now, show a message
+    if [ -f .env ] && [ "$INTERACTIVE" = true ] && [ -n "$DEFAULT_DOMAIN" ]; then
+        echo -e "${BLUE}ℹ️  Using existing .env file values${NC}"
     fi
     
     # Handle .env file (preserve existing or create new)
@@ -672,21 +652,28 @@ EOF
     echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
     generate_kratos_config "$DOMAIN"
     
-    # Run migrations before starting services
-    echo -e "${BLUE}🔄 Running database migrations...${NC}"
-    docker compose run --rm backend-migrate || {
-        echo -e "${YELLOW}⚠️  Migration service not available, continuing...${NC}"
-        echo -e "${YELLOW}⚠️  You may need to run migrations manually: docker compose run --rm backend-migrate${NC}"
-    }
-    
-    # Start services
-    echo -e "${BLUE}🚀 Starting Synap...${NC}"
+    # Build/pull image FIRST (migrations need the image to exist)
+    echo -e "${BLUE}🔨 Preparing backend image...${NC}"
     if [ "$FROM_SOURCE" = true ]; then
         docker compose build backend
     else
-        docker compose pull backend --ignore-pull-failures || true
+        docker compose pull backend --ignore-pull-failures || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build backend
+        }
     fi
     
+    # Run migrations before starting services (CRITICAL - must succeed)
+    echo -e "${BLUE}🔄 Running database migrations...${NC}"
+    if ! docker compose run --rm backend-migrate; then
+        echo -e "${RED}❌ Migrations failed!${NC}"
+        echo -e "${YELLOW}⚠️  Backend cannot start without migrations${NC}"
+        echo -e "${YELLOW}⚠️  Please check the migration logs and fix any issues${NC}"
+        exit 1
+    fi
+    
+    # Start services
+    echo -e "${BLUE}🚀 Starting Synap...${NC}"
     docker compose up -d
     
     echo -e "${GREEN}✅ Installation complete!${NC}"
