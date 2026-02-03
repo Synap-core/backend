@@ -47,6 +47,9 @@ export async function createContext(req: Request): Promise<Context> {
 
     const session = await authModule.getSession(req.headers);
 
+    // Extract workspace ID from header (set by frontend workspaceLink)
+    const workspaceId = req.headers.get("X-Workspace-Id") || null;
+
     // Kratos session structure: { identity: { id, traits: { email, name } } }
     if (session && session.identity) {
       return {
@@ -60,6 +63,7 @@ export async function createContext(req: Request): Promise<Context> {
         },
         session,
         req,
+        workspaceId, // Add workspace ID to context
       };
     }
 
@@ -71,6 +75,7 @@ export async function createContext(req: Request): Promise<Context> {
       user: null,
       session: null,
       req,
+      workspaceId, // Add workspace ID even for unauthenticated (for public routes)
     };
   } catch (error) {
     contextLogger.error(
@@ -89,6 +94,7 @@ export async function createContext(req: Request): Promise<Context> {
       user: null,
       session: null,
       req,
+      workspaceId: null, // No workspace ID on error
     };
   }
 }

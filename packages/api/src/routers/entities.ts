@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { db, eq, desc, and } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { emitRequestEvent } from "../utils/emit-event.js";
@@ -109,13 +109,15 @@ export const entitiesRouter = router({
     }),
 
   /**
-   * List entities
+   * List entities (workspace-scoped)
+   *
+   * Automatically filters by workspace from context (X-Workspace-Id header).
+   * No need to pass workspaceId in input anymore.
    */
-  list: protectedProcedure
+  list: workspaceProcedure
     .input(
       z.object({
         type: EntityTypeSchema.optional(),
-        workspaceId: z.string().uuid().optional(),
         limit: z.number().min(1).max(100).default(50),
       })
     )
@@ -125,8 +127,10 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // workspaceId is automatically available from context (set by workspaceProcedure)
       const results = await db.query.entities.findMany({
         where: and(
+          eq(entities.workspaceId, ctx.workspaceId), // ✅ Automatic workspace scoping
           eq(entities.userId, ctx.userId),
           input.type ? eq(entities.type, input.type) : undefined
         ),

@@ -14,6 +14,8 @@ import superjson from "superjson";
 import type { Context } from "./context.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
+import { db, eq, and } from "@synap/database";
+import { workspaceMembers } from "@synap/database/schema";
 import "@synap/database"; // Fix TS2742: inferred type portability
 
 const logger = createLogger({ module: "trpc" });
@@ -50,6 +52,58 @@ export const protectedProcedure = t.procedure.use(async (opts) => {
     ctx: {
       ...ctx,
       userId, // Ensure userId is always a string in protected procedures
+    },
+  });
+});
+
+/**
+ * Workspace-scoped procedure (auth + workspace required)
+ *
+ * Automatically validates workspace membership and adds workspaceId to context.
+ * All procedures using this will automatically have workspace scoping.
+ *
+ * Requirements:
+ * - User must be authenticated (extends protectedProcedure)
+ * - X-Workspace-Id header must be present in request
+ * - User must be a member of the workspace
+ *
+ * After this middleware, ctx.workspaceId and ctx.workspaceRole are guaranteed to be set.
+ */
+export const workspaceProcedure = protectedProcedure.use(async (opts) => {
+  const { ctx } = opts;
+
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Workspace ID required. Set active workspace in frontend.",
+    });
+  }
+
+  // Verify user has access to workspace
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, ctx.workspaceId),
+      eq(workspaceMembers.userId, ctx.userId)
+    ),
+  });
+
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Access denied to workspace",
+    });
+  }
+
+  logger.debug(
+    { userId: ctx.userId, workspaceId: ctx.workspaceId, role: membership.role },
+    "Workspace procedure - membership validated"
+  );
+
+  return opts.next({
+    ctx: {
+      ...ctx,
+      workspaceId: ctx.workspaceId, // Ensure it's a string (not null)
+      workspaceRole: membership.role, // Add role to context for convenience
     },
   });
 });

@@ -55,4 +55,6 @@ export interface Context {
   session?: KratosSession | null;
   req?: Request;
   socketIO?: any; // Socket.IO server instance (type: Server from 'socket.io')
+  workspaceId?: string | null; // Workspace ID from X-Workspace-Id header
+  workspaceRole?: string | null; // User's role in the workspace (set by workspaceProcedure)
 }
