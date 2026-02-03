@@ -38,7 +38,6 @@
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
-    "@synap/storage": "workspace:*",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",

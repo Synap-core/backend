@@ -21,6 +21,8 @@ import type {
   DocumentType,
   DocumentMetadata,
 } from "../types/document-types.js";
+// Type-only import for storage (runtime import is dynamic to avoid circular dependency)
+import type { IFileStorage } from "@synap/storage";
 
 export interface CreateDefaultWhiteboardResult {
   status: "created" | "skipped" | "error";
@@ -91,8 +93,12 @@ export async function ensureDefaultWhiteboard(
     const tldrawJson = JSON.stringify(emptyTldrawContent);
     const tldrawBuffer = Buffer.from(tldrawJson, "utf-8");
 
-    // Import storage (now available as dependency)
-    const { storage } = await import("@synap/storage");
+    // Import storage dynamically (to avoid circular dependency)
+    // @synap/database cannot depend on @synap/storage directly (cycle: database -> storage -> types -> database)
+    // Dynamic import works at runtime, type-only import above provides TypeScript types
+    const { storage } = (await import("@synap/storage")) as {
+      storage: IFileStorage;
+    };
 
     // Build standardized storage path (same pattern as other documents)
     const storageKey = storage.buildPath(
