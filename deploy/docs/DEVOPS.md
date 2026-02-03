@@ -84,7 +84,7 @@ This guide explains how Synap Backend is deployed, updated, and managed. It cove
 
 ```bash
 cd /opt/synap-backend/deploy
-./synap-cli update
+./synap update
 ```
 
 **What Happens**:
@@ -191,12 +191,12 @@ restart_policy:
 
 ## 🔧 Management CLI
 
-### `synap-cli` Commands
+### `synap` Commands
 
 **Health Check**:
 
 ```bash
-./synap-cli health
+./synap health
 ```
 
 - Checks all services
@@ -206,7 +206,7 @@ restart_policy:
 **Logs**:
 
 ```bash
-./synap-cli logs [service]
+./synap logs [service]
 ```
 
 - View logs for all services or specific service
@@ -215,7 +215,7 @@ restart_policy:
 **Update**:
 
 ```bash
-./synap-cli update [version]
+./synap update [version]
 ```
 
 - Updates to latest or specific version
@@ -226,7 +226,7 @@ restart_policy:
 **Backup**:
 
 ```bash
-./synap-cli backup [name]
+./synap backup [name]
 ```
 
 - Creates database dump
@@ -236,7 +236,7 @@ restart_policy:
 **Restore**:
 
 ```bash
-./synap-cli restore <backup-file>
+./synap restore <backup-file>
 ```
 
 - Restores database from backup
@@ -301,9 +301,9 @@ CMD ["node", "dist/index.js"]
 
 **During Installation**:
 
-- `install.sh` generates all secrets automatically
+- `synap install` generates all secrets automatically
 - Stored in `.env` file (not in git)
-- Backup created: `.secrets-backup.txt`
+- Backup created: `synap-backend-secrets.txt`
 - **IMPORTANT**: User must backup and delete backup file
 
 **Secrets Generated**:
@@ -381,7 +381,7 @@ healthcheck:
 **View Logs**:
 
 ```bash
-./synap-cli logs [service]
+./synap logs [service]
 ```
 
 **Docker Compose Logs**:
@@ -428,7 +428,7 @@ docker compose --profile monitoring up -d
 ### 1. Always Backup Before Updates
 
 ```bash
-./synap-cli update  # Automatically creates backup
+./synap update  # Automatically creates backup
 ```
 
 **Why**: Safety net if update fails
@@ -449,8 +449,8 @@ docker compose run --rm backend-migrate
 ### 3. Monitor After Updates
 
 ```bash
-./synap-cli health
-./synap-cli logs backend
+./synap health
+./synap logs backend
 ```
 
 **Why**: Verify everything works correctly
@@ -499,7 +499,7 @@ docker compose logs backend-migrate
 
 ```bash
 docker compose logs backend
-./synap-cli health
+./synap health
 ```
 
 **Common Causes**:

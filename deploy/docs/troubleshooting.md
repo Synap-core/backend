@@ -69,7 +69,7 @@ sudo systemctl disable nginx
 3. **Check Caddy logs**:
 
    ```bash
-   ./synap-cli logs caddy
+   ./synap logs caddy
    ```
 
 4. **Verify ports are open**:
@@ -93,10 +93,10 @@ sudo systemctl disable nginx
 
 ```bash
 # Restart Caddy to force renewal
-./synap-cli restart caddy
+./synap restart caddy
 
 # Check logs
-./synap-cli logs caddy
+./synap logs caddy
 ```
 
 ## Database Issues
@@ -116,12 +116,12 @@ sudo systemctl disable nginx
 2. **Restart PostgreSQL**:
 
    ```bash
-   ./synap-cli restart postgres
+   ./synap restart postgres
    ```
 
 3. **Check logs**:
    ```bash
-   ./synap-cli logs postgres
+   ./synap logs postgres
    ```
 
 ### Authentication Failed
@@ -140,7 +140,7 @@ sudo systemctl disable nginx
    ```bash
    docker compose down -v
    docker compose up -d
-   ./synap-cli restore latest-backup.tar.gz
+   ./synap restore latest-backup.tar.gz
    ```
 
 ### Database Corruption
@@ -157,7 +157,7 @@ docker compose stop backend
 docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 
 # Restore from backup
-./synap-cli restore backups/latest.tar.gz
+./synap restore backups/latest.tar.gz
 ```
 
 ## Service Crashes
@@ -171,7 +171,7 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 1. **Check logs**:
 
    ```bash
-   ./synap-cli logs backend
+   ./synap logs backend
    ```
 
 2. **Common causes**:
@@ -188,7 +188,7 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 4. **Restart with fresh logs**:
    ```bash
    docker compose restart backend
-   ./synap-cli logs backend
+   ./synap logs backend
    ```
 
 ### Out of Memory
@@ -271,12 +271,12 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 2. **Check logs for errors**:
 
    ```bash
-   ./synap-cli logs
+   ./synap logs
    ```
 
 3. **Restart services**:
    ```bash
-   ./synap-cli restart
+   ./synap restart
    ```
 
 ## AI Features Not Working
@@ -305,7 +305,7 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 
 4. **Restart intelligence service**:
    ```bash
-   ./synap-cli restart intelligence-service
+   ./synap restart intelligence-service
    ```
 
 ### Slow AI Responses
@@ -315,7 +315,7 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 1. **Check intelligence service logs**:
 
    ```bash
-   ./synap-cli logs intelligence-service
+   ./synap logs intelligence-service
    ```
 
 2. **Verify network connectivity**:
@@ -370,7 +370,7 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 2. **Check MinIO logs**:
 
    ```bash
-   ./synap-cli logs minio
+   ./synap logs minio
    ```
 
 3. **Verify bucket exists**:
@@ -404,7 +404,7 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 
 4. **Check logs**:
    ```bash
-   ./synap-cli logs typesense
+   ./synap logs typesense
    ```
 
 ## Update Issues
@@ -426,12 +426,12 @@ docker compose exec postgres pg_resetwal /var/lib/postgresql/data
 2. **Restore from backup**:
 
    ```bash
-   ./synap-cli restore backups/pre-update-*.tar.gz
+   ./synap restore backups/pre-update-*.tar.gz
    ```
 
 3. **Check migration logs**:
    ```bash
-   ./synap-cli logs backend | grep migration
+   ./synap logs backend | grep migration
    ```
 
 ## Network Issues
@@ -474,7 +474,7 @@ If you're still stuck:
 1. **Collect diagnostic info**:
 
    ```bash
-   ./synap-cli health > health.txt
+   ./synap health > health.txt
    docker compose logs > logs.txt
    docker compose config > config.txt
    ```

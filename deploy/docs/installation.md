@@ -4,8 +4,6 @@ Complete guide to installing Synap Backend on your server.
 
 ## Prerequisites
 
-Before you begin, ensure you have:
-
 ### Server Requirements
 
 - **Operating System**: Ubuntu 22.04 LTS or newer (Debian-based recommended)
@@ -19,38 +17,7 @@ Before you begin, ensure you have:
 - **Docker**: Version 20.10 or newer
 - **Docker Compose**: Version 2.0 or newer
 
-### External Requirements
-
-- **Domain Name**: A domain you control with DNS access
-- **OpenAI API Key**: Required for AI features ([Get one here](https://platform.openai.com/api-keys))
-
-## Installation Methods
-
-### Method 1: One-Command Install (Recommended)
-
-The fastest way to get started:
-
-```bash
-curl -fsSL https://get.synap.live/install.sh | bash
-```
-
-This will:
-
-1. Check prerequisites
-2. Prompt for configuration
-3. Generate secure secrets
-4. Download and start services
-5. Run database migrations
-
-**Follow the interactive prompts** to configure your instance.
-
-### Method 2: Manual Installation
-
-For more control over the installation process:
-
-#### Step 1: Install Docker
-
-If Docker isn't installed:
+Install Docker if needed:
 
 ```bash
 # Ubuntu/Debian
@@ -59,64 +26,106 @@ sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-#### Step 2: Clone Repository
+### External Requirements
+
+- **Domain Name**: A domain you control with DNS access (for production)
+- **OpenAI API Key**: Required for AI features ([Get one here](https://platform.openai.com/api-keys))
+
+## Installation Methods
+
+### Method 1: Quick Install (Recommended)
+
+The fastest way to get started:
 
 ```bash
-cd /opt
-sudo git clone https://github.com/synap-labs/synap-backend.git synap
-cd synap/deploy
+# Download unified CLI
+curl -fsSL https://raw.githubusercontent.com/synap-core/backend/main/synap -o synap
+chmod +x synap
+
+# Install (interactive mode)
+./synap install --clone --from-image latest --domain example.com --email me@example.com
 ```
 
-#### Step 3: Configure Environment
+This will:
+
+1. Clone the repository
+2. Generate secure secrets
+3. Create configuration
+4. Pull Docker images
+5. Start all services
+6. Run database migrations
+
+### Method 2: Clone Repository First
+
+For developers or if you want to review the code:
 
 ```bash
-# Copy template
-cp .env.example .env
+# Clone repository
+git clone https://github.com/synap-core/backend.git
+cd backend
 
-# Edit configuration
-nano .env
+# Make CLI executable
+chmod +x synap
+
+# Install (use existing repo)
+./synap install --no-clone --from-image latest --domain example.com --email me@example.com
 ```
 
-**Required variables**:
+### Method 3: Development Mode (Build from Source)
 
-- `DOMAIN`: Your domain (e.g., `synap.example.com`)
-- `LETSENCRYPT_EMAIL`: Your email for SSL certificates
-- `OPENAI_API_KEY`: Your OpenAI API key
-
-**Generate secrets**:
+For testing or development:
 
 ```bash
-# PostgreSQL password
-openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
+# Clone repository
+git clone https://github.com/synap-core/backend.git
+cd backend
+chmod +x synap
 
-# JWT secret
-openssl rand -base64 64 | tr -d "=+/" | cut -c1-64
-
-# Other secrets (repeat for each)
-openssl rand -base64 32 | tr -d "=+/" | cut -c1-32
+# Install and build from source
+./synap install --no-clone --from-source --domain localhost
 ```
 
-#### Step 4: Start Services
+## Installation Parameters
+
+### Required Parameters
+
+- `--domain <domain>` - Your domain name (or `localhost` for testing)
+- `--email <email>` - Email for SSL certificates (required for production domains)
+
+### Optional Parameters
+
+- `--clone` - Clone repository (default if not in git repo)
+- `--no-clone` / `--use-repo` - Use existing repository
+- `--from-image <tag>` - Use Docker image (default: `latest`)
+- `--from-source` / `--build` - Build from source code
+- `--dir <path>` - Installation directory (default: `/opt/synap-backend`)
+- `--non-interactive` - Automated mode (no prompts)
+
+### Examples
 
 ```bash
-docker compose up -d
-```
+# Production: Clone + Image
+./synap install --clone --from-image latest --domain example.com --email me@example.com
 
-#### Step 5: Run Migrations
+# Production: Use existing repo + Image
+./synap install --no-clone --from-image latest --domain example.com --email me@example.com
 
-```bash
-docker compose exec backend sh -c 'cd packages/database && pnpm db:push'
+# Development: Use existing repo + Build
+./synap install --no-clone --from-source --domain localhost
+
+# Automated (no prompts)
+./synap install --clone --from-image latest --domain example.com --email me@example.com --non-interactive
 ```
 
 ## Post-Installation
 
-### 1. Configure DNS
+### 1. Configure DNS (Production Only)
 
 Add an A record pointing your domain to your server's IP:
 
 ```
 Type: A
-Name: synap (or @)
+Name: @ (or subdomain like 'synap')
 Value: YOUR_SERVER_IP
 TTL: 300
 ```
@@ -136,21 +145,22 @@ If you get an SSL error, wait a few more minutes. Let's Encrypt can take 1-2 min
 ### 3. Check System Health
 
 ```bash
-./synap-cli health
+./synap health
 ```
 
 You should see all services marked as ✅ healthy.
 
 ### 4. Backup Secrets
 
-**CRITICAL**: Save your secrets file and delete it from the server:
+**CRITICAL**: Save your secrets and delete them from the server:
 
 ```bash
-# On your local machine
-scp user@server:/opt/synap/.secrets-backup.txt ~/synap-secrets.txt
+# The installation creates a secrets backup file
+# Copy it to your local machine
+scp user@server:/opt/synap-backend/synap-backend-secrets.txt ~/synap-secrets.txt
 
-# On the server
-rm /opt/synap/.secrets-backup.txt
+# Delete from server
+rm /opt/synap-backend/synap-backend-secrets.txt
 ```
 
 Store this file securely (password manager, encrypted storage, etc.).
@@ -170,14 +180,13 @@ You'll see the first-run setup wizard. Create your admin account and first works
 ### Check All Services
 
 ```bash
-./synap-cli health
+./synap health
 ```
 
 Expected output:
 
 ```
 ✅ Backend API
-✅ Intelligence Service
 ✅ Database
 ✅ Redis
 ✅ Storage
@@ -211,7 +220,7 @@ Expected response:
 ### View Logs
 
 ```bash
-./synap-cli logs
+./synap logs
 ```
 
 Look for any errors or warnings.
@@ -225,10 +234,10 @@ Look for any errors or warnings.
 sudo systemctl status docker
 
 # Check logs
-docker compose logs
+./synap logs
 
 # Restart services
-docker compose restart
+./synap restart
 ```
 
 ### SSL Certificate Issues
@@ -239,7 +248,7 @@ docker compose restart
 
 1. Verify DNS is configured correctly: `dig your-domain.com`
 2. Wait 2-5 minutes for Let's Encrypt
-3. Check Caddy logs: `./synap-cli logs caddy`
+3. Check Caddy logs: `./synap logs caddy`
 4. Ensure ports 80 and 443 are open in firewall
 
 ### Database Connection Errors
@@ -250,7 +259,7 @@ docker compose restart
 
 1. Check PostgreSQL is running: `docker compose ps postgres`
 2. Verify password in `.env` matches
-3. Restart backend: `./synap-cli restart backend`
+3. Restart backend: `./synap restart backend`
 
 ### AI Features Not Working
 
@@ -259,7 +268,7 @@ docker compose restart
 **Solutions**:
 
 1. Verify `OPENAI_API_KEY` is set in `.env`
-2. Check intelligence service: `./synap-cli logs intelligence-service`
+2. Check intelligence service: `./synap logs intelligence-service`
 3. Test API key: `curl https://api.openai.com/v1/models -H "Authorization: Bearer YOUR_KEY"`
 
 ### Port Already in Use
@@ -282,8 +291,8 @@ sudo systemctl disable nginx
 
 - [Configure your instance](./configuration.md)
 - [Set up backups](./backups.md)
-- [Connect your frontend](./frontend-connection.md)
-- [Invite team members](./user-management.md)
+- [Connect your frontend](../README.md#-connecting-your-frontend)
+- [Update your instance](../README.md#-updating)
 
 ## Getting Help
 

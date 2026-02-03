@@ -13,22 +13,24 @@
 Deploy your own Synap instance in 5 minutes:
 
 ```bash
-# Download and run the installer
-curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh -o install.sh
-chmod +x install.sh
-./install.sh
+# Download the unified CLI
+curl -fsSL https://raw.githubusercontent.com/synap-core/backend/main/synap -o synap
+chmod +x synap
+
+# Install (interactive mode)
+./synap install --clone --from-image latest --domain example.com --email me@example.com
 ```
 
-Or clone and run:
+Or clone the repository first:
 
 ```bash
-git clone https://github.com/Synap-core/backend.git
-cd backend/deploy
-chmod +x install.sh
-./install.sh
-```
+git clone https://github.com/synap-core/backend.git
+cd backend
+chmod +x synap
 
-Follow the interactive prompts to configure your instance.
+# Install from existing repo
+./synap install --no-clone --from-image latest --domain example.com --email me@example.com
+```
 
 ## ✨ Features
 
@@ -52,7 +54,7 @@ Follow the interactive prompts to configure your instance.
 ## 📚 Documentation
 
 - **[Self-Hosting Guide](./deploy/README.md)** - Complete installation and setup
-- **[DevOps Guide](./deploy/docs/DEVOPS.md)** - Deployment, updates, and operations
+- **[Installation Guide](./deploy/docs/installation.md)** - Step-by-step installation
 - **[Configuration Reference](./deploy/docs/configuration.md)** - All configuration options
 - **[Backup & Restore](./deploy/docs/backups.md)** - Data protection strategies
 - **[Troubleshooting](./deploy/docs/troubleshooting.md)** - Common issues and solutions
@@ -60,30 +62,32 @@ Follow the interactive prompts to configure your instance.
 - **[Architecture](./ARCHITECTURE.md)** - System architecture overview
 - **[Developer Guide](./DEVELOPER_GUIDE.md)** - Contributing and development
 
-### System-Wide DevOps
-
-- **[Complete DevOps Guide](../DEVOPS_COMPLETE_GUIDE.md)** - All services (backend, app, intelligence, control plane)
-- **[GitHub Actions Audit](../GITHUB_ACTIONS_AUDIT.md)** - CI/CD optimization and best practices
-
 ## 🛠️ Management
 
-Use the `synap-cli` tool to manage your instance:
+Use the unified `synap` CLI to manage your instance:
 
 ```bash
-cd /opt/synap  # or your installation directory
-
 # Check system health
-./synap-cli health
+./synap health
 
 # View logs
-./synap-cli logs
-
-# Create backup
-./synap-cli backup
+./synap logs [service]
 
 # Update to latest version
-./synap-cli update
+./synap update
+
+# Create backup
+./synap backup
+
+# Restore from backup
+./synap restore backups/backup-20260127.tar.gz
+
+# Manage configuration
+./synap config list
+./synap config set DOMAIN new-domain.com
 ```
+
+See [Management Commands](./deploy/README.md#-management) for complete reference.
 
 ## 🏗️ Architecture
 
@@ -124,7 +128,7 @@ cd /opt/synap  # or your installation directory
 Update to the latest version with one command:
 
 ```bash
-./synap-cli update
+./synap update
 ```
 
 This automatically:
@@ -134,17 +138,23 @@ This automatically:
 3. Restarts services
 4. Runs database migrations
 
+**Update options:**
+
+- `./synap update` - Update to latest image
+- `./synap update v1.2.3` - Update to specific version
+- `./synap update --build` - Build from source
+
 ## 💾 Backups
 
 ```bash
 # Create backup
-./synap-cli backup
+./synap backup
 
 # Restore from backup
-./synap-cli restore backups/backup-20260127.tar.gz
+./synap restore backups/backup-20260127.tar.gz
 
 # Automated daily backups (add to crontab)
-0 2 * * * cd /opt/synap && ./synap-cli backup
+0 2 * * * cd /opt/synap-backend && ./synap backup
 ```
 
 ## 🌐 Connect Your Frontend
@@ -170,7 +180,7 @@ cp .env.example .env
 # Edit .env with your configuration
 
 # Start development services
-docker compose -f docker-compose.yml up -d postgres redis minio typesense
+docker compose -f docker-compose.local.yml up -d postgres redis minio typesense
 
 # Run database migrations
 cd packages/database
@@ -195,10 +205,10 @@ synap-backend/
 │   ├── search/           # Typesense integration
 │   └── realtime/         # SSE server
 ├── deploy/               # Self-hosting deployment files
-│   ├── install.sh        # One-command installer
-│   ├── synap-cli         # Management CLI
 │   ├── docker-compose.yml
+│   ├── Dockerfile
 │   └── docs/             # Documentation
+├── synap                 # Unified CLI (install + management)
 └── docs/                 # Development documentation
 ```
 

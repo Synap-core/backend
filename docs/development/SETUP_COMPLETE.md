@@ -102,7 +102,7 @@ pnpm dev:remote
 
 **What it does**:
 
-- ✅ Auto-generates all secrets (like `install.sh`)
+- ✅ Auto-generates all secrets (via `synap install`)
 - ✅ Uses existing `.env.development.local` if present
 - ✅ Preserves existing values
 - ✅ No prompts needed (everything auto-generated)

@@ -196,7 +196,7 @@ Configure automated backups:
 
 ```bash
 # Add to crontab
-0 2 * * * cd /opt/synap && ./synap-cli backup
+0 2 * * * cd /opt/synap && ./synap backup
 ```
 
 ### Performance Tuning
@@ -344,7 +344,7 @@ docker compose config
 docker compose config --quiet
 
 # Check service health
-./synap-cli health
+./synap health
 ```
 
 ### Reset Configuration

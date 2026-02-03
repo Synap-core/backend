@@ -1,36 +1,45 @@
 # Self-Hosting Synap Backend
 
-Deploy your own Synap instance in 5 minutes.
+Deploy your own Synap instance in 5 minutes with our unified CLI.
 
 ## 🚀 Quick Start
 
-**Deploy your own Synap instance in 5 minutes:**
-
-**Recommended: Download first, then execute (most reliable):**
+### Option 1: Download CLI and Install (Recommended)
 
 ```bash
-# Download the installer
-curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh -o install.sh
+# Download the unified CLI
+curl -fsSL https://raw.githubusercontent.com/synap-core/backend/main/synap -o synap
+chmod +x synap
 
-# Make it executable
-chmod +x install.sh
-
-# Run it
-./install.sh
+# Install (interactive prompts)
+./synap install --clone --from-image latest --domain example.com --email me@example.com
 ```
 
-**Or clone and run (best for development):**
+### Option 2: Clone Repository First
 
 ```bash
-git clone https://github.com/Synap-core/backend.git
-cd backend/deploy
-chmod +x install.sh
-./install.sh
+# Clone repository
+git clone https://github.com/synap-core/backend.git
+cd backend
+
+# Make CLI executable
+chmod +x synap
+
+# Install (use existing repo, no cloning)
+./synap install --no-clone --from-image latest --domain example.com --email me@example.com
 ```
 
-> ⚠️ **Note**: Piping (`curl ... | bash`) can sometimes cause parsing issues. If you encounter errors, download the script first instead.
+### Option 3: Development Mode (Build from Source)
 
-That's it! Follow the interactive prompts to configure your instance.
+```bash
+# Clone repository
+git clone https://github.com/synap-core/backend.git
+cd backend
+chmod +x synap
+
+# Install and build from source
+./synap install --no-clone --from-source --domain localhost
+```
 
 ## 📋 Requirements
 
@@ -38,184 +47,124 @@ That's it! Follow the interactive prompts to configure your instance.
 - **4GB RAM** minimum (8GB recommended)
 - **20GB disk space** minimum
 - **Docker** & **Docker Compose** installed
-- **Domain name** with DNS access
+- **Domain name** with DNS access (for production)
 - **OpenAI API key** (required for AI features)
 
-## 🛠️ Manual Installation
+## 🎯 Installation Options
 
-If you prefer to install manually:
-
-1. **Clone the repository**:
-
-   ```bash
-   git clone https://github.com/synap-labs/synap-backend.git
-   cd synap-backend/deploy
-   ```
-
-2. **Copy environment template**:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-3. **Edit `.env` file**:
-   - Set your `DOMAIN`
-   - Set your `LETSENCRYPT_EMAIL`
-   - Add your `OPENAI_API_KEY`
-   - Generate secrets (or let the setup script do it)
-
-4. **Run setup script**:
-   ```bash
-   ./install.sh
-   ```
-
-## 🎯 What You Get
-
-- ✅ **Full Synap backend** with all features
-- ✅ **AI-powered intelligence** service
-- ✅ **Automatic SSL** certificates (Let's Encrypt)
-- ✅ **PostgreSQL database** for data storage
-- ✅ **MinIO object storage** for files
-- ✅ **Typesense search** engine
-- ✅ **Ory authentication** (Kratos + Hydra)
-- ✅ **Automatic backups** via CLI
-- ✅ **Easy updates** with one command
-
-## 📚 Documentation
-
-- [Installation Guide](./docs/installation.md)
-- [Configuration Options](./docs/configuration.md)
-- [Backup & Restore](./docs/backups.md)
-- [Troubleshooting](./docs/troubleshooting.md)
-- [DevOps Guide](./docs/DEVOPS.md) - **Complete deployment and operations guide**
-- [API Reference](https://docs.synap.live/api)
-
-### DevOps & Architecture
-
-- **[DevOps Guide](./docs/DEVOPS.md)** - Complete guide to deployment, updates, and operations
-- **[Complete DevOps Guide](../../DEVOPS_COMPLETE_GUIDE.md)** - System-wide DevOps documentation (all services)
-- **[GitHub Actions Audit](../../GITHUB_ACTIONS_AUDIT.md)** - CI/CD workflow optimization
-- **[DevOps Improvements](../../DEVOPS_IMPROVEMENTS.md)** - Migration fixes and improvements
-
-## 👀 Monitoring & Debugging
-
-For better observability of your self-hosted instance, we recommend the following tools:
-
-### Dozzle (Log Viewer)
-
-We include a pre-configured [Dozzle](https://dozzle.dev/) instance in our Docker Compose setup. It provides a real-time log viewer for all your containers.
-
-To enable it, run:
+### Production (Docker Images)
 
 ```bash
-docker compose --profile monitoring up -d
+# Clone repo and use pre-built images
+./synap install --clone --from-image latest --domain example.com --email me@example.com
 ```
 
-Access the dashboard at `http://your-server-ip:8888`.
+### Development (Build from Source)
 
-### Dockge (Management UI)
+```bash
+# Use existing repo and build locally
+./synap install --no-clone --from-source --domain localhost
+```
 
-For a complete management interface for your Docker Compose stacks, we highly recommend [Dockge](https://dockge.kuma.pet/). It's a lightweight, reactive alternative to Portainer that works perfectly with our `compose.yaml` file structure.
+### Automated (Non-Interactive)
 
-1. Install Dockge following their [official guide](https://github.com/louislam/dockge#install).
-2. Point it to your `synap-backend/deploy` directory.
-3. You'll get a full UI to manage, update, and monitor your Synap stack.
+```bash
+# All parameters provided, no prompts
+./synap install --clone --from-image latest --domain example.com --email me@example.com --non-interactive
+```
 
 ## 🔧 Management
 
-Use the `synap-cli` tool to manage your instance:
+Use the unified `synap` CLI to manage your instance:
 
 ```bash
 # Check system health
-./synap-cli health
+./synap health
 
-# View logs
-./synap-cli logs
+# View logs (all services or specific)
+./synap logs
+./synap logs backend
 
 # Restart services
-./synap-cli restart
+./synap restart
+./synap restart backend
+
+# Start/stop services
+./synap start
+./synap stop
 
 # Update to latest version
-./synap-cli update
+./synap update
+
+# Update to specific version
+./synap update v1.2.3
+
+# Build from source
+./synap update --build
 
 # Create backup
-./synap-cli backup
+./synap backup [name]
 
 # Restore from backup
-./synap-cli restore backups/backup-20260127.tar.gz
+./synap restore backups/backup-20260127.tar.gz
+
+# Manage configuration
+./synap config list
+./synap config get DOMAIN
+./synap config set DOMAIN new-domain.com
+./synap config edit
 ```
-
-## 🔐 Security
-
-- All secrets are auto-generated during installation
-- SSL certificates are automatically provisioned and renewed
-- Database and storage are isolated in Docker network
-- Security headers are enforced by Caddy reverse proxy
-
-**Important**: After installation, backup your `.secrets-backup.txt` file and delete it from the server!
 
 ## 🆙 Updating
 
-Update to the latest version with one command:
+### Standard Update (Pull Image)
 
 ```bash
-./synap-cli update
+./synap update
 ```
 
 This will:
 
-1. Create an automatic backup
-2. Pull latest Docker images
-3. Restart services
-4. Run database migrations
+1. Create automatic backup
+2. Pull latest Docker image from registry
+3. Run database migrations
+4. Restart services
 
-### Update Options
-
-**Standard update** (pulls image from registry):
+### Update to Specific Version
 
 ```bash
-./synap-cli update
+./synap update v1.2.3
 ```
 
-**Build from source** (if image not available):
+### Build from Source
 
 ```bash
-./synap-cli update --build
+./synap update --build
 ```
 
-**Local build** (bypass GitHub, includes uncommitted changes):
+Useful when:
 
-```bash
-./synap-cli update --local
-```
-
-**Update to specific version**:
-
-```bash
-./synap-cli update v1.2.3
-```
-
-See [Local Builds Guide](./docs/LOCAL_BUILDS.md) for building without GitHub Actions.
+- Image not available in registry
+- Testing local changes
+- Development workflow
 
 ## 💾 Backups
 
-### Automatic Backups
-
-Create a backup:
+### Create Backup
 
 ```bash
-./synap-cli backup
+./synap backup
 ```
 
 Backups are stored in `./backups/` and include:
 
 - PostgreSQL database dump
-- Environment configuration
+- Environment configuration (`.env`)
 
-### Restore
+### Restore from Backup
 
 ```bash
-./synap-cli restore backups/backup-20260127.tar.gz
+./synap restore backups/backup-20260127.tar.gz
 ```
 
 ### Scheduled Backups
@@ -223,8 +172,25 @@ Backups are stored in `./backups/` and include:
 Add to crontab for daily backups:
 
 ```bash
-0 2 * * * cd /opt/synap && ./synap-cli backup >> /var/log/synap-backup.log 2>&1
+0 2 * * * cd /opt/synap-backend && ./synap backup >> /var/log/synap-backup.log 2>&1
 ```
+
+## 📚 Documentation
+
+- **[Installation Guide](./docs/installation.md)** - Detailed installation steps
+- **[Configuration Options](./docs/configuration.md)** - All configuration variables
+- **[Backup & Restore](./docs/backups.md)** - Backup strategies
+- **[Troubleshooting](./docs/troubleshooting.md)** - Common issues and solutions
+- **[DevOps Guide](./docs/DEVOPS.md)** - Complete deployment and operations guide
+
+## 🔐 Security
+
+- **Auto-generated secrets**: All passwords and keys generated during installation
+- **Automatic SSL**: Let's Encrypt certificates auto-provisioned and renewed
+- **Isolated network**: Services communicate via internal Docker network
+- **Security headers**: Enforced by Caddy reverse proxy
+
+**Important**: After installation, backup your secrets and delete them from the server!
 
 ## 🌐 Connecting Your Frontend
 
@@ -238,45 +204,41 @@ NEXT_PUBLIC_REALTIME_URL=https://your-domain.com/realtime
 
 ## 🐛 Troubleshooting
 
-### Services won't start
+### Services Won't Start
 
 ```bash
-# Check logs
-./synap-cli logs
+# Check health
+./synap health
+
+# View logs
+./synap logs
 
 # Check Docker
 docker compose ps
 ```
 
-### SSL certificate issues
+### SSL Certificate Issues
 
 - Ensure DNS is properly configured (A record pointing to your server)
 - Wait 1-2 minutes for Let's Encrypt to provision certificate
-- Check Caddy logs: `./synap-cli logs caddy`
+- Check Caddy logs: `./synap logs caddy`
 
-### Database connection errors
+### Database Connection Errors
 
 - Check PostgreSQL is running: `docker compose ps postgres`
-- Verify password in `.env` matches what's in Docker
+- Verify password in `.env` matches
+- Restart backend: `./synap restart backend`
 
-### AI features not working
+### AI Features Not Working
 
 - Verify `OPENAI_API_KEY` is set in `.env`
-- Check intelligence service logs: `./synap-cli logs intelligence-service`
+- Check intelligence service logs: `./synap logs intelligence-service`
 
 ## 💬 Support
 
 - **Documentation**: [docs.synap.live](https://docs.synap.live)
 - **Discord Community**: [discord.gg/synap](https://discord.gg/synap)
 - **GitHub Issues**: [github.com/synap-labs/synap-backend/issues](https://github.com/synap-labs/synap-backend/issues)
-
-## 📄 License
-
-MIT License - see [LICENSE](../LICENSE) for details
-
-## 🙏 Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
 
 ---
 

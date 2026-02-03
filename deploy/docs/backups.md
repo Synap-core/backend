@@ -7,7 +7,7 @@ Complete guide to backing up and restoring your Synap instance.
 Create a backup with one command:
 
 ```bash
-./synap-cli backup
+./synap backup
 ```
 
 This creates a timestamped backup in `./backups/`:
@@ -28,7 +28,7 @@ crontab -e
 Add this line:
 
 ```
-0 2 * * * cd /opt/synap && ./synap-cli backup >> /var/log/synap-backup.log 2>&1
+0 2 * * * cd /opt/synap && ./synap backup >> /var/log/synap-backup.log 2>&1
 ```
 
 ### Weekly Backups
@@ -36,7 +36,7 @@ Add this line:
 For weekly backups on Sunday at 3 AM:
 
 ```
-0 3 * * 0 cd /opt/synap && ./synap-cli backup weekly-$(date +\%Y\%m\%d)
+0 3 * * 0 cd /opt/synap && ./synap backup weekly-$(date +\%Y\%m\%d)
 ```
 
 ### Backup Retention
@@ -75,7 +75,7 @@ For a complete backup including uploaded files:
 # full-backup.sh
 
 # Database and config
-./synap-cli backup full-$(date +%Y%m%d)
+./synap backup full-$(date +%Y%m%d)
 
 # MinIO files
 docker run --rm \
@@ -91,7 +91,7 @@ echo "Full backup complete"
 ### Basic Restore
 
 ```bash
-./synap-cli restore backups/backup-20260127.tar.gz
+./synap restore backups/backup-20260127.tar.gz
 ```
 
 **Warning**: This will overwrite current data!
@@ -126,7 +126,7 @@ docker compose up -d
 #!/bin/bash
 # backup-to-s3.sh
 
-BACKUP_FILE=$(./synap-cli backup | grep -o 'backup-.*\.tar\.gz')
+BACKUP_FILE=$(./synap backup | grep -o 'backup-.*\.tar\.gz')
 
 aws s3 cp "backups/$BACKUP_FILE" \
   s3://my-synap-backups/ \
@@ -139,7 +139,7 @@ aws s3 cp "backups/$BACKUP_FILE" \
 #!/bin/bash
 # backup-to-gcs.sh
 
-BACKUP_FILE=$(./synap-cli backup | grep -o 'backup-.*\.tar\.gz')
+BACKUP_FILE=$(./synap backup | grep -o 'backup-.*\.tar\.gz')
 
 gsutil cp "backups/$BACKUP_FILE" \
   gs://my-synap-backups/
@@ -151,7 +151,7 @@ gsutil cp "backups/$BACKUP_FILE" \
 #!/bin/bash
 # backup-to-remote.sh
 
-./synap-cli backup
+./synap backup
 
 rsync -avz --delete \
   backups/ \
@@ -174,7 +174,7 @@ If your server fails completely:
 4. **Download latest backup** from off-site storage
 5. **Restore**:
    ```bash
-   ./synap-cli restore /path/to/backup.tar.gz
+   ./synap restore /path/to/backup.tar.gz
    ```
 6. **Update DNS** to point to new server
 

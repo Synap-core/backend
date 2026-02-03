@@ -298,7 +298,7 @@ docker compose -f docker-compose.local.yml logs
 
 - **[Progressive Setup](./PROGRESSIVE_SETUP.md)** - Detailed progressive approach
 - **[Hybrid Development](./HYBRID_DEVELOPMENT.md)** - Remote services guide
-- **[Local Builds](../deploy/docs/LOCAL_BUILDS.md)** - Building on server
+- **[Build Options](../deploy/docs/BUILD_OPTIONS.md)** - Image vs source builds
 
 ---
 

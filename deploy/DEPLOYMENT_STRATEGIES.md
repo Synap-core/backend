@@ -25,7 +25,7 @@ docker compose pull backend
 docker compose up -d backend
 
 # Or use CLI
-./synap-cli update
+./synap update
 ```
 
 **Flow:**
@@ -74,7 +74,7 @@ docker compose build backend
 docker compose up -d backend
 
 # Or use CLI with --build flag
-./synap-cli update --build
+./synap update --build
 ```
 
 **Flow:**
@@ -125,17 +125,17 @@ backend:
 2. If pull fails → `docker compose build` → builds from source
 3. `docker compose up` → uses whichever is available
 
-### Using synap-cli
+### Using synap
 
 ```bash
 # Try to pull, fall back to build if needed (automatic)
-./synap-cli update
+./synap update
 
 # Force build from source (skip pull attempt)
-./synap-cli update --build
+./synap update --build
 
 # Update to specific version (pull image)
-./synap-cli update v1.2.3
+./synap update v1.2.3
 ```
 
 ## Comparison Table
@@ -162,7 +162,7 @@ GITHUB_REPOSITORY=synap-core/backend
 BACKEND_VERSION=v1.2.3  # Pin version, not "latest"
 
 # Update
-./synap-cli update
+./synap update
 ```
 
 **Why:**
@@ -181,7 +181,7 @@ git clone https://github.com/synap-core/backend.git
 cd backend/deploy
 
 # Build and run
-./synap-cli update --build
+./synap update --build
 ```
 
 **Why:**
@@ -196,7 +196,7 @@ cd backend/deploy
 
 ```bash
 # Installer handles this automatically
-curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/synap-core/backend/main/synap -o synap && chmod +x synap && ./synap install --clone --from-image latest
 ```
 
 **Why:**
@@ -222,7 +222,7 @@ curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/inst
 3. **Switch to image-based updates**
 
    ```bash
-   ./synap-cli update  # Now pulls images instead of building
+   ./synap update  # Now pulls images instead of building
    ```
 
 4. **Optional: Remove source code** (after confirming it works)
@@ -239,13 +239,13 @@ curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/deploy/inst
 **Option 1: Use fallback (automatic)**
 
 ```bash
-./synap-cli update  # Automatically falls back to build
+./synap update  # Automatically falls back to build
 ```
 
 **Option 2: Force build**
 
 ```bash
-./synap-cli update --build
+./synap update --build
 ```
 
 **Option 3: Check image exists**
