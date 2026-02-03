@@ -128,6 +128,155 @@ EOF
     chmod 600 .env
 }
 
+# Generate kratos.yml with actual domain values
+generate_kratos_config() {
+    local domain=$1
+    local kratos_dir="../kratos"
+    
+    if [ ! -d "$kratos_dir" ]; then
+        echo -e "${YELLOW}⚠️  Kratos directory not found, skipping config generation${NC}"
+        return
+    fi
+    
+    # Determine if domain is localhost (dev) or production
+    local is_localhost=false
+    if [ "$domain" = "localhost" ]; then
+        is_localhost=true
+    fi
+    
+    # Generate CORS origins
+    local cors_origins="        - http://localhost:3000
+        - http://localhost:5173
+        - http://localhost:3001"
+    
+    if [ "$is_localhost" = false ]; then
+        cors_origins="$cors_origins
+        - https://${domain}"
+    fi
+    
+    # Generate allowed return URLs
+    local return_urls="    - http://localhost:3000
+    - http://localhost:3000/*"
+    
+    if [ "$is_localhost" = false ]; then
+        return_urls="$return_urls
+    - https://${domain}
+    - https://${domain}/*"
+    fi
+    
+    # Cookie domain and secure settings
+    local cookie_domain="localhost"
+    local cookie_secure="false"
+    if [ "$is_localhost" = false ]; then
+        cookie_domain="$domain"
+        cookie_secure="true"
+    fi
+    
+    cat > "$kratos_dir/kratos.yml" << EOF
+version: v1.0.0
+# DSN should match docker-compose environment variable
+# Uses postgres service name, kratos database
+dsn: postgres://synap:\${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
+serve:
+  public:
+    base_url: http://localhost:4433
+    cors:
+      enabled: true
+      # CORS origins - automatically generated from domain
+      allowed_origins:
+$cors_origins
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed_headers:
+        - Authorization
+        - Cookie
+        - Content-Type
+        - X-Requested-With
+      exposed_headers:
+        - Content-Type
+        - Set-Cookie
+      allow_credentials: true
+  admin:
+    base_url: http://localhost:4434
+selfservice:
+  default_browser_return_url: http://localhost:3000
+  allowed_return_urls:
+$return_urls
+  methods:
+    password:
+      enabled: true
+      config: {}
+    oidc:
+      enabled: false
+  flows:
+    error:
+      ui_url: http://localhost:3000/error
+    settings:
+      ui_url: http://localhost:3000/settings
+      privileged_session_max_age: 15m
+    recovery:
+      enabled: true
+      ui_url: http://localhost:3000/recovery
+    verification:
+      enabled: false # Disabled: mailslurper service not running
+      ui_url: http://localhost:3000/verification
+    logout:
+      after:
+        default_browser_return_url: http://localhost:3000/auth
+    login:
+      ui_url: http://localhost:3000/auth
+      lifespan: 10m
+    registration:
+      lifespan: 10m
+      ui_url: http://localhost:3000/auth
+      after:
+        password:
+          hooks:
+            - hook: session
+            - hook: web_hook
+              config:
+                # Use Docker service name for internal communication
+                # backend:4000 is accessible from within the Docker network
+                url: http://backend:4000/webhooks/kratos
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7CiAgdHlwZTogImlkZW50aXR5LmNyZWF0ZWQiLAogIGlkZW50aXR5OiB7CiAgICBpZDogY3R4LmlkZW50aXR5LmlkLAogICAgdHJhaXRzOiBjdHguaWRlbnRpdHkudHJhaXRzCiAgfQp9
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: \${KRATOS_WEBHOOK_SECRET}
+                can_interrupt: false
+        oidc:
+          hooks:
+            - hook: session
+log:
+  level: info
+  format: json
+# secrets: provided via environment variables SECRETS_COOKIE and SECRETS_CIPHER in docker-compose.yml
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///etc/config/kratos/identity.schema.json
+session:
+  cookie:
+    # Cookie domain: automatically set based on domain
+    domain: ${cookie_domain}
+    same_site: Lax
+    # Note: secure flag is controlled by Kratos based on cookie domain
+    # For production domains, Kratos automatically sets secure=true
+courier:
+  smtp:
+    connection_uri: smtps://test:test@mailslurper:1025/?skip_ssl_verify=true
+    from_address: noreply@synap.io
+EOF
+    
+    echo -e "${GREEN}✓ Generated kratos.yml for domain: ${domain}${NC}"
+}
+
 # ============================================================================
 # INSTALL COMMAND
 # ============================================================================
@@ -294,6 +443,7 @@ EOF
     fi
     
     # Interactive prompts (if not automated)
+    # Note: We'll load .env defaults after entering deploy directory
     if [ "$INTERACTIVE" = true ]; then
         if [ -z "$DOMAIN" ]; then
             read -p "Enter domain (or 'localhost' for testing): " DOMAIN
@@ -368,13 +518,114 @@ EOF
     
     cd deploy
     
+    # Load existing .env values as defaults (if .env exists)
+    local DEFAULT_DOMAIN=""
+    local DEFAULT_EMAIL=""
+    local DEFAULT_OPENAI_KEY=""
+    local DEFAULT_ANTHROPIC_KEY=""
+    local DEFAULT_GOOGLE_KEY=""
+    local DEFAULT_ADMIN_EMAIL=""
+    
+    if [ -f .env ]; then
+        DEFAULT_DOMAIN=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_GOOGLE_KEY=$(grep "^GOOGLE_AI_API_KEY=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_ADMIN_EMAIL=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+        
+        # If interactive and we have defaults, re-prompt with defaults
+        if [ "$INTERACTIVE" = true ] && [ -n "$DEFAULT_DOMAIN" ]; then
+            echo -e "${BLUE}ℹ️  Found existing .env file, using as defaults${NC}"
+            echo ""
+            
+            # Re-prompt with defaults if values not provided
+            if [ -z "$DOMAIN" ]; then
+                local prompt="Enter domain (or 'localhost' for testing)"
+                if [ -n "$DEFAULT_DOMAIN" ]; then
+                    prompt="$prompt [${DEFAULT_DOMAIN}]: "
+                else
+                    prompt="$prompt: "
+                fi
+                read -p "$prompt" DOMAIN
+                DOMAIN=${DOMAIN:-${DEFAULT_DOMAIN:-localhost}}
+            fi
+            
+            if [ "$DOMAIN" != "localhost" ] && [ -z "$EMAIL" ]; then
+                local prompt="Enter email for SSL certificates"
+                if [ -n "$DEFAULT_EMAIL" ]; then
+                    prompt="$prompt [${DEFAULT_EMAIL}]: "
+                else
+                    prompt="$prompt: "
+                fi
+                read -p "$prompt" EMAIL
+                EMAIL=${EMAIL:-$DEFAULT_EMAIL}
+            fi
+            
+            # Ask for OpenAI API key with default
+            if [ -z "$OPENAI_API_KEY" ]; then
+                echo ""
+                echo -e "${BLUE}🤖 AI Configuration${NC}"
+                echo "OpenAI API key is required for AI features."
+                local prompt="Enter OpenAI API key"
+                if [ -n "$DEFAULT_OPENAI_KEY" ]; then
+                    prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...]: "
+                else
+                    prompt="$prompt (or press Enter to skip): "
+                fi
+                read -p "$prompt" OPENAI_API_KEY
+                OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
+                if [ -z "$OPENAI_API_KEY" ]; then
+                    echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
+                fi
+            fi
+            
+            # Ask for optional AI providers with defaults
+            if [ -z "$ANTHROPIC_API_KEY" ]; then
+                local prompt="Enter Anthropic API key"
+                if [ -n "$DEFAULT_ANTHROPIC_KEY" ]; then
+                    prompt="$prompt [${DEFAULT_ANTHROPIC_KEY:0:10}...] (optional, press Enter to skip): "
+                else
+                    prompt="$prompt (optional, press Enter to skip): "
+                fi
+                read -p "$prompt" ANTHROPIC_API_KEY
+                ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$DEFAULT_ANTHROPIC_KEY}
+            fi
+            
+            if [ -z "$GOOGLE_AI_API_KEY" ]; then
+                local prompt="Enter Google AI API key"
+                if [ -n "$DEFAULT_GOOGLE_KEY" ]; then
+                    prompt="$prompt [${DEFAULT_GOOGLE_KEY:0:10}...] (optional, press Enter to skip): "
+                else
+                    prompt="$prompt (optional, press Enter to skip): "
+                fi
+                read -p "$prompt" GOOGLE_AI_API_KEY
+                GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-$DEFAULT_GOOGLE_KEY}
+            fi
+            
+            # Ask for admin email with default
+            if [ -z "$ADMIN_EMAIL" ]; then
+                echo ""
+                echo -e "${BLUE}👤 Admin Configuration${NC}"
+                local prompt="Enter admin email (for first admin user, optional)"
+                if [ -n "$DEFAULT_ADMIN_EMAIL" ]; then
+                    prompt="$prompt [${DEFAULT_ADMIN_EMAIL}]: "
+                else
+                    prompt="$prompt: "
+                fi
+                read -p "$prompt" ADMIN_EMAIL
+                ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
+            fi
+        fi
+    fi
+    
     # Handle .env file (preserve existing or create new)
     if [ -f .env ]; then
         echo -e "${YELLOW}⚠️  .env file already exists${NC}"
         if [ "$INTERACTIVE" = true ]; then
             read -p "Overwrite .env? (y/N): " OVERWRITE
             if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
-                echo -e "${BLUE}ℹ️  Using existing .env file${NC}"
+                echo -e "${BLUE}ℹ️  Using existing .env file, updating values...${NC}"
                 # Just update domain/email/keys if needed
                 update_env_value "DOMAIN" "$DOMAIN"
                 update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
@@ -416,6 +667,10 @@ EOF
         echo -e "${BLUE}📝 Creating configuration...${NC}"
         generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL"
     fi
+    
+    # Generate kratos.yml with actual domain values
+    echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
+    generate_kratos_config "$DOMAIN"
     
     # Start services
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
@@ -1007,6 +1262,310 @@ cmd_config() {
     esac
 }
 
+cmd_rebuild() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    local no_cache=false
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --no-cache)
+                no_cache=true
+                shift
+                ;;
+            *)
+                if [ -z "$service" ]; then
+                    service="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # If no service specified, show interactive menu
+    if [ -z "$service" ]; then
+        local services=($(docker compose ps --services 2>/dev/null))
+        if [ ${#services[@]} -eq 0 ]; then
+            echo -e "${RED}❌ No services found${NC}"
+            exit 1
+        fi
+        
+        echo -e "${BLUE}🔨 Rebuild Service${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            echo -e "  ${GREEN}[$i]${NC} $svc"
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    local build_cmd="docker compose build"
+    if [ "$no_cache" = true ]; then
+        build_cmd="$build_cmd --no-cache"
+    fi
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🔨 Rebuilding all services...${NC}"
+        eval "$build_cmd"
+        echo -e "${BLUE}🔄 Restarting services...${NC}"
+        docker compose up -d
+    else
+        echo -e "${BLUE}🔨 Rebuilding $service...${NC}"
+        eval "$build_cmd $service"
+        echo -e "${BLUE}🔄 Restarting $service...${NC}"
+        docker compose up -d "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Rebuild complete!${NC}"
+}
+
+cmd_errors() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    local tail_lines=${2:-100}
+    
+    echo -e "${BLUE}🔍 Searching for errors in logs...${NC}"
+    echo ""
+    
+    if [ -z "$service" ]; then
+        # Search all services
+        local services=($(docker compose ps --services 2>/dev/null))
+        for svc in "${services[@]}"; do
+            local status=$(docker compose ps "$svc" --format json 2>/dev/null | grep -o '"State":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+            if [ "$status" = "running" ]; then
+                echo -e "${YELLOW}━━━ $svc ━━━${NC}"
+                docker compose logs --tail="$tail_lines" "$svc" 2>&1 | grep -i "error\|fatal\|panic\|exception\|failed" | head -20 || echo "  No errors found"
+                echo ""
+            fi
+        done
+    else
+        echo -e "${YELLOW}━━━ $service ━━━${NC}"
+        docker compose logs --tail="$tail_lines" "$service" 2>&1 | grep -i "error\|fatal\|panic\|exception\|failed" | head -50 || echo "  No errors found"
+    fi
+}
+
+cmd_diagnose() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    echo -e "${BLUE}🔍 Synap Diagnostics${NC}"
+    echo ""
+    
+    # Check Docker
+    echo -e "${BLUE}1. Docker Status${NC}"
+    if command -v docker &> /dev/null; then
+        echo -e "${GREEN}✓ Docker installed${NC}"
+        docker --version
+    else
+        echo -e "${RED}❌ Docker not found${NC}"
+    fi
+    echo ""
+    
+    # Check services
+    echo -e "${BLUE}2. Services Status${NC}"
+    docker compose ps
+    echo ""
+    
+    # Check for errors
+    echo -e "${BLUE}3. Recent Errors${NC}"
+    cmd_errors "" 50
+    echo ""
+    
+    # Check disk space
+    echo -e "${BLUE}4. Disk Space${NC}"
+    df -h . | tail -1
+    echo ""
+    
+    # Check Docker resources
+    echo -e "${BLUE}5. Docker Resources${NC}"
+    docker system df
+    echo ""
+    
+    # Check health endpoints
+    echo -e "${BLUE}6. Health Checks${NC}"
+    if docker compose ps backend | grep -q "Up"; then
+        if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ Backend health endpoint responding${NC}"
+        else
+            echo -e "${RED}❌ Backend health endpoint not responding${NC}"
+        fi
+    fi
+    echo ""
+}
+
+cmd_clean() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local what=${1:-}
+    
+    if [ -z "$what" ]; then
+        echo -e "${BLUE}🧹 Clean Docker Resources${NC}"
+        echo ""
+        echo "  ${GREEN}[1]${NC} Remove stopped containers"
+        echo "  ${GREEN}[2]${NC} Remove unused images"
+        echo "  ${GREEN}[3]${NC} Remove unused volumes"
+        echo "  ${GREEN}[4]${NC} Remove unused networks"
+        echo "  ${GREEN}[5]${NC} Prune everything (containers, images, volumes, networks)"
+        echo "  ${GREEN}[6]${NC} Remove build cache"
+        echo "  ${GREEN}[q]${NC} Quit"
+        echo ""
+        read -p "Select option (number/q): " choice
+        
+        case "$choice" in
+            1)
+                docker container prune -f
+                ;;
+            2)
+                docker image prune -f
+                ;;
+            3)
+                docker volume prune -f
+                ;;
+            4)
+                docker network prune -f
+                ;;
+            5)
+                echo -e "${YELLOW}⚠️  This will remove all unused Docker resources${NC}"
+                read -p "Continue? (y/N): " CONFIRM
+                if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+                    docker system prune -a -f --volumes
+                fi
+                ;;
+            6)
+                docker builder prune -f
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    else
+        case "$what" in
+            containers)
+                docker container prune -f
+                ;;
+            images)
+                docker image prune -f
+                ;;
+            volumes)
+                docker volume prune -f
+                ;;
+            networks)
+                docker network prune -f
+                ;;
+            all)
+                echo -e "${YELLOW}⚠️  This will remove all unused Docker resources${NC}"
+                read -p "Continue? (y/N): " CONFIRM
+                if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+                    docker system prune -a -f --volumes
+                fi
+                ;;
+            cache)
+                docker builder prune -f
+                ;;
+            *)
+                echo "Usage: synap clean [containers|images|volumes|networks|all|cache]"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    echo -e "${GREEN}✅ Cleanup complete!${NC}"
+}
+
+cmd_shell() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-backend}
+    local shell=${2:-sh}
+    
+    echo -e "${BLUE}🐚 Opening shell in $service (using $shell)...${NC}"
+    docker compose exec "$service" "$shell"
+}
+
+cmd_exec() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=$1
+    shift
+    
+    if [ -z "$service" ] || [ $# -eq 0 ]; then
+        echo "Usage: synap exec <service> <command> [args...]"
+        echo "Example: synap exec backend node --version"
+        exit 1
+    fi
+    
+    docker compose exec "$service" "$@"
+}
+
 cmd_help() {
     cat << EOF
 ${BLUE}Synap - Unified CLI${NC}
@@ -1018,13 +1577,19 @@ ${YELLOW}Management:${NC}
   synap health                   Check system health
   synap ps                       List all services and their status
   synap logs [service] [options] View logs (interactive if no service)
+  synap errors [service] [lines] Search for errors in logs
+  synap diagnose                 Run comprehensive diagnostics
   synap update [options]         Update to latest or specific version
   synap restart [service]        Restart services (interactive if no service)
+  synap rebuild [service]        Rebuild services (interactive if no service)
   synap start [service]          Start services (all or specific)
   synap stop [service]           Stop services (interactive if no service)
   synap backup [name]            Create backup
   synap restore <file>            Restore from backup
   synap config [action]          Manage configuration
+  synap clean [type]             Clean Docker resources (interactive if no type)
+  synap shell [service] [shell]   Open shell in container (default: backend, sh)
+  synap exec <service> <cmd>     Execute command in container
 
 ${YELLOW}Examples:${NC}
   # Install (auto-detects: clone if not in repo, use image by default)
@@ -1048,8 +1613,17 @@ ${YELLOW}Examples:${NC}
   synap logs backend            # View backend logs
   synap logs backend --tail 100 # Last 100 lines
   synap logs backend --filter error # Filter by "error"
+  synap errors                  # Find errors in all services
+  synap errors backend 200      # Find errors in backend (last 200 lines)
+  synap diagnose                # Run full diagnostics
   synap restart                 # Interactive service selection
   synap restart backend         # Restart backend
+  synap rebuild backend         # Rebuild and restart backend
+  synap rebuild --no-cache     # Rebuild without cache
+  synap clean                   # Interactive cleanup
+  synap clean all               # Clean all unused resources
+  synap shell backend           # Open shell in backend
+  synap exec backend node --version # Execute command in backend
   synap config list
 
 ${YELLOW}For detailed help:${NC}
@@ -1100,6 +1674,29 @@ case "${1:-help}" in
     config)
         shift
         cmd_config "$@"
+        ;;
+    rebuild)
+        shift
+        cmd_rebuild "$@"
+        ;;
+    errors|error)
+        shift
+        cmd_errors "$@"
+        ;;
+    diagnose|diag)
+        cmd_diagnose
+        ;;
+    clean)
+        shift
+        cmd_clean "$@"
+        ;;
+    shell)
+        shift
+        cmd_shell "$@"
+        ;;
+    exec)
+        shift
+        cmd_exec "$@"
         ;;
     help|--help|-h)
         cmd_help

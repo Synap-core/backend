@@ -13,7 +13,6 @@ serve:
         - http://localhost:3000
         - http://localhost:5173
         - http://localhost:3001
-        - https://${DOMAIN}
       allowed_methods:
         - POST
         - GET
@@ -29,7 +28,7 @@ serve:
       exposed_headers:
         - Content-Type
         - Set-Cookie
-      credentials: true
+      allow_credentials: true
   admin:
     base_url: http://localhost:4434
 selfservice:
@@ -37,7 +36,6 @@ selfservice:
   allowed_return_urls:
     - http://localhost:3000
     - http://localhost:3000/*
-    - https://${DOMAIN}/*
   methods:
     password:
       enabled: true
@@ -58,13 +56,13 @@ selfservice:
       ui_url: http://localhost:3000/verification
     logout:
       after:
-        default_browser_return_url: http://localhost:3000/login
+        default_browser_return_url: http://localhost:3000/auth
     login:
-      ui_url: http://localhost:3000/login
+      ui_url: http://localhost:3000/auth
       lifespan: 10m
     registration:
       lifespan: 10m
-      ui_url: http://localhost:3000/registration
+      ui_url: http://localhost:3000/auth
       after:
         password:
           hooks:
@@ -94,11 +92,10 @@ identity:
       url: file:///etc/config/kratos/identity.schema.json
 session:
   cookie:
-    # Cookie domain: empty for localhost, or set to your domain for production
-    # Edit this file if you need to change cookie settings
+    # Cookie domain: automatically set by CLI during installation
+    # For production domains, edit this file or regenerate with: synap install
     domain: localhost
     same_site: Lax
-    secure: false
 courier:
   smtp:
     connection_uri: smtps://test:test@mailslurper:1025/?skip_ssl_verify=true
