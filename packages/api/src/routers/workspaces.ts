@@ -115,6 +115,25 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
+      // Ensure default whiteboard exists (for existing workspaces created before this feature)
+      // This is a one-time operation per workspace
+      const { ensureDefaultWhiteboard } =
+        await import("../utils/create-default-whiteboard.js");
+      const whiteboardResult = await ensureDefaultWhiteboard(
+        input.id,
+        ctx.userId
+      );
+
+      // If whiteboard was just created, refetch workspace to get updated settings
+      if (whiteboardResult.status === "created") {
+        const updatedWorkspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, input.id),
+        });
+        if (updatedWorkspace) {
+          return { ...updatedWorkspace, role: membership.role };
+        }
+      }
+
       return { ...workspace, role: membership.role };
     }),
 

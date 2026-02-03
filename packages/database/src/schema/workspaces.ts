@@ -17,6 +17,9 @@ export interface WorkspaceSettings {
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
 
+  // Main whiteboard reference
+  mainWhiteboardId?: string; // UUID of the main whiteboard view for this workspace
+
   // Intelligence service configuration
   intelligenceServiceId?: string; // Default for workspace
   intelligenceServiceOverrides?: {

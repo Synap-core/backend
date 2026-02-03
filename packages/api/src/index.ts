@@ -38,6 +38,9 @@ export {
   createDefaultWorkspace,
 } from "./utils/kratos-sync.js";
 
+// Export utilities for default whiteboard creation
+export { ensureDefaultWhiteboard } from "./utils/create-default-whiteboard.js";
+
 // Export event handlers
 export { startEventProcessor, processEvents } from "./event-handlers/index.js";
 

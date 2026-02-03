@@ -96,6 +96,7 @@ import {
   threadContextExecutor,
   skillsExecutor,
   backgroundTasksExecutor,
+  createDefaultWhiteboard,
 } from "./executors/index.js";
 
 /**
@@ -139,4 +140,5 @@ export const functions = [
   threadContextExecutor,
   skillsExecutor,
   backgroundTasksExecutor,
+  createDefaultWhiteboard,
 ];
