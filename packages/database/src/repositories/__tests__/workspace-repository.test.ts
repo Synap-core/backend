@@ -53,7 +53,6 @@ describe("WorkspaceRepository", () => {
       const ws = await workspaceRepo.create(
         {
           name: "Test WS",
-          slug: "test-ws",
           ownerId: "user-1",
         },
         "user-1"

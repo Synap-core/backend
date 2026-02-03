@@ -23,19 +23,48 @@ export const createDefaultWhiteboard = inngest.createFunction(
     const workspaceId = event.data.id;
     const userId = event.user.id;
 
+    console.log(
+      `[defaultWhiteboardExecutor] Processing workspace.create.completed for workspace ${workspaceId}, user ${userId}`
+    );
+
     return await step.run("create-default-whiteboard", async () => {
-      const result = await ensureDefaultWhiteboard(workspaceId, userId);
+      try {
+        const result = await ensureDefaultWhiteboard(workspaceId, userId);
 
-      if (result.status === "error") {
-        throw new Error(result.message);
+        console.log(
+          `[defaultWhiteboardExecutor] ensureDefaultWhiteboard result:`,
+          result.status,
+          result.message,
+          result.whiteboardId
+        );
+
+        if (result.status === "error") {
+          console.error(
+            `[defaultWhiteboardExecutor] Failed to create default whiteboard:`,
+            result.message,
+            result.error
+          );
+          throw new Error(result.message);
+        }
+
+        return {
+          status: result.status === "created" ? "completed" : "skipped",
+          message: result.message,
+          whiteboardId: result.whiteboardId,
+          documentId: result.documentId,
+        };
+      } catch (error: any) {
+        console.error(
+          `[defaultWhiteboardExecutor] Exception during whiteboard creation:`,
+          {
+            workspaceId,
+            userId,
+            error: error.message,
+            stack: error.stack,
+          }
+        );
+        throw error;
       }
-
-      return {
-        status: result.status === "created" ? "completed" : "skipped",
-        message: result.message,
-        whiteboardId: result.whiteboardId,
-        documentId: result.documentId,
-      };
     });
   }
 );

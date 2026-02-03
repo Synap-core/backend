@@ -21,25 +21,40 @@ export const workspacesHandler = async ({
 
   if (action === "create") {
     workspace = await step.run("create-workspace", async () => {
-      return await workspaceRepo.create(
+      console.log(
+        `[workspacesExecutor] Creating workspace:`,
+        data.id,
+        data.name,
+        userId
+      );
+      const created = await workspaceRepo.create(
         {
           id: data.id,
           name: data.name,
-          slug: data.slug,
           ownerId: data.ownerId || userId,
           settings: data.settings,
         },
         userId
       );
+      console.log(
+        `[workspacesExecutor] Workspace created successfully:`,
+        created.id
+      );
+      return created;
     });
 
     // Emit completed event to Inngest so other functions (like whiteboard creation) can react
     await step.run("emit-completed-event", async () => {
+      console.log(
+        `[workspacesExecutor] Emitting workspaces.create.completed for workspace:`,
+        workspace?.id
+      );
       await inngest.send({
         name: "workspaces.create.completed",
         data: workspace,
         user: { id: userId },
       });
+      console.log(`[workspacesExecutor] Completed event emitted successfully`);
     });
   } else if (action === "update") {
     workspace = await step.run("update-workspace", async () => {
@@ -47,7 +62,6 @@ export const workspacesHandler = async ({
         data.id,
         {
           name: data.name,
-          slug: data.slug,
           settings: data.settings,
         },
         userId
