@@ -139,10 +139,12 @@ export const entitiesHandler = async ({
             // Delete storage file
             const { storage } = await import("@synap/storage");
             try {
-              await storage.delete(document.storageKey);
+              if (document.storageKey) {
+                await storage.delete(document.storageKey);
+              }
             } catch (error) {
               console.warn(
-                `Failed to delete storage file ${document.storageKey}:`,
+                `Failed to delete storage file ${document.storageKey || "unknown"}:`,
                 error
               );
             }
