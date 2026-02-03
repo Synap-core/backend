@@ -116,6 +116,8 @@ export const infiniteChatRouter = router({
           projectIds: input.projectId ? [input.projectId] : [],
           threadType: "main",
           status: "active",
+          agentId: input.agentId || "orchestrator", // Explicitly provide agentId (required, has default in schema)
+          agentType: input.agentType || "default", // Explicitly provide agentType (required, has default in schema)
         })
         .returning();
 

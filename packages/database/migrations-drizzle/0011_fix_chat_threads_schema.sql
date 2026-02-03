@@ -59,6 +59,12 @@ BEGIN
         ALTER TABLE "chat_threads" ADD COLUMN "agent_id" text DEFAULT 'orchestrator' NOT NULL;
     END IF;
 
+    -- Ensure agent_type exists and has default (from original migration, but ensure it's set)
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'chat_threads' AND column_name = 'agent_type') THEN
+        ALTER TABLE "chat_threads" ADD COLUMN "agent_type" text DEFAULT 'default' NOT NULL;
+    END IF;
+
     -- Add context_summary (nullable, text)
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                    WHERE table_name = 'chat_threads' AND column_name = 'context_summary') THEN
