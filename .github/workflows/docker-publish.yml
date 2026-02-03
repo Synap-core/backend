@@ -33,6 +33,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # Required for OIDC authentication with GHCR
 
     steps:
       - name: Checkout repository
@@ -47,6 +48,11 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          # Note: If you get "permission_denied: write_package", check:
+          # 1. Organization settings: https://github.com/organizations/synap-core/settings/packages
+          # 2. Repository Actions settings: https://github.com/synap-core/backend/settings/actions
+          # 3. Package might need to be created first: https://github.com/orgs/synap-core/packages
+          # See: .github/workflows/FIX_GHCR_PERMISSIONS.md
 
       - name: Convert repository name to lowercase
         id: repo
@@ -93,6 +99,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # Required for OIDC authentication with GHCR
 
     steps:
       - name: Checkout intelligence service
@@ -110,6 +117,11 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+          # Note: If you get "permission_denied: write_package", check:
+          # 1. Organization settings: https://github.com/organizations/synap-core/settings/packages
+          # 2. Repository Actions settings: https://github.com/synap-core/backend/settings/actions
+          # 3. Package might need to be created first: https://github.com/orgs/synap-core/packages
+          # See: .github/workflows/FIX_GHCR_PERMISSIONS.md
 
       - name: Convert intelligence repo name to lowercase
         id: intel-repo
