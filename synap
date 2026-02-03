@@ -129,6 +129,8 @@ EOF
 }
 
 # Generate kratos.yml with actual domain values
+# IMPORTANT: This function ALWAYS overwrites kratos.yml - never use a static file
+# The file is generated fresh on every install/update to ensure webhook secret and domain are correct
 generate_kratos_config() {
     local domain=$1
     local kratos_dir="../kratos"
@@ -140,19 +142,47 @@ generate_kratos_config() {
     fi
     
     # Read webhook secret from .env file (if it exists)
-    # Note: This function is called from deploy/ directory, so .env is in current directory
+    # This function is called from deploy/ directory, so .env is in current directory
     local webhook_secret=""
-    if [ -f "deploy/.env" ]; then
-        # Called from repo root
-        webhook_secret=$(grep "^KRATOS_WEBHOOK_SECRET=" "deploy/.env" 2>/dev/null | cut -d'=' -f2- || echo "")
-    elif [ -f ".env" ]; then
+    local env_file=""
+    
+    # Find .env file - check current directory first (deploy/), then parent (repo root)
+    if [ -f ".env" ] && [ -r ".env" ]; then
         # Called from deploy/ directory
-        webhook_secret=$(grep "^KRATOS_WEBHOOK_SECRET=" ".env" 2>/dev/null | cut -d'=' -f2- || echo "")
+        env_file=".env"
+    elif [ -f "../deploy/.env" ] && [ -r "../deploy/.env" ]; then
+        # Called from repo root
+        env_file="../deploy/.env"
+    elif [ -f "deploy/.env" ] && [ -r "deploy/.env" ]; then
+        # Alternative path
+        env_file="deploy/.env"
     fi
     
-    if [ -z "$webhook_secret" ]; then
-        echo -e "${YELLOW}⚠️  KRATOS_WEBHOOK_SECRET not found in .env, webhook may not work${NC}"
-        webhook_secret="CHANGE_ME"
+    if [ -n "$env_file" ]; then
+        # Use cat and grep to avoid permission issues with direct grep
+        webhook_secret=$(cat "$env_file" 2>/dev/null | grep "^KRATOS_WEBHOOK_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
+    fi
+    
+    if [ -z "$webhook_secret" ] || [ "$webhook_secret" = "" ]; then
+        echo -e "${YELLOW}⚠️  KRATOS_WEBHOOK_SECRET not found in .env, generating new secret...${NC}"
+        # Generate a random secret if not found
+        webhook_secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\n' || echo "CHANGE_ME")
+        echo -e "${BLUE}ℹ️  Generated webhook secret: ${webhook_secret:0:10}...${NC}"
+        # Try to write it back to .env if we found the file
+        if [ -n "$env_file" ] && [ -w "$env_file" ]; then
+            if grep -q "^KRATOS_WEBHOOK_SECRET=" "$env_file" 2>/dev/null; then
+                # Update existing
+                sed -i.bak "s|^KRATOS_WEBHOOK_SECRET=.*|KRATOS_WEBHOOK_SECRET=${webhook_secret}|" "$env_file" 2>/dev/null && rm -f "${env_file}.bak" || true
+            else
+                # Add new
+                echo "KRATOS_WEBHOOK_SECRET=${webhook_secret}" >> "$env_file" 2>/dev/null || true
+            fi
+        fi
+    fi
+    
+    # Backup existing kratos.yml if it exists (for recovery)
+    if [ -f "$kratos_dir/kratos.yml" ]; then
+        cp "$kratos_dir/kratos.yml" "$kratos_dir/kratos.yml.backup" 2>/dev/null || true
     fi
     
     # Determine if domain is localhost (dev) or production
@@ -965,7 +995,16 @@ cmd_update() {
         else
             echo "BACKEND_VERSION=${version}" >> .env
         fi
+        
+        # Read DOMAIN from .env for kratos config regeneration
+        local domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "localhost")
+    else
+        local domain="localhost"
     fi
+    
+    # Regenerate kratos.yml (ensures it exists and has correct webhook secret)
+    echo -e "${BLUE}📝 Regenerating Kratos configuration...${NC}"
+    generate_kratos_config "$domain"
     
     # Run migrations (critical - must succeed)
     echo -e "${BLUE}🔄 Running migrations...${NC}"
