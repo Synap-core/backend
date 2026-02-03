@@ -87,11 +87,16 @@ export async function ensureDefaultWhiteboard(
           userId,
           workspaceId,
           title: "Main Whiteboard",
-          type: "whiteboard",
+          // Note: 'type' column doesn't exist in database schema yet
+          // Store document type in metadata instead
           storageUrl,
           storageKey,
           size: 0,
           currentVersion: 1,
+          metadata: {
+            type: "whiteboard", // Store type in metadata until migration adds column
+            isMainWhiteboard: true,
+          },
         } as any)
         .returning();
 
