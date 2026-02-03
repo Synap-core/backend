@@ -36,6 +36,12 @@ export const views = pgTable("views", {
   name: text("name").notNull(),
   description: text("description"),
 
+  // Configuration (structured columns for better querying and indexing)
+  filter: jsonb("filter").default("{}"), // Dynamic filters
+  sort: jsonb("sort").default("{}"), // Sort configuration
+  columns: jsonb("columns").default("[]"), // Column definitions
+  layoutConfig: jsonb("layout_config").default("{}"), // Layout-specific configuration
+
   // Content reference (stores actual view data as JSON)
   documentId: uuid("document_id").references(() => documents.id, {
     onDelete: "set null",
