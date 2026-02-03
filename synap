@@ -42,6 +42,23 @@ get_deploy_dir() {
 }
 
 # ============================================================================
+# HELPER: Update env value
+# ============================================================================
+
+update_env_value() {
+    local key=$1
+    local value=$2
+    if [ -z "$value" ]; then
+        return 0  # Skip if value is empty
+    fi
+    if grep -q "^${key}=" .env; then
+        sed -i.bak "s|^${key}=.*|${key}=${value}|" .env
+    else
+        echo "${key}=${value}" >> .env
+    fi
+}
+
+# ============================================================================
 # HELPER: Generate secrets and create .env
 # ============================================================================
 
@@ -49,6 +66,10 @@ generate_and_create_env() {
     local domain=$1
     local email=$2
     local from_source=$3
+    local openai_key=$4
+    local anthropic_key=$5
+    local google_key=$6
+    local admin_email=$7
     
     # Generate secrets
     echo -e "${BLUE}🔐 Generating secrets...${NC}"
@@ -81,6 +102,15 @@ COMPOSE_PROJECT_NAME=synap-backend
 DOMAIN=${domain}
 LETSENCRYPT_EMAIL=${email:-noreply@localhost}
 
+# AI Provider API Keys
+OPENAI_API_KEY=${openai_key}
+ANTHROPIC_API_KEY=${anthropic_key}
+GOOGLE_AI_API_KEY=${google_key}
+
+# Admin Configuration
+ADMIN_EMAIL=${admin_email}
+
+# Auto-generated Secrets
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 JWT_SECRET=${JWT_SECRET}
 KRATOS_SECRETS_COOKIE=${KRATOS_COOKIE}
@@ -108,6 +138,10 @@ cmd_install() {
     local INSTALL_DIR=""
     local DOMAIN=""
     local EMAIL=""
+    local OPENAI_API_KEY=""
+    local ANTHROPIC_API_KEY=""
+    local GOOGLE_AI_API_KEY=""
+    local ADMIN_EMAIL=""
     local REPO_URL="https://github.com/synap-core/backend.git"
     local INTERACTIVE=true
     
@@ -138,6 +172,22 @@ cmd_install() {
                 ;;
             --email)
                 EMAIL="$2"
+                shift 2
+                ;;
+            --openai-key)
+                OPENAI_API_KEY="$2"
+                shift 2
+                ;;
+            --anthropic-key)
+                ANTHROPIC_API_KEY="$2"
+                shift 2
+                ;;
+            --google-key)
+                GOOGLE_AI_API_KEY="$2"
+                shift 2
+                ;;
+            --admin-email)
+                ADMIN_EMAIL="$2"
                 shift 2
                 ;;
             --repo-url)
@@ -253,6 +303,24 @@ EOF
         if [ "$DOMAIN" != "localhost" ] && [ -z "$EMAIL" ]; then
             read -p "Enter email for SSL certificates: " EMAIL
         fi
+        
+        # Ask for OpenAI API key (required for AI features)
+        echo ""
+        echo -e "${BLUE}🤖 AI Configuration${NC}"
+        echo "OpenAI API key is required for AI features."
+        read -p "Enter OpenAI API key (or press Enter to skip): " OPENAI_API_KEY
+        if [ -z "$OPENAI_API_KEY" ]; then
+            echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
+        fi
+        
+        # Ask for optional AI providers
+        read -p "Enter Anthropic API key (optional, press Enter to skip): " ANTHROPIC_API_KEY
+        read -p "Enter Google AI API key (optional, press Enter to skip): " GOOGLE_AI_API_KEY
+        
+        # Ask for admin email (for self-hosted instances)
+        echo ""
+        echo -e "${BLUE}👤 Admin Configuration${NC}"
+        read -p "Enter admin email (for first admin user, optional): " ADMIN_EMAIL
     fi
     
     # Validate required parameters
@@ -307,70 +375,46 @@ EOF
             read -p "Overwrite .env? (y/N): " OVERWRITE
             if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
                 echo -e "${BLUE}ℹ️  Using existing .env file${NC}"
-                # Just update domain/email if needed
-                if [ -n "$DOMAIN" ]; then
-                    if grep -q "^DOMAIN=" .env; then
-                        sed -i.bak "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
-                    else
-                        echo "DOMAIN=${DOMAIN}" >> .env
-                    fi
-                fi
-                if [ -n "$EMAIL" ]; then
-                    if grep -q "^LETSENCRYPT_EMAIL=" .env; then
-                        sed -i.bak "s|^LETSENCRYPT_EMAIL=.*|LETSENCRYPT_EMAIL=${EMAIL}|" .env
-                    else
-                        echo "LETSENCRYPT_EMAIL=${EMAIL}" >> .env
-                    fi
-                fi
+                # Just update domain/email/keys if needed
+                update_env_value "DOMAIN" "$DOMAIN"
+                update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
+                update_env_value "OPENAI_API_KEY" "$OPENAI_API_KEY"
+                update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
+                update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
+                update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
                 # Update backend version based on method
                 local backend_version="latest"
                 if [ "$FROM_SOURCE" = true ]; then
                     backend_version="local"
                 fi
-                if grep -q "^BACKEND_VERSION=" .env; then
-                    sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${backend_version}|" .env
-                else
-                    echo "BACKEND_VERSION=${backend_version}" >> .env
-                fi
+                update_env_value "BACKEND_VERSION" "$backend_version"
                 rm -f .env.bak
             else
                 # Overwrite .env
                 echo -e "${BLUE}📝 Creating new configuration...${NC}"
-                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE"
+                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL"
             fi
         else
             # Non-interactive: preserve existing
             echo -e "${BLUE}ℹ️  Preserving existing .env file${NC}"
-            # Just update domain/email/version if provided
-            if [ -n "$DOMAIN" ]; then
-                if grep -q "^DOMAIN=" .env; then
-                    sed -i.bak "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
-                else
-                    echo "DOMAIN=${DOMAIN}" >> .env
-                fi
-            fi
-            if [ -n "$EMAIL" ]; then
-                if grep -q "^LETSENCRYPT_EMAIL=" .env; then
-                    sed -i.bak "s|^LETSENCRYPT_EMAIL=.*|LETSENCRYPT_EMAIL=${EMAIL}|" .env
-                else
-                    echo "LETSENCRYPT_EMAIL=${EMAIL}" >> .env
-                fi
-            fi
+            # Just update values if provided
+            update_env_value "DOMAIN" "$DOMAIN"
+            update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
+            update_env_value "OPENAI_API_KEY" "$OPENAI_API_KEY"
+            update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
+            update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
+            update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
             local backend_version="latest"
             if [ "$FROM_SOURCE" = true ]; then
                 backend_version="local"
             fi
-            if grep -q "^BACKEND_VERSION=" .env; then
-                sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${backend_version}|" .env
-            else
-                echo "BACKEND_VERSION=${backend_version}" >> .env
-            fi
+            update_env_value "BACKEND_VERSION" "$backend_version"
             rm -f .env.bak
         fi
     else
         # No .env file, create new
         echo -e "${BLUE}📝 Creating configuration...${NC}"
-        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE"
+        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL"
     fi
     
     # Start services
@@ -445,11 +489,129 @@ cmd_logs() {
     
     cd "$deploy_dir"
     
-    local service=${1:-}
+    local follow=true
+    local tail_lines=""
+    local service=""
+    local filter=""
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --no-follow|-n)
+                follow=false
+                shift
+                ;;
+            --tail|-t)
+                tail_lines="$2"
+                shift 2
+                ;;
+            --filter|-f)
+                filter="$2"
+                shift 2
+                ;;
+            --help|-h)
+                cat << EOF
+${BLUE}Synap Logs${NC}
+
+${YELLOW}Usage:${NC}
+  synap logs [service] [options]
+
+${YELLOW}Options:${NC}
+  ${GREEN}--no-follow${NC}, ${GREEN}-n${NC}     Don't follow logs (show and exit)
+  ${GREEN}--tail <n>${NC}, ${GREEN}-t <n>${NC}  Show last N lines (default: all)
+  ${GREEN}--filter <text>${NC}, ${GREEN}-f <text>${NC}  Filter logs by text (grep)
+  ${GREEN}--help${NC}, ${GREEN}-h${NC}          Show this help
+
+${YELLOW}Examples:${NC}
+  synap logs                    # Interactive service selection
+  synap logs backend            # View backend logs
+  synap logs backend --tail 100 # Last 100 lines
+  synap logs backend --no-follow # Show and exit
+  synap logs backend --filter error # Filter by "error"
+
+EOF
+                exit 0
+                ;;
+            *)
+                if [ -z "$service" ]; then
+                    service="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Get list of running services
+    local services=($(docker compose ps --services --status running 2>/dev/null || docker compose ps --services 2>/dev/null))
+    
+    if [ ${#services[@]} -eq 0 ]; then
+        echo -e "${RED}❌ No services found${NC}"
+        exit 1
+    fi
+    
+    # If no service specified, show interactive menu
     if [ -z "$service" ]; then
-        docker compose logs -f
+        echo -e "${BLUE}📋 Available Services:${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            local status=$(docker compose ps "$svc" --format json 2>/dev/null | grep -o '"State":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+            if [ "$status" = "running" ]; then
+                echo -e "  ${GREEN}[$i]${NC} $svc"
+            else
+                echo -e "  ${YELLOW}[$i]${NC} $svc (not running)"
+            fi
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    # Build docker compose logs command
+    local cmd="docker compose logs"
+    
+    if [ "$follow" = true ]; then
+        cmd="$cmd -f"
+    fi
+    
+    if [ -n "$tail_lines" ]; then
+        cmd="$cmd --tail=$tail_lines"
+    fi
+    
+    if [ -n "$service" ]; then
+        cmd="$cmd $service"
+    fi
+    
+    # Execute command with optional filter
+    if [ -n "$filter" ]; then
+        eval "$cmd" | grep --color=always "$filter"
     else
-        docker compose logs -f "$service"
+        eval "$cmd"
     fi
 }
 
@@ -558,11 +720,74 @@ cmd_restart() {
     cd "$deploy_dir"
     
     local service=${1:-}
+    
+    # If no service specified, show interactive menu
     if [ -z "$service" ]; then
+        local services=($(docker compose ps --services 2>/dev/null))
+        if [ ${#services[@]} -eq 0 ]; then
+            echo -e "${RED}❌ No services found${NC}"
+            exit 1
+        fi
+        
+        echo -e "${BLUE}🔄 Restart Service${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            echo -e "  ${GREEN}[$i]${NC} $svc"
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🔄 Restarting all services...${NC}"
         docker compose restart
     else
+        echo -e "${BLUE}🔄 Restarting $service...${NC}"
         docker compose restart "$service"
     fi
+    
+    echo -e "${GREEN}✅ Restart complete!${NC}"
+}
+
+cmd_ps() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    echo -e "${BLUE}📊 Synap Services Status${NC}"
+    echo ""
+    docker compose ps
 }
 
 cmd_start() {
@@ -573,7 +798,18 @@ cmd_start() {
     fi
     
     cd "$deploy_dir"
-    docker compose up -d
+    
+    local service=${1:-}
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🚀 Starting all services...${NC}"
+        docker compose up -d
+    else
+        echo -e "${BLUE}🚀 Starting $service...${NC}"
+        docker compose up -d "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Services started!${NC}"
 }
 
 cmd_stop() {
@@ -584,7 +820,62 @@ cmd_stop() {
     fi
     
     cd "$deploy_dir"
-    docker compose stop
+    
+    local service=${1:-}
+    
+    # If no service specified, show interactive menu
+    if [ -z "$service" ]; then
+        local services=($(docker compose ps --services --status running 2>/dev/null))
+        if [ ${#services[@]} -eq 0 ]; then
+            echo -e "${YELLOW}⚠️  No running services found${NC}"
+            exit 0
+        fi
+        
+        echo -e "${BLUE}🛑 Stop Service${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            echo -e "  ${GREEN}[$i]${NC} $svc"
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🛑 Stopping all services...${NC}"
+        docker compose stop
+    else
+        echo -e "${BLUE}🛑 Stopping $service...${NC}"
+        docker compose stop "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Services stopped!${NC}"
 }
 
 cmd_backup() {
@@ -725,11 +1016,12 @@ ${YELLOW}Installation:${NC}
 
 ${YELLOW}Management:${NC}
   synap health                   Check system health
-  synap logs [service]           View logs
+  synap ps                       List all services and their status
+  synap logs [service] [options] View logs (interactive if no service)
   synap update [options]         Update to latest or specific version
-  synap restart [service]        Restart services
-  synap start                    Start all services
-  synap stop                     Stop all services
+  synap restart [service]        Restart services (interactive if no service)
+  synap start [service]          Start services (all or specific)
+  synap stop [service]           Stop services (interactive if no service)
   synap backup [name]            Create backup
   synap restore <file>            Restore from backup
   synap config [action]          Manage configuration
@@ -752,7 +1044,12 @@ ${YELLOW}Examples:${NC}
 
   # Management
   synap health
-  synap logs backend
+  synap logs                    # Interactive service selection
+  synap logs backend            # View backend logs
+  synap logs backend --tail 100 # Last 100 lines
+  synap logs backend --filter error # Filter by "error"
+  synap restart                 # Interactive service selection
+  synap restart backend         # Restart backend
   synap config list
 
 ${YELLOW}For detailed help:${NC}
@@ -774,8 +1071,12 @@ case "${1:-help}" in
     health)
         cmd_health
         ;;
+    ps|status)
+        cmd_ps
+        ;;
     logs)
-        cmd_logs "${2:-}"
+        shift
+        cmd_logs "$@"
         ;;
     update)
         shift
