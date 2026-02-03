@@ -27,6 +27,13 @@ export {
   type CreateDefaultWhiteboardResult,
 } from "./utils/create-default-whiteboard.js";
 
+// Export document types for type safety
+export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
+export {
+  isDocumentType,
+  normalizeDocumentType,
+} from "./types/document-types.js";
+
 // Database client
 export * from "./client.js";
 export type { EventHook } from "./repositories/event-repository.js";

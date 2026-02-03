@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { getDb } from "../client-pg.js";
+import { getDb, sql } from "../client-pg.js";
 import {
   documents,
   documentVersions,
@@ -17,6 +17,10 @@ import {
   workspaces,
 } from "../schema/index.js";
 import { eq } from "drizzle-orm";
+import type {
+  DocumentType,
+  DocumentMetadata,
+} from "../types/document-types.js";
 
 export interface CreateDefaultWhiteboardResult {
   status: "created" | "skipped" | "error";
@@ -77,9 +81,27 @@ export async function ensureDefaultWhiteboard(
     const storageKey = `whiteboards/${workspaceId}/main/${Date.now()}`;
     // Use a placeholder URL for whiteboards (they don't need actual file storage)
     const storageUrl = `internal://${storageKey}`;
+    const documentType: DocumentType = "whiteboard";
+
+    // Type-safe metadata
+    const documentMetadata: DocumentMetadata = {
+      isMainWhiteboard: true,
+    };
 
     let document;
     try {
+      // Check if 'type' column exists in database
+      // This allows the code to work both before and after migration
+      // Use raw SQL query via postgres.js client
+      const columnCheck = await sql`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'documents' AND column_name = 'type'
+      `;
+
+      const hasTypeColumn =
+        Array.isArray(columnCheck) && columnCheck.length > 0;
+
       const [insertedDocument] = await db
         .insert(documents)
         .values({
@@ -87,16 +109,14 @@ export async function ensureDefaultWhiteboard(
           userId,
           workspaceId,
           title: "Main Whiteboard",
-          // Note: 'type' column doesn't exist in database schema yet
-          // Store document type in metadata instead
+          // Conditionally include 'type' if column exists
+          // TypeScript will complain, but runtime will work correctly
+          ...(hasTypeColumn ? { type: documentType } : {}),
           storageUrl,
           storageKey,
           size: 0,
           currentVersion: 1,
-          metadata: {
-            type: "whiteboard", // Store type in metadata until migration adds column
-            isMainWhiteboard: true,
-          },
+          metadata: documentMetadata,
         } as any)
         .returning();
 
