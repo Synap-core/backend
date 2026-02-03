@@ -11,6 +11,7 @@ import type { AnyRouter } from "@trpc/server";
 import { router } from "./trpc.js";
 import { createLogger } from "@synap-core/core";
 import { ConflictError } from "@synap-core/types";
+import type { AppRouter } from "./root.js";
 
 const logger = createLogger({ module: "router-registry" });
 
@@ -158,16 +159,22 @@ class DynamicRouterRegistry {
    *
    * This creates a single tRPC router that merges all registered routers.
    *
-   * @returns The merged app router
+   * NOTE: Returns AppRouter type (not AnyRouter) for full type safety.
+   * The registry internally accepts AnyRouter for plugin flexibility,
+   * but the final merged router is typed as AppRouter.
+   *
+   * @returns The merged app router (typed as AppRouter for type safety)
    */
-  buildAppRouter(): AnyRouter {
+  buildAppRouter(): AppRouter {
     const routerMap: Record<string, AnyRouter> = {};
 
     for (const [name, { router: routerInstance }] of this.routers.entries()) {
       routerMap[name] = routerInstance;
     }
 
-    return router(routerMap);
+    // Type assertion: We know all registered routers form AppRouter
+    // This is safe because all routers are registered from coreRouter
+    return router(routerMap) as AppRouter;
   }
 
   /**
@@ -226,4 +233,12 @@ export const unregisterRouter = (name: string) =>
 export const getRouter = (name: string) =>
   dynamicRouterRegistry.getRouter(name);
 
-export const buildAppRouter = () => dynamicRouterRegistry.buildAppRouter();
+/**
+ * Build the app router from all registered routers
+ *
+ * Returns AppRouter type (not AnyRouter) for full type safety.
+ *
+ * @returns The merged app router with full type safety
+ */
+export const buildAppRouter = (): AppRouter =>
+  dynamicRouterRegistry.buildAppRouter();

@@ -74,20 +74,43 @@ export async function ensureDefaultWhiteboard(
 
     // 1. Create document for whiteboard content
     const documentId = randomUUID();
-    const [document] = await db
-      .insert(documents)
-      .values({
-        id: documentId,
-        userId,
-        workspaceId,
-        title: "Main Whiteboard",
-        type: "whiteboard",
-        storageUrl: "",
-        storageKey: `whiteboards/${workspaceId}/main/${Date.now()}`,
-        size: 0,
-        currentVersion: 1,
-      } as any)
-      .returning();
+    const storageKey = `whiteboards/${workspaceId}/main/${Date.now()}`;
+    // Use a placeholder URL for whiteboards (they don't need actual file storage)
+    const storageUrl = `internal://${storageKey}`;
+
+    let document;
+    try {
+      const [insertedDocument] = await db
+        .insert(documents)
+        .values({
+          id: documentId,
+          userId,
+          workspaceId,
+          title: "Main Whiteboard",
+          type: "whiteboard",
+          storageUrl,
+          storageKey,
+          size: 0,
+          currentVersion: 1,
+        } as any)
+        .returning();
+
+      if (!insertedDocument) {
+        throw new Error("Document insert returned no rows");
+      }
+      document = insertedDocument;
+    } catch (insertError: any) {
+      // Log full error details for debugging
+      console.error("[ensureDefaultWhiteboard] Document insert failed:", {
+        error: insertError.message,
+        code: insertError.code,
+        detail: insertError.detail,
+        constraint: insertError.constraint,
+        table: insertError.table,
+        values: { documentId, userId, workspaceId, storageUrl, storageKey },
+      });
+      throw insertError;
+    }
 
     // 2. Create initial document version with empty Tldraw content
     // Empty Tldraw structure: just an empty object (Tldraw will initialize properly)

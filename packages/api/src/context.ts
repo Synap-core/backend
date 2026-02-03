@@ -8,6 +8,7 @@ import { getDb } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { InternalServerError } from "@synap-core/types";
 import type { Context, KratosSession, User } from "./types/context.js";
+import { sessionCache } from "./utils/sessionCache.js";
 
 // Re-export types
 export type { Context, KratosSession, User };
@@ -45,7 +46,18 @@ export async function createContext(req: Request): Promise<Context> {
       "Attempting to get session from request"
     );
 
-    const session = await authModule.getSession(req.headers);
+    // Try cache first (optional optimization)
+    let session: any | null = null;
+    const cachedSession = sessionCache.get(cookieHeader || "");
+    if (cachedSession !== undefined) {
+      session = cachedSession;
+      contextLogger.debug({ cached: true }, "Using cached session");
+    } else {
+      // Validate with Kratos
+      session = await authModule.getSession(req.headers);
+      // Cache result (only valid sessions are cached)
+      sessionCache.set(cookieHeader || "", session, 5000);
+    }
 
     // Extract workspace ID from header (set by frontend workspaceLink)
     const workspaceId = req.headers.get("X-Workspace-Id") || null;
