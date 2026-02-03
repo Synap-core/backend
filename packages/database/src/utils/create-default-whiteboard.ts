@@ -78,9 +78,6 @@ export async function ensureDefaultWhiteboard(
 
     // 1. Create document for whiteboard content
     const documentId = randomUUID();
-    const storageKey = `whiteboards/${workspaceId}/main/${Date.now()}`;
-    // Use a placeholder URL for whiteboards (they don't need actual file storage)
-    const storageUrl = `internal://${storageKey}`;
     const documentType: DocumentType = "whiteboard";
 
     // Type-safe metadata
@@ -102,6 +99,17 @@ export async function ensureDefaultWhiteboard(
       const hasTypeColumn =
         Array.isArray(columnCheck) && columnCheck.length > 0;
 
+      // Check if storage fields are nullable (after migration)
+      const storageCheck = await sql`
+        SELECT is_nullable 
+        FROM information_schema.columns 
+        WHERE table_name = 'documents' AND column_name = 'storage_url'
+      `;
+      const storageIsNullable =
+        Array.isArray(storageCheck) &&
+        storageCheck.length > 0 &&
+        storageCheck[0]?.is_nullable === "YES";
+
       const [insertedDocument] = await db
         .insert(documents)
         .values({
@@ -110,10 +118,15 @@ export async function ensureDefaultWhiteboard(
           workspaceId,
           title: "Main Whiteboard",
           // Conditionally include 'type' if column exists
-          // TypeScript will complain, but runtime will work correctly
           ...(hasTypeColumn ? { type: documentType } : {}),
-          storageUrl,
-          storageKey,
+          // Whiteboards don't need storage (content stored in document_versions)
+          // Set to null if storage fields are nullable, otherwise use placeholders
+          ...(storageIsNullable
+            ? { storageUrl: null, storageKey: null }
+            : {
+                storageUrl: `internal://whiteboards/${workspaceId}/main/${Date.now()}`,
+                storageKey: `whiteboards/${workspaceId}/main/${Date.now()}`,
+              }),
           size: 0,
           currentVersion: 1,
           metadata: documentMetadata,
@@ -132,7 +145,7 @@ export async function ensureDefaultWhiteboard(
         detail: insertError.detail,
         constraint: insertError.constraint,
         table: insertError.table,
-        values: { documentId, userId, workspaceId, storageUrl, storageKey },
+        values: { documentId, userId, workspaceId },
       });
       throw insertError;
     }

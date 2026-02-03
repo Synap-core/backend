@@ -34,9 +34,10 @@ export const documents = pgTable(
     language: text("language"), // For code files: 'typescript', 'python', etc.
 
     // Storage
-    storageUrl: text("storage_url").notNull(), // MinIO/R2 URL
-    storageKey: text("storage_key").notNull(), // Storage path
-    size: integer("size").notNull(), // Bytes
+    // Note: Nullable for whiteboards (they store content in document_versions, not external storage)
+    storageUrl: text("storage_url"), // MinIO/R2 URL (nullable for whiteboards)
+    storageKey: text("storage_key"), // Storage path (nullable for whiteboards)
+    size: integer("size").notNull().default(0), // Bytes (default 0 for whiteboards)
     mimeType: text("mime_type"),
 
     // Versioning
