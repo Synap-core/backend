@@ -1,4 +1,4 @@
-version: v1.0.0
+version: v1.3.1
 # DSN should match docker-compose environment variable
 # Uses postgres service name, kratos_db database
 dsn: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable

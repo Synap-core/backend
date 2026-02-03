@@ -173,7 +173,7 @@ generate_kratos_config() {
     fi
     
     cat > "$kratos_dir/kratos.yml" << EOF
-version: v1.0.0
+version: v1.3.1
 # DSN should match docker-compose environment variable
 # Uses postgres service name, kratos database
 dsn: postgres://synap:\${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
@@ -672,6 +672,13 @@ EOF
     echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
     generate_kratos_config "$DOMAIN"
     
+    # Run migrations before starting services
+    echo -e "${BLUE}🔄 Running database migrations...${NC}"
+    docker compose run --rm backend-migrate || {
+        echo -e "${YELLOW}⚠️  Migration service not available, continuing...${NC}"
+        echo -e "${YELLOW}⚠️  You may need to run migrations manually: docker compose run --rm backend-migrate${NC}"
+    }
+    
     # Start services
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
     if [ "$FROM_SOURCE" = true ]; then
@@ -954,9 +961,17 @@ cmd_update() {
         fi
     fi
     
-    # Run migrations
+    # Run migrations (critical - must succeed)
     echo -e "${BLUE}🔄 Running migrations...${NC}"
-    docker compose run --rm backend-migrate || true
+    if ! docker compose run --rm backend-migrate; then
+        echo -e "${RED}❌ Migrations failed!${NC}"
+        echo -e "${YELLOW}⚠️  Backend may not start correctly without migrations${NC}"
+        read -p "Continue anyway? (y/N): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            echo "Update cancelled"
+            exit 1
+        fi
+    fi
     
     # Restart services
     echo -e "${BLUE}🔄 Restarting services...${NC}"

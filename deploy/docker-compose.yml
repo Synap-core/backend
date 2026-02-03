@@ -47,8 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      # Note: backend-migrate dependency removed - migrations run manually via CLI
-      # This prevents backend from failing if migrations are already applied
+      backend-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -89,8 +89,7 @@ services:
     networks:
       - synap-net
     # Mark as a one-shot service (runs once, then stops)
-    profiles:
-      - migrate
+    # Removed profile - migrations should run automatically on startup
 
   # ============================================================================
   # POSTGRESQL
@@ -208,14 +207,9 @@ services:
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
-    command:
-      [
-        "serve",
-        "-c",
-        "/etc/config/kratos/kratos.yml",
-        "--dev",
-        "--watch-courier",
-      ]
+    command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
+    # Note: --dev flag removed for production security
+    # Add --dev back only for local development
     volumes:
       - ../kratos:/etc/config/kratos
     depends_on:
