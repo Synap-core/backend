@@ -210,7 +210,6 @@ services:
       DOMAIN: ${DOMAIN}
     command:
       [
-        "kratos",
         "serve",
         "-c",
         "/etc/config/kratos/kratos.yml",
