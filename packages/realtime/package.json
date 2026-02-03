@@ -16,6 +16,7 @@
   "dependencies": {
     "@cloudflare/workers-types": "^4.20240117.0",
     "@synap/database": "workspace:*",
+    "@synap/storage": "workspace:*",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "socket.io": "^4.7.2",

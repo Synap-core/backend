@@ -1,5 +1,6 @@
 import { inngest } from "../client.js";
 import { getDb, EventRepository, WorkspaceRepository } from "@synap/database";
+import type { Workspace } from "@synap/database/schema";
 
 export const workspacesHandler = async ({
   event,
@@ -16,7 +17,7 @@ export const workspacesHandler = async ({
   const eventRepo = new EventRepository(db as any);
   const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
-  let workspace;
+  let workspace: Workspace | undefined;
 
   if (action === "create") {
     workspace = await step.run("create-workspace", async () => {
