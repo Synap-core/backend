@@ -83,6 +83,7 @@ export const documentsHandler = async ({
         where: and(eq(documents.id, data.id), eq(documents.userId, userId)),
       });
 
+      // All documents use MinIO storage (unified approach)
       if (document?.storageKey) {
         const { storage } = await import("@synap/storage");
         try {

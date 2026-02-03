@@ -78,15 +78,19 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
       throw new Error(`Document ${documentId} not found`);
     }
 
-    const newVersion = (document.currentVersion || 0) + 1;
+    // N+1 Versioning Pattern: When user saves, working version becomes saved
+    // lastSavedVersion = currentVersion (working becomes saved)
+    // currentVersion = currentVersion + 1 (new working version)
+    const savedVersion = document.currentVersion; // Current working version becomes saved
+    const newWorkingVersion = savedVersion + 1; // New working version
 
-    // Step 3: Save version snapshot
+    // Step 3: Save version snapshot (current working version becomes saved)
     const version = await step.run("save-version", async () => {
       const [v] = await db
         .insert(documentVersions)
         .values({
           documentId,
-          version: newVersion,
+          version: savedVersion, // Save current working version
           content: yjsState,
           message: message || "Snapshot",
           author: "user",
@@ -94,22 +98,28 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
         })
         .returning();
 
-      logger.info({ versionId: v.id, version: newVersion }, "Saved version");
+      logger.info({ versionId: v.id, version: savedVersion }, "Saved version");
 
       return v;
     });
 
-    // Step 4: Update document currentVersion
+    // Step 4: Update document version metadata (The +1 Logic)
+    // - lastSavedVersion = savedVersion (marking this snapshot as the latest save)
+    // - currentVersion = newWorkingVersion (starting the new "working" version)
     await step.run("update-document", async () => {
       await db
         .update(documents)
         .set({
-          currentVersion: newVersion,
+          lastSavedVersion: savedVersion, // Working version becomes saved
+          currentVersion: newWorkingVersion, // New working version (ahead)
           updatedAt: new Date(),
         })
         .where(eq(documents.id, documentId));
 
-      logger.info({ documentId, newVersion }, "Updated document version");
+      logger.info(
+        { documentId, savedVersion, newWorkingVersion },
+        "Updated document version (N+1 pattern)"
+      );
     });
 
     // Step 5: Broadcast completion to user
@@ -117,7 +127,7 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
       await broadcastSuccess(userId, "whiteboard.snapshot.saved", {
         viewId,
         versionId: version.id,
-        version: newVersion,
+        version: savedVersion,
         message,
       });
     });
@@ -125,7 +135,7 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
     return {
       success: true,
       versionId: version.id,
-      version: newVersion,
+      version: savedVersion,
     };
   }
 );

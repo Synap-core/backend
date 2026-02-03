@@ -4,7 +4,7 @@
  */
 
 import { inngest } from "../client.js";
-import { db, eq, desc } from "@synap/database";
+import { db, eq } from "@synap/database";
 import { documents, documentVersions } from "@synap/database/schema";
 import { storage } from "@synap/storage";
 import { broadcastSuccess } from "../utils/realtime-broadcast.js";
@@ -36,23 +36,10 @@ export const documentSnapshotWorker = inngest.createFunction(
       return doc;
     });
 
-    // 2. Fetch current content from storage or document_versions
+    // 2. Fetch current content from storage (all documents use MinIO)
     const content = await step.run("fetch-content", async () => {
-      if (document.storageKey) {
-        // File-based document: fetch from storage
-        const buffer = await storage.downloadBuffer(document.storageKey);
-        return buffer.toString("utf-8");
-      } else {
-        // Whiteboard/document without storage: fetch from latest version
-        const latestVersion = await db.query.documentVersions.findFirst({
-          where: eq(documentVersions.documentId, documentId),
-          orderBy: (versions, { desc }) => [desc(versions.version)],
-        });
-        if (!latestVersion) {
-          throw new Error("No content found for document");
-        }
-        return latestVersion.content;
-      }
+      const buffer = await storage.downloadBuffer(document.storageKey!);
+      return buffer.toString("utf-8");
     });
 
     // 3. Create version snapshot
@@ -150,17 +137,13 @@ export const documentRestoreWorker = inngest.createFunction(
       return doc;
     });
 
-    // 3. Upload restored content to storage (if document has storage)
+    // 3. Upload restored content to storage (all documents use MinIO)
     await step.run("restore-storage", async () => {
-      if (document.storageKey) {
-        // File-based document: upload to storage
-        await storage.upload(
-          document.storageKey,
-          Buffer.from(version.content, "utf-8"),
-          { contentType: document.mimeType || "text/plain" }
-        );
-      }
-      // Whiteboard/document without storage: content already in document_versions
+      await storage.upload(
+        document.storageKey!,
+        Buffer.from(version.content, "utf-8"),
+        { contentType: document.mimeType || "text/plain" }
+      );
     });
 
     // 4. Create new version marking the restoration
@@ -246,26 +229,9 @@ export const documentAutoSaveWorker = inngest.createFunction(
               error: "Document not found",
             };
 
-          // Fetch content from storage or document_versions
-          let content: string;
-          if (document.storageKey) {
-            // File-based document: fetch from storage
-            const buffer = await storage.downloadBuffer(document.storageKey);
-            content = buffer.toString("utf-8");
-          } else {
-            // Whiteboard/document without storage: fetch from latest version
-            const latestVersion = await db.query.documentVersions.findFirst({
-              where: eq(documentVersions.documentId, session.documentId),
-              orderBy: [desc(documentVersions.version)],
-            });
-            if (!latestVersion) {
-              return {
-                documentId: session.documentId,
-                error: "No content found",
-              };
-            }
-            content = latestVersion.content;
-          }
+          // Fetch content from storage (all documents use MinIO)
+          const buffer = await storage.downloadBuffer(document.storageKey!);
+          const content = buffer.toString("utf-8");
 
           const newVersion = (document.currentVersion || 0) + 1;
 

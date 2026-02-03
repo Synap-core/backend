@@ -116,7 +116,9 @@ export const documentsRouter = router({
         });
       }
 
-      const contentBuffer = await storage.downloadBuffer(document.storageKey);
+      // All documents use MinIO storage (unified approach)
+      // Current content is always in storage, versions are snapshots in database
+      const contentBuffer = await storage.downloadBuffer(document.storageKey!);
       const content =
         document.type === "pdf" || document.type === "docx"
           ? contentBuffer.toString("base64")
@@ -155,8 +157,9 @@ export const documentsRouter = router({
       const newVersion = document.currentVersion + 1;
 
       if (input.delta) {
+        // All documents use MinIO storage (unified approach)
         await storage.upload(
-          document.storageKey,
+          document.storageKey!,
           Buffer.from(newContent, "utf-8"),
           { contentType: document.mimeType || "text/plain" }
         );
@@ -222,8 +225,8 @@ export const documentsRouter = router({
         userId,
       });
 
-      // Storage delete kept synchronous for safety
-      await storage.delete(document.storageKey);
+      // All documents use MinIO storage (unified approach)
+      await storage.delete(document.storageKey!);
 
       return { success: true };
     }),
@@ -369,6 +372,9 @@ export const documentsRouter = router({
 
   /**
    * Start editing session
+   *
+   * Creates working version N+1 when realtime session starts (N+1 versioning pattern).
+   * This ensures the saved version (N) stays immutable while edits go to working version (N+1).
    */
   startSession: protectedProcedure
     .input(z.object({ documentId: z.string() }))
@@ -388,6 +394,38 @@ export const documentsRouter = router({
           code: "NOT_FOUND",
           message: "Document not found",
         });
+      }
+
+      // N+1 Versioning Pattern: Create working version when realtime session starts
+      // If currentVersion === lastSavedVersion, no working version exists yet - create it
+      if (document.currentVersion === document.lastSavedVersion) {
+        const newWorkingVersion = document.currentVersion + 1;
+
+        // Get current content from storage (all documents use MinIO)
+        const contentBuffer = await storage.downloadBuffer(
+          document.storageKey!
+        );
+        const content = contentBuffer.toString("utf-8");
+
+        // Create working version (N+1)
+        await db.insert(documentVersions).values({
+          documentId: input.documentId,
+          version: newWorkingVersion,
+          content,
+          author: "system",
+          authorId: userId,
+          message: "Realtime session started",
+        });
+
+        // Update document: currentVersion becomes N+1 (working), lastSavedVersion stays N (saved)
+        await db
+          .update(documents)
+          .set({
+            currentVersion: newWorkingVersion,
+            // lastSavedVersion stays the same (immutable)
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, input.documentId));
       }
 
       const chatThreadId = randomUUID();

@@ -2626,7 +2626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "updated"
                     | "referenced"
                     | "inherited_from_parent";
-                  conflictStatus: "pending" | "none" | "resolved";
+                  conflictStatus: "none" | "pending" | "resolved";
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2645,7 +2645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "updated"
                     | "referenced"
                     | "inherited_from_parent";
-                  conflictStatus: "pending" | "none" | "resolved";
+                  conflictStatus: "none" | "pending" | "resolved";
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2803,7 +2803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "updated"
                 | "referenced"
                 | "inherited_from_parent";
-              conflictStatus: "pending" | "none" | "resolved";
+              conflictStatus: "none" | "pending" | "resolved";
               sourceEventId: string | null;
             }[];
             documents: {
@@ -2820,7 +2820,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "updated"
                 | "referenced"
                 | "inherited_from_parent";
-              conflictStatus: "pending" | "none" | "resolved";
+              conflictStatus: "none" | "pending" | "resolved";
               sourceEventId: string | null;
             }[];
           };
@@ -3557,8 +3557,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               title: string;
               type: string;
               language: string | null;
-              storageUrl: string;
-              storageKey: string;
+              storageUrl: string | null;
+              storageKey: string | null;
               size: number;
               mimeType: string | null;
               currentVersion: number;
@@ -3685,8 +3685,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               title: string;
               type: string;
               language: string | null;
-              storageUrl: string;
-              storageKey: string;
+              storageUrl: string | null;
+              storageKey: string | null;
               size: number;
               mimeType: string | null;
               currentVersion: number;

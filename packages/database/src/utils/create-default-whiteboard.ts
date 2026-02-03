@@ -85,11 +85,32 @@ export async function ensureDefaultWhiteboard(
       isMainWhiteboard: true,
     };
 
+    // 1a. Upload initial whiteboard content to MinIO storage (unified storage for all documents)
+    // Empty Tldraw structure: just an empty object (Tldraw will initialize properly)
+    const emptyTldrawContent = {};
+    const tldrawJson = JSON.stringify(emptyTldrawContent);
+    const tldrawBuffer = Buffer.from(tldrawJson, "utf-8");
+
+    // Import storage (now available as dependency)
+    const { storage } = await import("@synap/storage");
+
+    // Build standardized storage path (same pattern as other documents)
+    const storageKey = storage.buildPath(
+      userId,
+      "whiteboard",
+      documentId,
+      "json"
+    );
+
+    // Upload to MinIO storage
+    const uploadResult = await storage.upload(storageKey, tldrawBuffer, {
+      contentType: "application/json",
+    });
+
     let document;
     try {
       // Check if 'type' column exists in database
       // This allows the code to work both before and after migration
-      // Use raw SQL query via postgres.js client
       const columnCheck = await sql`
         SELECT column_name 
         FROM information_schema.columns 
@@ -98,17 +119,6 @@ export async function ensureDefaultWhiteboard(
 
       const hasTypeColumn =
         Array.isArray(columnCheck) && columnCheck.length > 0;
-
-      // Check if storage fields are nullable (after migration)
-      const storageCheck = await sql`
-        SELECT is_nullable 
-        FROM information_schema.columns 
-        WHERE table_name = 'documents' AND column_name = 'storage_url'
-      `;
-      const storageIsNullable =
-        Array.isArray(storageCheck) &&
-        storageCheck.length > 0 &&
-        storageCheck[0]?.is_nullable === "YES";
 
       const [insertedDocument] = await db
         .insert(documents)
@@ -119,15 +129,11 @@ export async function ensureDefaultWhiteboard(
           title: "Main Whiteboard",
           // Conditionally include 'type' if column exists
           ...(hasTypeColumn ? { type: documentType } : {}),
-          // Whiteboards don't need storage (content stored in document_versions)
-          // Set to null if storage fields are nullable, otherwise use placeholders
-          ...(storageIsNullable
-            ? { storageUrl: null, storageKey: null }
-            : {
-                storageUrl: `internal://whiteboards/${workspaceId}/main/${Date.now()}`,
-                storageKey: `whiteboards/${workspaceId}/main/${Date.now()}`,
-              }),
-          size: 0,
+          // All documents now use MinIO storage (unified approach)
+          storageUrl: uploadResult.url,
+          storageKey: uploadResult.path,
+          size: uploadResult.size,
+          mimeType: "application/json",
           currentVersion: 1,
           metadata: documentMetadata,
         } as any)
@@ -150,13 +156,12 @@ export async function ensureDefaultWhiteboard(
       throw insertError;
     }
 
-    // 2. Create initial document version with empty Tldraw content
-    // Empty Tldraw structure: just an empty object (Tldraw will initialize properly)
-    const emptyTldrawContent = {};
+    // 2. Create initial document version snapshot (from storage content)
+    // Versions are snapshots of storage content for history/queryability
     await db.insert(documentVersions).values({
       documentId: document.id,
       version: 1,
-      content: JSON.stringify(emptyTldrawContent),
+      content: tldrawJson, // Snapshot of storage content
       author: "system",
       authorId: userId,
       message: "Initial whiteboard",

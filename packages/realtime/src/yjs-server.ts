@@ -12,8 +12,9 @@
 import * as Y from "yjs";
 import { YSocketIO } from "y-socket.io/dist/server";
 import type { Server as SocketIOServer } from "socket.io";
-import { db, eq, desc } from "@synap/database";
+import { db, eq, desc, and } from "@synap/database";
 import { views, documents, documentVersions } from "@synap/database/schema";
+import { storage } from "@synap/storage";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -46,21 +47,49 @@ class DatabasePersistence {
         return;
       }
 
-      // Get latest document version with Yjs state
-      const latestVersion = await db.query.documentVersions.findFirst({
-        where: eq(documentVersions.documentId, view.documentId),
-        orderBy: [desc(documentVersions.version)],
+      // Get document to check current version
+      const doc = await db.query.documents.findFirst({
+        where: eq(documents.id, view.documentId),
       });
 
-      if (!latestVersion) return;
+      if (!doc) return;
 
-      // Check if content is Yjs binary state
-      if (latestVersion.content.startsWith("yjs:")) {
-        // Extract base64-encoded Yjs state
-        const base64State = latestVersion.content.substring(4);
+      // Try to load from working version (currentVersion) first
+      const workingVersion = await db.query.documentVersions.findFirst({
+        where: and(
+          eq(documentVersions.documentId, view.documentId),
+          eq(documentVersions.version, doc.currentVersion)
+        ),
+      });
+
+      if (workingVersion && workingVersion.content.startsWith("yjs:")) {
+        // Extract base64-encoded Yjs state from working version
+        const base64State = workingVersion.content.substring(4);
         const state = Buffer.from(base64State, "base64");
         Y.applyUpdate(ydoc, state);
-        console.log(`[Yjs] Loaded persisted state for ${roomName}`);
+        console.log(
+          `[Yjs] Loaded working version ${doc.currentVersion} for ${roomName}`
+        );
+      } else {
+        // Fallback: Load from storage (current content)
+        // This handles documents that don't have Yjs state yet
+        if (doc.storageKey) {
+          try {
+            const contentBuffer = await storage.downloadBuffer(doc.storageKey);
+            const content = contentBuffer.toString("utf-8");
+
+            // For whiteboards, content is Tldraw JSON - convert to Yjs if needed
+            // For now, we'll let Yjs initialize fresh and sync from storage
+            console.log(
+              `[Yjs] No working version found, will initialize fresh for ${roomName}`
+            );
+          } catch (error) {
+            console.warn(
+              `[Yjs] Failed to load from storage for ${roomName}:`,
+              error
+            );
+          }
+        }
       }
     } catch (error) {
       console.error(`[Yjs] Failed to load document ${roomName}:`, error);
@@ -96,30 +125,62 @@ class DatabasePersistence {
       // Encode Y.Doc as binary state
       const state = Y.encodeStateAsUpdate(ydoc);
       const base64State = Buffer.from(state).toString("base64");
-      const content = `yjs:${base64State}`;
+      const yjsContent = `yjs:${base64State}`;
 
-      const newVersion = (doc.currentVersion || 0) + 1;
+      const workingVersion = doc.currentVersion;
 
-      // Create new version
-      await db.insert(documentVersions).values({
-        documentId: view.documentId,
-        version: newVersion,
-        content,
-        author: "system",
-        authorId: "yjs-server",
-        message: "Auto-save (Yjs sync)",
+      // Update working version (don't create new - N+1 pattern)
+      // During realtime editing, we update the same working version
+      const existingWorkingVersion = await db.query.documentVersions.findFirst({
+        where: and(
+          eq(documentVersions.documentId, view.documentId),
+          eq(documentVersions.version, workingVersion)
+        ),
       });
 
-      // Update document version
+      if (existingWorkingVersion) {
+        // Update existing working version
+        await db
+          .update(documentVersions)
+          .set({
+            content: yjsContent,
+          })
+          .where(
+            and(
+              eq(documentVersions.documentId, view.documentId),
+              eq(documentVersions.version, workingVersion)
+            )
+          );
+      } else {
+        // Working version doesn't exist - create it (shouldn't happen, but safety check)
+        console.warn(
+          `[Yjs] Working version ${workingVersion} not found, creating it for ${roomName}`
+        );
+        await db.insert(documentVersions).values({
+          documentId: view.documentId,
+          version: workingVersion,
+          content: yjsContent,
+          author: "system",
+          authorId: "yjs-server",
+          message: "Working version created (Yjs sync)",
+        });
+      }
+
+      // Note: Storage update during Yjs sync is deferred to explicit save operations
+      // This keeps the sync fast and avoids complex content extraction from Yjs
+      // Storage will be updated when user explicitly saves (via document-snapshots worker)
+
+      // Update document timestamp (version number stays the same)
       await db
         .update(documents)
         .set({
-          currentVersion: newVersion,
           updatedAt: new Date(),
         })
         .where(eq(documents.id, view.documentId));
 
-      console.log(`[Yjs] Saved ${roomName} (version ${newVersion})`);
+      console.log(
+        `[Yjs] Updated working version ${workingVersion} for ${roomName}`
+      );
     } catch (error) {
       console.error(`[Yjs] Failed to save document ${roomName}:`, error);
     }

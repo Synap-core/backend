@@ -136,7 +136,7 @@ export const entitiesHandler = async ({
           });
 
           if (document) {
-            // Delete storage file
+            // Delete storage file (all documents use MinIO)
             const { storage } = await import("@synap/storage");
             try {
               if (document.storageKey) {
