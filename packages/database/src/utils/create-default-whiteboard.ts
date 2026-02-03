@@ -91,10 +91,8 @@ export async function ensureDefaultWhiteboard(
     const tldrawJson = JSON.stringify(emptyTldrawContent);
     const tldrawBuffer = Buffer.from(tldrawJson, "utf-8");
 
-    // Import storage dynamically (to avoid circular dependency)
-    // @synap/database cannot depend on @synap/storage in dependencies (cycle: database -> storage -> types -> database)
-    // Dynamic import works at runtime - TypeScript types available via devDependency
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    // Import storage (cycle is now broken: database → storage → core ✅)
+    // We use dynamic import to keep database package lightweight, but it's now a proper dependency
     const { storage } = await import("@synap/storage");
 
     // Build standardized storage path (same pattern as other documents)

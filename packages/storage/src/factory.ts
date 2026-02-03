@@ -13,7 +13,10 @@
 import type { IFileStorage } from "./interface.js";
 import { R2StorageProvider, type R2Config } from "./r2-provider.js";
 import { MinIOStorageProvider, type MinIOConfig } from "./minio-provider.js";
-import { ValidationError, InternalServerError } from "@synap-core/types";
+// Import errors from @synap-core/core to avoid circular dependency
+// @synap-core/core doesn't depend on @synap/database, breaking the cycle:
+// database → storage → core ✅ (no cycle!)
+import { ValidationError, InternalServerError } from "@synap-core/core";
 
 // Import config using dynamic import to avoid circular dependencies
 // This will be resolved when the module loads

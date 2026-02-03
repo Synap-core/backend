@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
+    "@synap/storage": "workspace:*",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
@@ -46,7 +47,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@synap/storage": "workspace:*",
     "@types/bcrypt": "^6.0.0",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^24.10.1",

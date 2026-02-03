@@ -527,6 +527,9 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
+      '@synap/storage':
+        specifier: workspace:*
+        version: link:../storage
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
@@ -546,9 +549,6 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
-      '@synap/storage':
-        specifier: workspace:*
-        version: link:../storage
       '@types/bcrypt':
         specifier: ^6.0.0
         version: 6.0.0
@@ -783,9 +783,6 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
-      '@synap-core/types':
-        specifier: workspace:*
-        version: link:../types
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
