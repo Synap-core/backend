@@ -22,7 +22,7 @@ RUN cd packages/database && pnpm build:migrate
 
 # Deploy to self-contained directory with hard-linked dependencies
 # This creates a portable, production-ready package
-RUN rm -rf /app/deploy && pnpm deploy --filter=api --filter=@synap/realtime --prod --legacy /app/deploy
+RUN rm -rf /app/deploy && pnpm deploy --filter=api --prod --legacy /app/deploy
 
 # Prepare custom migrations directory (optional - only if migrations-custom exists)
 # Create directory unconditionally, then copy files if they exist
@@ -38,9 +38,6 @@ FROM node:20-alpine AS runner
 
 # Install runtime dependencies
 RUN apk add --no-cache postgresql-client dumb-init
-
-# Install tsx globally for running TypeScript files (needed for realtime server)
-RUN npm install -g tsx
 
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
@@ -71,8 +68,9 @@ COPY --chown=nodejs:nodejs packages/database/migrations-drizzle/*.sql ./migratio
 # Directory is prepared in builder stage (always exists, may be empty)
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
 
-# Copy realtime package source files (needed to run with tsx)
-COPY --from=builder --chown=nodejs:nodejs /app/packages/realtime/src ./node_modules/@synap/realtime/src
+# Copy built realtime package (compiled JavaScript from builder stage)
+# Only copy dist and package.json - no source files, no dev dependencies
+COPY --from=builder --chown=nodejs:nodejs /app/packages/realtime/dist ./node_modules/@synap/realtime/dist
 COPY --from=builder --chown=nodejs:nodejs /app/packages/realtime/package.json ./node_modules/@synap/realtime/package.json
 
 # Expose ports
