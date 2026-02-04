@@ -26,12 +26,18 @@ RUN echo "=== Verifying build output ===" && \
 RUN rm -rf /app/deploy && \
     pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy
 
-# Ensure server.js is present (pnpm deploy might not include it if not in main)
-# Copy directly from build output if missing
-RUN if [ ! -f /app/deploy/dist/server.js ]; then \
-      echo "server.js not in deploy, copying from build..." && \
+# Ensure dist directory exists and server.js is present
+# pnpm deploy might not include server.js if it's not the main entry point
+RUN mkdir -p /app/deploy/dist && \
+    if [ -f /app/packages/realtime/dist/server.js ]; then \
+      echo "Copying server.js from build output..." && \
       cp /app/packages/realtime/dist/server.js /app/deploy/dist/server.js && \
-      cp /app/packages/realtime/dist/server.js.map /app/deploy/dist/server.js.map 2>/dev/null || true; \
+      cp /app/packages/realtime/dist/server.js.map /app/deploy/dist/server.js.map 2>/dev/null || true && \
+      echo "✓ server.js copied"; \
+    else \
+      echo "✗ ERROR: server.js not found in build output!" && \
+      ls -la /app/packages/realtime/dist/ && \
+      exit 1; \
     fi
 
 # Debug: Check what was actually created
@@ -75,5 +81,5 @@ EXPOSE 4001
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
 # Same pattern as API - pnpm deploy places dist/ at root
-# Debug command to show what's actually there
-CMD ["sh", "-c", "echo '=== Container contents ===' && ls -la /app/ && echo '' && echo '=== dist/ contents ===' && (ls -la /app/dist/ 2>/dev/null || echo 'dist/ does not exist') && echo '' && echo '=== Finding server.js ===' && find /app -name 'server.js' -type f 2>/dev/null | head -10 || echo 'server.js not found' && echo '' && echo '=== Trying to run ===' && if [ -f /app/dist/server.js ]; then echo 'Found at /app/dist/server.js' && node /app/dist/server.js; elif [ -f /app/node_modules/@synap/realtime/dist/server.js ]; then echo 'Found at /app/node_modules/@synap/realtime/dist/server.js' && node /app/node_modules/@synap/realtime/dist/server.js; else echo 'ERROR: server.js not found anywhere!' && exit 1; fi"]
+# server.js is now guaranteed to exist after the copy step above
+CMD ["node", "dist/server.js"]
