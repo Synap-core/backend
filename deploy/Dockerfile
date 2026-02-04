@@ -20,30 +20,23 @@ RUN pnpm turbo build --filter=api --filter=@synap/realtime
 # Build migration script independently
 RUN cd packages/database && pnpm build:migrate
 
-# Deploy packages separately (pnpm deploy limitation: can only deploy 1 project at a time)
-# Deploy API first to main directory
+# Deploy API package (pnpm deploy limitation: can only deploy 1 project at a time)
 RUN rm -rf /app/deploy && \
     pnpm deploy --filter=api --prod --legacy /app/deploy
 
-# Deploy realtime package separately, then merge dependencies
-# pnpm deploy creates self-contained deployments with all dependencies hard-linked
-RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy-realtime
+# Copy realtime package directly from source (simpler than deploying separately)
+# The package is already built, just copy it to node_modules where it belongs
+RUN mkdir -p /app/deploy/node_modules/@synap/realtime && \
+    cp -r /app/packages/realtime/dist /app/deploy/node_modules/@synap/realtime/dist && \
+    cp /app/packages/realtime/package.json /app/deploy/node_modules/@synap/realtime/package.json
 
-# Merge realtime package and dependencies into main deploy
-# pnpm deploy puts the package at the root of deploy-realtime, not in node_modules
-# Create @synap directory structure and copy realtime package files
-RUN mkdir -p /app/deploy/node_modules/@synap && \
-    cp -r /app/deploy-realtime/dist /app/deploy/node_modules/@synap/realtime/dist && \
-    cp /app/deploy-realtime/package.json /app/deploy/node_modules/@synap/realtime/package.json
-
-# Merge node_modules: copy all dependencies from realtime that aren't already in deploy
-# This ensures socket.io, y-socket.io, yjs, and all transitive dependencies are included
-RUN cd /app/deploy-realtime/node_modules && \
-    for dir in */; do \
-      if [ ! -d "/app/deploy/node_modules/$dir" ]; then \
-        cp -r "$dir" /app/deploy/node_modules/; \
-      fi; \
-    done
+# Copy realtime dependencies from workspace node_modules
+# These are the production dependencies needed: socket.io, y-socket.io, yjs, etc.
+RUN cp -r /app/node_modules/socket.io /app/deploy/node_modules/socket.io 2>/dev/null || true && \
+    cp -r /app/node_modules/@socket.io /app/deploy/node_modules/@socket.io 2>/dev/null || true && \
+    cp -r /app/node_modules/y-socket.io /app/deploy/node_modules/y-socket.io 2>/dev/null || true && \
+    cp -r /app/node_modules/yjs /app/deploy/node_modules/yjs 2>/dev/null || true && \
+    cp -r /app/node_modules/lib0 /app/deploy/node_modules/lib0 2>/dev/null || true
 
 # Prepare custom migrations directory (optional - only if migrations-custom exists)
 # Create directory unconditionally, then copy files if they exist
