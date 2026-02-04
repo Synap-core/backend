@@ -42,10 +42,12 @@ import {
   ViewContentSchema,
   getViewCategory,
   validateViewConfig,
+  ViewTypeEnum,
   type ViewMetadata,
   type EntityFilter,
   type SortRule,
   type EntityQuery,
+  type ViewType,
 } from "@synap-core/types";
 
 export const viewsRouter = router({
@@ -59,20 +61,8 @@ export const viewsRouter = router({
         name: z.string().min(1).max(100),
         description: z.string().optional(),
         // Specific validation for view types and custom constraints
-        type: z.enum([
-          "whiteboard",
-          "timeline",
-          "kanban",
-          "table",
-          "list",
-          "grid",
-          "gallery",
-          "calendar",
-          "gantt",
-          "mindmap",
-          "graph",
-          "bento",
-        ]),
+        // Uses ViewTypeEnum from @synap-core/types for single source of truth
+        type: ViewTypeEnum,
         // NEW: Scope profiles (required for structured views)
         scopeProfileIds: z.array(z.string().uuid()).optional(),
         scopeMode: z.enum(["explicit", "observed"]).optional(),
@@ -112,7 +102,7 @@ export const viewsRouter = router({
       }
 
       // Compute category from view type
-      const category = getViewCategory(input.type as any);
+      const category = getViewCategory(input.type as ViewType);
 
       // Validate scopeProfileIds for structured views
       if (category === "structured") {
@@ -143,8 +133,20 @@ export const viewsRouter = router({
         }
       }
 
+      // Validate config against view type schema
+      if (input.config) {
+        const validation = validateViewConfig(input.type, input.config);
+        if (!validation.valid) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Invalid view config",
+            cause: validation.errors,
+          });
+        }
+      }
+
       await ViewEvents.createRequested(ctx.userId, {
-        type: input.type as any,
+        type: input.type as ViewType,
         name: input.name as string,
         workspaceId: input.workspaceId || "",
       });
@@ -344,7 +346,7 @@ export const viewsRouter = router({
           message: permResult.reason || "Insufficient permissions",
         });
 
-      const category = getViewCategory(view.type as any);
+      const category = getViewCategory(view.type as ViewType);
 
       // Canvas views: Return document content
       if (category === "canvas") {
@@ -599,7 +601,7 @@ export const viewsRouter = router({
       }
 
       // Ensure content category matches view type
-      const expectedCategory = getViewCategory(view.type as any);
+      const expectedCategory = getViewCategory(view.type as ViewType);
       if ((parseResult.data as any).category !== expectedCategory) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -677,22 +679,8 @@ export const viewsRouter = router({
         schemaSnapshot: z.record(z.string(), z.any()).optional(),
         snapshotUpdatedAt: z.date().optional(),
         // View type (for switching between types)
-        type: z
-          .enum([
-            "whiteboard",
-            "timeline",
-            "kanban",
-            "table",
-            "list",
-            "grid",
-            "gallery",
-            "calendar",
-            "gantt",
-            "mindmap",
-            "graph",
-            "bento",
-          ])
-          .optional(),
+        // Uses ViewTypeEnum from @synap-core/types for single source of truth
+        type: ViewTypeEnum.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -722,6 +710,19 @@ export const viewsRouter = router({
           code: "FORBIDDEN",
           message: permResult.reason || "Insufficient permissions",
         });
+
+      // Validate config against view type schema (use input.type or existing view.type)
+      const viewType = (input.type || view.type) as ViewType;
+      if (input.config) {
+        const validation = validateViewConfig(viewType, input.config);
+        if (!validation.valid) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Invalid view config",
+            cause: validation.errors,
+          });
+        }
+      }
 
       await emitRequestEvent({
         subjectType: "view",

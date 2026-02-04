@@ -1,5 +1,11 @@
 import { inngest } from "../client.js";
-import { getDb, EventRepository, ViewRepository, sql } from "@synap/database";
+import {
+  getDb,
+  EventRepository,
+  ViewRepository,
+  sql,
+  type ViewType,
+} from "@synap/database";
 import {
   extractEventInfo,
   type UnifiedEventData,
@@ -30,19 +36,7 @@ export const viewsHandler = async ({
       await viewRepo.create(
         {
           id: data.id as string,
-          type: data.type as string as
-            | "whiteboard"
-            | "timeline"
-            | "kanban"
-            | "table"
-            | "calendar"
-            | "list"
-            | "grid"
-            | "gallery"
-            | "graph"
-            | "mindmap"
-            | "gantt"
-            | "bento",
+          type: data.type as string as ViewType,
           name: (data.name as string) || "Untitled",
           description: (data.description as string) || undefined,
           documentId: (data.documentId as string) || undefined,

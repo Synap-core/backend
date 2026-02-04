@@ -22,6 +22,7 @@ export * from "./entity-repository.js";
 export * from "./document-repository.js";
 export * from "./workspace-repository.js";
 export * from "./view-repository.js";
+export type { ViewType } from "./view-repository.js";
 export * from "./project-repository.js";
 export * from "./inbox-repository.js";
 export * from "./sharing-repository.js";

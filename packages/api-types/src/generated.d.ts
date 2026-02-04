@@ -848,8 +848,9 @@ export interface EntityQuery {
  * View category determines content structure and rendering approach
  * - structured: Query-based views with interchangeable layouts (table, kanban, graph, etc.)
  * - canvas: Freeform drawing views (whiteboard, mindmap)
+ * - composite: Views that compose other views (bento grid, dashboard)
  */
-export type ViewCategory = "structured" | "canvas";
+export type ViewCategory = "structured" | "canvas" | "composite";
 declare enum AgentType {
   DEFAULT = "default",
   META = "meta",
@@ -3577,12 +3578,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "table"
               | "whiteboard"
               | "graph"
+              | "grid"
               | "timeline"
               | "kanban"
-              | "grid"
               | "gallery"
               | "gantt"
-              | "mindmap";
+              | "mindmap"
+              | "bento";
             workspaceId?: string | undefined;
             description?: string | undefined;
             scopeProfileIds?: string[] | undefined;
@@ -3598,6 +3600,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 }
               | undefined;
             config?: Record<string, any> | undefined;
+            embeddedViewIds?: string[] | undefined;
             initialContent?: any;
           };
           output: {
@@ -3611,12 +3614,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "table"
                 | "whiteboard"
                 | "graph"
+                | "grid"
                 | "timeline"
                 | "kanban"
-                | "grid"
                 | "gallery"
                 | "gantt"
-                | "mindmap";
+                | "mindmap"
+                | "bento";
               category: ViewCategory;
               name: string;
               description: string | undefined;
@@ -3643,9 +3647,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "whiteboard"
               | "all"
               | "graph"
+              | "grid"
               | "timeline"
               | "kanban"
-              | "grid"
               | "gallery"
               | "gantt"
               | "mindmap"
@@ -3676,6 +3680,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             thumbnailUrl: string | null;
             schemaSnapshot: unknown;
             snapshotUpdatedAt: Date | null;
+            embeddedViewIds: string[] | null;
           }[];
           meta: object;
         }>;
@@ -3709,6 +3714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               thumbnailUrl: string | null;
               schemaSnapshot: unknown;
               snapshotUpdatedAt: Date | null;
+              embeddedViewIds: string[] | null;
             };
             content: {};
           };
@@ -3745,6 +3751,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   thumbnailUrl: string | null;
                   schemaSnapshot: unknown;
                   snapshotUpdatedAt: Date | null;
+                  embeddedViewIds: string[] | null;
                 };
                 content: {};
                 entities: never[];
@@ -3779,6 +3786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   thumbnailUrl: string | null;
                   schemaSnapshot: unknown;
                   snapshotUpdatedAt: Date | null;
+                  embeddedViewIds: string[] | null;
                 };
                 query: EntityQuery;
                 config: {};
@@ -3829,6 +3837,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             id: string;
             name?: string | undefined;
             description?: string | undefined;
+            scopeProfileIds?: string[] | undefined;
+            scopeMode?: "explicit" | "observed" | undefined;
+            query?:
+              | {
+                  filters?: any[] | undefined;
+                  sorts?: any[] | undefined;
+                  search?: string | undefined;
+                  limit?: number | undefined;
+                  offset?: number | undefined;
+                  groupBy?: string | undefined;
+                }
+              | undefined;
+            config?: Record<string, any> | undefined;
+            embeddedViewIds?: string[] | undefined;
+            schemaSnapshot?: Record<string, any> | undefined;
+            snapshotUpdatedAt?: Date | undefined;
+            type?:
+              | "calendar"
+              | "list"
+              | "table"
+              | "whiteboard"
+              | "graph"
+              | "grid"
+              | "timeline"
+              | "kanban"
+              | "gallery"
+              | "gantt"
+              | "mindmap"
+              | "bento"
+              | undefined;
           };
           output: {
             status: string;
@@ -3940,7 +3978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   compactMode?: boolean | undefined;
                   fontSize?: string | undefined;
                   animations?: boolean | undefined;
-                  defaultView?: "list" | "timeline" | "grid" | undefined;
+                  defaultView?: "list" | "grid" | "timeline" | undefined;
                 }
               | undefined;
             graphPreferences?:
@@ -4250,6 +4288,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   thumbnailUrl: string | null;
                   schemaSnapshot: unknown;
                   snapshotUpdatedAt: Date | null;
+                  embeddedViewIds: string[] | null;
                   document: never;
                 };
             permissions: unknown;

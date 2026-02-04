@@ -18,6 +18,7 @@ export * from "./query.js";
 export * from "./config.js";
 export * from "./config-schemas.js";
 export * from "./config-types.js";
+export * from "./view-type-enum.js";
 
 // =============================================================================
 // View Type Enum

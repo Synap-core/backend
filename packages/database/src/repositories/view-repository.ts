@@ -11,20 +11,28 @@ import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { View, NewView } from "../schema/views.js";
 
+/**
+ * View type - matches ViewType from @synap-core/types
+ * Defined here to avoid circular dependency
+ * Re-exported from database package for use in jobs/executors
+ */
+export type ViewType =
+  | "whiteboard"
+  | "table"
+  | "kanban"
+  | "list"
+  | "grid"
+  | "gallery"
+  | "calendar"
+  | "gantt"
+  | "timeline"
+  | "mindmap"
+  | "graph"
+  | "bento";
+
 export interface CreateViewInput {
   id?: string;
-  type:
-    | "whiteboard"
-    | "timeline"
-    | "kanban"
-    | "table"
-    | "calendar"
-    | "list"
-    | "grid"
-    | "gallery"
-    | "graph"
-    | "mindmap"
-    | "gantt";
+  type: ViewType;
   name: string;
   description?: string;
   documentId?: string;
@@ -68,9 +76,16 @@ export class ViewRepository extends BaseRepository<
    */
   async create(data: CreateViewInput, userId: string): Promise<View> {
     // Determine category from type
-    const category = ["whiteboard", "mindmap"].includes(data.type)
+    // Canvas views: whiteboard, mindmap
+    // Composite views: bento
+    // Structured views: everything else
+    const canvasTypes: ViewType[] = ["whiteboard", "mindmap"];
+    const compositeTypes: ViewType[] = ["bento"];
+    const category = canvasTypes.includes(data.type)
       ? "canvas"
-      : "structured";
+      : compositeTypes.includes(data.type)
+        ? "composite"
+        : "structured";
 
     // Validate scopeProfileIds for structured views
     if (
