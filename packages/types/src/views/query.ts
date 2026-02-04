@@ -49,12 +49,18 @@ export interface SortRule {
 /**
  * Query definition for structured views
  * Defines which entities to show and how to filter them
+ *
+ * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
+ * This query structure only contains filters, sorts, search, pagination, and groupBy
  */
 export interface EntityQuery {
-  /** Profile slugs to include (preferred - dynamic profiles) */
+  /** @deprecated - Profile IDs now stored in views.scopeProfileIds */
+  profileIds?: string[];
+
+  /** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
   profileSlugs?: string[];
 
-  /** Entity types to include (deprecated - use profileSlugs instead) */
+  /** @deprecated - Use profileSlugs instead, which is also deprecated */
   entityTypes?: string[];
 
   /** Specific entity IDs (for fixed sets) */

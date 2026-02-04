@@ -12,6 +12,7 @@
 import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { documents } from "./documents.js";
+import { profiles } from "./profiles.js";
 
 export const views = pgTable("views", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -36,11 +37,23 @@ export const views = pgTable("views", {
   name: text("name").notNull(),
   description: text("description"),
 
-  // Configuration (structured columns for better querying and indexing)
-  filter: jsonb("filter").default("{}"), // Dynamic filters
-  sort: jsonb("sort").default("{}"), // Sort configuration
-  columns: jsonb("columns").default("[]"), // Column definitions
-  layoutConfig: jsonb("layout_config").default("{}"), // Layout-specific configuration
+  // NEW: Declared schema scope (stable anchor for deterministic defaults)
+  scopeProfileIds: uuid("scope_profile_ids")
+    .array()
+    .references(() => profiles.id, { onDelete: "cascade" }), // FK array to profiles
+  scopeMode: text("scope_mode"), // 'explicit' | 'observed' (optional)
+
+  // NEW: Consolidated query (dynamic - filters/sorts/search)
+  query: jsonb("query").default("{}"), // EntityQuery: { filters, sorts, search, limit, offset, groupBy }
+
+  // NEW: Render overrides (deltas from defaults only)
+  config: jsonb("config").default("{}"), // { hiddenColumns, visibleColumns, columnOrder, columnWidths, ... }
+
+  // Legacy columns (kept for backward compatibility during migration)
+  filter: jsonb("filter").default("{}"), // @deprecated - use query.filters
+  sort: jsonb("sort").default("{}"), // @deprecated - use query.sorts
+  columns: jsonb("columns").default("[]"), // @deprecated - columns computed from profiles
+  layoutConfig: jsonb("layout_config").default("{}"), // @deprecated - use config
 
   // Content reference (stores actual view data as JSON)
   documentId: uuid("document_id").references(() => documents.id, {
@@ -51,6 +64,13 @@ export const views = pgTable("views", {
   yjsRoomId: text("yjs_room_id"), // For real-time collaboration
   thumbnailUrl: text("thumbnail_url"), // Preview image
 
+  // Optional: Schema snapshot cache (performance optimization)
+  schemaSnapshot: jsonb("schema_snapshot"), // Cached property info from scopeProfileIds
+  snapshotUpdatedAt: timestamp("snapshot_updated_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+
   // Quick-access metadata (for listings, thumbnails, search)
   metadata: jsonb("metadata").default("{}").notNull(),
   // {
@@ -58,7 +78,7 @@ export const views = pgTable("views", {
   //   entityCount: 10,
   //   lastEditedBy: 'user-123',
   //   bounds: { width: 1920, height: 1080 },
-  //   viewConfig: { /* type-specific config */ }
+  //   // Legacy: viewConfig moved to query + config
   // }
 
   // Timestamps

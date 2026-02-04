@@ -19,23 +19,17 @@ import {
   sqlTemplate as sql,
   inArray,
   or,
-  like,
-  gt,
-  lt,
-  gte,
-  lte,
-  isNull,
-  isNotNull,
   getTableColumns,
   asc,
   type SQL,
-  type Column,
   views,
   documents,
   documentVersions,
   entities,
   relations,
   ViewFilterCompiler,
+  PropertyMergingService,
+  ViewDefaultColumnsService,
   getDb,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -48,9 +42,9 @@ import {
   ViewContentSchema,
   getViewCategory,
   type ViewMetadata,
-  type StructuredViewConfig,
   type EntityFilter,
   type SortRule,
+  type EntityQuery,
 } from "@synap-core/types";
 
 export const viewsRouter = router({
@@ -77,6 +71,23 @@ export const viewsRouter = router({
           "mindmap",
           "graph",
         ]),
+        // NEW: Scope profiles (required for structured views)
+        scopeProfileIds: z.array(z.string().uuid()).optional(),
+        scopeMode: z.enum(["explicit", "observed"]).optional(),
+        // NEW: Consolidated query
+        query: z
+          .object({
+            filters: z.array(z.any()).optional(),
+            sorts: z.array(z.any()).optional(),
+            search: z.string().optional(),
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            groupBy: z.string().optional(),
+          })
+          .optional(),
+        // NEW: Render config (overrides only)
+        config: z.record(z.string(), z.any()).optional(),
+        // Legacy: initialContent (for canvas views)
         initialContent: z.any().optional(),
       })
     )
@@ -99,8 +110,18 @@ export const viewsRouter = router({
       // Compute category from view type
       const category = getViewCategory(input.type as any);
 
-      // Validate initial content if provided
-      if (input.initialContent) {
+      // Validate scopeProfileIds for structured views
+      if (category === "structured") {
+        if (!input.scopeProfileIds || input.scopeProfileIds.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "scopeProfileIds is required for structured views",
+          });
+        }
+      }
+
+      // Validate initial content if provided (canvas views)
+      if (input.initialContent && category === "canvas") {
         const parseResult = ViewContentSchema.safeParse(input.initialContent);
         if (!parseResult.success) {
           throw new TRPCError({
@@ -177,9 +198,13 @@ export const viewsRouter = router({
           id: viewId,
           type: input.type,
           name: input.name,
+          description: input.description,
           documentId: doc.id,
           workspaceId: input.workspaceId,
-          config: optimisticView.metadata,
+          scopeProfileIds: input.scopeProfileIds,
+          scopeMode: input.scopeMode || "explicit",
+          query: input.query || {},
+          config: input.config || {},
           userId: ctx.userId,
         },
         userId: ctx.userId,
@@ -336,16 +361,25 @@ export const viewsRouter = router({
         return { view, content, entities: [], relations: [] };
       }
 
-      // Structured views: Execute query from metadata config
-      const metadata = view.metadata as ViewMetadata | undefined;
-      const config = metadata?.config as StructuredViewConfig | undefined;
-
-      // Ensure config has query property before accessing
-      if (!config || !("query" in config) || !config.query) {
-        return { view, config, entities: [], relations: [] };
+      // Structured views: Execute query from new query structure
+      if (!view.scopeProfileIds || view.scopeProfileIds.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "View must have scopeProfileIds. Please recreate the view with profile scope.",
+        });
       }
 
-      const { entityTypes, filters, sorts, limit, offset } = config.query;
+      // NEW: Use consolidated query structure
+      const query = (view.query as EntityQuery) || {};
+      const {
+        filters = [],
+        sorts = [],
+        search,
+        limit = 100,
+        offset = 0,
+      } = query;
+
       const conditions: any[] = [];
 
       // Filter by workspace
@@ -353,36 +387,89 @@ export const viewsRouter = router({
         conditions.push(eq(entities.workspaceId, view.workspaceId));
       }
 
-      // Filter by entity types
-      if (entityTypes && entityTypes.length > 0) {
-        conditions.push(inArray(entities.type, entityTypes));
+      // Filter by scope profiles (profileId FK)
+      if (view.scopeProfileIds && view.scopeProfileIds.length > 0) {
+        conditions.push(inArray(entities.profileId, view.scopeProfileIds));
       }
 
-      // Apply custom filters (using ViewFilterCompiler for optimized queries)
-      if (filters && filters.length > 0) {
-        // Try to get profileId from first entity (if available) for optimized filtering
-        // For now, we'll use the compiler without profileId (will fallback to JSONB)
-        // TODO: Get profileId from view config or entity types
-        const filterCompiler = new ViewFilterCompiler(await getDb());
-        const compiledFilters = await filterCompiler.compileFilters(filters);
+      // Pre-resolve property definitions (avoid N+1)
+      const dbInstance = await getDb();
+      const propertyMerging = new PropertyMergingService(dbInstance);
+      const mergedProperties =
+        await propertyMerging.mergePropertiesFromProfiles(
+          view.scopeProfileIds,
+          dbInstance
+        );
 
-        if (compiledFilters) {
-          conditions.push(compiledFilters);
-        } else {
-          // Fallback to legacy filter building if compiler returns null
-          for (const filter of filters) {
-            const fieldCondition = buildFilterCondition(filter);
-            if (fieldCondition) {
-              conditions.push(fieldCondition);
-            }
+      // Build property definition map
+      const propertyDefMap = new Map<string, string[]>();
+      for (const [slug, prop] of mergedProperties) {
+        propertyDefMap.set(slug, prop.propertyDefIds);
+      }
+
+      // Apply custom filters (using ViewFilterCompiler with multi-profile support)
+      if (filters && filters.length > 0) {
+        const filterCompiler = new ViewFilterCompiler(dbInstance);
+        try {
+          const compiledFilters = await filterCompiler.compileFilters(
+            filters as EntityFilter[],
+            view.scopeProfileIds,
+            propertyDefMap
+          );
+
+          if (compiledFilters) {
+            conditions.push(compiledFilters);
           }
+        } catch (error) {
+          // ✅ FIX: Error on unknown properties (don't silently skip)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: error instanceof Error ? error.message : "Invalid filter",
+            cause: error,
+          });
         }
       }
 
-      // Build order by clauses
+      // Apply full-text search
+      if (search) {
+        conditions.push(
+          sql`(${entities.title} ILIKE ${`%${search}%`} OR ${entities.preview} ILIKE ${`%${search}%`})`
+        );
+      }
+
+      // Build order by clauses with STRICT validation
       const orderByClause: any[] = [];
       if (sorts && sorts.length > 0) {
-        for (const sort of sorts) {
+        for (const sort of sorts as SortRule[]) {
+          // ✅ STRICT POLICY: Validate sort field
+          if (sort.field.startsWith("properties.")) {
+            const propertySlug = sort.field.split(".")[1];
+            const property = mergedProperties.get(propertySlug);
+
+            if (!property) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Property "${propertySlug}" not found in scope profiles`,
+              });
+            }
+
+            // ✅ STRICT: Must be indexed
+            if (!property.indexed) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Cannot sort by "${propertySlug}" - not indexed. Only indexed properties or core fields can be sorted.`,
+              });
+            }
+
+            // ✅ STRICT: Must exist in all profiles
+            if (property.profiles.length !== view.scopeProfileIds.length) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Cannot sort by "${propertySlug}" - property not present in all scope profiles. Sort requires property to exist in all profiles.`,
+              });
+            }
+          }
+
           const sortClause = buildSortClause(sort);
           if (sortClause) {
             orderByClause.push(sortClause);
@@ -400,10 +487,11 @@ export const viewsRouter = router({
             ? orderByClause
             : [desc(entities.createdAt)])
         )
-        .limit(limit || 100)
-        .offset(offset || 0);
+        .limit(limit)
+        .offset(offset);
 
-      // Apply manual ordering if present
+      // Apply manual ordering if present (from metadata)
+      const metadata = view.metadata as ViewMetadata | undefined;
       const entityOrders = metadata?.entityOrders;
       if (entityOrders && Object.keys(entityOrders).length > 0) {
         fetchedEntities = fetchedEntities.sort((a, b) => {
@@ -428,11 +516,34 @@ export const viewsRouter = router({
               )
           : [];
 
+      // Compute default columns from scope profiles
+      const defaultColumnsService = new ViewDefaultColumnsService();
+      const defaultColumns = defaultColumnsService.computeTableColumns(
+        mergedProperties,
+        view.scopeProfileIds.length
+      );
+
+      // Apply column overrides from config
+      const config = (view.config as Record<string, unknown>) || {};
+      const finalColumns = defaultColumnsService.applyColumnOverrides(
+        defaultColumns,
+        {
+          hiddenColumns: config.hiddenColumns as string[] | undefined,
+          visibleColumns: config.visibleColumns as string[] | undefined,
+          columnOrder: config.columnOrder as string[] | undefined,
+          columnWidths: config.columnWidths as
+            | Record<string, number>
+            | undefined,
+        }
+      );
+
       return {
         view,
-        config,
+        query,
+        config: view.config || {},
         entities: fetchedEntities,
         relations: fetchedRelations,
+        columns: finalColumns,
       };
     }),
 
@@ -726,107 +837,85 @@ export const viewsRouter = router({
         newOrder,
       };
     }),
-});
 
-/**
- * Build a filter condition from an EntityFilter
- */
-function buildFilterCondition(filter: EntityFilter): SQL | null {
-  const { field, operator, value } = filter;
-  const isMetadataField = field.startsWith("metadata.");
+  /**
+   * Get available columns for a view (from scope profiles)
+   */
+  getAvailableColumns: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const view = await db.query.views.findFirst({
+        where: eq(views.id, input.id),
+      });
 
-  if (isMetadataField) {
-    const metadataKey = field.split(".")[1];
-
-    // Use properties field instead of metadata (metadata removed)
-    // Use jsonb_extract_path_text equivalent or the ->> operator
-    const propertiesCol = entities.properties;
-
-    switch (operator) {
-      case "equals":
-        return sql`${propertiesCol}->>${metadataKey} = ${value}`;
-      case "not_equals":
-        return sql`${propertiesCol}->>${metadataKey} != ${value}`;
-      case "contains":
-        return sql`${propertiesCol}->>${metadataKey} ILIKE ${"%" + value + "%"}`;
-      case "is_empty":
-        return sql`${propertiesCol}->>${metadataKey} IS NULL`;
-      case "is_not_empty":
-        return sql`${propertiesCol}->>${metadataKey} IS NOT NULL`;
-      case "in":
-        if (Array.isArray(value)) {
-          // Properly escape array values or use Drizzle array operator if available for JSON
-          // Using Postgres ANY with string array
-          return sql`${propertiesCol}->>${metadataKey} = ANY(${value})`;
-        }
-        return null;
-      default:
-        return null;
-    }
-  } else {
-    // Dynamically get the column
-    // We start with all entity columns
-    const entityColumns = getTableColumns(entities);
-
-    // We check if the field exists in the columns
-    if (field in entityColumns) {
-      // Safe access because we checked existence
-      const column = entityColumns[field as keyof typeof entityColumns];
-
-      // Determine column type roughly for stricter operator checks if we wanted,
-      // but mostly we need to handle the value type matching.
-
-      // We can't easily exhaustively query column type here to eliminate all casts,
-      // but we can eliminate the 'as any' on the return
-
-      switch (operator) {
-        case "equals":
-          return eq(column, value);
-        case "not_equals":
-          // Drizzle doesn't have a direct 'ne' or 'neq' in some versions, but usually 'ne' exists or we use not(eq())
-          // If 'ne' is missing, sql is fine or notEq
-          // Checking imports... we don't have 'ne' or 'notEq' imported.
-          return sql`${column} != ${value}`;
-        case "contains":
-          // Like expects string
-          return like(column as Column<any, any, any>, `%${value}%`);
-        case "greater_than":
-          return gt(column, value);
-        case "less_than":
-          return lt(column, value);
-        case "greater_than_or_equal":
-          return gte(column, value);
-        case "less_than_or_equal":
-          return lte(column, value);
-        case "is_empty":
-          return isNull(column);
-        case "is_not_empty":
-          return isNotNull(column);
-
-        default:
-          return null;
+      if (!view) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
-    }
 
-    return null;
-  }
-}
+      if (!view.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "View must belong to a workspace",
+        });
+      }
+
+      // Check access
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: view.workspaceId },
+        requiredPermission: "read",
+      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason || "Insufficient permissions",
+        });
+
+      // Only structured views have columns
+      if (view.category !== "structured") {
+        return { columns: [] };
+      }
+
+      if (!view.scopeProfileIds || view.scopeProfileIds.length === 0) {
+        return { columns: [] };
+      }
+
+      // Merge properties from scope profiles
+      const dbInstance = await getDb();
+      const propertyMerging = new PropertyMergingService(dbInstance);
+      const mergedProperties =
+        await propertyMerging.mergePropertiesFromProfiles(
+          view.scopeProfileIds,
+          dbInstance
+        );
+
+      // Compute default columns
+      const defaultColumnsService = new ViewDefaultColumnsService();
+      const columns = defaultColumnsService.computeTableColumns(
+        mergedProperties,
+        view.scopeProfileIds.length
+      );
+
+      return { columns };
+    }),
+});
 
 /**
  * Build a sort clause from a SortRule
  */
 function buildSortClause(sort: SortRule): SQL | null {
   const { field, direction } = sort;
-  const isMetadataField = field.startsWith("metadata.");
+  const isPropertyField = field.startsWith("properties.");
 
-  if (isMetadataField) {
-    const metadataKey = field.split(".")[1];
+  if (isPropertyField) {
+    const propertyKey = field.split(".")[1];
     const propertiesCol = entities.properties; // Use properties instead of metadata
 
     // Sort by JSON field text value
     return direction === "asc"
-      ? sql`${propertiesCol}->>${metadataKey} ASC`
-      : sql`${propertiesCol}->>${metadataKey} DESC`;
+      ? sql`${propertiesCol}->>${propertyKey} ASC`
+      : sql`${propertiesCol}->>${propertyKey} DESC`;
   } else {
     const entityColumns = getTableColumns(entities);
     if (field in entityColumns) {

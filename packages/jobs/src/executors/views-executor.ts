@@ -35,11 +35,21 @@ export const viewsHandler = async ({
             | "timeline"
             | "kanban"
             | "table"
-            | "calendar",
+            | "calendar"
+            | "list"
+            | "grid"
+            | "gallery"
+            | "graph"
+            | "mindmap"
+            | "gantt",
           name: (data.name as string) || "Untitled",
+          description: (data.description as string) || undefined,
           documentId: (data.documentId as string) || undefined,
           workspaceId: (data.workspaceId as string) || "",
-          config: (data.config as Record<string, unknown>) || {},
+          scopeProfileIds: (data.scopeProfileIds as string[]) || undefined,
+          scopeMode: (data.scopeMode as "explicit" | "observed") || undefined,
+          query: (data.query as Record<string, unknown>) || undefined,
+          config: (data.config as Record<string, unknown>) || undefined,
           userId,
         },
         userId
@@ -52,7 +62,14 @@ export const viewsHandler = async ({
         data.id as string,
         {
           name: (data.name as string) || undefined,
+          description: (data.description as string) || undefined,
+          scopeProfileIds: (data.scopeProfileIds as string[]) || undefined,
+          scopeMode: (data.scopeMode as "explicit" | "observed") || undefined,
+          query: (data.query as Record<string, unknown>) || undefined,
           config: (data.config as Record<string, unknown>) || undefined,
+          schemaSnapshot:
+            (data.schemaSnapshot as Record<string, unknown>) || undefined,
+          snapshotUpdatedAt: (data.snapshotUpdatedAt as Date) || undefined,
         },
         userId
       );

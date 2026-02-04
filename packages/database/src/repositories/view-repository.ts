@@ -13,17 +13,41 @@ import type { View, NewView } from "../schema/views.js";
 
 export interface CreateViewInput {
   id?: string;
-  type: "whiteboard" | "timeline" | "kanban" | "table" | "calendar";
+  type:
+    | "whiteboard"
+    | "timeline"
+    | "kanban"
+    | "table"
+    | "calendar"
+    | "list"
+    | "grid"
+    | "gallery"
+    | "graph"
+    | "mindmap"
+    | "gantt";
   name: string;
+  description?: string;
   documentId?: string;
   workspaceId: string;
-  config?: Record<string, unknown>;
   userId: string;
+  // NEW: Scope profiles (required for structured views)
+  scopeProfileIds?: string[];
+  scopeMode?: "explicit" | "observed";
+  // NEW: Consolidated query
+  query?: Record<string, unknown>; // EntityQuery
+  // NEW: Render config (overrides only)
+  config?: Record<string, unknown>;
 }
 
 export interface UpdateViewInput {
   name?: string;
+  description?: string;
+  scopeProfileIds?: string[];
+  scopeMode?: "explicit" | "observed";
+  query?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  schemaSnapshot?: Record<string, unknown>;
+  snapshotUpdatedAt?: Date;
 }
 
 export class ViewRepository extends BaseRepository<
@@ -45,6 +69,14 @@ export class ViewRepository extends BaseRepository<
       ? "canvas"
       : "structured";
 
+    // Validate scopeProfileIds for structured views
+    if (
+      category === "structured" &&
+      (!data.scopeProfileIds || data.scopeProfileIds.length === 0)
+    ) {
+      throw new Error("scopeProfileIds is required for structured views");
+    }
+
     const [view] = await this.db
       .insert(views)
       .values({
@@ -52,10 +84,19 @@ export class ViewRepository extends BaseRepository<
         type: data.type,
         category,
         name: data.name,
+        description: data.description,
         documentId: data.documentId,
         workspaceId: data.workspaceId,
-        metadata: data.config || {},
         userId,
+        // NEW: Scope profiles
+        scopeProfileIds: data.scopeProfileIds,
+        scopeMode: data.scopeMode || "explicit",
+        // NEW: Consolidated query
+        query: data.query || {},
+        // NEW: Render config (overrides)
+        config: data.config || {},
+        // Metadata (for entity orders, etc.)
+        metadata: {},
       } as NewView)
       .returning();
 
@@ -74,13 +115,38 @@ export class ViewRepository extends BaseRepository<
     data: UpdateViewInput,
     userId: string
   ): Promise<View> {
+    const updateData: Partial<NewView> = {
+      updatedAt: new Date(),
+    };
+
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.description !== undefined)
+      updateData.description = data.description;
+    if (data.scopeProfileIds !== undefined) {
+      // Validate scopeProfileIds for structured views
+      const view = await this.db.query.views.findFirst({
+        where: eq(views.id, id),
+      });
+      if (
+        view &&
+        view.category === "structured" &&
+        (!data.scopeProfileIds || data.scopeProfileIds.length === 0)
+      ) {
+        throw new Error("scopeProfileIds cannot be empty for structured views");
+      }
+      updateData.scopeProfileIds = data.scopeProfileIds;
+    }
+    if (data.scopeMode !== undefined) updateData.scopeMode = data.scopeMode;
+    if (data.query !== undefined) updateData.query = data.query;
+    if (data.config !== undefined) updateData.config = data.config;
+    if (data.schemaSnapshot !== undefined)
+      updateData.schemaSnapshot = data.schemaSnapshot;
+    if (data.snapshotUpdatedAt !== undefined)
+      updateData.snapshotUpdatedAt = data.snapshotUpdatedAt;
+
     const [view] = await this.db
       .update(views)
-      .set({
-        name: data.name,
-        config: data.config,
-        updatedAt: new Date(),
-      } as Partial<NewView>)
+      .set(updateData)
       .where(and(eq(views.id, id), eq(views.userId, userId)))
       .returning();
 

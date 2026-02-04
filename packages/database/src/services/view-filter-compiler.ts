@@ -7,7 +7,7 @@
 
 import { sql, eq, and, SQL } from "drizzle-orm";
 import { entities, entityPropertyIndex } from "../schema/index.js";
-import { ProfileResolutionService } from "./profile-resolution-service.js";
+import { PropertyMergingService } from "./property-merging-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 // EntityFilter type definition (from @synap-core/types)
@@ -35,69 +35,132 @@ export interface CompiledFilter {
 }
 
 export class ViewFilterCompiler {
-  private profileResolution: ProfileResolutionService;
+  private propertyMerging: PropertyMergingService;
+  private db: PostgresJsDatabase<typeof import("../schema/index.js")>;
 
   constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
-    this.profileResolution = new ProfileResolutionService(db);
+    this.db = db;
+    this.propertyMerging = new PropertyMergingService(db);
   }
 
   /**
    * Compile a single filter condition
    * Returns optimized SQL using index if available, otherwise JSONB query
+   *
+   * @param filter - Filter to compile
+   * @param scopeProfileIds - Array of profile IDs (multi-profile support)
+   * @param propertyDefMap - Pre-resolved map of property slug -> propertyDefIds (optional, to avoid N+1)
    */
   async compileFilter(
     filter: EntityFilter,
-    profileId?: string
+    scopeProfileIds?: string[],
+    propertyDefMap?: Map<string, string[]>
   ): Promise<CompiledFilter | null> {
     const { field, operator, value } = filter;
 
-    // Check if this is a property field (starts with "properties." or "metadata.")
-    const isPropertyField =
-      field.startsWith("properties.") || field.startsWith("metadata.");
+    // Check if this is a property field (starts with "properties.")
+    const isPropertyField = field.startsWith("properties.");
 
     if (!isPropertyField) {
       // Standard entity column - use direct column access
       return this.compileStandardFieldFilter(filter);
     }
 
-    // Extract property key
-    const propertyKey = field.split(".")[1];
-    if (!propertyKey) {
+    // Extract property slug
+    const propertySlug = field.split(".")[1];
+    if (!propertySlug) {
       return null;
     }
 
-    // Try to use index if property is indexed
-    if (profileId) {
-      const indexedFilter = await this.compileIndexedPropertyFilter(
-        propertyKey,
-        operator,
-        value,
-        profileId
+    // Resolve propertyDefIds (pre-resolved if provided, otherwise resolve now)
+    let propertyDefIds: string[] = [];
+    if (propertyDefMap) {
+      propertyDefIds = propertyDefMap.get(propertySlug) || [];
+    } else if (scopeProfileIds && scopeProfileIds.length > 0) {
+      propertyDefIds = await this.propertyMerging.resolvePropertyDefIds(
+        propertySlug,
+        scopeProfileIds,
+        this.db
       );
-      if (indexedFilter) {
-        return indexedFilter;
+    }
+
+    // ✅ FIX: Error on unknown property (don't silently skip)
+    if (
+      propertyDefIds.length === 0 &&
+      scopeProfileIds &&
+      scopeProfileIds.length > 0
+    ) {
+      throw new Error(
+        `Property "${propertySlug}" not found in scope profiles. Available properties: ${scopeProfileIds ? "check scopeProfileIds" : "none"}`
+      );
+    }
+
+    // If no scopeProfileIds, fallback to JSONB (legacy support)
+    if (propertyDefIds.length === 0) {
+      return this.compileJSONBPropertyFilter(propertySlug, operator, value);
+    }
+
+    // Try to use index if property is indexed
+    if (scopeProfileIds && scopeProfileIds.length > 0) {
+      const isIndexed = await this.propertyMerging.isPropertyIndexed(
+        propertySlug,
+        scopeProfileIds,
+        this.db
+      );
+
+      if (isIndexed) {
+        const indexedFilter =
+          await this.compileIndexedPropertyFilterMultiProfile(
+            propertyDefIds,
+            operator,
+            value,
+            propertySlug,
+            scopeProfileIds
+          );
+        if (indexedFilter) {
+          return indexedFilter;
+        }
       }
     }
 
     // Fallback to JSONB query
-    return this.compileJSONBPropertyFilter(propertyKey, operator, value);
+    return this.compileJSONBPropertyFilter(propertySlug, operator, value);
   }
 
   /**
    * Compile multiple filters into a single SQL condition
+   *
+   * @param filters - Filters to compile
+   * @param scopeProfileIds - Array of profile IDs (multi-profile support)
+   * @param propertyDefMap - Pre-resolved map (optional, to avoid N+1)
    */
   async compileFilters(
     filters: EntityFilter[],
-    profileId?: string
+    scopeProfileIds?: string[],
+    propertyDefMap?: Map<string, string[]>
   ): Promise<SQL | null> {
     if (filters.length === 0) {
       return null;
     }
 
+    // Pre-resolve property definitions if not provided (avoid N+1)
+    let resolvedPropertyDefMap = propertyDefMap;
+    if (
+      !resolvedPropertyDefMap &&
+      scopeProfileIds &&
+      scopeProfileIds.length > 0
+    ) {
+      resolvedPropertyDefMap = await this.buildPropertyDefMap(scopeProfileIds);
+    }
+
     const compiledFilters: SQL[] = [];
 
     for (const filter of filters) {
-      const compiled = await this.compileFilter(filter, profileId);
+      const compiled = await this.compileFilter(
+        filter,
+        scopeProfileIds,
+        resolvedPropertyDefMap
+      );
       if (compiled !== null) {
         compiledFilters.push(compiled.sql);
       }
@@ -115,6 +178,26 @@ export class ViewFilterCompiler {
 
     const combined = and(...compiledFilters);
     return combined ?? null;
+  }
+
+  /**
+   * Build property definition map (pre-resolve to avoid N+1)
+   * Returns map of property slug -> propertyDefIds[]
+   */
+  private async buildPropertyDefMap(
+    scopeProfileIds: string[]
+  ): Promise<Map<string, string[]>> {
+    const merged = await this.propertyMerging.mergePropertiesFromProfiles(
+      scopeProfileIds,
+      this.db
+    );
+
+    const map = new Map<string, string[]>();
+    for (const [slug, prop] of merged) {
+      map.set(slug, prop.propertyDefIds);
+    }
+
+    return map;
   }
 
   /**
@@ -197,63 +280,60 @@ export class ViewFilterCompiler {
   }
 
   /**
-   * Compile filter for indexed property (uses entity_property_index)
+   * Compile filter for indexed property (multi-profile support)
+   * Uses entity_property_index with propertyDefId IN (...)
    */
-  private async compileIndexedPropertyFilter(
-    propertyKey: string,
+  private async compileIndexedPropertyFilterMultiProfile(
+    propertyDefIds: string[],
     operator: string,
     value: unknown,
-    profileId: string
+    propertySlug: string,
+    scopeProfileIds: string[]
   ): Promise<CompiledFilter | null> {
-    // Get effective properties to find property definition
-    const effectiveProperties =
-      await this.profileResolution.getEffectiveProperties(profileId);
-    const propertyDef = effectiveProperties.find((p) => p.slug === propertyKey);
-
-    if (!propertyDef) {
-      return null; // Property not in profile, fallback to JSONB
+    if (propertyDefIds.length === 0 || scopeProfileIds.length === 0) {
+      return null;
     }
 
-    // Check if property is indexed (for now, we assume hot properties are indexed)
-    // TODO: Add "indexed" flag to profile_properties table
-    const hotProperties = [
-      "title",
-      "status",
-      "priority",
-      "dueDate",
-      "startTime",
-      "endTime",
-      "assignee",
-    ];
-
-    if (!hotProperties.includes(propertyKey)) {
-      return null; // Not indexed, fallback to JSONB
+    // Get value type from merged properties
+    const merged = await this.propertyMerging.mergePropertiesFromProfiles(
+      scopeProfileIds,
+      this.db
+    );
+    const property = merged.get(propertySlug);
+    if (!property) {
+      return null;
     }
 
-    // Build SQL using entity_property_index
-    // Join with entity_property_index to filter by indexed value
-    const valueType = propertyDef.valueType;
+    const valueType = property.valueType;
 
     switch (operator) {
       case "equals":
-        return this.buildIndexedEqualsFilter(propertyDef.id, value, valueType);
+        return this.buildIndexedEqualsFilterMultiProfile(
+          propertyDefIds,
+          value,
+          valueType
+        );
       case "not_equals":
-        return this.buildIndexedNotEqualsFilter(
-          propertyDef.id,
+        return this.buildIndexedNotEqualsFilterMultiProfile(
+          propertyDefIds,
           value,
           valueType
         );
       case "in":
         if (Array.isArray(value)) {
-          return this.buildIndexedInFilter(propertyDef.id, value, valueType);
+          return this.buildIndexedInFilterMultiProfile(
+            propertyDefIds,
+            value,
+            valueType
+          );
         }
         return null;
       case "greater_than":
       case "greater_than_or_equal":
       case "less_than":
       case "less_than_or_equal":
-        return this.buildIndexedRangeFilter(
-          propertyDef.id,
+        return this.buildIndexedRangeFilterMultiProfile(
+          propertyDefIds,
           operator,
           value,
           valueType
@@ -264,10 +344,10 @@ export class ViewFilterCompiler {
   }
 
   /**
-   * Build indexed equals filter
+   * Build indexed equals filter (multi-profile - uses propertyDefId IN (...))
    */
-  private buildIndexedEqualsFilter(
-    propertyDefId: string,
+  private buildIndexedEqualsFilterMultiProfile(
+    propertyDefIds: string[],
     value: unknown,
     valueType: string
   ): CompiledFilter {
@@ -296,7 +376,7 @@ export class ViewFilterCompiler {
           SELECT 1
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
-            AND ${entityPropertyIndex.propertyDefId} = ${propertyDefId}
+            AND ${entityPropertyIndex.propertyDefId} = ANY(${propertyDefIds})
             AND ${valueColumn} = ${value}
         )
       `,
@@ -305,16 +385,15 @@ export class ViewFilterCompiler {
   }
 
   /**
-   * Build indexed not equals filter
+   * Build indexed not equals filter (multi-profile)
    */
-  private buildIndexedNotEqualsFilter(
-    propertyDefId: string,
+  private buildIndexedNotEqualsFilterMultiProfile(
+    propertyDefIds: string[],
     value: unknown,
     valueType: string
   ): CompiledFilter {
-    // Similar to equals but with NOT
-    const equalsFilter = this.buildIndexedEqualsFilter(
-      propertyDefId,
+    const equalsFilter = this.buildIndexedEqualsFilterMultiProfile(
+      propertyDefIds,
       value,
       valueType
     );
@@ -325,10 +404,10 @@ export class ViewFilterCompiler {
   }
 
   /**
-   * Build indexed IN filter
+   * Build indexed IN filter (multi-profile)
    */
-  private buildIndexedInFilter(
-    propertyDefId: string,
+  private buildIndexedInFilterMultiProfile(
+    propertyDefIds: string[],
     values: unknown[],
     valueType: string
   ): CompiledFilter {
@@ -357,7 +436,7 @@ export class ViewFilterCompiler {
           SELECT 1
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
-            AND ${entityPropertyIndex.propertyDefId} = ${propertyDefId}
+            AND ${entityPropertyIndex.propertyDefId} = ANY(${propertyDefIds})
             AND ${valueColumn} = ANY(${values})
         )
       `,
@@ -366,10 +445,10 @@ export class ViewFilterCompiler {
   }
 
   /**
-   * Build indexed range filter (gt, gte, lt, lte)
+   * Build indexed range filter (multi-profile)
    */
-  private buildIndexedRangeFilter(
-    propertyDefId: string,
+  private buildIndexedRangeFilterMultiProfile(
+    propertyDefIds: string[],
     operator: string,
     value: unknown,
     valueType: string
@@ -414,7 +493,7 @@ export class ViewFilterCompiler {
           SELECT 1
           FROM ${entityPropertyIndex}
           WHERE ${entityPropertyIndex.entityId} = ${entities.id}
-            AND ${entityPropertyIndex.propertyDefId} = ${propertyDefId}
+            AND ${entityPropertyIndex.propertyDefId} = ANY(${propertyDefIds})
             AND ${valueColumn} ${sql.raw(sqlOperator)} ${value}
         )
       `,

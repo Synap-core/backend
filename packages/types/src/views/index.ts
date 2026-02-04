@@ -41,18 +41,31 @@ export type ViewType =
 // API Input Types
 // =============================================================================
 
-import type { ViewConfig } from "./config.js";
+import type { EntityQuery } from "./query.js";
 
 export interface CreateViewInput {
   workspaceId?: string;
   type: ViewType;
   name: string;
   description?: string;
-  config?: ViewConfig; // NEW: Replaces initialContent/tableConfig
+  // NEW: Scope profiles (required for structured views)
+  scopeProfileIds?: string[];
+  scopeMode?: "explicit" | "observed";
+  // NEW: Consolidated query
+  query?: EntityQuery;
+  // NEW: Render config (overrides only)
+  config?: Record<string, unknown>;
+  // Canvas views: initialContent (for whiteboard, mindmap)
+  initialContent?: unknown;
 }
 
 export interface UpdateViewInput {
   name?: string;
   description?: string;
-  config?: Partial<ViewConfig>;
+  scopeProfileIds?: string[];
+  scopeMode?: "explicit" | "observed";
+  query?: EntityQuery;
+  config?: Record<string, unknown>;
+  schemaSnapshot?: Record<string, unknown>;
+  snapshotUpdatedAt?: Date;
 }

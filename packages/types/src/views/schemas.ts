@@ -42,9 +42,17 @@ const SortRuleSchema = z.object({
 
 /**
  * Entity query schema
+ * NOTE: profileIds/profileSlugs/entityTypes are now stored in views.scopeProfileIds
+ * This schema only validates filters, sorts, search, pagination, and groupBy
  */
 export const EntityQuerySchema = z.object({
+  /** @deprecated - Profile IDs now stored in views.scopeProfileIds */
+  profileIds: z.array(z.string().uuid()).optional(),
+  /** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
+  profileSlugs: z.array(z.string()).optional(),
+  /** @deprecated - Use profileSlugs instead, which is also deprecated */
   entityTypes: z.array(z.string()).optional(),
+  /** Specific entity IDs (for fixed sets) */
   entityIds: z.array(z.string().uuid()).optional(),
   filters: z.array(EntityFilterSchema).optional(),
   sorts: z.array(SortRuleSchema).optional(),

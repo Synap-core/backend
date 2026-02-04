@@ -86,14 +86,12 @@ export const documentVersions = pgTable(
 
     // Version info
     version: integer("version").notNull(),
-    type: text("type").notNull().default("manual"), // 'manual' | 'checkpoint' | 'restore'
-    content: text("content").notNull(), // Full content at this version
+    content: text("content").notNull(), // Full content at this version (snapshot)
 
-    // Change tracking
-    delta: jsonb("delta"), // Operational Transform operations
-    author: text("author").notNull(), // 'user' | 'ai'
-    authorId: text("author_id").notNull(),
-    message: text("message"), // Commit message
+    // Author tracking
+    author: text("author").notNull(), // 'user' | 'system'
+    authorId: text("author_id").notNull(), // User ID who created this version
+    message: text("message"), // Optional commit message (for UI display in version history)
 
     // Timestamps
     createdAt: timestamp("created_at", { withTimezone: true })

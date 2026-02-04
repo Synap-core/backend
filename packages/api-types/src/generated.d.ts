@@ -762,6 +762,18 @@ export interface EffectiveProperty extends PropertyDef {
   displayOrder: number;
 }
 /**
+ * Column definition for views
+ */
+export interface ViewColumn {
+  id: string;
+  field: string;
+  title?: string;
+  valueType?: string;
+  indexed?: boolean;
+  visible?: boolean;
+  width?: number;
+}
+/**
  * View Query Types
  *
  * Single source of truth for all view query and filter types.
@@ -800,11 +812,16 @@ export interface SortRule {
 /**
  * Query definition for structured views
  * Defines which entities to show and how to filter them
+ *
+ * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
+ * This query structure only contains filters, sorts, search, pagination, and groupBy
  */
 export interface EntityQuery {
-  /** Profile slugs to include (preferred - dynamic profiles) */
+  /** @deprecated - Profile IDs now stored in views.scopeProfileIds */
+  profileIds?: string[];
+  /** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
   profileSlugs?: string[];
-  /** Entity types to include (deprecated - use profileSlugs instead) */
+  /** @deprecated - Use profileSlugs instead, which is also deprecated */
   entityTypes?: string[];
   /** Specific entity IDs (for fixed sets) */
   entityIds?: string[];
@@ -833,81 +850,6 @@ export interface EntityQuery {
  * - canvas: Freeform drawing views (whiteboard, mindmap)
  */
 export type ViewCategory = "structured" | "canvas";
-/**
- * View Configuration Types
- *
- * Discriminated union for view configurations.
- */
-export interface ColumnDisplayConfig {
-  type:
-    | "text"
-    | "badge"
-    | "date"
-    | "user"
-    | "url"
-    | "boolean"
-    | "progress"
-    | "rating"
-    | "image"
-    | "file";
-  params?: {
-    colors?: Record<string, string>;
-    format?: string;
-    relative?: boolean;
-    wrap?: boolean;
-    lines?: number;
-    precision?: number;
-    currency?: string;
-    align?: "left" | "center" | "right";
-    icon?: string;
-  };
-}
-export interface ColumnConfig {
-  id: string;
-  field: string;
-  width?: number;
-  visible?: boolean;
-  title?: string;
-  display?: ColumnDisplayConfig;
-}
-export interface FormattingRule {
-  id: string;
-  name?: string;
-  target: "row" | "cell" | "card";
-  filter: EntityFilter;
-  style: {
-    color?: string;
-    backgroundColor?: string;
-    fontWeight?: "bold" | "normal";
-    fontStyle?: "italic" | "normal";
-    strikeThrough?: boolean;
-    icon?: string;
-  };
-}
-export interface RenderSettings {
-  rowHeight?: "compact" | "default" | "tall";
-  formatting?: FormattingRule[];
-  columns?: ColumnConfig[];
-  groupByField?: string;
-  cardFields?: string[];
-  cardSettings?: {
-    coverField?: string;
-    showAvatars?: boolean;
-    visibleFields?: string[];
-    colorField?: string;
-  };
-  dateField?: string;
-  endDateField?: string;
-  colorField?: string;
-  layout?: "force" | "hierarchical" | "circular";
-  nodeColorField?: string;
-  edgeLabelField?: string;
-}
-export interface StructuredViewConfig {
-  category: "structured";
-  query: EntityQuery;
-  render?: RenderSettings;
-}
 declare enum AgentType {
   DEFAULT = "default",
   META = "meta",
@@ -1417,7 +1359,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                       }[];
                       executionSummaries: {
                         tool: string;
-                        status: "error" | "success" | "skipped";
+                        status: "error" | "skipped" | "success";
                         result?: unknown;
                         error?: string | undefined;
                       }[];
@@ -1475,7 +1417,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               content: string;
               threadId: string;
               parentId: string | null;
-              role: "user" | "system" | "assistant";
+              role: "user" | "assistant" | "system";
               previousHash: string | null;
               hash: string;
             }[];
@@ -2574,11 +2516,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           output: {
             id: string;
             createdAt: Date;
-            type: string;
             documentId: string;
             version: number;
             content: string;
-            delta: unknown;
             author: string;
             authorId: string;
             message: string | null;
@@ -3645,6 +3585,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "mindmap";
             workspaceId?: string | undefined;
             description?: string | undefined;
+            scopeProfileIds?: string[] | undefined;
+            scopeMode?: "explicit" | "observed" | undefined;
+            query?:
+              | {
+                  filters?: any[] | undefined;
+                  sorts?: any[] | undefined;
+                  search?: string | undefined;
+                  limit?: number | undefined;
+                  offset?: number | undefined;
+                  groupBy?: string | undefined;
+                }
+              | undefined;
+            config?: Record<string, any> | undefined;
             initialContent?: any;
           };
           output: {
@@ -3703,6 +3656,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             userId: string;
             workspaceId: string | null;
             id: string;
+            query: unknown;
             columns: unknown;
             updatedAt: Date;
             createdAt: Date;
@@ -3712,11 +3666,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             documentId: string | null;
             description: string | null;
             category: string;
+            scopeProfileIds: string[] | null;
+            scopeMode: string | null;
+            config: unknown;
             filter: unknown;
             sort: unknown;
             layoutConfig: unknown;
             yjsRoomId: string | null;
             thumbnailUrl: string | null;
+            schemaSnapshot: unknown;
+            snapshotUpdatedAt: Date | null;
           }[];
           meta: object;
         }>;
@@ -3730,6 +3689,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               userId: string;
               workspaceId: string | null;
               id: string;
+              query: unknown;
               columns: unknown;
               updatedAt: Date;
               createdAt: Date;
@@ -3739,11 +3699,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               documentId: string | null;
               description: string | null;
               category: string;
+              scopeProfileIds: string[] | null;
+              scopeMode: string | null;
+              config: unknown;
               filter: unknown;
               sort: unknown;
               layoutConfig: unknown;
               yjsRoomId: string | null;
               thumbnailUrl: string | null;
+              schemaSnapshot: unknown;
+              snapshotUpdatedAt: Date | null;
             };
             content: {};
           };
@@ -3760,6 +3725,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   userId: string;
                   workspaceId: string | null;
                   id: string;
+                  query: unknown;
                   columns: unknown;
                   updatedAt: Date;
                   createdAt: Date;
@@ -3769,16 +3735,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   documentId: string | null;
                   description: string | null;
                   category: string;
+                  scopeProfileIds: string[] | null;
+                  scopeMode: string | null;
+                  config: unknown;
                   filter: unknown;
                   sort: unknown;
                   layoutConfig: unknown;
                   yjsRoomId: string | null;
                   thumbnailUrl: string | null;
+                  schemaSnapshot: unknown;
+                  snapshotUpdatedAt: Date | null;
                 };
                 content: {};
                 entities: never[];
                 relations: never[];
+                query?: undefined;
                 config?: undefined;
+                columns?: undefined;
               }
             | {
                 view: {
@@ -3786,6 +3759,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   userId: string;
                   workspaceId: string | null;
                   id: string;
+                  query: unknown;
                   columns: unknown;
                   updatedAt: Date;
                   createdAt: Date;
@@ -3795,39 +3769,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   documentId: string | null;
                   description: string | null;
                   category: string;
+                  scopeProfileIds: string[] | null;
+                  scopeMode: string | null;
+                  config: unknown;
                   filter: unknown;
                   sort: unknown;
                   layoutConfig: unknown;
                   yjsRoomId: string | null;
                   thumbnailUrl: string | null;
+                  schemaSnapshot: unknown;
+                  snapshotUpdatedAt: Date | null;
                 };
-                config: StructuredViewConfig | undefined;
-                entities: never[];
-                relations: never[];
-                content?: undefined;
-              }
-            | {
-                view: {
-                  name: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  id: string;
-                  columns: unknown;
-                  updatedAt: Date;
-                  createdAt: Date;
-                  type: string;
-                  metadata: unknown;
-                  projectIds: string[] | null;
-                  documentId: string | null;
-                  description: string | null;
-                  category: string;
-                  filter: unknown;
-                  sort: unknown;
-                  layoutConfig: unknown;
-                  yjsRoomId: string | null;
-                  thumbnailUrl: string | null;
-                };
-                config: StructuredViewConfig;
+                query: EntityQuery;
+                config: {};
                 entities: {
                   id: string;
                   userId: string;
@@ -3854,6 +3808,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   type: string;
                   createdAt: Date;
                 }[];
+                columns: ViewColumn[];
                 content?: undefined;
               };
           meta: object;
@@ -3901,6 +3856,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           output: {
             success: boolean;
             newOrder: number;
+          };
+          meta: object;
+        }>;
+        getAvailableColumns: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            columns: ViewColumn[];
           };
           meta: object;
         }>;
@@ -4266,6 +4230,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   userId: string;
                   workspaceId: string | null;
                   id: string;
+                  query: unknown;
                   columns: unknown;
                   updatedAt: Date;
                   createdAt: Date;
@@ -4275,11 +4240,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   documentId: string | null;
                   description: string | null;
                   category: string;
+                  scopeProfileIds: string[] | null;
+                  scopeMode: string | null;
+                  config: unknown;
                   filter: unknown;
                   sort: unknown;
                   layoutConfig: unknown;
                   yjsRoomId: string | null;
                   thumbnailUrl: string | null;
+                  schemaSnapshot: unknown;
+                  snapshotUpdatedAt: Date | null;
                   document: never;
                 };
             permissions: unknown;
@@ -4698,9 +4668,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             version: number;
             entityType: string | null;
             description: string | null;
+            config: unknown;
             targetType: string;
             inboxItemType: string | null;
-            config: unknown;
             schema: unknown;
             isDefault: boolean;
             isPublic: boolean;
@@ -4746,11 +4716,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             versions: {
               id: string;
               createdAt: Date;
-              type: string;
               documentId: string;
               version: number;
               content: string;
-              delta: unknown;
               author: string;
               authorId: string;
               message: string | null;
@@ -4777,11 +4745,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             version: {
               id: string;
               createdAt: Date;
-              type: string;
               documentId: string;
               version: number;
               content: string;
-              delta: unknown;
               author: string;
               authorId: string;
               message: string | null;
