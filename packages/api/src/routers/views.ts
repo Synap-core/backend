@@ -35,6 +35,8 @@ import {
   documentVersions,
   entities,
   relations,
+  ViewFilterCompiler,
+  getDb,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -356,12 +358,23 @@ export const viewsRouter = router({
         conditions.push(inArray(entities.type, entityTypes));
       }
 
-      // Apply custom filters
+      // Apply custom filters (using ViewFilterCompiler for optimized queries)
       if (filters && filters.length > 0) {
-        for (const filter of filters) {
-          const fieldCondition = buildFilterCondition(filter);
-          if (fieldCondition) {
-            conditions.push(fieldCondition);
+        // Try to get profileId from first entity (if available) for optimized filtering
+        // For now, we'll use the compiler without profileId (will fallback to JSONB)
+        // TODO: Get profileId from view config or entity types
+        const filterCompiler = new ViewFilterCompiler(await getDb());
+        const compiledFilters = await filterCompiler.compileFilters(filters);
+
+        if (compiledFilters) {
+          conditions.push(compiledFilters);
+        } else {
+          // Fallback to legacy filter building if compiler returns null
+          for (const filter of filters) {
+            const fieldCondition = buildFilterCondition(filter);
+            if (fieldCondition) {
+              conditions.push(fieldCondition);
+            }
           }
         }
       }
@@ -725,27 +738,26 @@ function buildFilterCondition(filter: EntityFilter): SQL | null {
   if (isMetadataField) {
     const metadataKey = field.split(".")[1];
 
+    // Use properties field instead of metadata (metadata removed)
     // Use jsonb_extract_path_text equivalent or the ->> operator
-    // Since we are inside sql template, we can't easily avoid raw sql here,
-    // but we can type the result
-    const metadataCol = entities.metadata;
+    const propertiesCol = entities.properties;
 
     switch (operator) {
       case "equals":
-        return sql`${metadataCol}->>${metadataKey} = ${value}`;
+        return sql`${propertiesCol}->>${metadataKey} = ${value}`;
       case "not_equals":
-        return sql`${metadataCol}->>${metadataKey} != ${value}`;
+        return sql`${propertiesCol}->>${metadataKey} != ${value}`;
       case "contains":
-        return sql`${metadataCol}->>${metadataKey} ILIKE ${"%" + value + "%"}`;
+        return sql`${propertiesCol}->>${metadataKey} ILIKE ${"%" + value + "%"}`;
       case "is_empty":
-        return sql`${metadataCol}->>${metadataKey} IS NULL`;
+        return sql`${propertiesCol}->>${metadataKey} IS NULL`;
       case "is_not_empty":
-        return sql`${metadataCol}->>${metadataKey} IS NOT NULL`;
+        return sql`${propertiesCol}->>${metadataKey} IS NOT NULL`;
       case "in":
         if (Array.isArray(value)) {
           // Properly escape array values or use Drizzle array operator if available for JSON
           // Using Postgres ANY with string array
-          return sql`${metadataCol}->>${metadataKey} = ANY(${value})`;
+          return sql`${propertiesCol}->>${metadataKey} = ANY(${value})`;
         }
         return null;
       default:
@@ -809,12 +821,12 @@ function buildSortClause(sort: SortRule): SQL | null {
 
   if (isMetadataField) {
     const metadataKey = field.split(".")[1];
-    const metadataCol = entities.metadata;
+    const propertiesCol = entities.properties; // Use properties instead of metadata
 
     // Sort by JSON field text value
     return direction === "asc"
-      ? sql`${metadataCol}->>${metadataKey} ASC`
-      : sql`${metadataCol}->>${metadataKey} DESC`;
+      ? sql`${propertiesCol}->>${metadataKey} ASC`
+      : sql`${propertiesCol}->>${metadataKey} DESC`;
   } else {
     const entityColumns = getTableColumns(entities);
     if (field in entityColumns) {

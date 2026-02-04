@@ -9,6 +9,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, and, desc } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 
 export const proposalsRouter = router({
@@ -47,7 +48,14 @@ export const proposalsRouter = router({
       }
 
       if (input.status !== "all") {
-        conditions.push(eq(proposals.status, input.status));
+        // Map string to enum
+        const statusEnum =
+          input.status === "pending"
+            ? ProposalStatus.PENDING
+            : input.status === "validated"
+              ? ProposalStatus.APPROVED // Note: "validated" maps to APPROVED
+              : ProposalStatus.REJECTED;
+        conditions.push(eq(proposals.status, statusEnum));
       }
 
       // TODO: Add stricter permission checks here (User must be Editor of workspace)

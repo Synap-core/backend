@@ -9,7 +9,6 @@ import {
   and,
   entities,
   documents,
-  EntityType,
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import {
@@ -86,66 +85,70 @@ export const entitiesHandler = async ({
 
       // Step 3: Create entity with documentId
       await step.run("create-entity", async () => {
-        // Handle both 'type' (from API) and 'entityType' (from repository interface)
-        // Standardize on entityType for consistency
-        const entityTypeValue =
-          (data.entityType as string) || (data.type as string);
-        if (!entityTypeValue) {
+        const workspaceId = (data.workspaceId as string) || "";
+        if (!workspaceId) {
+          throw new Error("workspaceId is required for entity creation");
+        }
+
+        // Prepare entity input (profile-based)
+        const entityInput: Parameters<typeof entityRepo.create>[0] = {
+          workspaceId,
+          userId,
+          title: (data.title as string) || undefined,
+          preview: (data.preview as string) || undefined,
+          documentId: docId,
+          properties: (data.properties as Record<string, unknown>) || undefined,
+        };
+
+        // Prefer profile-based, fallback to legacy type
+        if (data.profileId) {
+          entityInput.profileId = data.profileId as string;
+        } else if (data.profileSlug) {
+          entityInput.profileSlug = data.profileSlug as string;
+        } else if (data.type) {
+          // Legacy: use type as profileSlug
+          entityInput.profileSlug = data.type as string;
+        } else {
           throw new Error(
-            "Entity type is required (must provide either 'type' or 'entityType')"
+            "Either profileId, profileSlug, or type must be provided"
           );
         }
 
-        // Validate and cast to EntityType enum
-        const entityType = Object.values(EntityType).includes(
-          entityTypeValue as EntityType
-        )
-          ? (entityTypeValue as EntityType)
-          : EntityType.NOTE; // Default fallback
-
-        await entityRepo.create(
-          {
-            entityType,
-            title: (data.title as string) || undefined,
-            preview: (data.preview as string) || undefined,
-            documentId: docId, // Link to document
-            metadata: (data.metadata as Record<string, unknown>) || {},
-            userId,
-          },
-          userId
-        );
+        await entityRepo.create(entityInput, userId);
       });
     } else {
       // Simple entity creation without document
       await step.run("create-entity", async () => {
-        // Handle both 'type' (from API) and 'entityType' (from repository interface)
-        // Standardize on entityType for consistency
-        const entityTypeValue =
-          (data.entityType as string) || (data.type as string);
-        if (!entityTypeValue) {
+        const workspaceId = (data.workspaceId as string) || "";
+        if (!workspaceId) {
+          throw new Error("workspaceId is required for entity creation");
+        }
+
+        // Prepare entity input (profile-based)
+        const entityInput: Parameters<typeof entityRepo.create>[0] = {
+          workspaceId,
+          userId,
+          title: (data.title as string) || undefined,
+          preview: (data.preview as string) || undefined,
+          documentId: (data.documentId as string) || undefined,
+          properties: (data.properties as Record<string, unknown>) || undefined,
+        };
+
+        // Prefer profile-based, fallback to legacy type
+        if (data.profileId) {
+          entityInput.profileId = data.profileId as string;
+        } else if (data.profileSlug) {
+          entityInput.profileSlug = data.profileSlug as string;
+        } else if (data.type) {
+          // Legacy: use type as profileSlug
+          entityInput.profileSlug = data.type as string;
+        } else {
           throw new Error(
-            "Entity type is required (must provide either 'type' or 'entityType')"
+            "Either profileId, profileSlug, or type must be provided"
           );
         }
 
-        // Validate and cast to EntityType enum
-        const entityType = Object.values(EntityType).includes(
-          entityTypeValue as EntityType
-        )
-          ? (entityTypeValue as EntityType)
-          : EntityType.NOTE; // Default fallback
-
-        await entityRepo.create(
-          {
-            entityType,
-            title: (data.title as string) || undefined,
-            preview: (data.preview as string) || undefined,
-            documentId: (data.documentId as string) || undefined, // Use provided documentId if any
-            metadata: (data.metadata as Record<string, unknown>) || {},
-            userId,
-          },
-          userId
-        );
+        await entityRepo.create(entityInput, userId);
       });
     }
   } else if (action === "update") {
@@ -156,7 +159,7 @@ export const entitiesHandler = async ({
           title: (data.title as string) || undefined,
           preview: (data.preview as string) || undefined,
           content: (data.content as string) || undefined,
-          metadata: (data.metadata as Record<string, unknown>) || undefined,
+          properties: (data.properties as Record<string, unknown>) || undefined,
         },
         userId
       );

@@ -7,6 +7,12 @@
 export * from "./base-repository.js";
 export * from "./event-repository.js";
 export * from "./message-links-repository.js";
+
+// Dynamic Schema System Repositories
+export * from "./property-def-repository.js";
+export * from "./profile-repository.js";
+export * from "./profile-property-repository.js";
+export * from "./entity-property-index-repository.js";
 export * from "./conversation-repository.js";
 export * from "./knowledge-repository.js";
 export * from "./suggestion-repository.js";

@@ -15,24 +15,9 @@ import {
   jsonb,
 } from "drizzle-orm/pg-core";
 import { documents } from "./documents.js";
+import { profiles } from "./profiles.js";
 
-/**
- * Entity Types
- *
- * Standard entity types in the system.
- * Users can create custom types via user preferences.
- */
-export enum EntityType {
-  NOTE = "note",
-  TASK = "task",
-  PROJECT = "project",
-  DOCUMENT = "document",
-  PAGE = "page",
-  HABIT = "habit",
-  EVENT = "event",
-  PERSON = "person",
-  FILE = "file",
-}
+// EntityType enum removed - use profile slugs (strings) instead
 
 export const entities = pgTable("entities", {
   // Primary key
@@ -43,20 +28,14 @@ export const entities = pgTable("entities", {
   workspaceId: uuid("workspace_id").notNull(), // Every entity belongs to a workspace
   projectIds: uuid("project_ids").array(), // Optional: entities can be in multiple projects
 
-  // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event', 'person', 'file'
-  type: text("type", {
-    enum: [
-      EntityType.NOTE,
-      EntityType.TASK,
-      EntityType.PROJECT,
-      EntityType.DOCUMENT,
-      EntityType.PAGE,
-      EntityType.HABIT,
-      EntityType.EVENT,
-      EntityType.PERSON,
-      EntityType.FILE,
-    ],
-  }).notNull(),
+  // Profile reference (NEW - for dynamic types)
+  profileId: uuid("profile_id").references(() => profiles.id, {
+    onDelete: "set null",
+  }),
+
+  // Entity type: 'note', 'task', 'project', etc. (DEPRECATED - use profile.slug)
+  // Kept for backward compatibility, will be populated from profile.slug
+  type: text("type").notNull(), // No enum constraint - now flexible
 
   // Display metadata (NOT the full content!)
   title: text("title"),
@@ -68,9 +47,9 @@ export const entities = pgTable("entities", {
     onDelete: "set null",
   }),
 
-  // Type-specific metadata (JSONB)
-  // Stores entity type-specific fields (task status, person email, etc.)
-  metadata: jsonb("metadata").default("{}"),
+  // Properties (JSONB) - Source of truth for entity metadata
+  // Validated against profile property definitions
+  properties: jsonb("properties").default("{}").notNull(),
 
   // Optimistic locking
   version: integer("version").default(1).notNull(),

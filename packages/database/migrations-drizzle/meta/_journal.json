@@ -22,6 +22,13 @@
       "when": 1770158164910,
       "tag": "0002_daily_marvel_zombies",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1770172836427,
+      "tag": "0003_sparkling_thundra",
+      "breakpoints": true
     }
   ]
 }

@@ -37,7 +37,7 @@ export const entitiesRouter = router({
 
       // Call regular API's list endpoint
       const result = await caller.list({
-        type: input.type as any,
+        profileSlug: input.type, // Map type to profileSlug
         limit: input.limit || 50,
       });
 
@@ -78,7 +78,7 @@ export const entitiesRouter = router({
       // Call regular API's create endpoint
       // Note: Regular API doesn't have aiMetadata, but we can add it to the event
       const result = await caller.create({
-        type: input.type as any,
+        profileSlug: input.type, // Map type to profileSlug
         title: input.title,
         description: input.description,
       });
@@ -117,11 +117,12 @@ export const entitiesRouter = router({
 
       // Call regular API's update endpoint
       // Note: Regular API doesn't have metadata parameter in update,
-      // but we can pass it via workspaceId or extend the API later
+      // but we can pass it via properties
       const result = await caller.update({
         id: input.entityId,
         title: input.title,
-        preview: input.preview,
+        description: input.preview, // Map preview to description
+        properties: input.metadata, // Map metadata to properties
       });
 
       return {

@@ -1,98 +1,40 @@
 /**
  * Entity Types
  *
- * TypeScript types for entities with discriminated unions.
- * Types are automatically generated from Zod schemas and Database definition.
+ * TypeScript types for entities with profile-based dynamic types.
+ * Entity types are now dynamic (profiles), not hardcoded enums.
  */
 
 import { z } from "zod";
-import { ENTITY_SCHEMAS } from "./schemas.js";
 
 /**
- * Entity Metadata Interface per type
- */
-export { type EntityMetadata, type EntityType } from "./schemas.js";
-import type { EntityType } from "./schemas.js";
-
-/**
- * Entity Schema - Discriminated Union
+ * Entity Schema - Profile-Based (Dynamic Types)
  *
- * Combines the Database Schema (common fields) with type-specific metadata
+ * Entities now use profiles for dynamic type definitions.
+ * Properties are validated against profile schemas.
  */
-
-// Create a base schema from the select schema
-const baseEntitySchema = z.object({
-  id: z.string(),
+export const EntitySchema = z.object({
+  id: z.string().uuid(),
   userId: z.string(),
   workspaceId: z.string().nullable(),
-  type: z.string(),
+  type: z.string(), // Profile slug (dynamic, not enum)
+  profileId: z.string().uuid().nullable(), // FK to profiles table
   title: z.string().nullable(),
   preview: z.string().nullable(),
-  documentId: z.string().nullable(),
-  metadata: z.any(),
+  documentId: z.string().uuid().nullable(),
+  properties: z.record(z.string(), z.unknown()), // Validated properties (source of truth)
+  // metadata field removed - use properties instead
   fileUrl: z.string().nullable(),
   filePath: z.string().nullable(),
   fileSize: z.number().nullable(),
   fileType: z.string().nullable(),
   checksum: z.string().nullable(),
-  projectIds: z.array(z.string()).nullable(),
+  projectIds: z.array(z.string().uuid()).nullable(),
   version: z.number(),
   createdAt: z.date(),
   updatedAt: z.date(),
   deletedAt: z.date().nullable(),
 });
-
-// Create discriminated union with proper typing
-export const EntitySchema = z.discriminatedUnion("type", [
-  baseEntitySchema.extend({
-    type: z.literal("task"),
-    metadata: ENTITY_SCHEMAS.task,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("note"),
-    metadata: ENTITY_SCHEMAS.note,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("person"),
-    metadata: ENTITY_SCHEMAS.person,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("event"),
-    metadata: ENTITY_SCHEMAS.event,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("file"),
-    metadata: ENTITY_SCHEMAS.file,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("code"),
-    metadata: ENTITY_SCHEMAS.code,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("bookmark"),
-    metadata: ENTITY_SCHEMAS.bookmark,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("company"),
-    metadata: ENTITY_SCHEMAS.company,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("contact"),
-    metadata: ENTITY_SCHEMAS.contact,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("meeting"),
-    metadata: ENTITY_SCHEMAS.meeting,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("idea"),
-    metadata: ENTITY_SCHEMAS.idea,
-  }),
-  baseEntitySchema.extend({
-    type: z.literal("project"),
-    metadata: ENTITY_SCHEMAS.project,
-  }),
-]);
 
 /**
  * Entity - The main type used across the application
@@ -100,36 +42,49 @@ export const EntitySchema = z.discriminatedUnion("type", [
 export type Entity = z.infer<typeof EntitySchema>;
 
 /**
- * Base Entity Helper (for partial usage)
+ * Base Entity Helper (alias for clarity)
  */
-export type BaseEntity = Omit<Entity, "metadata"> & { metadata: unknown };
-
-/**
- * Specific entity types
- */
-export type Task = Extract<Entity, { type: "task" }>;
-export type Note = Extract<Entity, { type: "note" }>;
-export type Person = Extract<Entity, { type: "person" }>;
-export type Event = Extract<Entity, { type: "event" }>;
-export type File = Extract<Entity, { type: "file" }>;
-export type Contact = Extract<Entity, { type: "contact" }>;
-export type Meeting = Extract<Entity, { type: "meeting" }>;
-export type Idea = Extract<Entity, { type: "idea" }>;
-export type Project = Extract<Entity, { type: "project" }>;
+export type BaseEntity = Entity;
 
 /**
  * New entity type (for creation)
  */
-export type NewEntity<T extends EntityType = EntityType> = Omit<
-  Extract<Entity, { type: T }>,
-  "id" | "version" | "createdAt" | "updatedAt" | "deletedAt" | "documentId"
+export type NewEntity = Omit<
+  Entity,
+  "id" | "version" | "createdAt" | "updatedAt" | "deletedAt"
 > & {
-  documentId?: string | null;
+  profileSlug: string; // Required for creation (or profileId)
+  properties: Record<string, unknown>; // Required, validated against profile
 };
 
 /**
  * Entity update type (for updates)
  */
-export type UpdateEntity<T extends EntityType = EntityType> = Partial<
-  Omit<NewEntity<T>, "userId" | "type">
->;
+export type UpdateEntity = Partial<
+  Omit<
+    Entity,
+    | "id"
+    | "userId"
+    | "type"
+    | "profileId"
+    | "createdAt"
+    | "updatedAt"
+    | "deletedAt"
+  >
+> & {
+  properties?: Record<string, unknown>; // Optional, validated against profile
+};
+
+/**
+ * @deprecated EntityType enum - Use profile slugs (strings) instead
+ * Kept for backward compatibility during migration
+ *
+ * Note: EntityType is exported from schemas.ts, not here, to avoid conflicts
+ */
+// EntityType is exported from schemas.ts
+
+/**
+ * @deprecated Type-specific entity types - Profiles are dynamic
+ * Use Entity type with profileId/profileSlug instead
+ */
+// Removed: Task, Note, Person, Event, File, Contact, Meeting, Idea, Project

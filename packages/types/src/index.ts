@@ -58,3 +58,6 @@ export * from "./proposals/index.js";
 
 // Messages & Message Links
 export * from "./messages/index.js";
+
+// Profile System (Dynamic Entity Types)
+export * from "./profiles/index.js";

@@ -4,11 +4,7 @@
  * Re-exports all entity-related types, schemas, and helpers.
  */
 
-// Schemas and validation
-export * from "./schemas.js";
-
 // TypeScript types
 export * from "./types.js";
 
-// Type guards
-export * from "./guards.js";
+// Note: EntityType and ENTITY_SCHEMAS removed - use profiles instead

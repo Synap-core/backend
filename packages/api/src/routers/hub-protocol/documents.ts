@@ -85,7 +85,7 @@ export const documentsRouter = router({
       // It uses the same proposals system but with AI-specific metadata
       // We keep it direct since it's a specialized use case
       const { db, eq } = await import("@synap/database");
-      const { documents, entities, proposals } =
+      const { documents, entities, proposals, ProposalStatus } =
         await import("@synap/database/schema");
 
       // Calculate expiration (7 days)
@@ -124,7 +124,7 @@ export const documentsRouter = router({
             proposedContent: input.proposedContent,
             expiresAt: expiresAt.toISOString(),
           },
-          status: "pending",
+          status: ProposalStatus.PENDING,
         })
         .returning();
 

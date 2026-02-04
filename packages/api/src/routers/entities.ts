@@ -1,48 +1,37 @@
 /**
- * Entities Router - Enhanced for infinite chat
+ * Entities Router - Profile-Based Entity Management
  *
- * Handles entity management with agent extraction
+ * Handles entity CRUD with dynamic profiles (types).
+ * No longer uses hardcoded EntityType enums.
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
-import { db, eq, desc, and } from "@synap/database";
+import { router, workspaceProcedure } from "../trpc.js";
+import {
+  db,
+  eq,
+  desc,
+  and,
+  getDb,
+  ProfileResolutionService,
+} from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { emitRequestEvent } from "../utils/emit-event.js";
-import {
-  validateEntityMetadata,
-  type EntityType,
-  type Entity,
-  EntitySchema,
-} from "@synap-core/types";
-
-// TODO: Move to @synap-core/types or DB enum
-const EntityTypeSchema = z.enum([
-  "task",
-  "contact",
-  "meeting",
-  "idea",
-  "note",
-  "project",
-  "person",
-  "event",
-  "file",
-  "code",
-  "bookmark",
-  "company",
-]);
+import { type Entity, EntitySchema } from "@synap-core/types";
+import { TRPCError } from "@trpc/server";
 
 export const entitiesRouter = router({
   /**
-   * Create entity (manual or agent-extracted)
+   * Create entity with profile-based type system
    */
-  create: protectedProcedure
+  create: workspaceProcedure
     .input(
       z.object({
-        type: EntityTypeSchema,
+        profileSlug: z.string().optional(), // Preferred: use profile slug
+        profileId: z.string().uuid().optional(), // Alternative: use profile ID
         title: z.string().optional(),
         description: z.string().optional(),
-        workspaceId: z.string().uuid().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(), // Properties validated against profile
         documentId: z.string().uuid().optional(),
       })
     )
@@ -51,37 +40,62 @@ export const entitiesRouter = router({
         status: z.string(),
         message: z.string(),
         id: z.string().uuid(),
-        entity: EntitySchema,
+        entity: z.any(), // Use z.any() since we're using dynamic profile slugs (BaseEntity)
       })
     )
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
       const entityId = randomUUID();
 
-      // Get default metadata for the type
-      const defaultMetadata = validateEntityMetadata(input.type, {});
+      // Resolve profile if provided
+      let profileSlug: string | undefined;
+      if (input.profileSlug) {
+        profileSlug = input.profileSlug;
+      } else if (input.profileId) {
+        const db = await getDb();
+        const resolutionService = new ProfileResolutionService(db);
+        const profile = await resolutionService.resolveProfile(
+          input.profileId,
+          ctx.userId,
+          ctx.workspaceId
+        );
+        if (!profile) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Profile not found: ${input.profileId}`,
+          });
+        }
+        profileSlug = profile.slug;
+      } else {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Either profileSlug or profileId must be provided",
+        });
+      }
 
+      // Use BaseEntity type since we're using dynamic profile slugs
+      // EntitySchema is a discriminated union that requires specific type literals
       const optimisticEntity = {
         id: entityId,
-        type: input.type,
+        type: profileSlug, // Use profile slug as type (dynamic, not in EntitySchema union)
         title: input.title ?? null,
         preview: input.description ?? null,
         userId: ctx.userId,
-        workspaceId: input.workspaceId ?? null,
+        workspaceId: ctx.workspaceId,
         documentId: input.documentId ?? null,
-        metadata: defaultMetadata,
+        properties: input.properties || {},
+        metadata: {}, // Legacy field, kept for compatibility
         createdAt: new Date(),
         updatedAt: new Date(),
         deletedAt: null,
-        // Missing fields defaults
+        version: 1,
+        projectIds: [],
         fileUrl: null,
         filePath: null,
         fileSize: null,
         fileType: null,
         checksum: null,
-        version: 1,
-        projectIds: [],
-      } as Entity;
+      };
 
       // Emit request event (stores in event log + publishes to Inngest)
       await emitRequestEvent({
@@ -90,10 +104,12 @@ export const entitiesRouter = router({
         subjectId: entityId,
         data: {
           id: entityId,
-          type: input.type,
+          profileSlug: input.profileSlug,
+          profileId: input.profileId,
           title: input.title,
           preview: input.description,
-          workspaceId: input.workspaceId,
+          properties: input.properties,
+          workspaceId: ctx.workspaceId,
           documentId: input.documentId,
           userId: ctx.userId,
         },
@@ -110,14 +126,11 @@ export const entitiesRouter = router({
 
   /**
    * List entities (workspace-scoped)
-   *
-   * Automatically filters by workspace from context (X-Workspace-Id header).
-   * No need to pass workspaceId in input anymore.
    */
   list: workspaceProcedure
     .input(
       z.object({
-        type: EntityTypeSchema.optional(),
+        profileSlug: z.string().optional(), // Filter by profile slug
         limit: z.number().min(1).max(100).default(50),
       })
     )
@@ -127,49 +140,31 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // workspaceId is automatically available from context (set by workspaceProcedure)
+      const conditions: any[] = [
+        eq(entities.workspaceId, ctx.workspaceId),
+        eq(entities.userId, ctx.userId),
+      ];
+
+      if (input.profileSlug) {
+        conditions.push(eq(entities.type, input.profileSlug));
+      }
+
       const results = await db.query.entities.findMany({
-        where: and(
-          eq(entities.workspaceId, ctx.workspaceId), // ✅ Automatic workspace scoping
-          eq(entities.userId, ctx.userId),
-          input.type ? eq(entities.type, input.type) : undefined
-        ),
+        where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
       });
 
-      const typedEntities = results.map((entity) => {
-        try {
-          const typedMetadata = validateEntityMetadata(
-            entity.type as EntityType,
-            entity.metadata
-          );
-
-          return {
-            ...entity,
-            metadata: typedMetadata,
-            fileUrl: null,
-            filePath: null,
-            fileSize: null,
-            fileType: null,
-            checksum: null,
-          } as Entity;
-        } catch (e) {
-          console.warn(
-            `Entity ${entity.id} has invalid metadata for type ${entity.type}`,
-            e
-          );
-          return {
-            ...entity,
-            metadata: {},
-            fileUrl: null,
-            filePath: null,
-            fileSize: null,
-            fileType: null,
-            checksum: null,
-          } as unknown as Entity;
-        }
-      });
+      // Map to Entity type (properties field is already in entities table)
+      const typedEntities = results.map((entity) => ({
+        ...entity,
+        properties: entity.properties || {},
+        fileUrl: null,
+        filePath: null,
+        fileSize: null,
+        fileType: null,
+        checksum: null,
+      })) as Entity[];
 
       return { entities: typedEntities };
     }),
@@ -177,11 +172,11 @@ export const entitiesRouter = router({
   /**
    * Search entities (vector + text)
    */
-  search: protectedProcedure
+  search: workspaceProcedure
     .input(
       z.object({
         query: z.string(),
-        type: EntityTypeSchema.optional(),
+        profileSlug: z.string().optional(),
         limit: z.number().min(1).max(50).default(10),
       })
     )
@@ -191,45 +186,30 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Simple text search for now
-      // TODO: Implement vector search with pgvector
+      const conditions: any[] = [
+        eq(entities.workspaceId, ctx.workspaceId),
+        eq(entities.userId, ctx.userId),
+      ];
+
+      if (input.profileSlug) {
+        conditions.push(eq(entities.type, input.profileSlug));
+      }
+
       const results = await db.query.entities.findMany({
-        where: and(
-          eq(entities.userId, ctx.userId),
-          input.type ? eq(entities.type, input.type) : undefined
-        ),
+        where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
       });
 
-      const typedEntities = results.map((entity) => {
-        try {
-          const typedMetadata = validateEntityMetadata(
-            entity.type as EntityType,
-            entity.metadata
-          );
-          return {
-            ...entity,
-            metadata: typedMetadata,
-            fileUrl: null,
-            filePath: null,
-            fileSize: null,
-            fileType: null,
-            checksum: null,
-          } as Entity;
-        } catch (e) {
-          console.warn(`Entity ${entity.id} has invalid metadata`, e);
-          return {
-            ...entity,
-            metadata: {},
-            fileUrl: null,
-            filePath: null,
-            fileSize: null,
-            fileType: null,
-            checksum: null,
-          } as unknown as Entity;
-        }
-      });
+      const typedEntities = results.map((entity) => ({
+        ...entity,
+        properties: entity.properties || {},
+        fileUrl: null,
+        filePath: null,
+        fileSize: null,
+        fileType: null,
+        checksum: null,
+      })) as Entity[];
 
       return { entities: typedEntities };
     }),
@@ -237,7 +217,7 @@ export const entitiesRouter = router({
   /**
    * Get entity by ID
    */
-  get: protectedProcedure
+  get: workspaceProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -245,45 +225,34 @@ export const entitiesRouter = router({
     )
     .output(
       z.object({
-        entity: EntitySchema,
+        entity: z.any(), // Use z.any() since entity can have dynamic profile slug
       })
     )
     .query(async ({ input, ctx }) => {
       const entity = await db.query.entities.findFirst({
-        where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
+        where: and(
+          eq(entities.id, input.id),
+          eq(entities.workspaceId, ctx.workspaceId),
+          eq(entities.userId, ctx.userId)
+        ),
       });
 
       if (!entity) {
-        throw new Error("Entity not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Entity not found",
+        });
       }
 
-      let typedEntity: Entity;
-      try {
-        const typedMetadata = validateEntityMetadata(
-          entity.type as EntityType,
-          entity.metadata
-        );
-        typedEntity = {
-          ...entity,
-          metadata: typedMetadata,
-          fileUrl: null,
-          filePath: null,
-          fileSize: null,
-          fileType: null,
-          checksum: null,
-        } as Entity;
-      } catch (e) {
-        console.warn(`Entity ${entity.id} has invalid metadata`, e);
-        typedEntity = {
-          ...entity,
-          metadata: {},
-          fileUrl: null,
-          filePath: null,
-          fileSize: null,
-          fileType: null,
-          checksum: null,
-        } as unknown as Entity;
-      }
+      const typedEntity = {
+        ...entity,
+        properties: entity.properties || {},
+        fileUrl: null,
+        filePath: null,
+        fileSize: null,
+        fileType: null,
+        checksum: null,
+      } as Entity;
 
       return { entity: typedEntity };
     }),
@@ -291,17 +260,13 @@ export const entitiesRouter = router({
   /**
    * Update entity
    */
-  update: protectedProcedure
+  update: workspaceProcedure
     .input(
       z.object({
         id: z.string().uuid(),
-        type: z
-          .enum(["note", "task", "project", "contact", "meeting", "idea"])
-          .optional(),
         title: z.string().optional(),
-        preview: z.string().optional(),
-        workspaceId: z.string().uuid().optional(),
-        documentId: z.string().uuid().optional(),
+        description: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(), // Properties validated against profile
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -312,12 +277,12 @@ export const entitiesRouter = router({
         data: {
           id: input.id,
           title: input.title,
-          preview: input.preview,
+          preview: input.description,
+          properties: input.properties,
+          workspaceId: ctx.workspaceId,
           userId: ctx.userId,
-          workspaceId: input.workspaceId,
         },
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
       });
 
       return {
@@ -329,7 +294,7 @@ export const entitiesRouter = router({
   /**
    * Delete entity (soft delete)
    */
-  delete: protectedProcedure
+  delete: workspaceProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -342,6 +307,7 @@ export const entitiesRouter = router({
         subjectId: input.id,
         data: {
           id: input.id,
+          workspaceId: ctx.workspaceId,
           userId: ctx.userId,
         },
         userId: ctx.userId,

@@ -67,7 +67,6 @@ import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
-import { tagsRouter } from "./routers/tags.js";
 import { searchRouter } from "./routers/search.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
@@ -174,11 +173,6 @@ registerRouter("capabilities", capabilitiesRouter, {
   version: "1.0.0",
   source: "core",
   description: "Feature and service discovery",
-});
-registerRouter("tags", tagsRouter, {
-  version: "1.0.0",
-  source: "core",
-  description: "Tag management and entity tagging",
 });
 registerRouter("search", searchRouter, {
   version: "1.0.0",

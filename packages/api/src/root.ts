@@ -17,7 +17,6 @@ import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
-import { tagsRouter } from "./routers/tags.js";
 import { searchRouter } from "./routers/search.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
@@ -31,6 +30,9 @@ import { whiteboardsRouter } from "./routers/whiteboards.js";
 import { skillsRouter } from "./routers/skills.js";
 import { backgroundTasksRouter } from "./routers/background-tasks.js";
 import { messageLinksRouter } from "./routers/message-links.js";
+import { profilesRouter } from "./routers/profiles.js";
+import { propertyDefsRouter } from "./routers/property-defs.js";
+import { profilePropertiesRouter } from "./routers/profile-properties.js";
 
 /**
  * Core API Router
@@ -54,7 +56,6 @@ export const coreRouter = router({
   notifications: inboxRouter,
   intelligenceRegistry: intelligenceRegistryRouter,
   capabilities: capabilitiesRouter,
-  tags: tagsRouter,
   search: searchRouter,
   relations: relationsRouter,
   graph: graphRouter,
@@ -68,6 +69,10 @@ export const coreRouter = router({
   skills: skillsRouter,
   backgroundTasks: backgroundTasksRouter,
   messageLinks: messageLinksRouter,
+  // Dynamic Schema System
+  profiles: profilesRouter,
+  propertyDefs: propertyDefsRouter,
+  profileProperties: profilePropertiesRouter,
 });
 
 export type AppRouter = typeof coreRouter;

@@ -79,3 +79,15 @@ export * from "./provisioning-tokens.js";
 
 // NEW: Message Links (universal linking system)
 export * from "./message-links.js";
+
+// NEW: Dynamic Schema System (Profiles + Properties)
+export * from "./property-defs.js";
+export * from "./profiles.js";
+export * from "./profile-properties.js";
+export * from "./entity-property-index.js";
+
+// NEW: Dynamic Schema System (Profiles + Properties)
+export * from "./property-defs.js";
+export * from "./profiles.js";
+export * from "./profile-properties.js";
+export * from "./entity-property-index.js";

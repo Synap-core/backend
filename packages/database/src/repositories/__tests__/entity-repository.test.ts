@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { type EventRepository } from "../event-repository.js";
 import { EntityRepository } from "../entity-repository.js";
-import { EntityType } from "../../schema/entities.js";
 
 const mockDb = {
   query: {
@@ -54,10 +53,18 @@ describe("EntityRepository", () => {
 
   describe("create", () => {
     it("should create entity and emit completed event", async () => {
+      // Mock profile resolution (returns null for legacy support)
+      mockDb.query = {
+        entities: {
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+      } as any;
+
       const result = await entityRepo.create(
         {
           title: "Test Entity",
-          entityType: EntityType.NOTE,
+          profileSlug: "note",
+          workspaceId: "workspace-1",
           userId: "user-1",
         },
         "user-1"

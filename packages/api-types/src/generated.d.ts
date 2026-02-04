@@ -57,6 +57,24 @@ export interface Context {
   workspaceId?: string | null;
   workspaceRole?: string | null;
 }
+declare enum ChatThreadType {
+  MAIN = "main",
+  BRANCH = "branch",
+}
+declare enum ChatThreadStatus {
+  ACTIVE = "active",
+  MERGED = "merged",
+  ARCHIVED = "archived",
+}
+declare enum ChatThreadAgentType {
+  DEFAULT = "default",
+  META = "meta",
+  PROMPTING = "prompting",
+  KNOWLEDGE_SEARCH = "knowledge-search",
+  CODE = "code",
+  WRITING = "writing",
+  ACTION = "action",
+}
 declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
   name: "chat_threads";
   schema: undefined;
@@ -186,14 +204,14 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
         tableName: "chat_threads";
         dataType: "string";
         columnType: "PgText";
-        data: "main" | "branch";
+        data: ChatThreadType;
         driverParam: string;
         notNull: true;
         hasDefault: true;
         isPrimaryKey: false;
         isAutoincrement: false;
         hasRuntimeDefault: false;
-        enumValues: ["main", "branch"];
+        enumValues: [ChatThreadType.MAIN, ChatThreadType.BRANCH];
         baseColumn: never;
         identity: undefined;
         generated: undefined;
@@ -291,14 +309,18 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
         tableName: "chat_threads";
         dataType: "string";
         columnType: "PgText";
-        data: "active" | "merged" | "archived";
+        data: ChatThreadStatus;
         driverParam: string;
         notNull: true;
         hasDefault: true;
         isPrimaryKey: false;
         isAutoincrement: false;
         hasRuntimeDefault: false;
-        enumValues: ["active", "merged", "archived"];
+        enumValues: [
+          ChatThreadStatus.ACTIVE,
+          ChatThreadStatus.MERGED,
+          ChatThreadStatus.ARCHIVED,
+        ];
         baseColumn: never;
         identity: undefined;
         generated: undefined;
@@ -312,14 +334,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
         tableName: "chat_threads";
         dataType: "string";
         columnType: "PgText";
-        data:
-          | "default"
-          | "meta"
-          | "prompting"
-          | "knowledge-search"
-          | "code"
-          | "writing"
-          | "action";
+        data: ChatThreadAgentType;
         driverParam: string;
         notNull: true;
         hasDefault: true;
@@ -327,13 +342,13 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
         isAutoincrement: false;
         hasRuntimeDefault: false;
         enumValues: [
-          "default",
-          "meta",
-          "prompting",
-          "knowledge-search",
-          "code",
-          "writing",
-          "action",
+          ChatThreadAgentType.DEFAULT,
+          ChatThreadAgentType.META,
+          ChatThreadAgentType.PROMPTING,
+          ChatThreadAgentType.KNOWLEDGE_SEARCH,
+          ChatThreadAgentType.CODE,
+          ChatThreadAgentType.WRITING,
+          ChatThreadAgentType.ACTION,
         ];
         baseColumn: never;
         identity: undefined;
@@ -472,6 +487,30 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
   dialect: "pg";
 }>;
 export type ChatThread = typeof chatThreads.$inferSelect;
+declare enum ThreadEntityRelationshipType {
+  USED_AS_CONTEXT = "used_as_context",
+  CREATED = "created",
+  UPDATED = "updated",
+  REFERENCED = "referenced",
+  INHERITED_FROM_PARENT = "inherited_from_parent",
+}
+declare enum ThreadEntityConflictStatus {
+  NONE = "none",
+  PENDING = "pending",
+  RESOLVED = "resolved",
+}
+declare enum ThreadDocumentRelationshipType {
+  USED_AS_CONTEXT = "used_as_context",
+  CREATED = "created",
+  UPDATED = "updated",
+  REFERENCED = "referenced",
+  INHERITED_FROM_PARENT = "inherited_from_parent",
+}
+declare enum ThreadDocumentConflictStatus {
+  NONE = "none",
+  PENDING = "pending",
+  RESOLVED = "resolved",
+}
 /**
  * Workspaces Schema - Multi-user workspace support
  *
@@ -515,6 +554,188 @@ export interface WorkspaceSettings {
     allowAgentCreation?: boolean;
   };
 }
+declare enum ProposalStatus {
+  PENDING = "pending",
+  APPROVED = "approved",
+  REJECTED = "rejected",
+}
+declare enum PropertyValueType {
+  STRING = "string",
+  NUMBER = "number",
+  BOOLEAN = "boolean",
+  DATE = "date",
+  ENTITY_ID = "entity_id",
+  ARRAY = "array",
+  OBJECT = "object",
+}
+declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
+  name: "property_defs";
+  schema: undefined;
+  columns: {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "id";
+        tableName: "property_defs";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: true;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    slug: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "slug";
+        tableName: "property_defs";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    valueType: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "value_type";
+        tableName: "property_defs";
+        dataType: "string";
+        columnType: "PgText";
+        data: PropertyValueType;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [
+          PropertyValueType.STRING,
+          PropertyValueType.NUMBER,
+          PropertyValueType.BOOLEAN,
+          PropertyValueType.DATE,
+          PropertyValueType.ENTITY_ID,
+          PropertyValueType.ARRAY,
+          PropertyValueType.OBJECT,
+        ];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    constraints: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "constraints";
+        tableName: "property_defs";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    uiHints: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "ui_hints";
+        tableName: "property_defs";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "created_at";
+        tableName: "property_defs";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "updated_at";
+        tableName: "property_defs";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+  };
+  dialect: "pg";
+}>;
+export type PropertyDef = typeof propertyDefs.$inferSelect;
+declare enum ProfileScope {
+  SYSTEM = "system", // Available to all users
+  WORKSPACE = "workspace", // Shared within workspace
+  USER = "user",
+}
 /**
  * EventRecord - Database representation of an event
  *
@@ -534,6 +755,11 @@ export interface EventRecord {
   causationId?: string;
   correlationId?: string;
   source: string;
+}
+export interface EffectiveProperty extends PropertyDef {
+  required: boolean;
+  defaultValue: unknown;
+  displayOrder: number;
 }
 /**
  * View Query Types
@@ -576,7 +802,9 @@ export interface SortRule {
  * Defines which entities to show and how to filter them
  */
 export interface EntityQuery {
-  /** Entity types to include */
+  /** Profile slugs to include (preferred - dynamic profiles) */
+  profileSlugs?: string[];
+  /** Entity types to include (deprecated - use profileSlugs instead) */
   entityTypes?: string[];
   /** Specific entity IDs (for fixed sets) */
   entityIds?: string[];
@@ -960,1017 +1188,79 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
       import("@trpc/server").TRPCDecorateCreateRouterOptions<{
         create: import("@trpc/server").TRPCMutationProcedure<{
           input: {
-            type:
-              | "code"
-              | "task"
-              | "event"
-              | "file"
-              | "contact"
-              | "meeting"
-              | "idea"
-              | "note"
-              | "project"
-              | "person"
-              | "bookmark"
-              | "company";
+            profileSlug?: string | undefined;
+            profileId?: string | undefined;
             title?: string | undefined;
             description?: string | undefined;
-            workspaceId?: string | undefined;
+            properties?: Record<string, unknown> | undefined;
             documentId?: string | undefined;
           };
           output: {
             status: string;
             message: string;
             id: string;
-            entity:
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "task";
-                  metadata: {
-                    status: "archived" | "todo" | "in_progress" | "done";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    assignee?: string | undefined;
-                    estimatedMinutes?: number | undefined;
-                    actualMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "note";
-                  metadata: {
-                    tags: string[];
-                    format: "markdown" | "plain" | "rich";
-                    isFavorite: boolean;
-                    linkedEntities?: string[] | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "person";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "event";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "file";
-                  metadata: {
-                    mimeType: string;
-                    sizeBytes: number;
-                    extension: string;
-                    thumbnailUrl?: string | undefined;
-                    downloadUrl?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "code";
-                  metadata: {
-                    language: string;
-                    snippet?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "bookmark";
-                  metadata: {
-                    url: string;
-                    favicon?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "company";
-                  metadata: {
-                    website?: string | undefined;
-                    industry?: string | undefined;
-                    foundedYear?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "contact";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "meeting";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "idea";
-                  metadata: {
-                    tags: string[];
-                    impact?: "low" | "medium" | "high" | undefined;
-                    effort?: "low" | "medium" | "high" | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "project";
-                  metadata: {
-                    status: "active" | "archived" | "completed" | "on_hold";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    owner?: string | undefined;
-                  };
-                };
+            entity: any;
           };
           meta: object;
         }>;
         list: import("@trpc/server").TRPCQueryProcedure<{
           input: {
-            type?:
-              | "code"
-              | "task"
-              | "event"
-              | "file"
-              | "contact"
-              | "meeting"
-              | "idea"
-              | "note"
-              | "project"
-              | "person"
-              | "bookmark"
-              | "company"
-              | undefined;
+            profileSlug?: string | undefined;
             limit?: number | undefined;
           };
           output: {
-            entities: (
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "task";
-                  metadata: {
-                    status: "archived" | "todo" | "in_progress" | "done";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    assignee?: string | undefined;
-                    estimatedMinutes?: number | undefined;
-                    actualMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "note";
-                  metadata: {
-                    tags: string[];
-                    format: "markdown" | "plain" | "rich";
-                    isFavorite: boolean;
-                    linkedEntities?: string[] | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "person";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "event";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "file";
-                  metadata: {
-                    mimeType: string;
-                    sizeBytes: number;
-                    extension: string;
-                    thumbnailUrl?: string | undefined;
-                    downloadUrl?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "code";
-                  metadata: {
-                    language: string;
-                    snippet?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "bookmark";
-                  metadata: {
-                    url: string;
-                    favicon?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "company";
-                  metadata: {
-                    website?: string | undefined;
-                    industry?: string | undefined;
-                    foundedYear?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "contact";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "meeting";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "idea";
-                  metadata: {
-                    tags: string[];
-                    impact?: "low" | "medium" | "high" | undefined;
-                    effort?: "low" | "medium" | "high" | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "project";
-                  metadata: {
-                    status: "active" | "archived" | "completed" | "on_hold";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    owner?: string | undefined;
-                  };
-                }
-            )[];
+            entities: {
+              id: string;
+              userId: string;
+              workspaceId: string | null;
+              type: string;
+              profileId: string | null;
+              title: string | null;
+              preview: string | null;
+              documentId: string | null;
+              properties: Record<string, unknown>;
+              fileUrl: string | null;
+              filePath: string | null;
+              fileSize: number | null;
+              fileType: string | null;
+              checksum: string | null;
+              projectIds: string[] | null;
+              version: number;
+              createdAt: Date;
+              updatedAt: Date;
+              deletedAt: Date | null;
+            }[];
           };
           meta: object;
         }>;
         search: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             query: string;
-            type?:
-              | "code"
-              | "task"
-              | "event"
-              | "file"
-              | "contact"
-              | "meeting"
-              | "idea"
-              | "note"
-              | "project"
-              | "person"
-              | "bookmark"
-              | "company"
-              | undefined;
+            profileSlug?: string | undefined;
             limit?: number | undefined;
           };
           output: {
-            entities: (
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "task";
-                  metadata: {
-                    status: "archived" | "todo" | "in_progress" | "done";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    assignee?: string | undefined;
-                    estimatedMinutes?: number | undefined;
-                    actualMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "note";
-                  metadata: {
-                    tags: string[];
-                    format: "markdown" | "plain" | "rich";
-                    isFavorite: boolean;
-                    linkedEntities?: string[] | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "person";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "event";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "file";
-                  metadata: {
-                    mimeType: string;
-                    sizeBytes: number;
-                    extension: string;
-                    thumbnailUrl?: string | undefined;
-                    downloadUrl?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "code";
-                  metadata: {
-                    language: string;
-                    snippet?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "bookmark";
-                  metadata: {
-                    url: string;
-                    favicon?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "company";
-                  metadata: {
-                    website?: string | undefined;
-                    industry?: string | undefined;
-                    foundedYear?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "contact";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "meeting";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "idea";
-                  metadata: {
-                    tags: string[];
-                    impact?: "low" | "medium" | "high" | undefined;
-                    effort?: "low" | "medium" | "high" | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "project";
-                  metadata: {
-                    status: "active" | "archived" | "completed" | "on_hold";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    owner?: string | undefined;
-                  };
-                }
-            )[];
+            entities: {
+              id: string;
+              userId: string;
+              workspaceId: string | null;
+              type: string;
+              profileId: string | null;
+              title: string | null;
+              preview: string | null;
+              documentId: string | null;
+              properties: Record<string, unknown>;
+              fileUrl: string | null;
+              filePath: string | null;
+              fileSize: number | null;
+              fileType: string | null;
+              checksum: string | null;
+              projectIds: string[] | null;
+              version: number;
+              createdAt: Date;
+              updatedAt: Date;
+              deletedAt: Date | null;
+            }[];
           };
           meta: object;
         }>;
@@ -1979,338 +1269,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             id: string;
           };
           output: {
-            entity:
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "task";
-                  metadata: {
-                    status: "archived" | "todo" | "in_progress" | "done";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    assignee?: string | undefined;
-                    estimatedMinutes?: number | undefined;
-                    actualMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "note";
-                  metadata: {
-                    tags: string[];
-                    format: "markdown" | "plain" | "rich";
-                    isFavorite: boolean;
-                    linkedEntities?: string[] | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "person";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "event";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "file";
-                  metadata: {
-                    mimeType: string;
-                    sizeBytes: number;
-                    extension: string;
-                    thumbnailUrl?: string | undefined;
-                    downloadUrl?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "code";
-                  metadata: {
-                    language: string;
-                    snippet?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "bookmark";
-                  metadata: {
-                    url: string;
-                    favicon?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "company";
-                  metadata: {
-                    website?: string | undefined;
-                    industry?: string | undefined;
-                    foundedYear?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "contact";
-                  metadata: {
-                    email?: string | undefined;
-                    phone?: string | undefined;
-                    company?: string | undefined;
-                    role?: string | undefined;
-                    linkedInUrl?: string | undefined;
-                    twitterHandle?: string | undefined;
-                    notes?: string | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "meeting";
-                  metadata: {
-                    startTime: string;
-                    endTime: string;
-                    recurring: boolean;
-                    isAllDay: boolean;
-                    location?: string | undefined;
-                    attendees?: string[] | undefined;
-                    recurrenceRule?: string | undefined;
-                    reminderMinutes?: number | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "idea";
-                  metadata: {
-                    tags: string[];
-                    impact?: "low" | "medium" | "high" | undefined;
-                    effort?: "low" | "medium" | "high" | undefined;
-                  };
-                }
-              | {
-                  id: string;
-                  userId: string;
-                  workspaceId: string | null;
-                  title: string | null;
-                  preview: string | null;
-                  documentId: string | null;
-                  fileUrl: string | null;
-                  filePath: string | null;
-                  fileSize: number | null;
-                  fileType: string | null;
-                  checksum: string | null;
-                  projectIds: string[] | null;
-                  version: number;
-                  createdAt: Date;
-                  updatedAt: Date;
-                  deletedAt: Date | null;
-                  type: "project";
-                  metadata: {
-                    status: "active" | "archived" | "completed" | "on_hold";
-                    priority?: "low" | "medium" | "high" | "urgent" | undefined;
-                    dueDate?: string | undefined;
-                    completedAt?: string | undefined;
-                    owner?: string | undefined;
-                  };
-                };
+            entity: any;
           };
           meta: object;
         }>;
         update: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             id: string;
-            type?:
-              | "task"
-              | "contact"
-              | "meeting"
-              | "idea"
-              | "note"
-              | "project"
-              | undefined;
             title?: string | undefined;
-            preview?: string | undefined;
-            workspaceId?: string | undefined;
-            documentId?: string | undefined;
+            description?: string | undefined;
+            properties?: Record<string, unknown> | undefined;
           };
           output: {
             status: string;
@@ -2347,8 +1315,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             agentType?:
               | "code"
               | "action"
-              | "default"
               | "meta"
+              | "default"
               | "prompting"
               | "knowledge-search"
               | "writing"
@@ -2358,13 +1326,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           output:
             | {
-                threadId: `${string}-${string}-${string}-${string}-${string}`;
+                threadId: undefined;
                 status: string;
                 message: string;
                 thread?: undefined;
               }
             | {
-                threadId: `${string}-${string}-${string}-${string}-${string}`;
+                threadId: string;
                 thread: {
                   userId: string;
                   id: string;
@@ -2373,20 +1341,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   metadata: unknown;
                   projectIds: string[] | null;
                   title: string | null;
-                  status: "active" | "merged" | "archived";
-                  threadType: "main" | "branch";
+                  status: ChatThreadStatus;
+                  threadType: ChatThreadType;
                   parentThreadId: string | null;
                   branchedFromMessageId: string | null;
                   branchPurpose: string | null;
                   agentId: string;
-                  agentType:
-                    | "code"
-                    | "action"
-                    | "default"
-                    | "meta"
-                    | "prompting"
-                    | "knowledge-search"
-                    | "writing";
+                  agentType: ChatThreadAgentType;
                   agentConfig: unknown;
                   contextSummary: string | null;
                   mergedAt: Date | null;
@@ -2419,20 +1380,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   metadata: unknown;
                   projectIds: string[] | null;
                   title: string | null;
-                  status: "active" | "merged" | "archived";
-                  threadType: "main" | "branch";
+                  status: ChatThreadStatus;
+                  threadType: ChatThreadType;
                   parentThreadId: string | null;
                   branchedFromMessageId: string | null;
                   branchPurpose: string | null;
                   agentId: string;
-                  agentType:
-                    | "code"
-                    | "action"
-                    | "default"
-                    | "meta"
-                    | "prompting"
-                    | "knowledge-search"
-                    | "writing";
+                  agentType: ChatThreadAgentType;
                   agentConfig: unknown;
                   contextSummary: string | null;
                   mergedAt: Date | null;
@@ -2545,20 +1499,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               metadata: unknown;
               projectIds: string[] | null;
               title: string | null;
-              status: "active" | "merged" | "archived";
-              threadType: "main" | "branch";
+              status: ChatThreadStatus;
+              threadType: ChatThreadType;
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
               branchPurpose: string | null;
               agentId: string;
-              agentType:
-                | "code"
-                | "action"
-                | "default"
-                | "meta"
-                | "prompting"
-                | "knowledge-search"
-                | "writing";
+              agentType: ChatThreadAgentType;
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2579,20 +1526,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               metadata: unknown;
               projectIds: string[] | null;
               title: string | null;
-              status: "active" | "merged" | "archived";
-              threadType: "main" | "branch";
+              status: ChatThreadStatus;
+              threadType: ChatThreadType;
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
               branchPurpose: string | null;
               agentId: string;
-              agentType:
-                | "code"
-                | "action"
-                | "default"
-                | "meta"
-                | "prompting"
-                | "knowledge-search"
-                | "writing";
+              agentType: ChatThreadAgentType;
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2626,20 +1566,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               metadata: unknown;
               projectIds: string[] | null;
               title: string | null;
-              status: "active" | "merged" | "archived";
-              threadType: "main" | "branch";
+              status: ChatThreadStatus;
+              threadType: ChatThreadType;
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
               branchPurpose: string | null;
               agentId: string;
-              agentType:
-                | "code"
-                | "action"
-                | "default"
-                | "meta"
-                | "prompting"
-                | "knowledge-search"
-                | "writing";
+              agentType: ChatThreadAgentType;
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2653,13 +1586,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   entityId: string;
                   threadId: string;
                   sourceMessageId: string | null;
-                  relationshipType:
-                    | "used_as_context"
-                    | "created"
-                    | "updated"
-                    | "referenced"
-                    | "inherited_from_parent";
-                  conflictStatus: "pending" | "none" | "resolved";
+                  relationshipType: ThreadEntityRelationshipType;
+                  conflictStatus: ThreadEntityConflictStatus;
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2672,13 +1600,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   documentId: string;
                   threadId: string;
                   sourceMessageId: string | null;
-                  relationshipType:
-                    | "used_as_context"
-                    | "created"
-                    | "updated"
-                    | "referenced"
-                    | "inherited_from_parent";
-                  conflictStatus: "pending" | "none" | "resolved";
+                  relationshipType: ThreadDocumentRelationshipType;
+                  conflictStatus: ThreadDocumentConflictStatus;
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2694,8 +1617,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             agentType?:
               | "code"
               | "action"
-              | "default"
               | "meta"
+              | "default"
               | "prompting"
               | "knowledge-search"
               | "writing"
@@ -2735,20 +1658,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               metadata: unknown;
               projectIds: string[] | null;
               title: string | null;
-              status: "active" | "merged" | "archived";
-              threadType: "main" | "branch";
+              status: ChatThreadStatus;
+              threadType: ChatThreadType;
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
               branchPurpose: string | null;
               agentId: string;
-              agentType:
-                | "code"
-                | "action"
-                | "default"
-                | "meta"
-                | "prompting"
-                | "knowledge-search"
-                | "writing";
+              agentType: ChatThreadAgentType;
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2761,20 +1677,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               metadata: unknown;
               projectIds: string[] | null;
               title: string | null;
-              status: "active" | "merged" | "archived";
-              threadType: "main" | "branch";
+              status: ChatThreadStatus;
+              threadType: ChatThreadType;
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
               branchPurpose: string | null;
               agentId: string;
-              agentType:
-                | "code"
-                | "action"
-                | "default"
-                | "meta"
-                | "prompting"
-                | "knowledge-search"
-                | "writing";
+              agentType: ChatThreadAgentType;
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2787,20 +1696,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               metadata: unknown;
               projectIds: string[] | null;
               title: string | null;
-              status: "active" | "merged" | "archived";
-              threadType: "main" | "branch";
+              status: ChatThreadStatus;
+              threadType: ChatThreadType;
               parentThreadId: string | null;
               branchedFromMessageId: string | null;
               branchPurpose: string | null;
               agentId: string;
-              agentType:
-                | "code"
-                | "action"
-                | "default"
-                | "meta"
-                | "prompting"
-                | "knowledge-search"
-                | "writing";
+              agentType: ChatThreadAgentType;
               agentConfig: unknown;
               contextSummary: string | null;
               mergedAt: Date | null;
@@ -2830,13 +1732,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               entityId: string;
               threadId: string;
               sourceMessageId: string | null;
-              relationshipType:
-                | "used_as_context"
-                | "created"
-                | "updated"
-                | "referenced"
-                | "inherited_from_parent";
-              conflictStatus: "pending" | "none" | "resolved";
+              relationshipType: ThreadEntityRelationshipType;
+              conflictStatus: ThreadEntityConflictStatus;
               sourceEventId: string | null;
             }[];
             documents: {
@@ -2847,13 +1744,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               documentId: string;
               threadId: string;
               sourceMessageId: string | null;
-              relationshipType:
-                | "used_as_context"
-                | "created"
-                | "updated"
-                | "referenced"
-                | "inherited_from_parent";
-              conflictStatus: "pending" | "none" | "resolved";
+              relationshipType: ThreadDocumentRelationshipType;
+              conflictStatus: ThreadDocumentConflictStatus;
               sourceEventId: string | null;
             }[];
           };
@@ -2889,7 +1781,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               data: unknown;
               updatedAt: Date;
               createdAt: Date;
-              status: string;
+              status: ProposalStatus;
               targetType: string;
               targetId: string;
               proposalType: string;
@@ -3563,7 +2455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
       import("@trpc/server").TRPCDecorateCreateRouterOptions<{
         upload: import("@trpc/server").TRPCMutationProcedure<{
           input: {
-            type: "code" | "markdown" | "text" | "pdf" | "docx";
+            type: "code" | "text" | "markdown" | "pdf" | "docx";
             content: string;
             title?: string | undefined;
             language?: string | undefined;
@@ -3706,7 +2598,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         list: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             projectId?: string | undefined;
-            type?: "code" | "markdown" | "text" | "pdf" | "docx" | undefined;
+            type?: "code" | "text" | "markdown" | "pdf" | "docx" | undefined;
             limit?: number | undefined;
           };
           output: {
@@ -3769,7 +2661,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             file: string;
             filename: string;
             contentType: string;
-            targetType: "note" | "document";
+            targetType: "document" | "note";
             metadata?:
               | {
                   title?: string | undefined;
@@ -4187,116 +3079,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
       }>
     >;
-    tags: import("@trpc/server").TRPCBuiltRouter<
-      {
-        ctx: Context;
-        meta: object;
-        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
-        transformer: true;
-      },
-      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
-        list: import("@trpc/server").TRPCQueryProcedure<{
-          input: void;
-          output: {
-            tags: {
-              name: string;
-              userId: string;
-              workspaceId: string;
-              id: string;
-              createdAt: Date;
-              projectIds: string[] | null;
-              color: string | null;
-            }[];
-          };
-          meta: object;
-        }>;
-        create: import("@trpc/server").TRPCMutationProcedure<{
-          input: {
-            name: string;
-            color?: string | undefined;
-          };
-          output: {
-            tag: {
-              id: `${string}-${string}-${string}-${string}-${string}`;
-              userId: string;
-              name: string;
-              color: string;
-              createdAt: Date;
-              updatedAt: Date;
-            };
-          };
-          meta: object;
-        }>;
-        update: import("@trpc/server").TRPCMutationProcedure<{
-          input: {
-            id: string;
-            name?: string | undefined;
-            color?: string | undefined;
-          };
-          output: {
-            tag: {
-              name: string;
-              color: string | null;
-              updatedAt: Date;
-              userId: string;
-              workspaceId: string;
-              id: string;
-              createdAt: Date;
-              projectIds: string[] | null;
-            };
-          };
-          meta: object;
-        }>;
-        delete: import("@trpc/server").TRPCMutationProcedure<{
-          input: {
-            id: string;
-          };
-          output: {
-            success: boolean;
-          };
-          meta: object;
-        }>;
-        attach: import("@trpc/server").TRPCMutationProcedure<{
-          input: {
-            tagId: string;
-            entityId: string;
-          };
-          output: {
-            status: string;
-          };
-          meta: object;
-        }>;
-        detach: import("@trpc/server").TRPCMutationProcedure<{
-          input: {
-            tagId: string;
-            entityId: string;
-          };
-          output: {
-            status: string;
-          };
-          meta: object;
-        }>;
-        getForEntity: import("@trpc/server").TRPCQueryProcedure<{
-          input: {
-            entityId: string;
-          };
-          output: {
-            tags: any[];
-          };
-          meta: object;
-        }>;
-        getEntitiesWithTag: import("@trpc/server").TRPCQueryProcedure<{
-          input: {
-            tagId: string;
-            limit?: number | undefined;
-          };
-          output: {
-            entities: any[];
-          };
-          meta: object;
-        }>;
-      }>
-    >;
     search: import("@trpc/server").TRPCBuiltRouter<
       {
         ctx: Context;
@@ -4308,7 +3090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         entities: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             query: string;
-            type?: "task" | "note" | "project" | "document" | undefined;
+            type?: "task" | "document" | "note" | "project" | undefined;
             limit?: number | undefined;
           };
           output: {
@@ -4319,11 +3101,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              metadata: unknown;
               projectIds: string[] | null;
+              profileId: string | null;
               title: string | null;
               preview: string | null;
               documentId: string | null;
+              properties: unknown;
               version: number;
               deletedAt: Date | null;
             }[];
@@ -4333,7 +3116,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         semantic: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             query: string;
-            type?: "task" | "note" | "project" | "document" | undefined;
+            type?: "task" | "document" | "note" | "project" | undefined;
             limit?: number | undefined;
             threshold?: number | undefined;
           };
@@ -4356,11 +3139,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              metadata: unknown;
               projectIds: string[] | null;
+              profileId: string | null;
               title: string | null;
               preview: string | null;
               documentId: string | null;
+              properties: unknown;
               version: number;
               deletedAt: Date | null;
             }[];
@@ -4445,11 +3229,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              metadata: unknown;
               projectIds: string[] | null;
+              profileId: string | null;
               title: string | null;
               preview: string | null;
               documentId: string | null;
+              properties: unknown;
               version: number;
               deletedAt: Date | null;
             }[];
@@ -4528,11 +3313,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   type: string;
-                  metadata: unknown;
                   projectIds: string[] | null;
+                  profileId: string | null;
                   title: string | null;
                   preview: string | null;
                   documentId: string | null;
+                  properties: unknown;
                   version: number;
                   deletedAt: Date | null;
                 };
@@ -4548,11 +3334,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   type: string;
-                  metadata: unknown;
                   projectIds: string[] | null;
+                  profileId: string | null;
                   title: string | null;
                   preview: string | null;
                   documentId: string | null;
+                  properties: unknown;
                   version: number;
                   deletedAt: Date | null;
                 };
@@ -4590,11 +3377,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              metadata: unknown;
               projectIds: string[] | null;
+              profileId: string | null;
               title: string | null;
               preview: string | null;
               documentId: string | null;
+              properties: unknown;
               version: number;
               deletedAt: Date | null;
             }[];
@@ -5045,11 +3833,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   userId: string;
                   workspaceId: string;
                   projectIds: string[] | null;
+                  profileId: string | null;
                   type: string;
                   title: string | null;
                   preview: string | null;
                   documentId: string | null;
-                  metadata: unknown;
+                  properties: unknown;
                   version: number;
                   createdAt: Date;
                   updatedAt: Date;
@@ -5463,11 +4252,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   type: string;
-                  metadata: unknown;
                   projectIds: string[] | null;
+                  profileId: string | null;
                   title: string | null;
                   preview: string | null;
                   documentId: string | null;
+                  properties: unknown;
                   version: number;
                   deletedAt: Date | null;
                 }
@@ -5543,8 +4333,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           input: {
             targetType?:
               | "entity"
-              | "project"
               | "document"
+              | "project"
               | "inbox_item"
               | undefined;
             entityType?: string | undefined;
@@ -5574,7 +4364,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         getDefault: import("@trpc/server").TRPCQueryProcedure<{
           input: {
-            targetType: "entity" | "project" | "document" | "inbox_item";
+            targetType: "entity" | "document" | "project" | "inbox_item";
             entityType?: string | undefined;
             inboxItemType?: string | undefined;
             workspaceId?: string | undefined;
@@ -5585,7 +4375,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         create: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             name: string;
-            targetType: "entity" | "project" | "document" | "inbox_item";
+            targetType: "entity" | "document" | "project" | "inbox_item";
             config: {
               layout?:
                 | {
@@ -6291,6 +5081,324 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             messageId: string;
             position: unknown;
           }[];
+          meta: object;
+        }>;
+      }>
+    >;
+    profiles: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        list: import("@trpc/server").TRPCQueryProcedure<{
+          input: void;
+          output: {
+            profiles: {
+              userId: string | null;
+              workspaceId: string | null;
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              version: number;
+              isActive: boolean;
+              scope: ProfileScope;
+              slug: string;
+              uiHints: unknown;
+              displayName: string;
+              parentProfileId: string | null;
+            }[];
+          };
+          meta: object;
+        }>;
+        get: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            identifier: string;
+          };
+          output: {
+            profile: {
+              userId: string | null;
+              workspaceId: string | null;
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              version: number;
+              isActive: boolean;
+              scope: ProfileScope;
+              slug: string;
+              uiHints: unknown;
+              displayName: string;
+              parentProfileId: string | null;
+            };
+            effectiveProperties: EffectiveProperty[];
+          };
+          meta: object;
+        }>;
+        create: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            slug: string;
+            displayName: string;
+            parentProfileId?: string | undefined;
+            uiHints?: Record<string, unknown> | undefined;
+            scope?: "user" | "system" | "workspace" | undefined;
+          };
+          output: {
+            profile: {
+              userId: string | null;
+              workspaceId: string | null;
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              version: number;
+              isActive: boolean;
+              scope: ProfileScope;
+              slug: string;
+              uiHints: unknown;
+              displayName: string;
+              parentProfileId: string | null;
+            };
+          };
+          meta: object;
+        }>;
+        update: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+            displayName?: string | undefined;
+            parentProfileId?: string | null | undefined;
+            uiHints?: Record<string, unknown> | undefined;
+          };
+          output: {
+            profile: {
+              userId: string | null;
+              workspaceId: string | null;
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              version: number;
+              isActive: boolean;
+              scope: ProfileScope;
+              slug: string;
+              uiHints: unknown;
+              displayName: string;
+              parentProfileId: string | null;
+            };
+          };
+          meta: object;
+        }>;
+        delete: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            success: boolean;
+          };
+          meta: object;
+        }>;
+        getEffectiveProperties: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            profileId: string;
+          };
+          output: {
+            properties: EffectiveProperty[];
+          };
+          meta: object;
+        }>;
+        getHierarchy: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            profileId: string;
+          };
+          output: {
+            hierarchy: {
+              userId: string | null;
+              workspaceId: string | null;
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              version: number;
+              isActive: boolean;
+              scope: ProfileScope;
+              slug: string;
+              uiHints: unknown;
+              displayName: string;
+              parentProfileId: string | null;
+            }[];
+          };
+          meta: object;
+        }>;
+      }>
+    >;
+    propertyDefs: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        list: import("@trpc/server").TRPCQueryProcedure<{
+          input: void;
+          output: {
+            propertyDefs: {
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              slug: string;
+              valueType: PropertyValueType;
+              constraints: unknown;
+              uiHints: unknown;
+            }[];
+          };
+          meta: object;
+        }>;
+        get: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            slug: string;
+          };
+          output: {
+            propertyDef: {
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              slug: string;
+              valueType: PropertyValueType;
+              constraints: unknown;
+              uiHints: unknown;
+            };
+          };
+          meta: object;
+        }>;
+        create: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            slug: string;
+            valueType:
+              | "string"
+              | "number"
+              | "boolean"
+              | "object"
+              | "array"
+              | "date"
+              | "entity_id";
+            constraints?: Record<string, unknown> | undefined;
+            uiHints?: Record<string, unknown> | undefined;
+          };
+          output: {
+            propertyDef: {
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              slug: string;
+              valueType: PropertyValueType;
+              constraints: unknown;
+              uiHints: unknown;
+            };
+          };
+          meta: object;
+        }>;
+        update: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+            slug?: string | undefined;
+            valueType?:
+              | "string"
+              | "number"
+              | "boolean"
+              | "object"
+              | "array"
+              | "date"
+              | "entity_id"
+              | undefined;
+            constraints?: Record<string, unknown> | undefined;
+            uiHints?: Record<string, unknown> | undefined;
+          };
+          output: {
+            propertyDef: {
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              slug: string;
+              valueType: PropertyValueType;
+              constraints: unknown;
+              uiHints: unknown;
+            };
+          };
+          meta: object;
+        }>;
+        delete: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            success: boolean;
+          };
+          meta: object;
+        }>;
+      }>
+    >;
+    profileProperties: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        link: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            profileId: string;
+            propertyDefId: string;
+            required?: boolean | undefined;
+            defaultValue?: unknown;
+            displayOrder?: number | undefined;
+          };
+          output: {
+            link: {
+              profileId: string;
+              propertyDefId: string;
+              required: boolean;
+              defaultValue: unknown;
+              displayOrder: number;
+            };
+          };
+          meta: object;
+        }>;
+        unlink: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            profileId: string;
+            propertyDefId: string;
+          };
+          output: {
+            success: boolean;
+          };
+          meta: object;
+        }>;
+        update: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            profileId: string;
+            propertyDefId: string;
+            required?: boolean | undefined;
+            defaultValue?: unknown;
+            displayOrder?: number | undefined;
+          };
+          output: {
+            link: {
+              profileId: string;
+              propertyDefId: string;
+              required: boolean;
+              defaultValue: unknown;
+              displayOrder: number;
+            };
+          };
+          meta: object;
+        }>;
+        getByProfile: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            profileId: string;
+          };
+          output: {
+            properties: EffectiveProperty[];
+          };
           meta: object;
         }>;
       }>

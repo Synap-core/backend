@@ -10,14 +10,8 @@ import { db, sql, eq, desc, and, isNull, ilike, or } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { intelligenceHubClient } from "../clients/intelligence-hub.js";
 
-const EntityTypeSchema = z.enum([
-  "task",
-  "contact",
-  "meeting",
-  "idea",
-  "note",
-  "project",
-]);
+// Legacy support - use profileSlug instead
+const EntityTypeSchema = z.string().optional();
 
 /**
  * Entities Data Router
@@ -25,14 +19,18 @@ const EntityTypeSchema = z.enum([
  */
 export const entitiesDataRouter = router({
   /**
-   * Create entity
+   * Create entity (legacy - use entities.create instead)
+   * @deprecated Use entities.create with profileSlug
    */
   create: protectedProcedure
     .input(
       z.object({
-        type: EntityTypeSchema,
+        profileSlug: z.string().optional(), // Preferred
+        type: EntityTypeSchema, // Legacy support
         title: z.string(),
         description: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -42,9 +40,11 @@ export const entitiesDataRouter = router({
       await inngest.send({
         name: "entities.create.requested",
         data: {
-          type: input.type,
+          profileSlug: input.profileSlug || input.type,
+          type: input.type, // Legacy
           title: input.title,
           preview: input.description,
+          properties: input.properties,
           userId: ctx.userId,
         },
         user: { id: ctx.userId },

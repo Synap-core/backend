@@ -19,6 +19,15 @@ export * from "./schema/index.js";
 // Export all repositories
 export * from "./repositories/index.js";
 
+// Export services
+export * from "./services/profile-resolution-service.js";
+export * from "./services/property-validation-service.js";
+export * from "./services/property-index-service.js";
+export * from "./services/view-filter-compiler.js";
+
+// Export errors
+export * from "./errors/index.js";
+
 // Utilities
 export * from "./utils/preferences.js";
 // Explicit export for ensureDefaultWhiteboard to ensure TypeScript picks it up

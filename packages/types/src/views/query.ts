@@ -51,7 +51,10 @@ export interface SortRule {
  * Defines which entities to show and how to filter them
  */
 export interface EntityQuery {
-  /** Entity types to include */
+  /** Profile slugs to include (preferred - dynamic profiles) */
+  profileSlugs?: string[];
+
+  /** Entity types to include (deprecated - use profileSlugs instead) */
   entityTypes?: string[];
 
   /** Specific entity IDs (for fixed sets) */
