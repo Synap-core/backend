@@ -15,9 +15,20 @@
         reverse_proxy backend:4000
     }
 
-    # Realtime SSE
+    # Realtime WebSocket (Socket.IO)
+    # Routes /socket.io/* and /realtime/* to realtime service
+    # Caddy automatically handles WebSocket upgrades
+    handle /socket.io/* {
+        reverse_proxy realtime:4001 {
+            # WebSocket support
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
+        }
+    }
+    
+    # Realtime HTTP bridge endpoints (for Inngest workers)
     handle /realtime/* {
-        reverse_proxy backend:4000
+        reverse_proxy realtime:4001
     }
 
     # Ory Kratos (Authentication)
