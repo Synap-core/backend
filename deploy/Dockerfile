@@ -24,19 +24,23 @@ RUN cd packages/database && pnpm build:migrate
 RUN rm -rf /app/deploy && \
     pnpm deploy --filter=api --prod --legacy /app/deploy
 
-# Copy realtime package directly from source (simpler than deploying separately)
-# The package is already built, just copy it to node_modules where it belongs
+# Deploy realtime package separately to get its dependencies
+# This creates a self-contained deployment with all dependencies hard-linked
+RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy-realtime
+
+# Copy realtime package from source (already built)
 RUN mkdir -p /app/deploy/node_modules/@synap/realtime && \
     cp -r /app/packages/realtime/dist /app/deploy/node_modules/@synap/realtime/dist && \
     cp /app/packages/realtime/package.json /app/deploy/node_modules/@synap/realtime/package.json
 
-# Copy realtime dependencies from workspace node_modules
-# These are the production dependencies needed: socket.io, y-socket.io, yjs, etc.
-RUN cp -r /app/node_modules/socket.io /app/deploy/node_modules/socket.io 2>/dev/null || true && \
-    cp -r /app/node_modules/@socket.io /app/deploy/node_modules/@socket.io 2>/dev/null || true && \
-    cp -r /app/node_modules/y-socket.io /app/deploy/node_modules/y-socket.io 2>/dev/null || true && \
-    cp -r /app/node_modules/yjs /app/deploy/node_modules/yjs 2>/dev/null || true && \
-    cp -r /app/node_modules/lib0 /app/deploy/node_modules/lib0 2>/dev/null || true
+# Copy ALL dependencies from realtime deploy (includes socket.io, y-socket.io, yjs, etc.)
+# This ensures all transitive dependencies are included
+RUN cd /app/deploy-realtime/node_modules && \
+    for dir in */; do \
+      if [ ! -d "/app/deploy/node_modules/$dir" ]; then \
+        cp -r "$dir" /app/deploy/node_modules/; \
+      fi; \
+    done
 
 # Prepare custom migrations directory (optional - only if migrations-custom exists)
 # Create directory unconditionally, then copy files if they exist
