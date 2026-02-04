@@ -16,6 +16,8 @@ import { setupBridge } from "./bridge.js";
 
 const PORT = process.env.REALTIME_PORT || 4001;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+// CORS origin - allow frontend URL or use wildcard for same-domain setups (Caddy reverse proxy)
+const CORS_ORIGIN = process.env.CORS_ORIGIN || FRONTEND_URL;
 
 // Create HTTP server
 const httpServer = createServer();
@@ -23,10 +25,15 @@ const httpServer = createServer();
 // Create Socket.IO server
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: FRONTEND_URL,
+    origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN, // true = allow all origins
     credentials: true,
+    methods: ["GET", "POST"],
   },
   transports: ["websocket", "polling"],
+  // Allow Socket.IO to work behind reverse proxy (Caddy)
+  allowEIO3: true,
+  // Path for Socket.IO (default is /socket.io/)
+  path: "/socket.io/",
 });
 
 // ============================================================================

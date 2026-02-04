@@ -81,6 +81,9 @@ services:
       NODE_ENV: production
       REALTIME_PORT: 4001
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # CORS origin - use "*" to allow all origins (for same-domain Caddy setup)
+      # Or set to specific frontend URL if frontend is on different domain
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       STORAGE_PROVIDER: minio
       MINIO_ENDPOINT: http://minio:9000

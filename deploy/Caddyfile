@@ -20,9 +20,13 @@
     # Caddy automatically handles WebSocket upgrades
     handle /socket.io/* {
         reverse_proxy realtime:4001 {
-            # WebSocket support
+            # Preserve WebSocket upgrade headers
             header_up Connection {>Connection}
             header_up Upgrade {>Upgrade}
+            header_up Host {host}
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {remote}
+            header_up X-Forwarded-Proto {scheme}
         }
     }
     
