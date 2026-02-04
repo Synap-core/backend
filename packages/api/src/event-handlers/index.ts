@@ -12,6 +12,7 @@ import { handleInboxItemReceived } from "./inbox-storage.js";
 import { handleInboxItemIntelligence } from "./inbox-intelligence.js";
 import { handleInboxItemAnalyzed } from "./inbox-analysis.js";
 import { createLogger } from "@synap-core/core";
+import { extractEventInfo, type UnifiedEventData } from "@synap/jobs";
 
 const logger = createLogger({ module: "event-handlers" });
 
@@ -37,72 +38,111 @@ export async function processEvents() {
 
     for (const event of latestEvents) {
       try {
+        // Parse event type using unified event system
+        let eventInfo: {
+          subjectType: string;
+          action: string;
+          phase: string;
+        } | null = null;
+        try {
+          eventInfo = extractEventInfo(event.type);
+        } catch {
+          // Legacy event format - handle separately
+        }
+
         if (event.type.startsWith("entities")) {
           logger.debug(
             { eventId: event.id, type: event.type },
             "Found entities event in processor"
           );
         }
+
         // Route event to appropriate handler based on type
-        switch (event.type) {
-          case "inbox.item.received":
-            logger.debug({ eventId: event.id }, "Handling inbox.item.received");
-            // Storage handler - writes to DB
-            await handleInboxItemReceived({
-              type: "inbox.item.received",
-              subjectId: event.subjectId,
-              subjectType: event.subjectType as "inbox_item", // ✅ Type cast
-              data: event.data as any,
-              id: event.id,
-              userId: event.userId,
-              timestamp: event.timestamp,
-            });
-            // Intelligence handler - calls service
-            await handleInboxItemIntelligence({
-              type: "inbox.item.received",
-              subjectId: event.subjectId,
-              subjectType: event.subjectType as "inbox_item", // ✅ Type cast
-              data: event.data as any,
-              id: event.id,
-              userId: event.userId,
-              timestamp: event.timestamp,
-            });
-            break;
+        // Legacy inbox events (not using unified format)
+        // These use specific event types from @synap/events
+        if (event.type === "inbox.item.received") {
+          logger.debug({ eventId: event.id }, "Handling inbox.item.received");
+          // Storage handler - writes to DB
+          // Type assertion is safe here because we know the event type matches
+          await handleInboxItemReceived({
+            type: "inbox.item.received",
+            subjectId: event.subjectId,
+            subjectType: event.subjectType as "inbox_item",
+            data: event.data as Parameters<
+              typeof handleInboxItemReceived
+            >[0]["data"],
+            id: event.id,
+            userId: event.userId,
+            timestamp: event.timestamp,
+          });
+          // Intelligence handler - calls service
+          await handleInboxItemIntelligence({
+            type: "inbox.item.received",
+            subjectId: event.subjectId,
+            subjectType: event.subjectType as "inbox_item",
+            data: event.data as Parameters<
+              typeof handleInboxItemIntelligence
+            >[0]["data"],
+            id: event.id,
+            userId: event.userId,
+            timestamp: event.timestamp,
+          });
+          continue;
+        }
 
-          case "inbox.item.analyzed":
-            logger.debug({ eventId: event.id }, "Handling inbox.item.analyzed");
-            await handleInboxItemAnalyzed({
-              type: "inbox.item.analyzed",
-              subjectId: event.subjectId,
-              subjectType: event.subjectType as "inbox_item", // ✅ Type cast
-              data: event.data as any,
-              id: event.id,
-              userId: event.userId,
-              timestamp: event.timestamp,
+        if (event.type === "inbox.item.analyzed") {
+          logger.debug({ eventId: event.id }, "Handling inbox.item.analyzed");
+          await handleInboxItemAnalyzed({
+            type: "inbox.item.analyzed",
+            subjectId: event.subjectId,
+            subjectType: event.subjectType as "inbox_item",
+            data: event.data as Parameters<
+              typeof handleInboxItemAnalyzed
+            >[0]["data"],
+            id: event.id,
+            userId: event.userId,
+            timestamp: event.timestamp,
+          });
+          continue;
+        }
+
+        // Unified event format: {subjectType}.{action}.{phase}
+        if (eventInfo) {
+          const { phase } = eventInfo;
+
+          // Forward validated/completed events to Inngest for background processing
+          // This is the bridge between the Event Store and Inngest
+          if (phase === "requested" || phase === "validated") {
+            logger.info(
+              { eventId: event.id, eventType: event.type, phase },
+              "Forwarding event to Inngest"
+            );
+            const { inngest } = await import("@synap/jobs");
+
+            await inngest.send({
+              name: event.type,
+              data: event.data as UnifiedEventData,
+              user: { id: event.userId },
             });
-            break;
+          }
+        } else {
+          // Legacy event format - try to forward if it looks like a unified event
+          if (
+            event.type.includes(".requested") ||
+            event.type.includes(".validated")
+          ) {
+            logger.info(
+              { eventId: event.id, eventType: event.type },
+              "Forwarding legacy event to Inngest"
+            );
+            const { inngest } = await import("@synap/jobs");
 
-          // Add more event handlers here
-          default:
-            // Forward all other events to Inngest for background processing
-            // This is the bridge between the Event Store and Inngest
-            if (
-              event.type.includes(".requested") ||
-              event.type.includes(".validated")
-            ) {
-              logger.info(
-                { eventId: event.id, eventType: event.type },
-                "Forwarding event to Inngest"
-              );
-              const { inngest } = await import("@synap/jobs");
-
-              await inngest.send({
-                name: event.type as any,
-                data: event.data as any,
-                user: { id: event.userId },
-              });
-            }
-            break;
+            await inngest.send({
+              name: event.type,
+              data: event.data as UnifiedEventData,
+              user: { id: event.userId },
+            });
+          }
         }
       } catch (error) {
         logger.error(

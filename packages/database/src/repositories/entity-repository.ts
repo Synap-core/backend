@@ -3,13 +3,13 @@
  */
 
 import { eq, and } from "drizzle-orm";
-import { entities } from "../schema/index.js";
+import { entities, EntityType } from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
 
 export interface CreateEntityInput {
-  entityType: "note" | "task" | "project" | "document";
+  entityType: EntityType;
   title?: string;
   preview?: string;
   documentId?: string; // Link to document for content

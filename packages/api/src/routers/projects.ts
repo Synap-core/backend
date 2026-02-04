@@ -81,9 +81,9 @@ export const projectsRouter = router({
       const projectId = randomUUID();
 
       await emitRequestEvent({
-        type: "projects.create.requested",
-        subjectId: projectId,
         subjectType: "project",
+        action: "create",
+        subjectId: projectId,
         data: {
           id: projectId,
           name: input.name,
@@ -116,9 +116,9 @@ export const projectsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "projects.update.requested",
-        subjectId: input.id,
         subjectType: "project",
+        action: "update",
+        subjectId: input.id,
         data: {
           id: input.id,
           name: input.name,
@@ -146,9 +146,9 @@ export const projectsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "projects.delete.requested",
-        subjectId: input.id,
         subjectType: "project",
+        action: "delete",
+        subjectId: input.id,
         data: {
           id: input.id,
           userId: ctx.userId,

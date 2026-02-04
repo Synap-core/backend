@@ -18,6 +18,28 @@ import { documents } from "./documents.js";
 import { conversationMessages } from "./conversation-messages.js";
 import { events } from "./events.js";
 
+/**
+ * Thread Document Relationship Types
+ *
+ * How a document relates to a thread.
+ */
+export enum ThreadDocumentRelationshipType {
+  USED_AS_CONTEXT = "used_as_context",
+  CREATED = "created",
+  UPDATED = "updated",
+  REFERENCED = "referenced",
+  INHERITED_FROM_PARENT = "inherited_from_parent",
+}
+
+/**
+ * Thread Document Conflict Status
+ */
+export enum ThreadDocumentConflictStatus {
+  NONE = "none",
+  PENDING = "pending",
+  RESOLVED = "resolved",
+}
+
 export const threadDocuments = pgTable(
   "thread_documents",
   {
@@ -37,20 +59,24 @@ export const threadDocuments = pgTable(
     // Relationship type
     relationshipType: text("relationship_type", {
       enum: [
-        "used_as_context", // Document used as context (read-only)
-        "created", // Document created in this thread
-        "updated", // Document updated in this thread
-        "referenced", // Document referenced/mentioned
-        "inherited_from_parent", // Inherited from parent thread
+        ThreadDocumentRelationshipType.USED_AS_CONTEXT,
+        ThreadDocumentRelationshipType.CREATED,
+        ThreadDocumentRelationshipType.UPDATED,
+        ThreadDocumentRelationshipType.REFERENCED,
+        ThreadDocumentRelationshipType.INHERITED_FROM_PARENT,
       ],
     }).notNull(),
 
     // Conflict tracking (for parallel threads)
     conflictStatus: text("conflict_status", {
-      enum: ["none", "pending", "resolved"],
+      enum: [
+        ThreadDocumentConflictStatus.NONE,
+        ThreadDocumentConflictStatus.PENDING,
+        ThreadDocumentConflictStatus.RESOLVED,
+      ],
     })
       .notNull()
-      .default("none"),
+      .default(ThreadDocumentConflictStatus.NONE),
 
     // Source tracking (for traceability)
     sourceMessageId: uuid("source_message_id").references(

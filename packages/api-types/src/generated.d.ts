@@ -734,6 +734,39 @@ export interface BranchDecision {
   suggestedTitle?: string;
   suggestedPurpose?: string;
 }
+declare enum MessageLinkTargetType {
+  ENTITY = "entity",
+  DOCUMENT = "document",
+  PROPOSAL = "proposal",
+  MESSAGE = "message",
+  EVENT = "event",
+  USER = "user",
+  WORKSPACE = "workspace",
+  VIEW = "view",
+  RELATION = "relation",
+  PROJECT = "project",
+  TAG = "tag",
+  ROLE = "role",
+  API_KEY = "apiKey",
+  SKILL = "skill",
+  BACKGROUND_TASK = "backgroundTask",
+  AGENT = "agent",
+  CHAT_THREAD = "chatThread",
+  TEMPLATE = "template",
+  INBOX_ITEM = "inboxItem",
+}
+declare enum MessageLinkRelationshipType {
+  CREATED = "created", // Message created this object
+  UPDATED = "updated", // Message updated this object
+  REFERENCES = "references", // Message references/mentions this object
+  APPROVES = "approves", // Message approves this proposal
+  REJECTS = "rejects", // Message rejects this proposal
+  COMMENTS = "comments", // Message is a comment on this object
+  REVIEWS = "reviews", // Message reviews this object
+  RESPONDS_TO = "responds_to", // Message responds to another message
+  QUOTES = "quotes", // Message quotes this object
+  CONTEXT = "context",
+}
 /**
  * @synap/events - Schema-Driven Event Generator
  *
@@ -2626,7 +2659,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "updated"
                     | "referenced"
                     | "inherited_from_parent";
-                  conflictStatus: "none" | "pending" | "resolved";
+                  conflictStatus: "pending" | "none" | "resolved";
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2645,7 +2678,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                     | "updated"
                     | "referenced"
                     | "inherited_from_parent";
-                  conflictStatus: "none" | "pending" | "resolved";
+                  conflictStatus: "pending" | "none" | "resolved";
                   sourceEventId: string | null;
                 }[]
               | undefined;
@@ -2803,7 +2836,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "updated"
                 | "referenced"
                 | "inherited_from_parent";
-              conflictStatus: "none" | "pending" | "resolved";
+              conflictStatus: "pending" | "none" | "resolved";
               sourceEventId: string | null;
             }[];
             documents: {
@@ -2820,7 +2853,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                 | "updated"
                 | "referenced"
                 | "inherited_from_parent";
-              conflictStatus: "none" | "pending" | "resolved";
+              conflictStatus: "pending" | "none" | "resolved";
               sourceEventId: string | null;
             }[];
           };
@@ -6135,6 +6168,129 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             success: boolean;
             message: string;
           };
+          meta: object;
+        }>;
+      }>
+    >;
+    messageLinks: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        create: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            messageId: string;
+            targetType: MessageLinkTargetType;
+            targetId: string;
+            relationshipType: MessageLinkRelationshipType;
+            position?:
+              | {
+                  start: number;
+                  end: number;
+                }
+              | undefined;
+            metadata?: Record<string, unknown> | undefined;
+          };
+          output: {
+            userId: string;
+            workspaceId: string;
+            id: string;
+            createdAt: Date;
+            metadata: unknown;
+            relationshipType: string;
+            targetType: string;
+            targetId: string;
+            messageId: string;
+            position: unknown;
+          };
+          meta: object;
+        }>;
+        delete: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            success: boolean;
+          };
+          meta: object;
+        }>;
+        getByMessage: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            messageId: string;
+          };
+          output: {
+            userId: string;
+            workspaceId: string;
+            id: string;
+            createdAt: Date;
+            metadata: unknown;
+            relationshipType: string;
+            targetType: string;
+            targetId: string;
+            messageId: string;
+            position: unknown;
+          }[];
+          meta: object;
+        }>;
+        getByTarget: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            targetType: MessageLinkTargetType;
+            targetId: string;
+          };
+          output: {
+            userId: string;
+            workspaceId: string;
+            id: string;
+            createdAt: Date;
+            metadata: unknown;
+            relationshipType: string;
+            targetType: string;
+            targetId: string;
+            messageId: string;
+            position: unknown;
+          }[];
+          meta: object;
+        }>;
+        getApprovalChain: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            proposalId: string;
+          };
+          output: {
+            userId: string;
+            workspaceId: string;
+            id: string;
+            createdAt: Date;
+            metadata: unknown;
+            relationshipType: string;
+            targetType: string;
+            targetId: string;
+            messageId: string;
+            position: unknown;
+          }[];
+          meta: object;
+        }>;
+        query: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            messageId?: string | undefined;
+            targetType?: MessageLinkTargetType | undefined;
+            targetId?: string | undefined;
+            relationshipType?: MessageLinkRelationshipType | undefined;
+          };
+          output: {
+            userId: string;
+            workspaceId: string;
+            id: string;
+            createdAt: Date;
+            metadata: unknown;
+            relationshipType: string;
+            targetType: string;
+            targetId: string;
+            messageId: string;
+            position: unknown;
+          }[];
           meta: object;
         }>;
       }>

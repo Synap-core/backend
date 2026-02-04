@@ -8,24 +8,27 @@
  * 4. Publishing to Inngest for async processing
  *
  * This eliminates duplication across all API routers.
+ * Uses UnifiedEvent system for type safety.
  */
 
-import { EventRepository } from "@synap/database";
-import { db } from "@synap/database";
+import { EventRepository, sql } from "@synap/database";
 import { ValidationPolicyService } from "./validation-policy.js";
+import { createUnifiedEvent, type UnifiedEventData } from "@synap/jobs";
+import type { EventAction, SubjectType } from "@synap/jobs";
+import type { EnhancedEventMetadata } from "@synap-core/core";
 
 export interface EmitEventInput {
-  /** Event type (e.g., "entities.create.requested") */
-  type: string;
-
-  /** Subject ID (the entity being acted upon) */
-  subjectId: string;
-
   /** Subject type (e.g., "entity", "document", "workspace") */
-  subjectType: string;
+  subjectType: SubjectType | string;
+
+  /** Action (e.g., "create", "update", "delete", or custom actions like "attach", "detach", "branch", "merge") */
+  action: EventAction | string;
+
+  /** Subject ID (the entity being acted upon) - optional for create */
+  subjectId?: string;
 
   /** Event payload data */
-  data: Record<string, any>;
+  data: UnifiedEventData;
 
   /** User ID who initiated the action */
   userId: string;
@@ -40,7 +43,16 @@ export interface EmitEventInput {
   userRole?: string;
 
   /** Event source override (default: "api") */
-  source?: string;
+  source?:
+    | "api"
+    | "automation"
+    | "sync"
+    | "migration"
+    | "system"
+    | "intelligence";
+
+  /** Enhanced metadata */
+  metadata?: EnhancedEventMetadata;
 }
 
 /**
@@ -51,12 +63,14 @@ export interface EmitEventInput {
  * 2. Routes to appropriate flow (validated vs requested)
  * 3. Always logs to event repository
  *
+ * Uses UnifiedEvent system for type safety.
+ *
  * @example
  * ```typescript
  * await emitRequestEvent({
- *   type: "entities.create.requested",
- *   subjectId: entityId,
  *   subjectType: "entity",
+ *   action: "create",
+ *   subjectId: entityId,
  *   data: { id: entityId, title: "...", ... },
  *   userId: ctx.userId,
  *   workspaceId: ctx.workspaceId,
@@ -64,16 +78,20 @@ export interface EmitEventInput {
  * ```
  */
 export async function emitRequestEvent(input: EmitEventInput): Promise<void> {
-  const { randomUUID } = await import("crypto");
-  const eventRepo = new EventRepository(db.$client);
+  const eventRepo = new EventRepository(sql);
   const { inngest } = await import("@synap/jobs");
 
-  // Extract operation from event type (e.g., "entities.create.requested" → "create")
-  const parts = input.type.split(".");
-  const operation = parts[1] as "create" | "update" | "delete";
+  // Generate subjectId if not provided (for create operations)
+  const subjectId = input.subjectId || input.data.id || "";
 
   // Check validation policy
   const policyService = new ValidationPolicyService();
+  // Convert EventAction to the operation type expected by ValidationPolicyService
+  const operation =
+    input.action === "archive" || input.action === "restore"
+      ? "update"
+      : (input.action as "create" | "update" | "delete");
+
   const policyResult = await policyService.requiresValidation({
     operation,
     subjectType: input.subjectType,
@@ -82,59 +100,109 @@ export async function emitRequestEvent(input: EmitEventInput): Promise<void> {
     userRole: input.userRole,
   });
 
+  // Build enhanced metadata
+  const metadata: EnhancedEventMetadata = {
+    ...input.metadata,
+    validation: {
+      validationPolicy: {
+        source: policyResult.source, // ✅ Type-safe: matches ValidationMetadataSchema
+        requiresValidation: policyResult.requiresValidation,
+        reason: policyResult.reason,
+      },
+    },
+    user: {
+      action: "direct",
+      platform: "web",
+    },
+  };
+
   if (policyResult.requiresValidation) {
     // STANDARD FLOW: requested → GlobalValidator → validated → executor
 
-    // 1. Log requested event
-    await eventRepo.append({
-      id: randomUUID(),
-      version: "v1",
-      type: input.type, // e.g., "entities.create.requested"
-      subjectId: input.subjectId,
-      subjectType: input.subjectType,
+    // 1. Create unified requested event
+    const requestedEvent = createUnifiedEvent({
+      subjectType: input.subjectType as SubjectType,
+      action: input.action as EventAction,
+      phase: "requested",
+      subjectId,
       data: input.data,
+      metadata,
       userId: input.userId,
-      source: "api",
-      timestamp: new Date(),
-      metadata: {
-        validationPolicy: policyResult.reason,
-        policySource: policyResult.source,
-      },
+      source: input.source || "api",
     });
 
-    // 2. Send to GlobalValidator
+    // 2. Log to event repository
+    await eventRepo.append({
+      id: requestedEvent.id,
+      version: requestedEvent.version,
+      type: requestedEvent.type,
+      subjectId: requestedEvent.subjectId,
+      subjectType: requestedEvent.subjectType,
+      data: requestedEvent.data as Record<string, unknown>,
+      metadata: requestedEvent.metadata as Record<string, unknown>,
+      userId: requestedEvent.userId,
+      source: requestedEvent.source as
+        | "api"
+        | "automation"
+        | "sync"
+        | "migration"
+        | "system"
+        | "intelligence",
+      timestamp: requestedEvent.timestamp,
+    });
+
+    // 3. Send to GlobalValidator
     await inngest.send({
-      name: input.type,
-      data: input.data,
+      name: requestedEvent.type,
+      data: requestedEvent.data,
       user: { id: input.userId },
     });
   } else {
     // FAST PATH: Skip validation, go directly to executor
 
-    const validatedType = input.type.replace(".requested", ".validated");
-
-    // 1. Log validated event (skip requested)
-    await eventRepo.append({
-      id: randomUUID(),
-      version: "v1",
-      type: validatedType, // e.g., "entities.create.validated"
-      subjectId: input.subjectId,
-      subjectType: input.subjectType,
+    // 1. Create unified validated event (skip requested)
+    const validatedEvent = createUnifiedEvent({
+      subjectType: input.subjectType as SubjectType,
+      action: input.action as EventAction, // Cast to EventAction for createUnifiedEvent
+      phase: "validated",
+      subjectId,
       data: input.data,
-      userId: input.userId,
-      source: "api",
-      timestamp: new Date(),
       metadata: {
-        validationPolicy: policyResult.reason,
-        policySource: policyResult.source,
-        fastPath: true, // Flag for audit
+        ...metadata,
+        validation: {
+          ...metadata.validation,
+          autoApproved: true,
+          autoApproveReason: "Fast-path: No validation required",
+        },
       },
+      userId: input.userId,
+      source: input.source || "api",
     });
 
-    // 2. Send directly to executor (bypass GlobalValidator)
+    // 2. Log to event repository
+    await eventRepo.append({
+      id: validatedEvent.id,
+      version: validatedEvent.version,
+      type: validatedEvent.type,
+      subjectId: validatedEvent.subjectId,
+      subjectType: validatedEvent.subjectType,
+      data: validatedEvent.data as Record<string, unknown>,
+      metadata: validatedEvent.metadata as Record<string, unknown>,
+      userId: validatedEvent.userId,
+      source: validatedEvent.source as
+        | "api"
+        | "automation"
+        | "sync"
+        | "migration"
+        | "system"
+        | "intelligence",
+      timestamp: validatedEvent.timestamp,
+    });
+
+    // 3. Send directly to executor (bypass GlobalValidator)
     await inngest.send({
-      name: validatedType,
-      data: input.data,
+      name: validatedEvent.type,
+      data: validatedEvent.data,
       user: { id: input.userId },
     });
   }

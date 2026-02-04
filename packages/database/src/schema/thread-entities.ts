@@ -18,6 +18,28 @@ import { entities } from "./entities.js";
 import { conversationMessages } from "./conversation-messages.js";
 import { events } from "./events.js";
 
+/**
+ * Thread Entity Relationship Types
+ *
+ * How an entity relates to a thread.
+ */
+export enum ThreadEntityRelationshipType {
+  USED_AS_CONTEXT = "used_as_context",
+  CREATED = "created",
+  UPDATED = "updated",
+  REFERENCED = "referenced",
+  INHERITED_FROM_PARENT = "inherited_from_parent",
+}
+
+/**
+ * Thread Entity Conflict Status
+ */
+export enum ThreadEntityConflictStatus {
+  NONE = "none",
+  PENDING = "pending",
+  RESOLVED = "resolved",
+}
+
 export const threadEntities = pgTable(
   "thread_entities",
   {
@@ -37,20 +59,24 @@ export const threadEntities = pgTable(
     // Relationship type
     relationshipType: text("relationship_type", {
       enum: [
-        "used_as_context", // Entity used as context (read-only)
-        "created", // Entity created in this thread
-        "updated", // Entity updated in this thread
-        "referenced", // Entity referenced/mentioned
-        "inherited_from_parent", // Inherited from parent thread
+        ThreadEntityRelationshipType.USED_AS_CONTEXT,
+        ThreadEntityRelationshipType.CREATED,
+        ThreadEntityRelationshipType.UPDATED,
+        ThreadEntityRelationshipType.REFERENCED,
+        ThreadEntityRelationshipType.INHERITED_FROM_PARENT,
       ],
     }).notNull(),
 
     // Conflict tracking (for parallel threads)
     conflictStatus: text("conflict_status", {
-      enum: ["none", "pending", "resolved"],
+      enum: [
+        ThreadEntityConflictStatus.NONE,
+        ThreadEntityConflictStatus.PENDING,
+        ThreadEntityConflictStatus.RESOLVED,
+      ],
     })
       .notNull()
-      .default("none"),
+      .default(ThreadEntityConflictStatus.NONE),
 
     // Source tracking (for traceability)
     sourceMessageId: uuid("source_message_id").references(

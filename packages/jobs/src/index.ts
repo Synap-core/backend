@@ -15,6 +15,9 @@ export * from "./client.js";
 export * from "./worker-registry.js";
 export * from "./utils/realtime-broadcast.js";
 
+// Unified event types
+export * from "./types/index.js";
+
 // ============================================================================
 // Table Workers (Legacy - Being Replaced by Executors)
 // ============================================================================

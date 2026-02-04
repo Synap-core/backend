@@ -3,47 +3,67 @@ import {
   getDb,
   EventRepository,
   ProjectMemberRepository,
+  sql,
 } from "@synap/database";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const projectMembersHandler = async ({
   event,
   step,
 }: {
-  event: any;
+  event: { name: string; data: UnifiedEventData; user: { id: string } };
   step: any;
 }) => {
+  const eventInfo = extractEventInfo(event.name);
+  const { phase } = eventInfo;
+  // Extract custom action (members have add/remove/updateRole which aren't in EventAction)
   const action = event.name.split(".")[1] as "add" | "remove" | "updateRole";
-  const { userId } = event.user;
-  const data = event.data;
+
+  if (phase !== "validated") {
+    console.warn(
+      `[projectMembersExecutor] Received non-validated event: ${event.name}`
+    );
+    return { success: false, reason: "Not a validated event" };
+  }
 
   const db = await getDb();
-  const eventRepo = new EventRepository(db as any);
+  const eventRepo = new EventRepository(sql);
   const memberRepo = new ProjectMemberRepository(db, eventRepo);
+
+  const userId = event.user.id;
+  const data = event.data;
 
   return await step.run("process-project-member", async () => {
     if (action === "add") {
+      // Note: ProjectMemberRepository methods may emit events manually
       await memberRepo.add(
         {
-          projectId: data.projectId,
-          userId: data.targetUserId,
-          role: data.role || "viewer",
+          projectId: data.projectId as string,
+          userId: (data.targetUserId as string) || (data.userId as string),
+          role: ((data.role as string) || "viewer") as
+            | "owner"
+            | "editor"
+            | "viewer",
         },
         userId
       );
     } else if (action === "remove") {
       await memberRepo.remove(
         {
-          projectId: data.projectId,
-          userId: data.targetUserId,
+          projectId: data.projectId as string,
+          userId: (data.targetUserId as string) || (data.userId as string),
         },
         userId
       );
     } else if (action === "updateRole") {
       await memberRepo.updateRole(
         {
-          projectId: data.projectId,
-          userId: data.targetUserId,
-          newRole: data.newRole,
+          projectId: data.projectId as string,
+          userId: (data.targetUserId as string) || (data.userId as string),
+          newRole: data.newRole as "owner" | "editor" | "viewer",
         },
         userId
       );

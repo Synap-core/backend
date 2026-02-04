@@ -44,9 +44,9 @@ export const workspacesRouter = router({
       const workspaceId = randomUUID();
 
       await emitRequestEvent({
-        type: "workspaces.create.requested",
-        subjectId: workspaceId,
         subjectType: "workspace",
+        action: "create",
+        subjectId: workspaceId,
         data: {
           id: workspaceId,
           name: input.name,
@@ -171,11 +171,10 @@ export const workspacesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "workspaces.update.requested",
-        subjectId: input.id,
         subjectType: "workspace",
+        action: "update",
+        subjectId: input.id,
         data: {
-          workspaceId: input.id,
           id: input.id,
           name: input.name,
           description: input.description,
@@ -198,11 +197,10 @@ export const workspacesRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "workspaces.delete.requested",
-        subjectId: input.id,
         subjectType: "workspace",
+        action: "delete",
+        subjectId: input.id,
         data: {
-          workspaceId: input.id,
           id: input.id,
           userId: ctx.userId,
         },
@@ -230,160 +228,17 @@ export const workspacesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "workspace_members.create.requested",
+        subjectType: "workspaceMember",
+        action: "add",
         subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
-          userId: input.userId,
+          targetUserId: input.userId,
           role: input.role,
           invitedBy: ctx.userId,
         },
         userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
-      await emitRequestEvent({
-        type: "workspace_members.create.requested",
-        subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
-        data: {
-          workspaceId: input.workspaceId,
-          userId: input.userId,
-          role: input.role,
-          invitedBy: ctx.userId,
-        },
-        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
@@ -428,14 +283,15 @@ export const workspacesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "workspace_members.delete.requested",
+        subjectType: "workspaceMember",
+        action: "remove",
         subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
         },
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
@@ -457,15 +313,16 @@ export const workspacesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "workspace_members.update.requested",
+        subjectType: "workspaceMember",
+        action: "updateRole",
         subjectId: `${input.workspaceId}-${input.userId}`,
-        subjectType: "workspace_member",
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
           newRole: input.role,
         },
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
@@ -581,9 +438,9 @@ export const workspacesRouter = router({
       }
 
       await emitRequestEvent({
-        type: "workspace_members.create.requested",
+        subjectType: "workspaceMember",
+        action: "add",
         subjectId: `${invite.workspaceId}-${ctx.userId}`,
-        subjectType: "workspace_member",
         data: {
           workspaceId: invite.workspaceId,
           userId: ctx.userId,

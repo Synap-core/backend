@@ -168,9 +168,9 @@ export const viewsRouter = router({
       };
 
       await emitRequestEvent({
-        type: "views.create.requested",
-        subjectId: viewId,
         subjectType: "view",
+        action: "create",
+        subjectId: viewId,
         data: {
           id: viewId,
           type: input.type,
@@ -557,9 +557,9 @@ export const viewsRouter = router({
         });
 
       await emitRequestEvent({
-        type: "views.update.requested",
-        subjectId: input.id,
         subjectType: "view",
+        action: "update",
+        subjectId: input.id,
         data: {
           id: input.id,
           name: input.name,
@@ -609,9 +609,9 @@ export const viewsRouter = router({
         });
 
       await emitRequestEvent({
-        type: "views.delete.requested",
-        subjectId: input.id,
         subjectType: "view",
+        action: "delete",
+        subjectId: input.id,
         data: {
           id: input.id,
           userId: ctx.userId,

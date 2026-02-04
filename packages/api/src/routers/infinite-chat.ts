@@ -81,9 +81,9 @@ export const infiniteChatRouter = router({
         const { emitRequestEvent } = await import("../utils/emit-event.js");
 
         await emitRequestEvent({
-          type: "chat_threads.branch.requested",
+          subjectType: "chatThread",
+          action: "branch",
           subjectId: input.parentThreadId,
-          subjectType: "chat_thread",
           data: {
             id: threadId,
             userId: ctx.userId,
@@ -482,9 +482,9 @@ export const infiniteChatRouter = router({
       const { emitRequestEvent } = await import("../utils/emit-event.js");
 
       await emitRequestEvent({
-        type: "chat_threads.merge.requested",
+        subjectType: "chatThread",
+        action: "merge",
         subjectId: input.branchId,
-        subjectType: "chat_thread",
         data: {
           branchId: input.branchId,
           parentThreadId: branch.parentThreadId,

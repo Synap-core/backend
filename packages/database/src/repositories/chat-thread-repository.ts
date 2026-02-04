@@ -6,35 +6,35 @@
  */
 
 import { eq, and, desc, arrayContains } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { chatThreads, type ChatThread } from "../schema/chat-threads.js";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import {
+  chatThreads,
+  type ChatThread,
+  ChatThreadType,
+  ChatThreadStatus,
+  ChatThreadAgentType,
+} from "../schema/chat-threads.js";
 import { EventRepository } from "./event-repository.js";
+import { sql } from "../client-pg.js";
 
 export interface CreateChatThreadData {
   id?: string;
   userId: string;
   projectId?: string;
   title?: string;
-  threadType?: "main" | "branch";
+  threadType?: ChatThreadType;
   parentThreadId?: string;
   branchedFromMessageId?: string;
   branchPurpose?: string;
   agentId?: string;
-  agentType?:
-    | "default"
-    | "meta"
-    | "prompting"
-    | "knowledge-search"
-    | "code"
-    | "writing"
-    | "action";
+  agentType?: ChatThreadAgentType;
   agentConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
 export interface UpdateChatThreadData {
   title?: string;
-  status?: "active" | "merged" | "archived";
+  status?: ChatThreadStatus;
   contextSummary?: string;
   metadata?: Record<string, unknown>;
   mergedAt?: Date;
@@ -43,8 +43,10 @@ export interface UpdateChatThreadData {
 export class ChatThreadRepository {
   private eventRepo: EventRepository;
 
-  constructor(private db: NodePgDatabase<any>) {
-    this.eventRepo = new EventRepository(db as any);
+  constructor(
+    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
+  ) {
+    this.eventRepo = new EventRepository(sql);
   }
 
   /**
@@ -61,15 +63,15 @@ export class ChatThreadRepository {
         userId: data.userId,
         projectIds: data.projectId ? [data.projectId] : [],
         title: data.title,
-        threadType: data.threadType || "main",
+        threadType: data.threadType || ChatThreadType.MAIN,
         parentThreadId: data.parentThreadId,
         branchedFromMessageId: data.branchedFromMessageId,
         branchPurpose: data.branchPurpose,
         agentId: data.agentId || "orchestrator",
-        agentType: data.agentType || "default",
+        agentType: data.agentType || ChatThreadAgentType.DEFAULT,
         agentConfig: data.agentConfig,
         metadata: data.metadata,
-        status: "active",
+        status: ChatThreadStatus.ACTIVE,
       })
       .returning();
 
@@ -109,7 +111,7 @@ export class ChatThreadRepository {
     await this.db
       .update(chatThreads)
       .set({
-        status: "archived",
+        status: ChatThreadStatus.ARCHIVED,
         updatedAt: new Date(),
       })
       .where(eq(chatThreads.id, id));
@@ -136,8 +138,8 @@ export class ChatThreadRepository {
     userId: string,
     filters?: {
       projectId?: string;
-      status?: "active" | "merged" | "archived";
-      threadType?: "main" | "branch";
+      status?: ChatThreadStatus;
+      threadType?: ChatThreadType;
     }
   ): Promise<ChatThread[]> {
     const conditions = [eq(chatThreads.userId, userId)];
@@ -183,7 +185,7 @@ export class ChatThreadRepository {
     const [thread] = await this.db
       .update(chatThreads)
       .set({
-        status: "merged",
+        status: ChatThreadStatus.MERGED,
         contextSummary,
         mergedAt: new Date(),
         updatedAt: new Date(),

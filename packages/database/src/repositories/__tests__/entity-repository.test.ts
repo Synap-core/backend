@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { type EventRepository } from "../event-repository.js";
 import { EntityRepository } from "../entity-repository.js";
+import { EntityType } from "../../schema/entities.js";
 
 const mockDb = {
   query: {
@@ -56,7 +57,7 @@ describe("EntityRepository", () => {
       const result = await entityRepo.create(
         {
           title: "Test Entity",
-          entityType: "note",
+          entityType: EntityType.NOTE,
           userId: "user-1",
         },
         "user-1"

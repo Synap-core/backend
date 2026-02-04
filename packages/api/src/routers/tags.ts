@@ -72,9 +72,9 @@ export const tagsRouter = router({
       };
 
       await emitRequestEvent({
-        type: "tags.create.requested",
-        subjectId: id,
         subjectType: "tag",
+        action: "create",
+        subjectId: id,
         data: {
           id,
           name: input.name,
@@ -122,9 +122,9 @@ export const tagsRouter = router({
       };
 
       await emitRequestEvent({
-        type: "tags.update.requested",
-        subjectId: input.id as string,
         subjectType: "tag",
+        action: "update",
+        subjectId: input.id as string,
         data: {
           id: input.id,
           name: input.name,
@@ -160,9 +160,9 @@ export const tagsRouter = router({
       }
 
       await emitRequestEvent({
-        type: "tags.delete.requested",
-        subjectId: input.id as string,
         subjectType: "tag",
+        action: "delete",
+        subjectId: input.id as string,
         data: {
           id: input.id,
           userId,
@@ -188,9 +188,9 @@ export const tagsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await emitRequestEvent({
-        type: "tags.attach.requested",
-        subjectId: input.tagId as string,
         subjectType: "tag",
+        action: "attach",
+        subjectId: input.tagId as string,
         data: {
           tagId: input.tagId,
           entityId: input.entityId,
@@ -219,9 +219,9 @@ export const tagsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await emitRequestEvent({
-        type: "tags.detach.requested",
-        subjectId: input.tagId as string,
         subjectType: "tag",
+        action: "detach",
+        subjectId: input.tagId as string,
         data: {
           tagId: input.tagId,
           entityId: input.entityId,

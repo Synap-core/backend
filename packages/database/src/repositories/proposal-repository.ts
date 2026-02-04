@@ -8,6 +8,7 @@
 
 import { eq, and, desc } from "drizzle-orm";
 import { proposals } from "../schema/index.js";
+import { ProposalStatus } from "../schema/proposals.js";
 
 export interface CreateProposalInput {
   workspaceId: string;
@@ -101,7 +102,10 @@ export class ProposalRepository {
   /**
    * Find proposals by workspace
    */
-  async findByWorkspace(workspaceId: string, status?: string): Promise<any[]> {
+  async findByWorkspace(
+    workspaceId: string,
+    status?: ProposalStatus
+  ): Promise<any[]> {
     const conditions = [eq(proposals.workspaceId, workspaceId)];
 
     if (status) {

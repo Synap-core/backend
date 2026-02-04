@@ -5,8 +5,18 @@
  */
 
 import { inngest } from "../client.js";
-import { ChatThreadRepository } from "@synap/database";
-import { getDb } from "@synap/database";
+import { ChatThreadRepository, getDb } from "@synap/database";
+import {
+  ChatThreadType,
+  ChatThreadStatus,
+  ChatThreadAgentType,
+  ThreadEntityRelationshipType,
+  ThreadDocumentRelationshipType,
+} from "@synap/database/schema";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const chatThreadsExecutor = inngest.createFunction(
   {
@@ -23,31 +33,46 @@ export const chatThreadsExecutor = inngest.createFunction(
     { event: "chat_threads.archive.validated" },
   ],
   async ({ event, step }) => {
-    const eventType = event.name;
-    const data = event.data;
+    const eventInfo = extractEventInfo(event.name);
+    const { action, phase } = eventInfo;
+    const data = event.data as UnifiedEventData;
+
+    // Ensure we're handling a validated event
+    if (phase !== "validated") {
+      console.warn(
+        `[chatThreadsExecutor] Received non-validated event: ${event.name}`
+      );
+      return { success: false, reason: "Not a validated event" };
+    }
 
     return await step.run("execute-chat-thread-operation", async () => {
       const db = await getDb();
-      const repo = new ChatThreadRepository(db as any);
+      const repo = new ChatThreadRepository(db);
       const { randomUUID } = await import("crypto");
       const { threadEntities, threadDocuments } =
         await import("@synap/database/schema");
       const { eq } = await import("@synap/database");
 
-      if (eventType === "chat_threads.create.validated") {
+      // Handle custom actions (branch, merge, archive) and standard actions
+      if (
+        action === "create" ||
+        event.name === "chat_threads.create.validated"
+      ) {
         const thread = await repo.create({
-          id: data.id,
-          userId: data.userId,
-          projectId: data.projectId,
-          title: data.title,
-          threadType: data.threadType,
-          parentThreadId: data.parentThreadId,
-          branchedFromMessageId: data.branchedFromMessageId,
-          branchPurpose: data.branchPurpose,
-          agentId: data.agentId,
-          agentType: data.agentType,
-          agentConfig: data.agentConfig,
-          metadata: data.metadata,
+          id: data.id as string | undefined,
+          userId: data.userId as string,
+          projectId: data.projectId as string | undefined,
+          title: data.title as string | undefined,
+          threadType: data.threadType as ChatThreadType | undefined,
+          parentThreadId: data.parentThreadId as string | undefined,
+          branchedFromMessageId: data.branchedFromMessageId as
+            | string
+            | undefined,
+          branchPurpose: data.branchPurpose as string | undefined,
+          agentId: data.agentId as string | undefined,
+          agentType: data.agentType as ChatThreadAgentType | undefined,
+          agentConfig: data.agentConfig as Record<string, unknown> | undefined,
+          metadata: data.metadata as Record<string, unknown> | undefined,
         });
 
         return {
@@ -57,58 +82,75 @@ export const chatThreadsExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "chat_threads.branch.validated") {
+      if (event.name === "chat_threads.branch.validated") {
         // Create branch thread with context inheritance
         const threadId = randomUUID();
         const thread = await repo.create({
           id: threadId,
-          userId: data.userId,
-          projectId: data.projectId,
-          threadType: "branch",
-          parentThreadId: data.parentThreadId,
-          branchPurpose: data.branchPurpose,
-          agentId: data.agentId || "orchestrator",
-          agentType: data.agentType,
-          agentConfig: data.agentConfig,
+          userId: data.userId as string,
+          projectId: data.projectId as string | undefined,
+          threadType: ChatThreadType.BRANCH,
+          parentThreadId: data.parentThreadId as string | undefined,
+          branchPurpose: data.branchPurpose as string | undefined,
+          agentId: (data.agentId as string | undefined) || "orchestrator",
+          agentType:
+            (data.agentType as ChatThreadAgentType | undefined) ||
+            ChatThreadAgentType.DEFAULT,
+          agentConfig: data.agentConfig as Record<string, unknown> | undefined,
         });
 
         // Inherit context from parent if requested
         if (data.inheritContext && data.parentThreadId) {
+          const parentThreadId = data.parentThreadId as string;
           // Get parent's entities
           const parentEntities = await db.query.threadEntities.findMany({
-            where: eq(threadEntities.threadId, data.parentThreadId),
+            where: eq(threadEntities.threadId, parentThreadId),
           });
 
           // Get parent's documents
           const parentDocuments = await db.query.threadDocuments.findMany({
-            where: eq(threadDocuments.threadId, data.parentThreadId),
+            where: eq(threadDocuments.threadId, parentThreadId),
           });
 
           // Copy entities with 'inherited_from_parent' type
           if (parentEntities.length > 0) {
             await db.insert(threadEntities).values(
-              parentEntities.map((e) => ({
-                threadId,
-                entityId: e.entityId,
-                relationshipType: "inherited_from_parent" as const,
-                userId: data.userId,
-                workspaceId: e.workspaceId,
-                sourceEventId: e.sourceEventId || undefined,
-              }))
+              parentEntities.map(
+                (e: {
+                  entityId: string;
+                  workspaceId: string;
+                  sourceEventId: string | null;
+                }) => ({
+                  threadId,
+                  entityId: e.entityId,
+                  relationshipType:
+                    ThreadEntityRelationshipType.INHERITED_FROM_PARENT,
+                  userId: data.userId as string,
+                  workspaceId: e.workspaceId,
+                  sourceEventId: e.sourceEventId || undefined,
+                })
+              )
             );
           }
 
           // Copy documents with 'inherited_from_parent' type
           if (parentDocuments.length > 0) {
             await db.insert(threadDocuments).values(
-              parentDocuments.map((d) => ({
-                threadId,
-                documentId: d.documentId,
-                relationshipType: "inherited_from_parent" as const,
-                userId: data.userId,
-                workspaceId: d.workspaceId,
-                sourceEventId: d.sourceEventId || undefined,
-              }))
+              parentDocuments.map(
+                (d: {
+                  documentId: string;
+                  workspaceId: string;
+                  sourceEventId: string | null;
+                }) => ({
+                  threadId,
+                  documentId: d.documentId,
+                  relationshipType:
+                    ThreadDocumentRelationshipType.INHERITED_FROM_PARENT,
+                  userId: data.userId as string,
+                  workspaceId: d.workspaceId,
+                  sourceEventId: d.sourceEventId || undefined,
+                })
+              )
             );
           }
         }
@@ -116,20 +158,21 @@ export const chatThreadsExecutor = inngest.createFunction(
         return {
           status: "completed",
           threadId: thread.id,
-          parentThreadId: data.parentThreadId,
+          parentThreadId: data.parentThreadId as string | undefined,
           message: "Branch thread created successfully",
         };
       }
 
-      if (eventType === "chat_threads.merge.validated") {
+      if (event.name === "chat_threads.merge.validated") {
         // Merge branch: update parent context and mark branch as merged
-        const branch = await repo.getById(data.branchId);
+        const branchId = data.branchId as string;
+        const branch = await repo.getById(branchId);
         if (!branch) {
-          throw new Error(`Branch thread ${data.branchId} not found`);
+          throw new Error(`Branch thread ${branchId} not found`);
         }
 
         // Generate summary if not provided
-        let summary = data.summary;
+        let summary = data.summary as string | undefined;
         if (!summary) {
           // TODO: Use LLM to generate summary from branch messages
           summary = `Branch "${branch.branchPurpose}" completed`;
@@ -145,52 +188,56 @@ export const chatThreadsExecutor = inngest.createFunction(
             await repo.update(
               branch.parentThreadId,
               { contextSummary: updatedSummary },
-              data.userId
+              data.userId as string
             );
           }
         }
 
         // Mark branch as merged
         await repo.update(
-          data.branchId,
+          branchId,
           {
-            status: "merged",
+            status: ChatThreadStatus.MERGED,
             contextSummary: summary,
             mergedAt: new Date(),
           },
-          data.userId
+          data.userId as string
         );
 
         return {
           status: "completed",
-          branchId: data.branchId,
+          branchId,
           parentThreadId: branch.parentThreadId,
           message: "Branch merged successfully",
         };
       }
 
-      if (eventType === "chat_threads.archive.validated") {
+      if (event.name === "chat_threads.archive.validated") {
         // Archive thread (soft delete)
-        await repo.update(data.threadId, { status: "archived" }, data.userId);
+        await repo.update(
+          data.threadId as string,
+          { status: ChatThreadStatus.ARCHIVED },
+          data.userId as string
+        );
 
         return {
           status: "completed",
-          threadId: data.threadId,
+          threadId: data.threadId as string,
           message: "Thread archived successfully",
         };
       }
 
-      if (eventType === "chat_threads.update.validated") {
+      if (action === "update") {
         const thread = await repo.update(
-          data.id,
+          data.id as string,
           {
-            title: data.title,
-            status: data.status,
-            contextSummary: data.contextSummary,
-            metadata: data.metadata,
-            mergedAt: data.mergedAt,
+            title: data.title as string | undefined,
+            status: data.status as ChatThreadStatus | undefined,
+            contextSummary: data.contextSummary as string | undefined,
+            metadata: data.metadata as Record<string, unknown> | undefined,
+            mergedAt: data.mergedAt as Date | undefined,
           },
-          data.userId
+          data.userId as string
         );
 
         return {
@@ -200,17 +247,17 @@ export const chatThreadsExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "chat_threads.delete.validated") {
-        await repo.delete(data.id, data.userId);
+      if (action === "delete") {
+        await repo.delete(data.id as string, data.userId as string);
 
         return {
           status: "completed",
-          threadId: data.id,
+          threadId: data.id as string,
           message: "Chat thread deleted successfully",
         };
       }
 
-      throw new Error(`Unknown event type: ${eventType}`);
+      throw new Error(`Unknown action or event: ${action} (${event.name})`);
     });
   }
 );

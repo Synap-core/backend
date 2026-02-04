@@ -7,7 +7,10 @@
 
 import { inngest } from "../client.js";
 import { db, skills, eq } from "@synap/database";
-import { randomUUID } from "crypto";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const skillsExecutor = inngest.createFunction(
   {
@@ -21,26 +24,34 @@ export const skillsExecutor = inngest.createFunction(
     { event: "skills.delete.validated" },
   ],
   async ({ event, step }) => {
-    const eventType = event.name;
-    const data = event.data;
+    const eventInfo = extractEventInfo(event.name);
+    const { action, phase } = eventInfo;
+    const data = event.data as UnifiedEventData;
+
+    // Ensure we're handling a validated event
+    if (phase !== "validated") {
+      console.warn(
+        `[skillsExecutor] Received non-validated event: ${event.name}`
+      );
+      return { success: false, reason: "Not a validated event" };
+    }
 
     return await step.run("execute-skill-operation", async () => {
-      if (eventType === "skills.create.validated") {
-        const skillId = randomUUID();
-
+      if (action === "create") {
         const [skill] = await db
           .insert(skills)
           .values({
-            id: skillId,
-            userId: data.userId,
-            workspaceId: data.workspaceId || null,
-            name: data.name,
-            description: data.description || null,
-            code: data.code,
-            parameters: data.parameters || null,
-            category: data.category || null,
-            executionMode: data.executionMode || "sync",
-            timeoutSeconds: data.timeoutSeconds || 30,
+            userId: data.userId as string,
+            workspaceId: (data.workspaceId as string | undefined) || null,
+            name: data.name as string,
+            description: (data.description as string | undefined) || null,
+            code: data.code as string,
+            parameters:
+              (data.parameters as Record<string, unknown> | undefined) || null,
+            category: (data.category as string | undefined) || null,
+            executionMode:
+              (data.executionMode as "sync" | "async" | undefined) || "sync",
+            timeoutSeconds: (data.timeoutSeconds as number | undefined) || 30,
             status: "active",
             metadata: {},
           })
@@ -53,20 +64,21 @@ export const skillsExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "skills.update.validated") {
+      if (action === "update") {
         const updateData: Record<string, unknown> = {};
 
-        if (data.name !== undefined) updateData.name = data.name;
+        if (data.name !== undefined) updateData.name = data.name as string;
         if (data.description !== undefined)
-          updateData.description = data.description;
-        if (data.code !== undefined) updateData.code = data.code;
+          updateData.description = data.description as string;
+        if (data.code !== undefined) updateData.code = data.code as string;
         if (data.parameters !== undefined)
-          updateData.parameters = data.parameters;
-        if (data.category !== undefined) updateData.category = data.category;
+          updateData.parameters = data.parameters as Record<string, unknown>;
+        if (data.category !== undefined)
+          updateData.category = data.category as string;
         if (data.executionMode !== undefined)
-          updateData.executionMode = data.executionMode;
+          updateData.executionMode = data.executionMode as "sync" | "async";
         if (data.timeoutSeconds !== undefined)
-          updateData.timeoutSeconds = data.timeoutSeconds;
+          updateData.timeoutSeconds = data.timeoutSeconds as number;
 
         // Reset error status if code is updated
         if (data.code !== undefined) {
@@ -79,7 +91,7 @@ export const skillsExecutor = inngest.createFunction(
         const [skill] = await db
           .update(skills)
           .set(updateData)
-          .where(eq(skills.id, data.skillId))
+          .where(eq(skills.id, data.skillId as string))
           .returning();
 
         if (!skill) {
@@ -93,17 +105,17 @@ export const skillsExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "skills.delete.validated") {
-        await db.delete(skills).where(eq(skills.id, data.skillId));
+      if (action === "delete") {
+        await db.delete(skills).where(eq(skills.id, data.skillId as string));
 
         return {
           status: "completed",
-          skillId: data.skillId,
+          skillId: data.skillId as string,
           message: "Skill deleted successfully",
         };
       }
 
-      throw new Error(`Unknown event type: ${eventType}`);
+      throw new Error(`Unknown action: ${action}`);
     });
   }
 );

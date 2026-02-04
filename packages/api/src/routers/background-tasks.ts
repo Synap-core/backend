@@ -105,9 +105,9 @@ export const backgroundTasksRouter = router({
 
       // Emit event for task creation
       await emitRequestEvent({
-        type: "background_tasks.create.requested",
+        subjectType: "backgroundTask",
+        action: "create",
         subjectId: taskId,
-        subjectType: "background_task",
         data: {
           id: taskId,
           userId,
@@ -167,11 +167,11 @@ export const backgroundTasksRouter = router({
 
       // Emit event for task update
       await emitRequestEvent({
-        type: "background_tasks.update.requested",
+        subjectType: "backgroundTask",
+        action: "update",
         subjectId: id,
-        subjectType: "background_task",
         data: {
-          taskId: id,
+          id,
           ...updateData,
         },
         userId,
@@ -214,11 +214,11 @@ export const backgroundTasksRouter = router({
 
       // Emit event for task deletion
       await emitRequestEvent({
-        type: "background_tasks.delete.requested",
+        subjectType: "backgroundTask",
+        action: "delete",
         subjectId: input.id,
-        subjectType: "background_task",
         data: {
-          taskId: input.id,
+          id: input.id,
         },
         userId,
         workspaceId: existingTask.workspaceId || undefined,

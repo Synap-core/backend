@@ -85,9 +85,9 @@ export const apiKeysRouter = router({
         : undefined;
 
       await emitRequestEvent({
-        type: "api_keys.create.requested",
+        subjectType: "apiKey",
+        action: "create",
         subjectId: id,
-        subjectType: "api_key",
         data: {
           id,
           keyName: input.keyName,
@@ -133,9 +133,9 @@ export const apiKeysRouter = router({
       }
 
       await emitRequestEvent({
-        type: "api_keys.revoke.requested",
+        subjectType: "apiKey",
+        action: "delete",
         subjectId: input.keyId,
-        subjectType: "api_key",
         data: {
           id: input.keyId,
           reason: input.reason,
@@ -170,9 +170,9 @@ export const apiKeysRouter = router({
       }
 
       await emitRequestEvent({
-        type: "api_keys.rotate.requested",
+        subjectType: "apiKey",
+        action: "update",
         subjectId: input.keyId,
-        subjectType: "api_key",
         data: {
           id: input.keyId,
           keyPrefix: oldKey.keyPrefix,

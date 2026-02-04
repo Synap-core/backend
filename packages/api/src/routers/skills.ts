@@ -98,9 +98,9 @@ export const skillsRouter = router({
 
       // Emit event for skill creation
       await emitRequestEvent({
-        type: "skills.create.requested",
-        subjectId: skillId,
         subjectType: "skill",
+        action: "create",
+        subjectId: skillId,
         data: {
           id: skillId,
           userId,
@@ -159,11 +159,11 @@ export const skillsRouter = router({
 
       // Emit event for skill update
       await emitRequestEvent({
-        type: "skills.update.requested",
-        subjectId: id,
         subjectType: "skill",
+        action: "update",
+        subjectId: id,
         data: {
-          skillId: id,
+          id,
           ...updateData,
         },
         userId,
@@ -203,11 +203,11 @@ export const skillsRouter = router({
 
       // Emit event for skill deletion
       await emitRequestEvent({
-        type: "skills.delete.requested",
-        subjectId: input.id,
         subjectType: "skill",
+        action: "delete",
+        subjectId: input.id,
         data: {
-          skillId: input.id,
+          id: input.id,
         },
         userId,
         workspaceId: existingSkill.workspaceId || undefined,

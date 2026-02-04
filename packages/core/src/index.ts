@@ -21,3 +21,9 @@ export {
 
 // Event metadata types (AI, import, sync, automation)
 export * from "./event-metadata.js";
+
+// Enhanced event metadata (validation, user, message, IoT, enterprise)
+export * from "./enhanced-event-metadata.js";
+
+// Enhanced message metadata (AI, approval, links, attachments)
+export * from "./enhanced-message-metadata.js";

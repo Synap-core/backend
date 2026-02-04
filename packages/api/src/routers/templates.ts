@@ -153,20 +153,20 @@ export const templatesRouter = router({
       const templateId = randomUUID();
 
       await emitRequestEvent({
-        type: "templates.create.requested",
-        subjectId: templateId,
         subjectType: "template",
+        action: "create",
+        subjectId: templateId,
         data: {
           id: templateId,
-          userId: input.workspaceId ? null : ctx.userId,
-          workspaceId: input.workspaceId || null,
+          userId: input.workspaceId ? undefined : ctx.userId,
+          workspaceId: input.workspaceId || undefined,
           name: input.name,
-          description: input.description || null,
+          description: input.description || undefined,
           targetType: input.targetType,
-          entityType: input.entityType || null,
-          inboxItemType: input.inboxItemType || null,
+          entityType: input.entityType || undefined,
+          inboxItemType: input.inboxItemType || undefined,
           config: input.config,
-          schema: input.schema || null,
+          schema: input.schema || undefined,
           isDefault: input.isDefault,
           isPublic: input.isPublic,
           version: 1,
@@ -225,9 +225,9 @@ export const templatesRouter = router({
       }
 
       await emitRequestEvent({
-        type: "templates.update.requested",
-        subjectId: id,
         subjectType: "template",
+        action: "update",
+        subjectId: id,
         data: {
           id,
           ...updates,
@@ -272,9 +272,9 @@ export const templatesRouter = router({
       }
 
       await emitRequestEvent({
-        type: "templates.delete.requested",
-        subjectId: input.id,
         subjectType: "template",
+        action: "delete",
+        subjectId: input.id,
         data: {
           id: input.id,
           userId: ctx.userId,

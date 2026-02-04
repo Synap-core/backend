@@ -3,38 +3,60 @@ import {
   getDb,
   EventRepository,
   DocumentRepository,
+  sql,
   eq,
   and,
   documents,
 } from "@synap/database";
+import { randomUUID } from "crypto";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
+import { normalizeDocumentType } from "@synap/database";
 
 export const documentsHandler = async ({
   event,
   step,
 }: {
-  event: any;
+  event: { name: string; data: UnifiedEventData; user: { id: string } };
   step: any;
 }) => {
-  const action = event.name.split(".")[1] as "create" | "update" | "delete";
-  const { userId } = event.user;
+  // Extract event info using unified event system
+  const eventInfo = extractEventInfo(event.name);
+  const { action, phase } = eventInfo;
+
+  // Ensure we're handling a validated event
+  if (phase !== "validated") {
+    console.warn(
+      `[documentsExecutor] Received non-validated event: ${event.name}`
+    );
+    return { success: false, reason: "Not a validated event" };
+  }
+
+  const userId = event.user.id;
   const data = event.data;
 
   const db = await getDb();
-  const eventRepo = new EventRepository(db as any);
+  const eventRepo = new EventRepository(sql);
   const docRepo = new DocumentRepository(db, eventRepo);
 
   if (action === "create") {
+    const docId = (data.id as string) || randomUUID();
+    const docType = normalizeDocumentType(data.type, "markdown");
+
     // Step 1: Upload file to storage
     const uploadResult = await step.run("upload-file", async () => {
       const { storage } = await import("@synap/storage");
 
       // Build standardized storage path
-      const extension = data.type === "markdown" ? "md" : data.type;
-      const key = storage.buildPath(userId, "document", data.id, extension);
+      const extension = docType === "markdown" ? "md" : docType;
+      const key = storage.buildPath(userId, "document", docId, extension);
 
       // Upload content to storage
-      const metadata = await storage.upload(key, data.content || "", {
-        contentType: data.mimeType || "text/markdown",
+      const content = (data.content as string) || "";
+      const metadata = await storage.upload(key, content, {
+        contentType: (data.mimeType as string) || "text/markdown",
       });
 
       return {
@@ -49,15 +71,15 @@ export const documentsHandler = async ({
     await step.run("create-document", async () => {
       await docRepo.create(
         {
-          title: data.title,
-          type: data.type,
-          language: data.language,
+          title: (data.title as string) || "Untitled",
+          type: docType as "text" | "markdown" | "code" | "pdf" | "docx", // DocumentRepository doesn't support whiteboard yet
+          language: (data.language as string) || undefined,
           storageUrl: uploadResult.url,
           storageKey: uploadResult.key,
           size: uploadResult.size,
-          mimeType: data.mimeType || "text/plain",
-          projectId: data.projectId,
-          metadata: data.metadata,
+          mimeType: (data.mimeType as string) || "text/plain",
+          projectId: (data.projectId as string) || undefined,
+          metadata: (data.metadata as Record<string, unknown>) || {},
           userId,
         },
         userId
@@ -66,12 +88,12 @@ export const documentsHandler = async ({
   } else if (action === "update") {
     await step.run("update-document", async () => {
       await docRepo.update(
-        data.id,
+        data.id as string,
         {
-          title: data.title,
-          currentVersion: data.currentVersion,
-          size: data.size,
-          metadata: data.metadata,
+          title: (data.title as string) || undefined,
+          currentVersion: (data.currentVersion as number) || undefined,
+          size: (data.size as number) || undefined,
+          metadata: (data.metadata as Record<string, unknown>) || undefined,
         },
         userId
       );
@@ -80,7 +102,10 @@ export const documentsHandler = async ({
     await step.run("delete-storage-file", async () => {
       // Get document to retrieve storage key
       const document = await db.query.documents.findFirst({
-        where: and(eq(documents.id, data.id), eq(documents.userId, userId)),
+        where: and(
+          eq(documents.id, data.id as string),
+          eq(documents.userId, userId)
+        ),
       });
 
       // All documents use MinIO storage (unified approach)
@@ -98,9 +123,14 @@ export const documentsHandler = async ({
     });
 
     await step.run("delete-document", async () => {
-      await docRepo.delete(data.id, userId);
+      await docRepo.delete(data.id as string, userId);
+      // BaseRepository.emitCompleted() automatically emits "documents.delete.completed"
     });
   }
+
+  // Note: Completed events are automatically emitted by BaseRepository
+  // when calling repo.create(), repo.update(), or repo.delete()
+  // No need to manually emit here
 
   return { success: true, action };
 };

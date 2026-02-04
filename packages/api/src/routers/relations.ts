@@ -224,9 +224,9 @@ export const relationsRouter = router({
       const id = randomUUID();
 
       await emitRequestEvent({
-        type: "relations.create.requested",
-        subjectId: id,
         subjectType: "relation",
+        action: "create",
+        subjectId: id,
         data: {
           id,
           sourceEntityId: input.sourceEntityId,
@@ -256,9 +256,9 @@ export const relationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "relations.delete.requested",
-        subjectId: input.id,
         subjectType: "relation",
+        action: "delete",
+        subjectId: input.id,
         data: {
           id: input.id,
           userId: ctx.userId,

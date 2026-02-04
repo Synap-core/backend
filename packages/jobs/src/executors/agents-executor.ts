@@ -7,6 +7,10 @@
 import { inngest } from "../client.js";
 import { AgentRepository } from "@synap/database";
 import { getDb } from "@synap/database";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const agentsExecutor = inngest.createFunction(
   {
@@ -20,34 +24,56 @@ export const agentsExecutor = inngest.createFunction(
     { event: "agents.delete.validated" },
   ],
   async ({ event, step }) => {
-    const eventType = event.name;
-    const data = event.data;
+    const eventInfo = extractEventInfo(event.name);
+    const { action, phase } = eventInfo;
+    const data = event.data as UnifiedEventData;
+
+    // Ensure we're handling a validated event
+    if (phase !== "validated") {
+      console.warn(
+        `[agentsExecutor] Received non-validated event: ${event.name}`
+      );
+      return { success: false, reason: "Not a validated event" };
+    }
 
     return await step.run("execute-agent-operation", async () => {
       const db = await getDb();
-      const repo = new AgentRepository(db as any);
+      const repo = new AgentRepository(db);
 
-      if (eventType === "agents.create.validated") {
+      if (action === "create") {
         const agent = await repo.create(
           {
-            id: data.id,
-            name: data.name,
-            description: data.description,
-            createdBy: data.createdBy,
-            userId: data.userId,
-            llmProvider: data.llmProvider,
-            llmModel: data.llmModel,
-            capabilities: data.capabilities,
-            systemPrompt: data.systemPrompt,
-            toolsConfig: data.toolsConfig,
-            executionMode: data.executionMode,
-            maxIterations: data.maxIterations,
-            timeoutSeconds: data.timeoutSeconds,
-            weight: data.weight,
-            performanceMetrics: data.performanceMetrics,
-            active: data.active,
+            id: data.id as string,
+            name: data.name as string,
+            description: data.description as string | undefined,
+            createdBy: data.createdBy as string,
+            userId: data.userId as string | undefined,
+            llmProvider: data.llmProvider as
+              | "claude"
+              | "openai"
+              | "ollama"
+              | "gemini"
+              | undefined,
+            llmModel: data.llmModel as string,
+            capabilities: data.capabilities as string[],
+            systemPrompt: data.systemPrompt as string,
+            toolsConfig: data.toolsConfig as
+              | Record<string, unknown>
+              | undefined,
+            executionMode: data.executionMode as
+              | "simple"
+              | "react"
+              | "langgraph"
+              | undefined,
+            maxIterations: data.maxIterations as number | undefined,
+            timeoutSeconds: data.timeoutSeconds as number | undefined,
+            weight: data.weight as string | undefined,
+            performanceMetrics: data.performanceMetrics as
+              | Record<string, unknown>
+              | undefined,
+            active: data.active as boolean | undefined,
           },
-          data.userId
+          data.userId as string
         );
 
         return {
@@ -57,25 +83,38 @@ export const agentsExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "agents.update.validated") {
+      if (action === "update") {
         const agent = await repo.update(
-          data.id,
+          data.id as string,
           {
-            name: data.name,
-            description: data.description,
-            llmProvider: data.llmProvider,
-            llmModel: data.llmModel,
-            capabilities: data.capabilities,
-            systemPrompt: data.systemPrompt,
-            toolsConfig: data.toolsConfig,
-            executionMode: data.executionMode,
-            maxIterations: data.maxIterations,
-            timeoutSeconds: data.timeoutSeconds,
-            weight: data.weight,
-            performanceMetrics: data.performanceMetrics,
-            active: data.active,
+            name: data.name as string | undefined,
+            description: data.description as string | undefined,
+            llmProvider: data.llmProvider as
+              | "claude"
+              | "openai"
+              | "ollama"
+              | "gemini"
+              | undefined,
+            llmModel: data.llmModel as string | undefined,
+            capabilities: data.capabilities as string[] | undefined,
+            systemPrompt: data.systemPrompt as string | undefined,
+            toolsConfig: data.toolsConfig as
+              | Record<string, unknown>
+              | undefined,
+            executionMode: data.executionMode as
+              | "simple"
+              | "react"
+              | "langgraph"
+              | undefined,
+            maxIterations: data.maxIterations as number | undefined,
+            timeoutSeconds: data.timeoutSeconds as number | undefined,
+            weight: data.weight as string | undefined,
+            performanceMetrics: data.performanceMetrics as
+              | Record<string, unknown>
+              | undefined,
+            active: data.active as boolean | undefined,
           },
-          data.userId
+          data.userId as string
         );
 
         return {
@@ -85,17 +124,17 @@ export const agentsExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "agents.delete.validated") {
-        await repo.delete(data.id, data.userId);
+      if (action === "delete") {
+        await repo.delete(data.id as string, data.userId as string);
 
         return {
           status: "completed",
-          agentId: data.id,
+          agentId: data.id as string,
           message: "Agent deleted successfully",
         };
       }
 
-      throw new Error(`Unknown event type: ${eventType}`);
+      throw new Error(`Unknown action: ${action}`);
     });
   }
 );

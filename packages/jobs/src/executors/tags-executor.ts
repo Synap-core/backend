@@ -6,54 +6,69 @@
  */
 
 import { inngest } from "../client.js";
-import { getDb, EventRepository, TagRepository } from "@synap/database";
+import { getDb, EventRepository, TagRepository, sql } from "@synap/database";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const tagsHandler = async ({
   event,
   step,
 }: {
-  event: any;
+  event: { name: string; data: UnifiedEventData; user: { id: string } };
   step: any;
 }) => {
-  const db = await getDb();
-  const eventRepo = new EventRepository(db as any);
-  const tagRepo = new TagRepository(db, eventRepo);
-
-  // Extract action from event name (tags.create.validated → create)
+  const eventInfo = extractEventInfo(event.name);
+  const { phase } = eventInfo;
+  // Extract custom action (tags have attach/detach which aren't in EventAction)
   const action = event.name.split(".")[1] as
     | "create"
     | "update"
     | "delete"
     | "attach"
     | "detach";
-  const { userId } = event.user;
+
+  if (phase !== "validated") {
+    console.warn(`[tagsExecutor] Received non-validated event: ${event.name}`);
+    return { success: false, reason: "Not a validated event" };
+  }
+
+  const db = await getDb();
+  const eventRepo = new EventRepository(sql);
+  const tagRepo = new TagRepository(db, eventRepo);
+
+  const userId = event.user.id;
   const data = event.data;
 
   if (action === "create") {
     await step.run("create-tag", async () => {
       await tagRepo.create(
         {
-          name: data.name,
-          color: data.color,
+          name: (data.name as string) || "Untitled",
+          color: (data.color as string) || "#808080",
           userId,
         },
         userId
       );
+      // BaseRepository.emitCompleted() automatically emits "tags.create.completed"
     });
   } else if (action === "update") {
     await step.run("update-tag", async () => {
       await tagRepo.update(
-        data.id,
+        data.id as string,
         {
-          name: data.name,
-          color: data.color,
+          name: (data.name as string) || undefined,
+          color: (data.color as string) || undefined,
         },
         userId
       );
+      // BaseRepository.emitCompleted() automatically emits "tags.update.completed"
     });
   } else if (action === "delete") {
     await step.run("delete-tag", async () => {
-      await tagRepo.delete(data.id, userId);
+      await tagRepo.delete(data.id as string, userId);
+      // BaseRepository.emitCompleted() automatically emits "tags.delete.completed"
     });
   } else if (action === "attach") {
     await step.run("attach-tag", async () => {
@@ -62,9 +77,9 @@ export const tagsHandler = async ({
         .insert(entityTags)
         .values({
           userId,
-          tagId: data.tagId,
-          entityId: data.entityId,
-        } as any)
+          tagId: data.tagId as string,
+          entityId: data.entityId as string,
+        })
         .onConflictDoNothing();
     });
   } else if (action === "detach") {
@@ -74,8 +89,8 @@ export const tagsHandler = async ({
         .delete(entityTags)
         .where(
           and(
-            eq(entityTags.tagId, data.tagId),
-            eq(entityTags.entityId, data.entityId)
+            eq(entityTags.tagId, data.tagId as string),
+            eq(entityTags.entityId, data.entityId as string)
           )
         );
     });

@@ -6,6 +6,7 @@
 
 export * from "./base-repository.js";
 export * from "./event-repository.js";
+export * from "./message-links-repository.js";
 export * from "./conversation-repository.js";
 export * from "./knowledge-repository.js";
 export * from "./suggestion-repository.js";

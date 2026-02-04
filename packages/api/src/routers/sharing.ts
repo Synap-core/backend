@@ -94,23 +94,23 @@ export const sharingRouter = router({
 
       // Emit event for share creation
       await emitRequestEvent({
-        type: "sharing.createPublicLink.requested",
+        subjectType: "sharing",
+        action: "create",
         subjectId: shareId,
-        subjectType: "share",
         data: {
           id: shareId,
           resourceType: input.resourceType,
           resourceId: input.resourceId,
           visibility: "public",
           publicToken: token,
-          permissions: { read: true },
+          permission: "view",
           expiresAt: input.expiresInDays
             ? new Date(
                 Date.now() +
                   (input.expiresInDays as number) * 24 * 60 * 60 * 1000
               )
             : null,
-          createdBy: ctx.userId,
+          sharedByUserId: ctx.userId,
           userId: ctx.userId,
         },
         userId: ctx.userId,
@@ -140,14 +140,16 @@ export const sharingRouter = router({
 
       // Emit event for invitation
       await emitRequestEvent({
-        type: "sharing.invite.requested",
+        subjectType: "sharing",
+        action: "create",
         subjectId: inviteId,
-        subjectType: "share",
         data: {
           id: inviteId,
           resourceType: input.resourceType,
           resourceId: input.resourceId,
-          userEmail: input.userEmail,
+          sharedWithEmail: input.userEmail,
+          permission: "view",
+          sharedByUserId: ctx.userId,
           userId: ctx.userId,
         },
         userId: ctx.userId,
@@ -351,11 +353,11 @@ export const sharingRouter = router({
 
       // Emit event for share revocation
       await emitRequestEvent({
-        type: "sharing.revoke.requested",
+        subjectType: "sharing",
+        action: "delete",
         subjectId: input.shareId,
-        subjectType: "share",
         data: {
-          shareId: input.shareId,
+          id: input.shareId,
           userId: ctx.userId,
         },
         userId: ctx.userId,

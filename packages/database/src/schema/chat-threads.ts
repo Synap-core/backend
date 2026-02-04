@@ -14,6 +14,36 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 
+/**
+ * Chat Thread Types
+ */
+export enum ChatThreadType {
+  MAIN = "main",
+  BRANCH = "branch",
+}
+
+/**
+ * Chat Thread Status
+ */
+export enum ChatThreadStatus {
+  ACTIVE = "active",
+  MERGED = "merged",
+  ARCHIVED = "archived",
+}
+
+/**
+ * Chat Thread Agent Types
+ */
+export enum ChatThreadAgentType {
+  DEFAULT = "default",
+  META = "meta",
+  PROMPTING = "prompting",
+  KNOWLEDGE_SEARCH = "knowledge-search",
+  CODE = "code",
+  WRITING = "writing",
+  ACTION = "action",
+}
+
 export const chatThreads = pgTable(
   "chat_threads",
   {
@@ -25,10 +55,10 @@ export const chatThreads = pgTable(
     // Thread metadata
     title: text("title"),
     threadType: text("thread_type", {
-      enum: ["main", "branch"],
+      enum: [ChatThreadType.MAIN, ChatThreadType.BRANCH],
     })
       .notNull()
-      .default("main"),
+      .default(ChatThreadType.MAIN),
 
     // Branching
     parentThreadId: uuid("parent_thread_id"), // Self-reference
@@ -40,25 +70,29 @@ export const chatThreads = pgTable(
 
     // Status
     status: text("status", {
-      enum: ["active", "merged", "archived"],
+      enum: [
+        ChatThreadStatus.ACTIVE,
+        ChatThreadStatus.MERGED,
+        ChatThreadStatus.ARCHIVED,
+      ],
     })
       .notNull()
-      .default("active"),
+      .default(ChatThreadStatus.ACTIVE),
 
     // Agent type for multi-agent system
     agentType: text("agent_type", {
       enum: [
-        "default",
-        "meta",
-        "prompting",
-        "knowledge-search",
-        "code",
-        "writing",
-        "action",
+        ChatThreadAgentType.DEFAULT,
+        ChatThreadAgentType.META,
+        ChatThreadAgentType.PROMPTING,
+        ChatThreadAgentType.KNOWLEDGE_SEARCH,
+        ChatThreadAgentType.CODE,
+        ChatThreadAgentType.WRITING,
+        ChatThreadAgentType.ACTION,
       ],
     })
       .notNull()
-      .default("default"), // Changed from 'meta' to 'default'
+      .default(ChatThreadAgentType.DEFAULT),
     agentConfig: jsonb("agent_config"), // Custom agent configuration (system prompt, tools, etc.)
 
     // Context (compressed summaries from merged branches)

@@ -7,6 +7,10 @@
 import { inngest } from "../client.js";
 import { UserEntityStateRepository } from "@synap/database";
 import { getDb } from "@synap/database";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const userEntityStateExecutor = inngest.createFunction(
   {
@@ -19,22 +23,31 @@ export const userEntityStateExecutor = inngest.createFunction(
     { event: "user_entity_state.delete.validated" },
   ],
   async ({ event, step }) => {
-    const eventType = event.name;
-    const data = event.data;
+    const eventInfo = extractEventInfo(event.name);
+    const { action, phase } = eventInfo;
+    const data = event.data as UnifiedEventData;
+
+    // Ensure we're handling a validated event
+    if (phase !== "validated") {
+      console.warn(
+        `[userEntityStateExecutor] Received non-validated event: ${event.name}`
+      );
+      return { success: false, reason: "Not a validated event" };
+    }
 
     return await step.run("execute-user-entity-state-operation", async () => {
       const db = await getDb();
-      const repo = new UserEntityStateRepository(db as any);
+      const repo = new UserEntityStateRepository(db);
 
-      if (eventType === "user_entity_state.update.validated") {
+      if (action === "update") {
         const state = await repo.update(
-          data.userId,
-          data.itemId,
+          data.userId as string,
+          data.itemId as string,
           {
-            starred: data.starred,
-            pinned: data.pinned,
+            starred: data.starred as boolean | undefined,
+            pinned: data.pinned as boolean | undefined,
           },
-          data.itemType || "entity"
+          (data.itemType as "entity" | "inbox_item" | undefined) || "entity"
         );
 
         return {
@@ -45,18 +58,22 @@ export const userEntityStateExecutor = inngest.createFunction(
         };
       }
 
-      if (eventType === "user_entity_state.delete.validated") {
-        await repo.delete(data.userId, data.itemId, data.itemType || "entity");
+      if (action === "delete") {
+        await repo.delete(
+          data.userId as string,
+          data.itemId as string,
+          (data.itemType as "entity" | "inbox_item" | undefined) || "entity"
+        );
 
         return {
           status: "completed",
-          userId: data.userId,
-          itemId: data.itemId,
+          userId: data.userId as string,
+          itemId: data.itemId as string,
           message: "User entity state deleted successfully",
         };
       }
 
-      throw new Error(`Unknown event type: ${eventType}`);
+      throw new Error(`Unknown action: ${action}`);
     });
   }
 );

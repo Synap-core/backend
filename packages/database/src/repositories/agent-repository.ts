@@ -6,9 +6,10 @@
  */
 
 import { eq, and, desc, or } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { agents, type Agent } from "../schema/agents.js";
 import { EventRepository } from "./event-repository.js";
+import { sql } from "../client-pg.js";
 
 export interface CreateAgentData {
   id: string;
@@ -48,8 +49,10 @@ export interface UpdateAgentData {
 export class AgentRepository {
   private eventRepo: EventRepository;
 
-  constructor(private db: NodePgDatabase<any>) {
-    this.eventRepo = new EventRepository(db as any);
+  constructor(
+    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
+  ) {
+    this.eventRepo = new EventRepository(sql);
   }
 
   /**

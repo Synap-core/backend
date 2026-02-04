@@ -76,3 +76,6 @@ export * from "./admin-invitations.js";
 
 // NEW: Provisioning Tokens (one-time tokens for control-plane-provisioned backends)
 export * from "./provisioning-tokens.js";
+
+// NEW: Message Links (universal linking system)
+export * from "./message-links.js";

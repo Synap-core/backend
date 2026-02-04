@@ -51,7 +51,7 @@ export class MessageRepository {
         userId: input.userId,
         timestamp: new Date(),
         hash,
-      } as any)
+      })
       .returning();
 
     await this.eventRepo.append({

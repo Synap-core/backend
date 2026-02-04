@@ -70,9 +70,9 @@ export const documentsRouter = router({
       const documentId = randomUUID();
 
       await emitRequestEvent({
-        type: "documents.create.requested",
-        subjectId: documentId,
         subjectType: "document",
+        action: "create",
+        subjectId: documentId,
         data: {
           id: documentId,
           title: input.title,
@@ -168,9 +168,9 @@ export const documentsRouter = router({
       // 3. Emit Event for Metadata/DB Update
       // This ensures the DB update goes through the unified flow (governance -> executor)
       await emitRequestEvent({
-        type: "documents.update.requested",
-        subjectId: input.documentId,
         subjectType: "document",
+        action: "update",
+        subjectId: input.documentId,
         data: {
           id: input.documentId,
           currentVersion: newVersion,
@@ -215,9 +215,9 @@ export const documentsRouter = router({
       }
 
       await emitRequestEvent({
-        type: "documents.delete.requested",
-        subjectId: input.documentId,
         subjectType: "document",
+        action: "delete",
+        subjectId: input.documentId,
         data: {
           id: input.documentId,
           userId,

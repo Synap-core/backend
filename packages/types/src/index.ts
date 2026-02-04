@@ -55,3 +55,6 @@ export * from "./chat/index.js";
 
 // Universal Proposals
 export * from "./proposals/index.js";
+
+// Messages & Message Links
+export * from "./messages/index.js";

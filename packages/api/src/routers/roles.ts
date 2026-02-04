@@ -72,9 +72,9 @@ export const rolesRouter = router({
       const id = randomUUID();
 
       await emitRequestEvent({
-        type: "roles.create.requested",
-        subjectId: id,
         subjectType: "role",
+        action: "create",
+        subjectId: id,
         data: {
           id,
           name: input.name,
@@ -110,9 +110,9 @@ export const rolesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "roles.update.requested",
-        subjectId: input.id,
         subjectType: "role",
+        action: "update",
+        subjectId: input.id,
         data: {
           id: input.id,
           name: input.name,
@@ -137,9 +137,9 @@ export const rolesRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "roles.delete.requested",
-        subjectId: input.id,
         subjectType: "role",
+        action: "delete",
+        subjectId: input.id,
         data: {
           id: input.id,
         },

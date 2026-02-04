@@ -30,6 +30,7 @@ import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
 import { skillsRouter } from "./routers/skills.js";
 import { backgroundTasksRouter } from "./routers/background-tasks.js";
+import { messageLinksRouter } from "./routers/message-links.js";
 
 /**
  * Core API Router
@@ -66,6 +67,7 @@ export const coreRouter = router({
   whiteboards: whiteboardsRouter,
   skills: skillsRouter,
   backgroundTasks: backgroundTasksRouter,
+  messageLinks: messageLinksRouter,
 });
 
 export type AppRouter = typeof coreRouter;

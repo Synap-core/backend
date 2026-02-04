@@ -12,6 +12,7 @@
 
 import { createLogger } from "@synap-core/core";
 import type { EventRecord } from "@synap/database";
+import { extractEventInfo, type UnifiedEventData } from "@synap/jobs";
 
 const logger = createLogger({ module: "event-stream-manager" });
 
@@ -72,6 +73,19 @@ class EventStreamManager {
       return; // No clients connected, skip
     }
 
+    // Parse event type to extract structured info
+    let eventInfo: {
+      subjectType: string;
+      action: string;
+      phase: string;
+    } | null = null;
+    try {
+      eventInfo = extractEventInfo(event.eventType);
+    } catch {
+      // Legacy event format - use raw eventType
+      eventInfo = null;
+    }
+
     const data = JSON.stringify({
       id: event.id,
       type: event.eventType,
@@ -79,7 +93,9 @@ class EventStreamManager {
       userId: event.userId,
       subjectId: event.subjectId,
       subjectType: event.subjectType,
-      data: event.data,
+      action: eventInfo?.action,
+      phase: eventInfo?.phase,
+      data: event.data as UnifiedEventData,
       metadata: event.metadata,
       correlationId: event.correlationId,
       causationId: event.causationId,

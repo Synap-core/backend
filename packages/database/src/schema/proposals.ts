@@ -9,6 +9,15 @@ import {
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
+ * Proposal Status
+ */
+export enum ProposalStatus {
+  PENDING = "pending",
+  APPROVED = "approved",
+  REJECTED = "rejected",
+}
+
+/**
  * Universal Proposals Table
  *
  * Stores all pending update requests (proposals) for any entity type.
@@ -31,7 +40,15 @@ export const proposals = pgTable(
     data: jsonb("data").notNull(), // Payload (was 'request')
 
     // Status Tracking
-    status: text("status").notNull().default("pending"), // 'pending' | 'validated' | 'rejected'
+    status: text("status", {
+      enum: [
+        ProposalStatus.PENDING,
+        ProposalStatus.APPROVED,
+        ProposalStatus.REJECTED,
+      ],
+    })
+      .notNull()
+      .default(ProposalStatus.PENDING),
 
     // Review Metadata
     reviewedBy: text("reviewed_by"),

@@ -48,9 +48,9 @@ export const linkingRouter = router({
 
       // Fast-path event (no validation needed)
       await emitRequestEvent({
-        type: "thread_entities.link.requested",
+        subjectType: "chatThread",
+        action: "linkEntity",
         subjectId: input.threadId,
-        subjectType: "chat_thread",
         data: {
           threadId: input.threadId,
           entityId: input.entityId,
@@ -106,9 +106,9 @@ export const linkingRouter = router({
 
       // Fast-path event (no validation needed)
       await emitRequestEvent({
-        type: "thread_documents.link.requested",
+        subjectType: "chatThread",
+        action: "linkDocument",
         subjectId: input.threadId,
-        subjectType: "chat_thread",
         data: {
           threadId: input.threadId,
           documentId: input.documentId,

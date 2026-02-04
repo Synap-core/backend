@@ -11,9 +11,17 @@
  */
 
 import { inngest } from "../client.js";
-import { db, proposals } from "@synap/database";
+import { db, proposals, sql } from "@synap/database";
+import { EventRepository } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
+import {
+  createUnifiedEvent,
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
+import type { EnhancedEventMetadata } from "@synap-core/core";
 
 const logger = createLogger({ module: "global-validator" });
 
@@ -26,12 +34,28 @@ export const globalValidator = inngest.createFunction(
   [{ event: "entities.create.requested" }, { event: "*.*.requested" }],
   async ({ event, step }) => {
     const eventName = event.name as string;
-    const [targetType, action] = eventName.split("."); // e.g. 'documents', 'create'
+
+    // Extract event info using unified event system
+    const eventInfo = extractEventInfo(eventName);
+    const { subjectType, action, phase } = eventInfo;
+
+    // Ensure we're handling a requested event
+    if (phase !== "requested") {
+      logger.warn(
+        { eventName, phase },
+        "Global validator received non-requested event"
+      );
+      return { status: "skipped", reason: "Not a requested event" };
+    }
+
     const userId = event.user?.id || event.data.userId;
     const workspaceId = event.data.workspaceId;
     const source =
-      event.data.source || (event.data.metadata as any)?.source || "user";
-    const data = event.data;
+      event.data.source || (event.data.metadata as any)?.source || "api";
+    const data = event.data as UnifiedEventData;
+    const metadata = (event.data.metadata || {}) as
+      | EnhancedEventMetadata
+      | undefined;
 
     if (!userId) {
       logger.error({ eventName }, "No userId in event - auto-denying");
@@ -39,7 +63,7 @@ export const globalValidator = inngest.createFunction(
     }
 
     logger.info(
-      { eventName, userId, action, targetType, source },
+      { eventName, userId, action, subjectType, source },
       "Validating request"
     );
 
@@ -59,14 +83,17 @@ export const globalValidator = inngest.createFunction(
 
         if (action === "delete") {
           requiredPermission = "delete"; // Requires owner role
-        } else if (action === "create" || action === "update") {
-          requiredPermission = "write"; // Requires editor or owner
         } else if (
-          action === "addMember" ||
-          action === "removeMember" ||
-          action === "updateMemberRole"
+          action === "create" ||
+          action === "update" ||
+          action === "archive" ||
+          action === "restore"
         ) {
-          requiredPermission = "manage"; // Workspace/project management
+          requiredPermission = "write"; // Requires editor or owner
+        } else {
+          // For any other actions (like addMember, removeMember, updateMemberRole)
+          // These would need to be handled separately if they exist
+          requiredPermission = "write";
         }
 
         // Get projectIds from event data if present
@@ -112,16 +139,57 @@ export const globalValidator = inngest.createFunction(
     });
 
     if (!permissionResult.granted) {
-      // Emit Denied
+      // Emit Denied using unified event system
       const denialReason =
         (permissionResult as any).reason || "Permission denied";
+
       await step.run("emit-denied", async () => {
+        const eventRepo = new EventRepository(sql);
+
+        // Create denied event
+        const deniedEvent = createUnifiedEvent({
+          subjectType,
+          action,
+          phase: "denied",
+          subjectId: data.id || "",
+          data: {
+            ...data,
+            reason: denialReason,
+          },
+          metadata: {
+            ...metadata,
+            validation: {
+              proposalStatus: "rejected",
+              reviewedBy: userId,
+              reviewNotes: denialReason,
+            },
+          },
+          userId,
+          source: source as any,
+        });
+
+        // Log to event repository
+        await eventRepo.append({
+          id: deniedEvent.id,
+          version: deniedEvent.version,
+          type: deniedEvent.type,
+          subjectId: deniedEvent.subjectId,
+          subjectType: deniedEvent.subjectType,
+          data: deniedEvent.data as Record<string, unknown>,
+          metadata: deniedEvent.metadata as Record<string, unknown>,
+          userId: deniedEvent.userId,
+          source: deniedEvent.source as any,
+          timestamp: deniedEvent.timestamp,
+        });
+
+        // Send to Inngest
         await inngest.send({
-          name: eventName.replace(".requested", ".denied"),
-          data: { ...data, denialReason },
+          name: deniedEvent.type,
+          data: deniedEvent.data,
           user: { id: userId },
         });
       });
+
       return { status: "denied", reason: denialReason };
     }
 
@@ -152,18 +220,62 @@ export const globalValidator = inngest.createFunction(
 
     // 3. Path A: Auto-Approve → Emit Validated
     if (policyResult.approved) {
-      // Always emit *.validated - executors will handle execution
-      const validatedEventName = eventName.replace(".requested", ".validated");
-
       await step.run("emit-validated", async () => {
+        const eventRepo = new EventRepository(sql);
+
+        // Create validated event using unified event system
+        const validatedEvent = createUnifiedEvent({
+          subjectType,
+          action,
+          phase: "validated",
+          subjectId: data.id || "",
+          data,
+          metadata: {
+            ...metadata,
+            validation: {
+              autoApproved: true,
+              autoApproveReason: policyResult.reason,
+              validationPolicy: {
+                source: "global-default" as any,
+                requiresValidation: false,
+                reason: policyResult.reason,
+              },
+            },
+            user: {
+              action: "direct",
+              platform: "web",
+            },
+          },
+          userId,
+          source: source as any,
+        });
+
+        // Log to event repository
+        await eventRepo.append({
+          id: validatedEvent.id,
+          version: validatedEvent.version,
+          type: validatedEvent.type,
+          subjectId: validatedEvent.subjectId,
+          subjectType: validatedEvent.subjectType,
+          data: validatedEvent.data as Record<string, unknown>,
+          metadata: validatedEvent.metadata as Record<string, unknown>,
+          userId: validatedEvent.userId,
+          source: validatedEvent.source as any,
+          timestamp: validatedEvent.timestamp,
+        });
+
+        // Send to executor
         await inngest.send({
-          name: validatedEventName,
-          data: event.data,
-          user: event.user,
+          name: validatedEvent.type,
+          data: validatedEvent.data,
+          user: { id: userId },
         });
       });
 
-      return { status: "validated", event: validatedEventName };
+      return {
+        status: "validated",
+        event: `${subjectType}.${action}.validated`,
+      };
     }
 
     // 4. Path B: Create Proposal (Pending)
@@ -172,9 +284,9 @@ export const globalValidator = inngest.createFunction(
         data.entityId ||
         data.id ||
         randomUUID()) as string;
-      const singularType = targetType.endsWith("s")
-        ? targetType.slice(0, -1)
-        : targetType;
+      const singularType = subjectType.endsWith("s")
+        ? subjectType.slice(0, -1)
+        : subjectType;
 
       const [proposal] = await db
         .insert(proposals)
@@ -182,20 +294,20 @@ export const globalValidator = inngest.createFunction(
           workspaceId: workspaceId || "personal",
           targetType: singularType,
           targetId,
-          proposalType: action as string,
+          proposalType: action,
           data: {
             requestId: randomUUID(),
             source: source,
             sourceId: userId,
-            targetType: singularType as any,
+            targetType: singularType,
             targetId,
-            changeType: action as any,
-            data: data,
+            changeType: action,
+            data: data as Record<string, unknown>,
             reasoning: policyResult.reason,
             // Pass through AI metadata for frontend display
-            aiMetadata: (data as any).aiMetadata,
-          },
-          status: "pending",
+            aiMetadata: metadata?.ai,
+          } as Record<string, unknown>,
+          status: ProposalStatus.PENDING,
         })
         .returning();
 
@@ -212,9 +324,12 @@ export const globalValidator = inngest.createFunction(
         // Also notify workspace owners? That's complex logic.
         // Let's stick to notifying the user context for now.
 
+        const requestId =
+          (data.requestId as string | undefined) || randomUUID();
+
         await broadcastNotification({
           userId,
-          requestId: data.requestId || event.id,
+          requestId,
           message: {
             type: "proposal:created", // Frontend listens to this
             data: {
@@ -225,9 +340,9 @@ export const globalValidator = inngest.createFunction(
                 data.id ||
                 randomUUID()) as string,
               changeType: action,
-              status: "pending",
+              status: ProposalStatus.PENDING,
             },
-            requestId: data.requestId,
+            requestId,
             status: "success", // It was successfully *proposed*
             timestamp: new Date().toISOString(),
           },

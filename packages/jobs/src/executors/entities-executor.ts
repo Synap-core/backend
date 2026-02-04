@@ -4,26 +4,43 @@ import {
   EventRepository,
   EntityRepository,
   DocumentRepository,
+  sql,
   eq,
   and,
   entities,
   documents,
+  EntityType,
 } from "@synap/database";
 import { randomUUID } from "crypto";
+import {
+  extractEventInfo,
+  type UnifiedEventData,
+} from "../types/unified-events.js";
 
 export const entitiesHandler = async ({
   event,
   step,
 }: {
-  event: any;
+  event: { name: string; data: UnifiedEventData; user: { id: string } };
   step: any;
 }) => {
-  const action = event.name.split(".")[1] as "create" | "update" | "delete";
-  const { userId } = event.user;
+  // Extract event info using unified event system
+  const eventInfo = extractEventInfo(event.name);
+  const { action, phase } = eventInfo;
+
+  // Ensure we're handling a validated event
+  if (phase !== "validated") {
+    console.warn(
+      `[entitiesExecutor] Received non-validated event: ${event.name}`
+    );
+    return { success: false, reason: "Not a validated event" };
+  }
+
+  const userId = event.user.id;
   const data = event.data;
 
   const db = await getDb();
-  const eventRepo = new EventRepository(db as any);
+  const eventRepo = new EventRepository(sql);
   const entityRepo = new EntityRepository(db, eventRepo);
   const docRepo = new DocumentRepository(db, eventRepo);
 
@@ -37,8 +54,10 @@ export const entitiesHandler = async ({
       const uploadResult = await step.run("upload-content", async () => {
         const { storage } = await import("@synap/storage");
 
-        const key = storage.buildPath(userId, "entity", data.id, "md");
-        const metadata = await storage.upload(key, data.content, {
+        const entityId = (data.id as string) || randomUUID();
+        const content = (data.content as string) || "";
+        const key = storage.buildPath(userId, "entity", entityId, "md");
+        const metadata = await storage.upload(key, content, {
           contentType: "text/markdown",
         });
 
@@ -53,7 +72,7 @@ export const entitiesHandler = async ({
       await step.run("create-document", async () => {
         await docRepo.create(
           {
-            title: data.title || "Untitled",
+            title: (data.title as string) || "Untitled",
             type: "markdown",
             storageUrl: uploadResult.url,
             storageKey: uploadResult.key,
@@ -67,13 +86,30 @@ export const entitiesHandler = async ({
 
       // Step 3: Create entity with documentId
       await step.run("create-entity", async () => {
+        // Handle both 'type' (from API) and 'entityType' (from repository interface)
+        // Standardize on entityType for consistency
+        const entityTypeValue =
+          (data.entityType as string) || (data.type as string);
+        if (!entityTypeValue) {
+          throw new Error(
+            "Entity type is required (must provide either 'type' or 'entityType')"
+          );
+        }
+
+        // Validate and cast to EntityType enum
+        const entityType = Object.values(EntityType).includes(
+          entityTypeValue as EntityType
+        )
+          ? (entityTypeValue as EntityType)
+          : EntityType.NOTE; // Default fallback
+
         await entityRepo.create(
           {
-            entityType: data.entityType,
-            title: data.title,
-            preview: data.preview,
+            entityType,
+            title: (data.title as string) || undefined,
+            preview: (data.preview as string) || undefined,
             documentId: docId, // Link to document
-            metadata: data.metadata,
+            metadata: (data.metadata as Record<string, unknown>) || {},
             userId,
           },
           userId
@@ -82,13 +118,30 @@ export const entitiesHandler = async ({
     } else {
       // Simple entity creation without document
       await step.run("create-entity", async () => {
+        // Handle both 'type' (from API) and 'entityType' (from repository interface)
+        // Standardize on entityType for consistency
+        const entityTypeValue =
+          (data.entityType as string) || (data.type as string);
+        if (!entityTypeValue) {
+          throw new Error(
+            "Entity type is required (must provide either 'type' or 'entityType')"
+          );
+        }
+
+        // Validate and cast to EntityType enum
+        const entityType = Object.values(EntityType).includes(
+          entityTypeValue as EntityType
+        )
+          ? (entityTypeValue as EntityType)
+          : EntityType.NOTE; // Default fallback
+
         await entityRepo.create(
           {
-            entityType: data.entityType,
-            title: data.title,
-            preview: data.preview,
-            documentId: data.documentId, // Use provided documentId if any
-            metadata: data.metadata,
+            entityType,
+            title: (data.title as string) || undefined,
+            preview: (data.preview as string) || undefined,
+            documentId: (data.documentId as string) || undefined, // Use provided documentId if any
+            metadata: (data.metadata as Record<string, unknown>) || {},
             userId,
           },
           userId
@@ -98,12 +151,12 @@ export const entitiesHandler = async ({
   } else if (action === "update") {
     await step.run("update-entity", async () => {
       await entityRepo.update(
-        data.id,
+        data.id as string,
         {
-          title: data.title,
-          preview: data.preview,
-          content: data.content,
-          metadata: data.metadata,
+          title: (data.title as string) || undefined,
+          preview: (data.preview as string) || undefined,
+          content: (data.content as string) || undefined,
+          metadata: (data.metadata as Record<string, unknown>) || undefined,
         },
         userId
       );
@@ -120,7 +173,10 @@ export const entitiesHandler = async ({
       // Get entity to find linked document
       const entity = await step.run("get-entity", async () => {
         return db.query.entities.findFirst({
-          where: and(eq(entities.id, data.id), eq(entities.userId, userId)),
+          where: and(
+            eq(entities.id, data.id as string),
+            eq(entities.userId, userId)
+          ),
         });
       });
 
@@ -158,9 +214,14 @@ export const entitiesHandler = async ({
 
     // Delete entity
     await step.run("delete-entity", async () => {
-      await entityRepo.delete(data.id, userId, { deleteDocument });
+      await entityRepo.delete(data.id as string, userId, { deleteDocument });
+      // BaseRepository.emitCompleted() automatically emits "entities.delete.completed"
     });
   }
+
+  // Note: Completed events are automatically emitted by BaseRepository
+  // when calling repo.create(), repo.update(), or repo.delete()
+  // No need to manually emit here
 
   return { success: true, action };
 };

@@ -16,6 +16,24 @@ import {
 } from "drizzle-orm/pg-core";
 import { documents } from "./documents.js";
 
+/**
+ * Entity Types
+ *
+ * Standard entity types in the system.
+ * Users can create custom types via user preferences.
+ */
+export enum EntityType {
+  NOTE = "note",
+  TASK = "task",
+  PROJECT = "project",
+  DOCUMENT = "document",
+  PAGE = "page",
+  HABIT = "habit",
+  EVENT = "event",
+  PERSON = "person",
+  FILE = "file",
+}
+
 export const entities = pgTable("entities", {
   // Primary key
   id: uuid("id").defaultRandom().primaryKey(),
@@ -26,7 +44,19 @@ export const entities = pgTable("entities", {
   projectIds: uuid("project_ids").array(), // Optional: entities can be in multiple projects
 
   // Entity type: 'note', 'task', 'project', 'page', 'habit', 'event', 'person', 'file'
-  type: text("type").notNull(),
+  type: text("type", {
+    enum: [
+      EntityType.NOTE,
+      EntityType.TASK,
+      EntityType.PROJECT,
+      EntityType.DOCUMENT,
+      EntityType.PAGE,
+      EntityType.HABIT,
+      EntityType.EVENT,
+      EntityType.PERSON,
+      EntityType.FILE,
+    ],
+  }).notNull(),
 
   // Display metadata (NOT the full content!)
   title: text("title"),

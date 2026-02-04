@@ -6,7 +6,7 @@
  */
 
 import { eq, and, sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   userEntityState,
   type UserEntityState,
@@ -19,7 +19,9 @@ export interface UpdateUserEntityStateData {
 }
 
 export class UserEntityStateRepository {
-  constructor(private db: NodePgDatabase<any>) {}
+  constructor(
+    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
+  ) {}
 
   /**
    * Get or create user entity state

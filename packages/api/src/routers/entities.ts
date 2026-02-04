@@ -85,9 +85,9 @@ export const entitiesRouter = router({
 
       // Emit request event (stores in event log + publishes to Inngest)
       await emitRequestEvent({
-        type: "entities.create.requested",
-        subjectId: entityId,
         subjectType: "entity",
+        action: "create",
+        subjectId: entityId,
         data: {
           id: entityId,
           type: input.type,
@@ -306,17 +306,18 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "entities.update.requested",
-        subjectId: input.id,
         subjectType: "entity",
+        action: "update",
+        subjectId: input.id,
         data: {
-          entityId: input.id,
+          id: input.id,
           title: input.title,
           preview: input.preview,
           userId: ctx.userId,
           workspaceId: input.workspaceId,
         },
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
@@ -336,11 +337,11 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        type: "entities.delete.requested",
-        subjectId: input.id,
         subjectType: "entity",
+        action: "delete",
+        subjectId: input.id,
         data: {
-          entityId: input.id,
+          id: input.id,
           userId: ctx.userId,
         },
         userId: ctx.userId,
