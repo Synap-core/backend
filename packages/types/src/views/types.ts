@@ -13,8 +13,9 @@
  * View category determines content structure and rendering approach
  * - structured: Query-based views with interchangeable layouts (table, kanban, graph, etc.)
  * - canvas: Freeform drawing views (whiteboard, mindmap)
+ * - composite: Views that compose other views (bento grid, dashboard)
  */
-export type ViewCategory = "structured" | "canvas";
+export type ViewCategory = "structured" | "canvas" | "composite";
 
 /**
  * View type enum (imported from index.ts)
@@ -36,6 +37,9 @@ export const VIEW_TYPE_CATEGORIES: Record<ViewType, ViewCategory> = {
   timeline: "structured",
   graph: "structured", // Graph is also query-based!
 
+  // Composite (views that compose other views)
+  bento: "composite",
+
   // Canvas (freeform drawing)
   whiteboard: "canvas",
   mindmap: "canvas",
@@ -48,7 +52,7 @@ export const VIEW_TYPE_CATEGORIES: Record<ViewType, ViewCategory> = {
  * @returns The category of the view type
  */
 export function getViewCategory(type: ViewType): ViewCategory {
-  return VIEW_TYPE_CATEGORIES[type];
+  return VIEW_TYPE_CATEGORIES[type] || "structured"; // Default fallback
 }
 
 // ... imports

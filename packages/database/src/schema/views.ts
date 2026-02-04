@@ -71,6 +71,9 @@ export const views = pgTable("views", {
     withTimezone: true,
   }),
 
+  // Composition support (for composite views like bento grid)
+  embeddedViewIds: uuid("embedded_view_ids").array(), // Views embedded in this view
+
   // Quick-access metadata (for listings, thumbnails, search)
   metadata: jsonb("metadata").default("{}").notNull(),
   // {

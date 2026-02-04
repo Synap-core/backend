@@ -41,6 +41,7 @@ import { verifyPermission } from "@synap/database";
 import {
   ViewContentSchema,
   getViewCategory,
+  validateViewConfig,
   type ViewMetadata,
   type EntityFilter,
   type SortRule,
@@ -70,6 +71,7 @@ export const viewsRouter = router({
           "gantt",
           "mindmap",
           "graph",
+          "bento",
         ]),
         // NEW: Scope profiles (required for structured views)
         scopeProfileIds: z.array(z.string().uuid()).optional(),
@@ -87,6 +89,8 @@ export const viewsRouter = router({
           .optional(),
         // NEW: Render config (overrides only)
         config: z.record(z.string(), z.any()).optional(),
+        // NEW: Embedded view IDs (for composite views)
+        embeddedViewIds: z.array(z.string().uuid()).optional(),
         // Legacy: initialContent (for canvas views)
         initialContent: z.any().optional(),
       })
@@ -205,6 +209,7 @@ export const viewsRouter = router({
           scopeMode: input.scopeMode || "explicit",
           query: input.query || {},
           config: input.config || {},
+          embeddedViewIds: input.embeddedViewIds || [],
           userId: ctx.userId,
         },
         userId: ctx.userId,
@@ -666,6 +671,8 @@ export const viewsRouter = router({
           .optional(),
         // NEW: Render config (overrides only)
         config: z.record(z.string(), z.any()).optional(),
+        // NEW: Embedded view IDs (for composite views)
+        embeddedViewIds: z.array(z.string().uuid()).optional(),
         // NEW: Schema snapshot
         schemaSnapshot: z.record(z.string(), z.any()).optional(),
         snapshotUpdatedAt: z.date().optional(),
@@ -683,6 +690,7 @@ export const viewsRouter = router({
             "gantt",
             "mindmap",
             "graph",
+            "bento",
           ])
           .optional(),
       })
@@ -727,6 +735,7 @@ export const viewsRouter = router({
           scopeMode: input.scopeMode,
           query: input.query,
           config: input.config,
+          embeddedViewIds: input.embeddedViewIds,
           schemaSnapshot: input.schemaSnapshot,
           snapshotUpdatedAt: input.snapshotUpdatedAt,
           type: input.type,

@@ -28,6 +28,9 @@ export interface View {
   schemaSnapshot: Record<string, unknown> | null;
   snapshotUpdatedAt: Date | null;
 
+  // Composition support (for composite views like bento grid)
+  embeddedViewIds: string[] | null;
+
   // Content references
   documentId: string | null;
 

@@ -37,6 +37,8 @@ export interface CreateViewInput {
   query?: Record<string, unknown>; // EntityQuery
   // NEW: Render config (overrides only)
   config?: Record<string, unknown>;
+  // NEW: Embedded view IDs (for composite views)
+  embeddedViewIds?: string[];
 }
 
 export interface UpdateViewInput {
@@ -46,6 +48,7 @@ export interface UpdateViewInput {
   scopeMode?: "explicit" | "observed";
   query?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  embeddedViewIds?: string[];
   schemaSnapshot?: Record<string, unknown>;
   snapshotUpdatedAt?: Date;
 }
@@ -95,6 +98,8 @@ export class ViewRepository extends BaseRepository<
         query: data.query || {},
         // NEW: Render config (overrides)
         config: data.config || {},
+        // NEW: Embedded view IDs (for composite views)
+        embeddedViewIds: data.embeddedViewIds || [],
         // Metadata (for entity orders, etc.)
         metadata: {},
       } as NewView)
@@ -139,6 +144,8 @@ export class ViewRepository extends BaseRepository<
     if (data.scopeMode !== undefined) updateData.scopeMode = data.scopeMode;
     if (data.query !== undefined) updateData.query = data.query;
     if (data.config !== undefined) updateData.config = data.config;
+    if (data.embeddedViewIds !== undefined)
+      updateData.embeddedViewIds = data.embeddedViewIds;
     if (data.schemaSnapshot !== undefined)
       updateData.schemaSnapshot = data.schemaSnapshot;
     if (data.snapshotUpdatedAt !== undefined)

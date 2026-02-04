@@ -16,6 +16,8 @@ export * from "./types.js";
 export * from "./schemas.js";
 export * from "./query.js";
 export * from "./config.js";
+export * from "./config-schemas.js";
+export * from "./config-types.js";
 
 // =============================================================================
 // View Type Enum
@@ -35,7 +37,8 @@ export type ViewType =
   | "gantt"
   | "timeline"
   | "mindmap"
-  | "graph";
+  | "graph"
+  | "bento";
 
 // =============================================================================
 // API Input Types
@@ -55,6 +58,8 @@ export interface CreateViewInput {
   query?: EntityQuery;
   // NEW: Render config (overrides only)
   config?: Record<string, unknown>;
+  // NEW: Embedded view IDs (for composite views)
+  embeddedViewIds?: string[];
   // Canvas views: initialContent (for whiteboard, mindmap)
   initialContent?: unknown;
 }
@@ -66,6 +71,7 @@ export interface UpdateViewInput {
   scopeMode?: "explicit" | "observed";
   query?: EntityQuery;
   config?: Record<string, unknown>;
+  embeddedViewIds?: string[];
   schemaSnapshot?: Record<string, unknown>;
   snapshotUpdatedAt?: Date;
 }

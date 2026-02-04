@@ -41,7 +41,8 @@ export const viewsHandler = async ({
             | "gallery"
             | "graph"
             | "mindmap"
-            | "gantt",
+            | "gantt"
+            | "bento",
           name: (data.name as string) || "Untitled",
           description: (data.description as string) || undefined,
           documentId: (data.documentId as string) || undefined,
@@ -50,6 +51,7 @@ export const viewsHandler = async ({
           scopeMode: (data.scopeMode as "explicit" | "observed") || undefined,
           query: (data.query as Record<string, unknown>) || undefined,
           config: (data.config as Record<string, unknown>) || undefined,
+          embeddedViewIds: (data.embeddedViewIds as string[]) || undefined,
           userId,
         },
         userId
@@ -67,6 +69,7 @@ export const viewsHandler = async ({
           scopeMode: (data.scopeMode as "explicit" | "observed") || undefined,
           query: (data.query as Record<string, unknown>) || undefined,
           config: (data.config as Record<string, unknown>) || undefined,
+          embeddedViewIds: (data.embeddedViewIds as string[]) || undefined,
           schemaSnapshot:
             (data.schemaSnapshot as Record<string, unknown>) || undefined,
           snapshotUpdatedAt: (data.snapshotUpdatedAt as Date) || undefined,
