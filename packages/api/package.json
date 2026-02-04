@@ -51,14 +51,14 @@
     "superjson": "^2.2.6",
     "ws": "^8.18.3",
     "yjs": "^13.6.29",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "bcrypt": "^6.0.0"
   },
   "devDependencies": {
     "@trpc/react-query": "^11.8.1",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/react": "^19.2.8",
-    "bcrypt": "^6.0.0",
     "dts-bundle-generator": "^9.5.1",
     "react": "^19.2.3",
     "tsup": "^8.0.0",
