@@ -132,12 +132,16 @@ export const workspacesRouter = router({
         whiteboardResult.whiteboardId
       );
 
+      // If whiteboard creation failed, log error but don't fail the workspace fetch
+      // Frontend will handle missing whiteboard gracefully
       if (whiteboardResult.status === "error") {
         console.error(
           `[workspaces.get] Failed to ensure default whiteboard for workspace ${input.id}:`,
           whiteboardResult.message,
           whiteboardResult.error
         );
+        // ⚠️ Note: We still return the workspace, but without mainWhiteboardId
+        // Frontend should handle this case and show appropriate error/retry UI
       }
 
       // If whiteboard was just created, refetch workspace to get updated settings
@@ -154,6 +158,8 @@ export const workspacesRouter = router({
         }
       }
 
+      // Return workspace (may or may not have mainWhiteboardId depending on whiteboard creation status)
+      // Frontend should check for mainWhiteboardId and handle missing whiteboard case
       return { ...workspace, role: membership.role };
     }),
 

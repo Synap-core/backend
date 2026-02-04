@@ -47,6 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
       backend-migrate:
         condition: service_completed_successfully
     healthcheck:

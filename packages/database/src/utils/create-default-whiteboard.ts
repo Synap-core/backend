@@ -103,10 +103,38 @@ export async function ensureDefaultWhiteboard(
       "json"
     );
 
-    // Upload to MinIO storage
-    const uploadResult = await storage.upload(storageKey, tldrawBuffer, {
-      contentType: "application/json",
-    });
+    // Upload to MinIO storage (required - no fallback)
+    // Retry logic for transient network errors
+    const maxRetries = 3;
+    let uploadResult: { url: string; path: string; size: number } | null = null;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        uploadResult = await storage.upload(storageKey, tldrawBuffer, {
+          contentType: "application/json",
+        });
+        break; // Success, exit retry loop
+      } catch (error: any) {
+        lastError = error;
+        console.warn(
+          `[ensureDefaultWhiteboard] MinIO upload attempt ${attempt}/${maxRetries} failed:`,
+          error.message
+        );
+
+        // If not the last attempt, wait before retrying (exponential backoff)
+        if (attempt < maxRetries) {
+          const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+
+    if (!uploadResult) {
+      throw new Error(
+        `Failed to upload whiteboard to MinIO after ${maxRetries} attempts: ${lastError?.message || "Unknown error"}`
+      );
+    }
 
     let document;
     try {
@@ -130,7 +158,7 @@ export async function ensureDefaultWhiteboard(
           title: "Main Whiteboard",
           // Conditionally include 'type' if column exists
           ...(hasTypeColumn ? { type: documentType } : {}),
-          // All documents now use MinIO storage (unified approach)
+          // All documents use MinIO storage (unified approach)
           storageUrl: uploadResult.url,
           storageKey: uploadResult.path,
           size: uploadResult.size,

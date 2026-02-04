@@ -182,9 +182,13 @@ function loadConfig(): Config {
         r2BucketName: process.env.R2_BUCKET_NAME,
         r2PublicUrl: process.env.R2_PUBLIC_URL,
         minioEndpoint: process.env.MINIO_ENDPOINT,
-        minioAccessKeyId: process.env.MINIO_ACCESS_KEY_ID,
-        minioSecretAccessKey: process.env.MINIO_SECRET_ACCESS_KEY,
-        minioBucketName: process.env.MINIO_BUCKET_NAME,
+        // Support both naming conventions (MINIO_ACCESS_KEY_ID for consistency, MINIO_ACCESS_KEY for docker-compose)
+        minioAccessKeyId:
+          process.env.MINIO_ACCESS_KEY_ID || process.env.MINIO_ACCESS_KEY,
+        minioSecretAccessKey:
+          process.env.MINIO_SECRET_ACCESS_KEY || process.env.MINIO_SECRET_KEY,
+        minioBucketName:
+          process.env.MINIO_BUCKET_NAME || process.env.MINIO_BUCKET,
         minioPublicUrl: process.env.MINIO_PUBLIC_URL,
       },
       ai: {
