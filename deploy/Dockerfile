@@ -30,8 +30,11 @@ RUN rm -rf /app/deploy && \
 RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy-realtime
 
 # Merge realtime package and dependencies into main deploy
-# Copy realtime package itself
-RUN cp -r /app/deploy-realtime/node_modules/@synap/realtime /app/deploy/node_modules/@synap/realtime
+# pnpm deploy puts the package at the root of deploy-realtime, not in node_modules
+# Create @synap directory structure and copy realtime package files
+RUN mkdir -p /app/deploy/node_modules/@synap && \
+    cp -r /app/deploy-realtime/dist /app/deploy/node_modules/@synap/realtime/dist && \
+    cp /app/deploy-realtime/package.json /app/deploy/node_modules/@synap/realtime/package.json
 
 # Merge node_modules: copy all dependencies from realtime that aren't already in deploy
 # This ensures socket.io, y-socket.io, yjs, and all transitive dependencies are included
