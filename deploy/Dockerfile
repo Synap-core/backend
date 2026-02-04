@@ -53,14 +53,18 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./
 # Exclude .bak files (backup files should not be migrated)
 COPY --chown=nodejs:nodejs packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 
-# Copy custom migrations (manual SQL migrations for schema updates)
+# Copy custom migrations (optional - only if directory exists in source)
 # The migration script (scripts/migrate.ts) gracefully handles:
 #   - Missing directory: logs "No custom migrations directory found, skipping..." and continues
 #   - Empty directory: logs "No custom migrations found, skipping..." and continues
 #   - Existing migrations: applies them in alphabetical order
-# This COPY ensures custom migrations are available in the image when they exist.
-# If the directory doesn't exist in source, build will fail (which is correct - migrations should be committed).
-COPY --chown=nodejs:nodejs packages/database/migrations-custom/ ./migrations-custom/
+# Prepare custom migrations in builder stage (creates empty dir if source doesn't exist)
+RUN mkdir -p /app/migrations-custom-temp && \
+    ([ -d "/app/packages/database/migrations-custom" ] && \
+     [ "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ] && \
+     cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/ || true)
+# Copy prepared directory (will be empty if no custom migrations exist - that's fine)
+COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
 
 # Expose port
 EXPOSE 3000
