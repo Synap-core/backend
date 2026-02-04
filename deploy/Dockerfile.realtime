@@ -17,6 +17,7 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 RUN pnpm turbo build --filter=@synap/realtime
 
 # Deploy realtime package (pnpm deploy works perfectly for single package)
+# Same pattern as API - pnpm deploy places package at root with dist/ folder
 RUN rm -rf /app/deploy && \
     pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy
 
@@ -43,4 +44,5 @@ EXPOSE 4001
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
+# Same pattern as API - pnpm deploy places dist/ at root
 CMD ["node", "dist/server.js"]

@@ -78,6 +78,9 @@ import { sharingRouter } from "./routers/sharing.js";
 import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
 import { projectsRouter } from "./routers/projects.js";
+import { profilesRouter } from "./routers/profiles.js";
+import { propertyDefsRouter } from "./routers/property-defs.js";
+import { profilePropertiesRouter } from "./routers/profile-properties.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -228,6 +231,21 @@ registerRouter("projects", projectsRouter, {
   version: "1.0.0",
   source: "core",
   description: "Project management",
+});
+registerRouter("profiles", profilesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Entity type profile management (dynamic schema system)",
+});
+registerRouter("propertyDefs", propertyDefsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Property definition management (dynamic schema system)",
+});
+registerRouter("profileProperties", profilePropertiesRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Profile-property linking management (dynamic schema system)",
 });
 
 import { coreRouter } from "./root.js";

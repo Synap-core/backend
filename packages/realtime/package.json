@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx watch --env-file=../../.env.development.local src/server.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/server.ts",
