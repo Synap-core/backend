@@ -144,7 +144,7 @@ registerRouter("integrations", webhooksRouter, {
   source: "core",
   description: "Webhook subscription management",
 });
-registerRouter("documentsApi", documentsRouter, {
+registerRouter("documents", documentsRouter, {
   version: "1.0.0",
   source: "core",
   description: "Document management and collaboration",

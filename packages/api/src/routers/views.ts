@@ -650,6 +650,41 @@ export const viewsRouter = router({
         id: z.string().uuid(),
         name: z.string().min(1).max(100).optional(),
         description: z.string().optional(),
+        // NEW: Scope profiles
+        scopeProfileIds: z.array(z.string().uuid()).optional(),
+        scopeMode: z.enum(["explicit", "observed"]).optional(),
+        // NEW: Consolidated query
+        query: z
+          .object({
+            filters: z.array(z.any()).optional(),
+            sorts: z.array(z.any()).optional(),
+            search: z.string().optional(),
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            groupBy: z.string().optional(),
+          })
+          .optional(),
+        // NEW: Render config (overrides only)
+        config: z.record(z.string(), z.any()).optional(),
+        // NEW: Schema snapshot
+        schemaSnapshot: z.record(z.string(), z.any()).optional(),
+        snapshotUpdatedAt: z.date().optional(),
+        // View type (for switching between types)
+        type: z
+          .enum([
+            "whiteboard",
+            "timeline",
+            "kanban",
+            "table",
+            "list",
+            "grid",
+            "gallery",
+            "calendar",
+            "gantt",
+            "mindmap",
+            "graph",
+          ])
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -688,6 +723,13 @@ export const viewsRouter = router({
           id: input.id,
           name: input.name,
           description: input.description,
+          scopeProfileIds: input.scopeProfileIds,
+          scopeMode: input.scopeMode,
+          query: input.query,
+          config: input.config,
+          schemaSnapshot: input.schemaSnapshot,
+          snapshotUpdatedAt: input.snapshotUpdatedAt,
+          type: input.type,
           userId: ctx.userId,
         },
         userId: ctx.userId,

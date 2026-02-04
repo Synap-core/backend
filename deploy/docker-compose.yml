@@ -67,6 +67,51 @@ services:
       - synap-net
 
   # ============================================================================
+  # REALTIME SERVER (WebSocket/Socket.IO)
+  # ============================================================================
+  realtime:
+    # Use same image as backend service (pulls or builds same way)
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    # Build fallback: if image pull fails, build from source
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: always
+    environment:
+      NODE_ENV: production
+      REALTIME_PORT: 4001
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      STORAGE_PROVIDER: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: synap-storage
+      MINIO_USE_SSL: false
+    command: tsx node_modules/@synap/realtime/src/server.ts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "4001:4001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:4001/bridge/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - synap-net
+
+  # ============================================================================
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
