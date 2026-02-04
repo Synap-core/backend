@@ -1,0 +1,1772 @@
+#!/bin/bash
+# Synap - Unified CLI for installation and management
+# Replaces: install.sh, install-automated.sh, synap-cli
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+# Detect if we're in a git repository
+is_git_repo() {
+    git rev-parse --git-dir > /dev/null 2>&1
+}
+
+# Get repo root (if in git repo)
+get_repo_root() {
+    if is_git_repo; then
+        git rev-parse --show-toplevel 2>/dev/null || pwd
+    else
+        echo ""
+    fi
+}
+
+# Get deploy directory
+get_deploy_dir() {
+    local repo_root=$(get_repo_root)
+    if [ -n "$repo_root" ] && [ -d "$repo_root/deploy" ]; then
+        echo "$repo_root/deploy"
+    elif [ -f "docker-compose.yml" ]; then
+        echo "$(pwd)"
+    else
+        echo ""
+    fi
+}
+
+# ============================================================================
+# HELPER: Update env value
+# ============================================================================
+
+update_env_value() {
+    local key=$1
+    local value=$2
+    if [ -z "$value" ]; then
+        return 0  # Skip if value is empty
+    fi
+    if grep -q "^${key}=" .env; then
+        sed -i.bak "s|^${key}=.*|${key}=${value}|" .env
+    else
+        echo "${key}=${value}" >> .env
+    fi
+}
+
+# ============================================================================
+# HELPER: Generate secrets and create .env
+# ============================================================================
+
+generate_and_create_env() {
+    local domain=$1
+    local email=$2
+    local from_source=$3
+    local openai_key=$4
+    local anthropic_key=$5
+    local google_key=$6
+    local admin_email=$7
+    
+    # Generate secrets
+    echo -e "${BLUE}🔐 Generating secrets...${NC}"
+    
+    local POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local JWT_SECRET=$(openssl rand -base64 64 | tr -d "=+/" | cut -c1-64)
+    local KRATOS_COOKIE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local KRATOS_CIPHER=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local KRATOS_WEBHOOK=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local MINIO_SECRET_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local TYPESENSE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local INNGEST_EVENT_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local INNGEST_SIGNING_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local HYDRA_SECRETS_SYSTEM=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    
+    local backend_version="latest"
+    if [ "$from_source" = "true" ]; then
+        backend_version="local"
+    fi
+    
+    cat > .env <<EOF
+# Synap Backend Configuration
+# Generated: $(date)
+
+GITHUB_REPOSITORY=synap-core/backend
+BACKEND_VERSION=${backend_version}
+COMPOSE_PROJECT_NAME=synap-backend
+
+DOMAIN=${domain}
+LETSENCRYPT_EMAIL=${email:-noreply@localhost}
+
+# AI Provider API Keys
+OPENAI_API_KEY=${openai_key}
+ANTHROPIC_API_KEY=${anthropic_key}
+GOOGLE_AI_API_KEY=${google_key}
+
+# Admin Configuration
+ADMIN_EMAIL=${admin_email}
+
+# Auto-generated Secrets
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+KRATOS_SECRETS_COOKIE=${KRATOS_COOKIE}
+KRATOS_SECRETS_CIPHER=${KRATOS_CIPHER}
+KRATOS_WEBHOOK_SECRET=${KRATOS_WEBHOOK}
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+TYPESENSE_API_KEY=${TYPESENSE_KEY}
+TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
+INNGEST_EVENT_KEY=${INNGEST_EVENT_KEY}
+INNGEST_SIGNING_KEY=${INNGEST_SIGNING_KEY}
+ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
+EOF
+    
+    chmod 600 .env
+}
+
+# Generate kratos.yml with actual domain values
+# IMPORTANT: This function ALWAYS overwrites kratos.yml - never use a static file
+# The file is generated fresh on every install/update to ensure webhook secret and domain are correct
+generate_kratos_config() {
+    local domain=$1
+    local kratos_dir="../kratos"
+    local deploy_dir="deploy"
+    
+    if [ ! -d "$kratos_dir" ]; then
+        echo -e "${YELLOW}⚠️  Kratos directory not found, skipping config generation${NC}"
+        return
+    fi
+    
+    # Read webhook secret from .env file (if it exists)
+    # This function is called from deploy/ directory, so .env is in current directory
+    local webhook_secret=""
+    local env_file=""
+    
+    # Find .env file - check current directory first (deploy/), then parent (repo root)
+    if [ -f ".env" ] && [ -r ".env" ]; then
+        # Called from deploy/ directory
+        env_file=".env"
+    elif [ -f "../deploy/.env" ] && [ -r "../deploy/.env" ]; then
+        # Called from repo root
+        env_file="../deploy/.env"
+    elif [ -f "deploy/.env" ] && [ -r "deploy/.env" ]; then
+        # Alternative path
+        env_file="deploy/.env"
+    fi
+    
+    if [ -n "$env_file" ]; then
+        # Use cat and grep to avoid permission issues with direct grep
+        webhook_secret=$(cat "$env_file" 2>/dev/null | grep "^KRATOS_WEBHOOK_SECRET=" | cut -d'=' -f2- | tr -d ' ' | tr -d '"' || echo "")
+    fi
+    
+    if [ -z "$webhook_secret" ] || [ "$webhook_secret" = "" ]; then
+        echo -e "${YELLOW}⚠️  KRATOS_WEBHOOK_SECRET not found in .env, generating new secret...${NC}"
+        # Generate a random secret if not found
+        webhook_secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\n' || echo "CHANGE_ME")
+        echo -e "${BLUE}ℹ️  Generated webhook secret: ${webhook_secret:0:10}...${NC}"
+        # Try to write it back to .env if we found the file
+        if [ -n "$env_file" ] && [ -w "$env_file" ]; then
+            if grep -q "^KRATOS_WEBHOOK_SECRET=" "$env_file" 2>/dev/null; then
+                # Update existing
+                sed -i.bak "s|^KRATOS_WEBHOOK_SECRET=.*|KRATOS_WEBHOOK_SECRET=${webhook_secret}|" "$env_file" 2>/dev/null && rm -f "${env_file}.bak" || true
+            else
+                # Add new
+                echo "KRATOS_WEBHOOK_SECRET=${webhook_secret}" >> "$env_file" 2>/dev/null || true
+            fi
+        fi
+    fi
+    
+    # Backup existing kratos.yml if it exists (for recovery)
+    if [ -f "$kratos_dir/kratos.yml" ]; then
+        cp "$kratos_dir/kratos.yml" "$kratos_dir/kratos.yml.backup" 2>/dev/null || true
+    fi
+    
+    # Determine if domain is localhost (dev) or production
+    local is_localhost=false
+    if [ "$domain" = "localhost" ]; then
+        is_localhost=true
+    fi
+    
+    # Generate CORS origins
+    local cors_origins="        - http://localhost:3000
+        - http://localhost:5173
+        - http://localhost:3001"
+    
+    if [ "$is_localhost" = false ]; then
+        cors_origins="$cors_origins
+        - https://${domain}"
+    fi
+    
+    # Generate allowed return URLs
+    local return_urls="    - http://localhost:3000
+    - http://localhost:3000/*"
+    
+    if [ "$is_localhost" = false ]; then
+        return_urls="$return_urls
+    - https://${domain}
+    - https://${domain}/*"
+    fi
+    
+    # Cookie domain and secure settings
+    local cookie_domain="localhost"
+    local cookie_secure="false"
+    if [ "$is_localhost" = false ]; then
+        cookie_domain="$domain"
+        cookie_secure="true"
+    fi
+    
+    # Always overwrite kratos.yml (never use a static file - always generate fresh)
+    # This ensures webhook secret and domain are always correct
+    cat > "$kratos_dir/kratos.yml" << EOF
+version: v1.3.1
+# DSN should match docker-compose environment variable
+# Uses postgres service name, kratos database
+dsn: postgres://synap:\${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
+serve:
+  public:
+    base_url: http://localhost:4433
+    cors:
+      enabled: true
+      # CORS origins - automatically generated from domain
+      allowed_origins:
+$cors_origins
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      allowed_headers:
+        - Authorization
+        - Cookie
+        - Content-Type
+        - X-Requested-With
+      exposed_headers:
+        - Content-Type
+        - Set-Cookie
+      allow_credentials: true
+  admin:
+    base_url: http://localhost:4434
+selfservice:
+  default_browser_return_url: http://localhost:3000
+  allowed_return_urls:
+$return_urls
+  methods:
+    password:
+      enabled: true
+      config: {}
+    oidc:
+      enabled: false
+  flows:
+    error:
+      ui_url: http://localhost:3000/error
+    settings:
+      ui_url: http://localhost:3000/settings
+      privileged_session_max_age: 15m
+    recovery:
+      enabled: true
+      ui_url: http://localhost:3000/recovery
+    verification:
+      enabled: false # Disabled: mailslurper service not running
+      ui_url: http://localhost:3000/verification
+    logout:
+      after:
+        default_browser_return_url: http://localhost:3000/auth
+    login:
+      ui_url: http://localhost:3000/auth
+      lifespan: 10m
+    registration:
+      lifespan: 10m
+      ui_url: http://localhost:3000/auth
+      after:
+        password:
+          hooks:
+            - hook: session
+            - hook: web_hook
+              config:
+                # Use Docker service name for internal communication
+                # backend:4000 is accessible from within the Docker network
+                url: http://backend:4000/webhooks/kratos
+                method: POST
+                body: base64://ZnVuY3Rpb24oY3R4KSB7CiAgdHlwZTogImlkZW50aXR5LmNyZWF0ZWQiLAogIGlkZW50aXR5OiB7CiAgICBpZDogY3R4LmlkZW50aXR5LmlkLAogICAgdHJhaXRzOiBjdHguaWRlbnRpdHkudHJhaXRzCiAgfQp9
+                headers:
+                  Content-Type: application/json
+                  X-Webhook-Secret: ${webhook_secret}
+                can_interrupt: false
+        oidc:
+          hooks:
+            - hook: session
+log:
+  level: info
+  format: json
+# secrets: provided via environment variables SECRETS_COOKIE and SECRETS_CIPHER in docker-compose.yml
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///etc/config/kratos/identity.schema.json
+session:
+  cookie:
+    # Cookie domain: automatically set based on domain
+    domain: ${cookie_domain}
+    same_site: Lax
+    # Note: secure flag is controlled by Kratos based on cookie domain
+    # For production domains, Kratos automatically sets secure=true
+courier:
+  smtp:
+    connection_uri: smtps://test:test@mailslurper:1025/?skip_ssl_verify=true
+    from_address: noreply@synap.io
+EOF
+    
+    echo -e "${GREEN}✓ Generated kratos.yml for domain: ${domain}${NC}"
+}
+
+# ============================================================================
+# INSTALL COMMAND
+# ============================================================================
+
+cmd_install() {
+    local FROM_IMAGE=""
+    local FROM_SOURCE=""
+    local INSTALL_DIR=""
+    local DOMAIN=""
+    local EMAIL=""
+    local OPENAI_API_KEY=""
+    local ANTHROPIC_API_KEY=""
+    local GOOGLE_AI_API_KEY=""
+    local ADMIN_EMAIL=""
+    local REPO_URL="https://github.com/synap-core/backend.git"
+    local INTERACTIVE=true
+    
+    # Auto-detect if we're in a git repo
+    local IN_GIT_REPO=false
+    if is_git_repo; then
+        IN_GIT_REPO=true
+    fi
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --from-image)
+                FROM_IMAGE=true
+                shift
+                ;;
+            --from-source|--build)
+                FROM_SOURCE=true
+                shift
+                ;;
+            --dir|--directory)
+                INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --domain)
+                DOMAIN="$2"
+                shift 2
+                ;;
+            --email)
+                EMAIL="$2"
+                shift 2
+                ;;
+            --openai-key)
+                OPENAI_API_KEY="$2"
+                shift 2
+                ;;
+            --anthropic-key)
+                ANTHROPIC_API_KEY="$2"
+                shift 2
+                ;;
+            --google-key)
+                GOOGLE_AI_API_KEY="$2"
+                shift 2
+                ;;
+            --admin-email)
+                ADMIN_EMAIL="$2"
+                shift 2
+                ;;
+            --repo-url)
+                REPO_URL="$2"
+                shift 2
+                ;;
+            --non-interactive|--automated)
+                INTERACTIVE=false
+                shift
+                ;;
+            --help|-h)
+                cat << EOF
+${BLUE}Synap Install${NC}
+
+${YELLOW}Usage:${NC}
+  synap install [options]
+
+${YELLOW}Auto-Detection:${NC}
+  - If in git repository: Uses existing repo, defaults to --from-source
+  - If not in git repository: Clones repo, defaults to --from-image
+  - Default clone location: Current directory + "synap-backend"
+
+${YELLOW}Options:${NC}
+  ${GREEN}--from-image${NC}        Use Docker image (default when cloning)
+  ${GREEN}--from-source${NC}        Build from source code (default when in git repo)
+  ${GREEN}--dir <path>${NC}         Installation directory (default: ./synap-backend when cloning)
+  ${GREEN}--domain <domain>${NC}    Domain name (required)
+  ${GREEN}--email <email>${NC}     Email for SSL certificates (required for production)
+  ${GREEN}--repo-url <url>${NC}    Repository URL (default: synap-core/backend)
+  ${GREEN}--non-interactive${NC}   Automated mode (no prompts)
+
+${YELLOW}Examples:${NC}
+  # In git repo: build from source (default)
+  synap install --domain localhost
+
+  # Not in git repo: clone and use image (default)
+  synap install --domain example.com --email me@example.com
+
+  # Force image even in git repo
+  synap install --from-image --domain example.com --email me@example.com
+
+  # Force source build when cloning
+  synap install --from-source --domain localhost
+
+  # Custom installation directory
+  synap install --dir /opt/synap --domain example.com --email me@example.com
+
+EOF
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}"
+                echo "Run 'synap install --help' for usage"
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Determine if we need to clone
+    local NEEDS_CLONE=false
+    if [ "$IN_GIT_REPO" = false ]; then
+        NEEDS_CLONE=true
+        echo -e "${BLUE}ℹ️  Not in git repository, will clone${NC}"
+    else
+        echo -e "${GREEN}✓ Detected git repository, using existing repo${NC}"
+    fi
+    
+    # Determine installation directory
+    if [ -z "$INSTALL_DIR" ]; then
+        if [ "$NEEDS_CLONE" = true ]; then
+            # Default to current directory + "synap-backend"
+            INSTALL_DIR="$(pwd)/synap-backend"
+            
+            # Propose to change if interactive
+            if [ "$INTERACTIVE" = true ]; then
+                echo -e "${BLUE}📁 Installation directory: ${INSTALL_DIR}${NC}"
+                read -p "Change installation directory? (y/N): " CHANGE_DIR
+                if [ "$CHANGE_DIR" = "y" ] || [ "$CHANGE_DIR" = "Y" ]; then
+                    read -p "Enter installation directory: " INSTALL_DIR
+                    INSTALL_DIR=${INSTALL_DIR:-$(pwd)/synap-backend}
+                fi
+            fi
+        else
+            # Use repo root as install directory
+            INSTALL_DIR=$(get_repo_root)
+            if [ -z "$INSTALL_DIR" ]; then
+                echo -e "${RED}Error: Could not determine repository root${NC}"
+                exit 1
+            fi
+        fi
+    fi
+    
+    # Determine deployment method (smart defaults)
+    if [ -z "$FROM_IMAGE" ] && [ -z "$FROM_SOURCE" ]; then
+        if [ "$NEEDS_CLONE" = true ]; then
+            # When cloning: default to image
+            FROM_IMAGE=true
+            echo -e "${BLUE}ℹ️  Defaulting to --from-image (use --from-source to build)${NC}"
+        else
+            # When in git repo: default to source
+            FROM_SOURCE=true
+            echo -e "${BLUE}ℹ️  Defaulting to --from-source (use --from-image to use pre-built image)${NC}"
+        fi
+    fi
+    
+    # Check for existing .env file in deploy directory to load defaults
+    # We need to do this before prompts, but after we know the install directory
+    local deploy_env_path=""
+    if [ -n "$INSTALL_DIR" ]; then
+        deploy_env_path="$INSTALL_DIR/deploy/.env"
+    fi
+    
+    # Load existing .env values as defaults (if .env exists)
+    local DEFAULT_DOMAIN=""
+    local DEFAULT_EMAIL=""
+    local DEFAULT_OPENAI_KEY=""
+    local DEFAULT_ANTHROPIC_KEY=""
+    local DEFAULT_GOOGLE_KEY=""
+    local DEFAULT_ADMIN_EMAIL=""
+    
+    if [ -n "$deploy_env_path" ] && [ -f "$deploy_env_path" ]; then
+        DEFAULT_DOMAIN=$(grep "^DOMAIN=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_GOOGLE_KEY=$(grep "^GOOGLE_AI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+        DEFAULT_ADMIN_EMAIL=$(grep "^ADMIN_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- || echo "")
+    fi
+    
+    # Interactive prompts (if not automated)
+    if [ "$INTERACTIVE" = true ]; then
+        if [ -z "$DOMAIN" ]; then
+            local prompt="Enter domain (or 'localhost' for testing)"
+            if [ -n "$DEFAULT_DOMAIN" ]; then
+                prompt="$prompt [${DEFAULT_DOMAIN}]: "
+            else
+                prompt="$prompt: "
+            fi
+            read -p "$prompt" DOMAIN
+            DOMAIN=${DOMAIN:-${DEFAULT_DOMAIN:-localhost}}
+        fi
+        
+        if [ "$DOMAIN" != "localhost" ] && [ -z "$EMAIL" ]; then
+            local prompt="Enter email for SSL certificates"
+            if [ -n "$DEFAULT_EMAIL" ]; then
+                prompt="$prompt [${DEFAULT_EMAIL}]: "
+            else
+                prompt="$prompt: "
+            fi
+            read -p "$prompt" EMAIL
+            EMAIL=${EMAIL:-$DEFAULT_EMAIL}
+        fi
+        
+        # Ask for admin email (for self-hosted instances) - BEFORE AI config
+        if [ -z "$ADMIN_EMAIL" ]; then
+            echo ""
+            echo -e "${BLUE}👤 Admin Configuration${NC}"
+            local prompt="Enter admin email (for first admin user, optional)"
+            if [ -n "$DEFAULT_ADMIN_EMAIL" ]; then
+                prompt="$prompt [${DEFAULT_ADMIN_EMAIL}]: "
+            else
+                prompt="$prompt: "
+            fi
+            read -p "$prompt" ADMIN_EMAIL
+            ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
+        fi
+        
+        # AI Configuration - all in one section
+        echo ""
+        echo -e "${BLUE}🤖 AI Configuration${NC}"
+        echo "Configure AI provider API keys (optional, but required for AI features)."
+        
+        # Ask for OpenAI API key
+        if [ -z "$OPENAI_API_KEY" ]; then
+            local prompt="Enter OpenAI API key"
+            if [ -n "$DEFAULT_OPENAI_KEY" ]; then
+                prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...] (press Enter to skip): "
+            else
+                prompt="$prompt (press Enter to skip): "
+            fi
+            read -p "$prompt" OPENAI_API_KEY
+            OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
+            if [ -z "$OPENAI_API_KEY" ]; then
+                echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
+            fi
+        fi
+        
+        # Ask for optional AI providers
+        if [ -z "$ANTHROPIC_API_KEY" ]; then
+            local prompt="Enter Anthropic API key"
+            if [ -n "$DEFAULT_ANTHROPIC_KEY" ]; then
+                prompt="$prompt [${DEFAULT_ANTHROPIC_KEY:0:10}...] (optional, press Enter to skip): "
+            else
+                prompt="$prompt (optional, press Enter to skip): "
+            fi
+            read -p "$prompt" ANTHROPIC_API_KEY
+            ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$DEFAULT_ANTHROPIC_KEY}
+        fi
+        
+        if [ -z "$GOOGLE_AI_API_KEY" ]; then
+            local prompt="Enter Google AI API key"
+            if [ -n "$DEFAULT_GOOGLE_KEY" ]; then
+                prompt="$prompt [${DEFAULT_GOOGLE_KEY:0:10}...] (optional, press Enter to skip): "
+            else
+                prompt="$prompt (optional, press Enter to skip): "
+            fi
+            read -p "$prompt" GOOGLE_AI_API_KEY
+            GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-$DEFAULT_GOOGLE_KEY}
+        fi
+    fi
+    
+    # Validate required parameters
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}Error: --domain is required${NC}"
+        exit 1
+    fi
+    
+    if [ "$DOMAIN" != "localhost" ] && [ -z "$EMAIL" ]; then
+        echo -e "${RED}Error: --email is required for production domains${NC}"
+        exit 1
+    fi
+    
+    # Create installation directory if cloning
+    if [ "$NEEDS_CLONE" = true ]; then
+        echo -e "${BLUE}📁 Creating installation directory: ${INSTALL_DIR}${NC}"
+        if [ -d "$INSTALL_DIR" ]; then
+            echo -e "${YELLOW}⚠️  Directory already exists: ${INSTALL_DIR}${NC}"
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "Continue? (y/N): " CONTINUE
+                if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+                    echo "Installation cancelled"
+                    exit 0
+                fi
+            fi
+        else
+            mkdir -p "$INSTALL_DIR"
+        fi
+        cd "$INSTALL_DIR"
+        
+        # Clone repository
+        echo -e "${BLUE}⬇️  Cloning repository...${NC}"
+        git clone "$REPO_URL" .
+    else
+        # Use existing repo
+        echo -e "${GREEN}✓ Using existing repository${NC}"
+        cd "$INSTALL_DIR"
+    fi
+    
+    # Enter deploy directory
+    if [ ! -d "deploy" ]; then
+        echo -e "${RED}Error: 'deploy' directory not found${NC}"
+        exit 1
+    fi
+    
+    cd deploy
+    
+    # If we loaded defaults earlier and they were used, we're done with prompts
+    # Otherwise, if .env exists now, show a message
+    if [ -f .env ] && [ "$INTERACTIVE" = true ] && [ -n "$DEFAULT_DOMAIN" ]; then
+        echo -e "${BLUE}ℹ️  Using existing .env file values${NC}"
+    fi
+    
+    # Handle .env file (preserve existing or create new)
+    if [ -f .env ]; then
+        echo -e "${YELLOW}⚠️  .env file already exists${NC}"
+        if [ "$INTERACTIVE" = true ]; then
+            read -p "Overwrite .env? (y/N): " OVERWRITE
+            if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
+                echo -e "${BLUE}ℹ️  Using existing .env file, updating values...${NC}"
+                # Just update domain/email/keys if needed
+                update_env_value "DOMAIN" "$DOMAIN"
+                update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
+                update_env_value "OPENAI_API_KEY" "$OPENAI_API_KEY"
+                update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
+                update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
+                update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
+                # Update backend version based on method
+                local backend_version="latest"
+                if [ "$FROM_SOURCE" = true ]; then
+                    backend_version="local"
+                fi
+                update_env_value "BACKEND_VERSION" "$backend_version"
+                rm -f .env.bak
+            else
+                # Overwrite .env
+                echo -e "${BLUE}📝 Creating new configuration...${NC}"
+                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL"
+            fi
+        else
+            # Non-interactive: preserve existing
+            echo -e "${BLUE}ℹ️  Preserving existing .env file${NC}"
+            # Just update values if provided
+            update_env_value "DOMAIN" "$DOMAIN"
+            update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
+            update_env_value "OPENAI_API_KEY" "$OPENAI_API_KEY"
+            update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
+            update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
+            update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
+            local backend_version="latest"
+            if [ "$FROM_SOURCE" = true ]; then
+                backend_version="local"
+            fi
+            update_env_value "BACKEND_VERSION" "$backend_version"
+            rm -f .env.bak
+        fi
+    else
+        # No .env file, create new
+        echo -e "${BLUE}📝 Creating configuration...${NC}"
+        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL"
+    fi
+    
+    # Generate kratos.yml with actual domain values
+    echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
+    generate_kratos_config "$DOMAIN"
+    
+    # Build/pull image FIRST (migrations need the image to exist)
+    echo -e "${BLUE}🔨 Preparing backend image...${NC}"
+    if [ "$FROM_SOURCE" = true ]; then
+        docker compose build backend
+    else
+        docker compose pull backend --ignore-pull-failures || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build backend
+        }
+    fi
+    
+    # Run migrations before starting services (CRITICAL - must succeed)
+    echo -e "${BLUE}🔄 Running database migrations...${NC}"
+    if ! docker compose run --rm backend-migrate; then
+        echo -e "${RED}❌ Migrations failed!${NC}"
+        echo -e "${YELLOW}⚠️  Backend cannot start without migrations${NC}"
+        echo -e "${YELLOW}⚠️  Please check the migration logs and fix any issues${NC}"
+        exit 1
+    fi
+    
+    # Start services
+    echo -e "${BLUE}🚀 Starting Synap...${NC}"
+    docker compose up -d
+    
+    echo -e "${GREEN}✅ Installation complete!${NC}"
+    echo ""
+    echo "Management commands:"
+    echo "  ./synap health    # Check status"
+    echo "  ./synap logs      # View logs"
+    echo "  ./synap update    # Update to latest"
+}
+
+
+# ============================================================================
+# MANAGEMENT COMMANDS (from synap-cli)
+# ============================================================================
+
+cmd_health() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    echo -e "${BLUE}🏥 Synap Health Check${NC}"
+    echo ""
+    
+    if ! docker compose ps | grep -q "Up"; then
+        echo -e "${RED}❌ No services running${NC}"
+        exit 1
+    fi
+    
+    check_service() {
+        local service=$1
+        local name=$2
+        if docker compose ps "$service" | grep -q "Up"; then
+            echo -e "${GREEN}✅ ${name}${NC}"
+        else
+            echo -e "${RED}❌ ${name}${NC}"
+        fi
+    }
+    
+    check_service "backend" "Backend API"
+    check_service "postgres" "Database"
+    check_service "redis" "Redis"
+    check_service "minio" "Storage"
+    check_service "typesense" "Search"
+    check_service "kratos" "Authentication"
+    check_service "hydra" "OAuth2"
+    check_service "caddy" "Reverse Proxy"
+    
+    echo ""
+    echo -e "${GREEN}✅ System healthy${NC}"
+}
+
+cmd_logs() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local follow=true
+    local tail_lines=""
+    local service=""
+    local filter=""
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --no-follow|-n)
+                follow=false
+                shift
+                ;;
+            --tail|-t)
+                tail_lines="$2"
+                shift 2
+                ;;
+            --filter|-f)
+                filter="$2"
+                shift 2
+                ;;
+            --help|-h)
+                cat << EOF
+${BLUE}Synap Logs${NC}
+
+${YELLOW}Usage:${NC}
+  synap logs [service] [options]
+
+${YELLOW}Options:${NC}
+  ${GREEN}--no-follow${NC}, ${GREEN}-n${NC}     Don't follow logs (show and exit)
+  ${GREEN}--tail <n>${NC}, ${GREEN}-t <n>${NC}  Show last N lines (default: all)
+  ${GREEN}--filter <text>${NC}, ${GREEN}-f <text>${NC}  Filter logs by text (grep)
+  ${GREEN}--help${NC}, ${GREEN}-h${NC}          Show this help
+
+${YELLOW}Examples:${NC}
+  synap logs                    # Interactive service selection
+  synap logs backend            # View backend logs
+  synap logs backend --tail 100 # Last 100 lines
+  synap logs backend --no-follow # Show and exit
+  synap logs backend --filter error # Filter by "error"
+
+EOF
+                exit 0
+                ;;
+            *)
+                if [ -z "$service" ]; then
+                    service="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Get list of running services
+    local services=($(docker compose ps --services --status running 2>/dev/null || docker compose ps --services 2>/dev/null))
+    
+    if [ ${#services[@]} -eq 0 ]; then
+        echo -e "${RED}❌ No services found${NC}"
+        exit 1
+    fi
+    
+    # If no service specified, show interactive menu
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}📋 Available Services:${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            local status=$(docker compose ps "$svc" --format json 2>/dev/null | grep -o '"State":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+            if [ "$status" = "running" ]; then
+                echo -e "  ${GREEN}[$i]${NC} $svc"
+            else
+                echo -e "  ${YELLOW}[$i]${NC} $svc (not running)"
+            fi
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    # Build docker compose logs command
+    local cmd="docker compose logs"
+    
+    if [ "$follow" = true ]; then
+        cmd="$cmd -f"
+    fi
+    
+    if [ -n "$tail_lines" ]; then
+        cmd="$cmd --tail=$tail_lines"
+    fi
+    
+    if [ -n "$service" ]; then
+        cmd="$cmd $service"
+    fi
+    
+    # Execute command with optional filter
+    if [ -n "$filter" ]; then
+        eval "$cmd" | grep --color=always "$filter"
+    else
+        eval "$cmd"
+    fi
+}
+
+cmd_update() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    # Auto-detect if we're in a git repo (for smart defaults)
+    local IN_GIT_REPO=false
+    local repo_root=$(get_repo_root)
+    if [ -n "$repo_root" ] && [ "$(cd "$deploy_dir" && pwd)" = "$(cd "$repo_root/deploy" 2>/dev/null && pwd)" ]; then
+        IN_GIT_REPO=true
+    fi
+    
+    local version="latest"
+    local force_build=false
+    local force_image=false
+    local local_build=false
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --build|-b|--from-source)
+                force_build=true
+                shift
+                ;;
+            --from-image)
+                force_image=true
+                shift
+                ;;
+            --local|-l)
+                local_build=true
+                force_build=true
+                shift
+                ;;
+            --version|-v)
+                version="$2"
+                shift 2
+                ;;
+            *)
+                if [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]] || [ "$1" = "latest" ]; then
+                    version="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    echo -e "${BLUE}🔄 Updating Synap...${NC}"
+    
+    # Smart default: if in git repo and no flags, default to build
+    # If not in git repo or --from-image specified, use image
+    if [ "$force_build" = false ] && [ "$force_image" = false ]; then
+        if [ "$IN_GIT_REPO" = true ]; then
+            force_build=true
+            echo -e "${BLUE}ℹ️  In git repository, defaulting to --from-source${NC}"
+        fi
+    fi
+    
+    if [ "$force_build" = true ]; then
+        echo -e "${BLUE}🔨 Building from source...${NC}"
+        docker compose build backend
+        version="local"
+    else
+        echo -e "${BLUE}📥 Pulling image...${NC}"
+        docker compose pull backend || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build backend
+            version="local"
+        }
+    fi
+    
+    # Update .env
+    if [ -f .env ]; then
+        if grep -q "^BACKEND_VERSION=" .env; then
+            sed -i.bak "s|^BACKEND_VERSION=.*|BACKEND_VERSION=${version}|" .env
+            rm -f .env.bak
+        else
+            echo "BACKEND_VERSION=${version}" >> .env
+        fi
+        
+        # Read DOMAIN from .env for kratos config regeneration
+        local domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "localhost")
+    else
+        local domain="localhost"
+    fi
+    
+    # Regenerate kratos.yml (ensures it exists and has correct webhook secret)
+    echo -e "${BLUE}📝 Regenerating Kratos configuration...${NC}"
+    generate_kratos_config "$domain"
+    
+    # Run migrations (critical - must succeed)
+    echo -e "${BLUE}🔄 Running migrations...${NC}"
+    if ! docker compose run --rm backend-migrate; then
+        echo -e "${RED}❌ Migrations failed!${NC}"
+        echo -e "${YELLOW}⚠️  Backend may not start correctly without migrations${NC}"
+        read -p "Continue anyway? (y/N): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            echo "Update cancelled"
+            exit 1
+        fi
+    fi
+    
+    # Restart services
+    echo -e "${BLUE}🔄 Restarting services...${NC}"
+    docker compose up -d backend
+    
+    echo -e "${GREEN}✅ Update complete!${NC}"
+}
+
+cmd_restart() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    
+    # If no service specified, show interactive menu
+    if [ -z "$service" ]; then
+        local services=($(docker compose ps --services 2>/dev/null))
+        if [ ${#services[@]} -eq 0 ]; then
+            echo -e "${RED}❌ No services found${NC}"
+            exit 1
+        fi
+        
+        echo -e "${BLUE}🔄 Restart Service${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            echo -e "  ${GREEN}[$i]${NC} $svc"
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🔄 Restarting all services...${NC}"
+        docker compose restart
+    else
+        echo -e "${BLUE}🔄 Restarting $service...${NC}"
+        docker compose restart "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Restart complete!${NC}"
+}
+
+cmd_ps() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    echo -e "${BLUE}📊 Synap Services Status${NC}"
+    echo ""
+    docker compose ps
+}
+
+cmd_start() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🚀 Starting all services...${NC}"
+        docker compose up -d
+    else
+        echo -e "${BLUE}🚀 Starting $service...${NC}"
+        docker compose up -d "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Services started!${NC}"
+}
+
+cmd_stop() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    
+    # If no service specified, show interactive menu
+    if [ -z "$service" ]; then
+        local services=($(docker compose ps --services --status running 2>/dev/null))
+        if [ ${#services[@]} -eq 0 ]; then
+            echo -e "${YELLOW}⚠️  No running services found${NC}"
+            exit 0
+        fi
+        
+        echo -e "${BLUE}🛑 Stop Service${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            echo -e "  ${GREEN}[$i]${NC} $svc"
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🛑 Stopping all services...${NC}"
+        docker compose stop
+    else
+        echo -e "${BLUE}🛑 Stopping $service...${NC}"
+        docker compose stop "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Services stopped!${NC}"
+}
+
+cmd_backup() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local backup_name=${1:-"backup-$(date +%Y%m%d-%H%M%S)"}
+    local backup_dir="./backups"
+    
+    mkdir -p "$backup_dir"
+    
+    echo -e "${BLUE}💾 Creating backup: ${backup_name}${NC}"
+    
+    # Backup database
+    docker compose exec -T postgres pg_dump -U synap synap > "$backup_dir/${backup_name}-database.sql"
+    
+    # Backup .env
+    cp .env "$backup_dir/${backup_name}.env"
+    
+    # Create tarball
+    tar -czf "$backup_dir/${backup_name}.tar.gz" \
+        -C "$backup_dir" \
+        "${backup_name}-database.sql" \
+        "${backup_name}.env"
+    
+    rm "$backup_dir/${backup_name}-database.sql" "$backup_dir/${backup_name}.env"
+    
+    echo -e "${GREEN}✅ Backup created: ${backup_dir}/${backup_name}.tar.gz${NC}"
+}
+
+cmd_restore() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local backup_file=$1
+    if [ -z "$backup_file" ]; then
+        echo -e "${RED}Error: Backup file required${NC}"
+        echo "Usage: synap restore <backup-file.tar.gz>"
+        exit 1
+    fi
+    
+    if [ ! -f "$backup_file" ]; then
+        echo -e "${RED}Error: Backup file not found: $backup_file${NC}"
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}⚠️  WARNING: This will overwrite current data!${NC}"
+    read -p "Continue? (yes/no): " CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then
+        echo "Restore cancelled"
+        exit 0
+    fi
+    
+    local temp_dir=$(mktemp -d)
+    tar -xzf "$backup_file" -C "$temp_dir"
+    
+    docker compose stop backend
+    cat "$temp_dir"/*-database.sql | docker compose exec -T postgres psql -U synap synap
+    cp "$temp_dir"/*.env .env
+    rm -rf "$temp_dir"
+    
+    docker compose up -d
+    
+    echo -e "${GREEN}✅ Restore complete!${NC}"
+}
+
+cmd_config() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local action=${1:-list}
+    
+    case "$action" in
+        list)
+            if [ -f .env ]; then
+                echo -e "${BLUE}📝 Current Configuration:${NC}"
+                grep -v "^#" .env | grep -v "^$" | while IFS='=' read -r k v; do
+                    if [[ "$k" == *"SECRET"* ]] || [[ "$k" == *"KEY"* ]] || [[ "$k" == *"PASSWORD"* ]]; then
+                        echo "$k=********"
+                    else
+                        echo "$k=$v"
+                    fi
+                done
+            fi
+            ;;
+        edit)
+            ${EDITOR:-nano} .env
+            ;;
+        get)
+            local key=$2
+            if [ -z "$key" ]; then
+                echo "Usage: synap config get <key>"
+                exit 1
+            fi
+            grep "^${key}=" .env | cut -d'=' -f2-
+            ;;
+        set)
+            local key=$2
+            local value=$3
+            if [ -z "$key" ] || [ -z "$value" ]; then
+                echo "Usage: synap config set <key> <value>"
+                exit 1
+            fi
+            if grep -q "^${key}=" .env; then
+                sed -i.bak "s|^${key}=.*|${key}=${value}|" .env
+            else
+                echo "${key}=${value}" >> .env
+            fi
+            echo -e "${GREEN}✓ Updated ${key}${NC}"
+            ;;
+        *)
+            echo "Usage: synap config [list|edit|get|set]"
+            ;;
+    esac
+}
+
+cmd_rebuild() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    local no_cache=false
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --no-cache)
+                no_cache=true
+                shift
+                ;;
+            *)
+                if [ -z "$service" ]; then
+                    service="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # If no service specified, show interactive menu
+    if [ -z "$service" ]; then
+        local services=($(docker compose ps --services 2>/dev/null))
+        if [ ${#services[@]} -eq 0 ]; then
+            echo -e "${RED}❌ No services found${NC}"
+            exit 1
+        fi
+        
+        echo -e "${BLUE}🔨 Rebuild Service${NC}"
+        echo ""
+        local i=1
+        for svc in "${services[@]}"; do
+            echo -e "  ${GREEN}[$i]${NC} $svc"
+            ((i++))
+        done
+        echo ""
+        echo -e "  ${BLUE}[a]${NC} All services"
+        echo -e "  ${BLUE}[q]${NC} Quit"
+        echo ""
+        read -p "Select service (number/a/q): " choice
+        
+        case "$choice" in
+            [0-9]*)
+                local idx=$((choice - 1))
+                if [ $idx -ge 0 ] && [ $idx -lt ${#services[@]} ]; then
+                    service="${services[$idx]}"
+                else
+                    echo -e "${RED}Invalid selection${NC}"
+                    exit 1
+                fi
+                ;;
+            a|A)
+                service=""
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    local build_cmd="docker compose build"
+    if [ "$no_cache" = true ]; then
+        build_cmd="$build_cmd --no-cache"
+    fi
+    
+    if [ -z "$service" ]; then
+        echo -e "${BLUE}🔨 Rebuilding all services...${NC}"
+        eval "$build_cmd"
+        echo -e "${BLUE}🔄 Restarting services...${NC}"
+        docker compose up -d
+    else
+        echo -e "${BLUE}🔨 Rebuilding $service...${NC}"
+        eval "$build_cmd $service"
+        echo -e "${BLUE}🔄 Restarting $service...${NC}"
+        docker compose up -d "$service"
+    fi
+    
+    echo -e "${GREEN}✅ Rebuild complete!${NC}"
+}
+
+cmd_errors() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-}
+    local tail_lines=${2:-100}
+    
+    echo -e "${BLUE}🔍 Searching for errors in logs...${NC}"
+    echo ""
+    
+    if [ -z "$service" ]; then
+        # Search all services
+        local services=($(docker compose ps --services 2>/dev/null))
+        for svc in "${services[@]}"; do
+            local status=$(docker compose ps "$svc" --format json 2>/dev/null | grep -o '"State":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+            if [ "$status" = "running" ]; then
+                echo -e "${YELLOW}━━━ $svc ━━━${NC}"
+                docker compose logs --tail="$tail_lines" "$svc" 2>&1 | grep -i "error\|fatal\|panic\|exception\|failed" | head -20 || echo "  No errors found"
+                echo ""
+            fi
+        done
+    else
+        echo -e "${YELLOW}━━━ $service ━━━${NC}"
+        docker compose logs --tail="$tail_lines" "$service" 2>&1 | grep -i "error\|fatal\|panic\|exception\|failed" | head -50 || echo "  No errors found"
+    fi
+}
+
+cmd_diagnose() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    echo -e "${BLUE}🔍 Synap Diagnostics${NC}"
+    echo ""
+    
+    # Check Docker
+    echo -e "${BLUE}1. Docker Status${NC}"
+    if command -v docker &> /dev/null; then
+        echo -e "${GREEN}✓ Docker installed${NC}"
+        docker --version
+    else
+        echo -e "${RED}❌ Docker not found${NC}"
+    fi
+    echo ""
+    
+    # Check services
+    echo -e "${BLUE}2. Services Status${NC}"
+    docker compose ps
+    echo ""
+    
+    # Check for errors
+    echo -e "${BLUE}3. Recent Errors${NC}"
+    cmd_errors "" 50
+    echo ""
+    
+    # Check disk space
+    echo -e "${BLUE}4. Disk Space${NC}"
+    df -h . | tail -1
+    echo ""
+    
+    # Check Docker resources
+    echo -e "${BLUE}5. Docker Resources${NC}"
+    docker system df
+    echo ""
+    
+    # Check health endpoints
+    echo -e "${BLUE}6. Health Checks${NC}"
+    if docker compose ps backend | grep -q "Up"; then
+        if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ Backend health endpoint responding${NC}"
+        else
+            echo -e "${RED}❌ Backend health endpoint not responding${NC}"
+        fi
+    fi
+    echo ""
+}
+
+cmd_clean() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local what=${1:-}
+    
+    if [ -z "$what" ]; then
+        echo -e "${BLUE}🧹 Clean Docker Resources${NC}"
+        echo ""
+        echo "  ${GREEN}[1]${NC} Remove stopped containers"
+        echo "  ${GREEN}[2]${NC} Remove unused images"
+        echo "  ${GREEN}[3]${NC} Remove unused volumes"
+        echo "  ${GREEN}[4]${NC} Remove unused networks"
+        echo "  ${GREEN}[5]${NC} Prune everything (containers, images, volumes, networks)"
+        echo "  ${GREEN}[6]${NC} Remove build cache"
+        echo "  ${GREEN}[q]${NC} Quit"
+        echo ""
+        read -p "Select option (number/q): " choice
+        
+        case "$choice" in
+            1)
+                docker container prune -f
+                ;;
+            2)
+                docker image prune -f
+                ;;
+            3)
+                docker volume prune -f
+                ;;
+            4)
+                docker network prune -f
+                ;;
+            5)
+                echo -e "${YELLOW}⚠️  This will remove all unused Docker resources${NC}"
+                read -p "Continue? (y/N): " CONFIRM
+                if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+                    docker system prune -a -f --volumes
+                fi
+                ;;
+            6)
+                docker builder prune -f
+                ;;
+            q|Q)
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid selection${NC}"
+                exit 1
+                ;;
+        esac
+    else
+        case "$what" in
+            containers)
+                docker container prune -f
+                ;;
+            images)
+                docker image prune -f
+                ;;
+            volumes)
+                docker volume prune -f
+                ;;
+            networks)
+                docker network prune -f
+                ;;
+            all)
+                echo -e "${YELLOW}⚠️  This will remove all unused Docker resources${NC}"
+                read -p "Continue? (y/N): " CONFIRM
+                if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+                    docker system prune -a -f --volumes
+                fi
+                ;;
+            cache)
+                docker builder prune -f
+                ;;
+            *)
+                echo "Usage: synap clean [containers|images|volumes|networks|all|cache]"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    echo -e "${GREEN}✅ Cleanup complete!${NC}"
+}
+
+cmd_shell() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=${1:-backend}
+    local shell=${2:-sh}
+    
+    echo -e "${BLUE}🐚 Opening shell in $service (using $shell)...${NC}"
+    docker compose exec "$service" "$shell"
+}
+
+cmd_exec() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    
+    cd "$deploy_dir"
+    
+    local service=$1
+    shift
+    
+    if [ -z "$service" ] || [ $# -eq 0 ]; then
+        echo "Usage: synap exec <service> <command> [args...]"
+        echo "Example: synap exec backend node --version"
+        exit 1
+    fi
+    
+    docker compose exec "$service" "$@"
+}
+
+cmd_help() {
+    cat << EOF
+${BLUE}Synap - Unified CLI${NC}
+
+${YELLOW}Installation:${NC}
+  synap install [options]        Install Synap
+
+${YELLOW}Management:${NC}
+  synap health                   Check system health
+  synap ps                       List all services and their status
+  synap logs [service] [options] View logs (interactive if no service)
+  synap errors [service] [lines] Search for errors in logs
+  synap diagnose                 Run comprehensive diagnostics
+  synap update [options]         Update to latest or specific version
+  synap restart [service]        Restart services (interactive if no service)
+  synap rebuild [service]        Rebuild services (interactive if no service)
+  synap start [service]          Start services (all or specific)
+  synap stop [service]           Stop services (interactive if no service)
+  synap backup [name]            Create backup
+  synap restore <file>            Restore from backup
+  synap config [action]          Manage configuration
+  synap clean [type]             Clean Docker resources (interactive if no type)
+  synap shell [service] [shell]   Open shell in container (default: backend, sh)
+  synap exec <service> <cmd>     Execute command in container
+
+${YELLOW}Examples:${NC}
+  # Install (auto-detects: clone if not in repo, use image by default)
+  synap install --domain example.com --email me@example.com
+
+  # Install in git repo (auto-detects: uses repo, builds from source by default)
+  synap install --domain localhost
+
+  # Force image even in git repo
+  synap install --from-image --domain example.com --email me@example.com
+
+  # Update (auto-detects: builds if in git repo, pulls image otherwise)
+  synap update
+  synap update --from-image
+  synap update --from-source
+  synap update v1.2.3
+
+  # Management
+  synap health
+  synap logs                    # Interactive service selection
+  synap logs backend            # View backend logs
+  synap logs backend --tail 100 # Last 100 lines
+  synap logs backend --filter error # Filter by "error"
+  synap errors                  # Find errors in all services
+  synap errors backend 200      # Find errors in backend (last 200 lines)
+  synap diagnose                # Run full diagnostics
+  synap restart                 # Interactive service selection
+  synap restart backend         # Restart backend
+  synap rebuild backend         # Rebuild and restart backend
+  synap rebuild --no-cache     # Rebuild without cache
+  synap clean                   # Interactive cleanup
+  synap clean all               # Clean all unused resources
+  synap shell backend           # Open shell in backend
+  synap exec backend node --version # Execute command in backend
+  synap config list
+
+${YELLOW}For detailed help:${NC}
+  synap install --help
+  synap update --help
+
+EOF
+}
+
+# ============================================================================
+# MAIN COMMAND ROUTER
+# ============================================================================
+
+case "${1:-help}" in
+    install)
+        shift
+        cmd_install "$@"
+        ;;
+    health)
+        cmd_health
+        ;;
+    ps|status)
+        cmd_ps
+        ;;
+    logs)
+        shift
+        cmd_logs "$@"
+        ;;
+    update)
+        shift
+        cmd_update "$@"
+        ;;
+    restart)
+        cmd_restart "${2:-}"
+        ;;
+    start)
+        cmd_start
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    backup)
+        cmd_backup "${2:-}"
+        ;;
+    restore)
+        cmd_restore "${2:-}"
+        ;;
+    config)
+        shift
+        cmd_config "$@"
+        ;;
+    rebuild)
+        shift
+        cmd_rebuild "$@"
+        ;;
+    errors|error)
+        shift
+        cmd_errors "$@"
+        ;;
+    diagnose|diag)
+        cmd_diagnose
+        ;;
+    clean)
+        shift
+        cmd_clean "$@"
+        ;;
+    shell)
+        shift
+        cmd_shell "$@"
+        ;;
+    exec)
+        shift
+        cmd_exec "$@"
+        ;;
+    help|--help|-h)
+        cmd_help
+        ;;
+    *)
+        echo -e "${RED}Unknown command: $1${NC}"
+        echo ""
+        cmd_help
+        exit 1
+        ;;
+esac
+
+

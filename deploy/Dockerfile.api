@@ -47,9 +47,9 @@ USER nodejs
 # Copy self-contained deployment (includes hard-linked node_modules)
 COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 
-# Copy configuration files needed at runtime
-COPY --from=builder --chown=nodejs:nodejs kratos ./kratos
-COPY --from=builder --chown=nodejs:nodejs hydra ./hydra
+# Copy configuration files needed at runtime (from build context, not builder stage)
+COPY --chown=nodejs:nodejs kratos ./kratos
+COPY --chown=nodejs:nodejs hydra ./hydra
 
 # Copy migration script (compiled from builder)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./node_modules/@synap/database/dist/scripts
