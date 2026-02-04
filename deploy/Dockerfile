@@ -24,6 +24,13 @@ RUN cd packages/database && pnpm build:migrate
 # This creates a portable, production-ready package
 RUN rm -rf /app/deploy && pnpm deploy --filter=api --prod --legacy /app/deploy
 
+# Prepare custom migrations directory (optional - only if migrations-custom exists)
+# Create directory unconditionally, then copy files if they exist
+RUN mkdir -p /app/migrations-custom-temp && \
+    if [ -d "/app/packages/database/migrations-custom" ] && [ -n "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ]; then \
+      cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/; \
+    fi
+
 # ============================================================================
 # Runner: Minimal production image
 # ============================================================================
@@ -53,17 +60,12 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./
 # Exclude .bak files (backup files should not be migrated)
 COPY --chown=nodejs:nodejs packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 
-# Copy custom migrations (optional - only if directory exists in source)
+# Copy custom migrations (optional - prepared in builder stage)
 # The migration script (scripts/migrate.ts) gracefully handles:
 #   - Missing directory: logs "No custom migrations directory found, skipping..." and continues
 #   - Empty directory: logs "No custom migrations found, skipping..." and continues
 #   - Existing migrations: applies them in alphabetical order
-# Prepare custom migrations in builder stage (creates empty dir if source doesn't exist)
-RUN mkdir -p /app/migrations-custom-temp && \
-    ([ -d "/app/packages/database/migrations-custom" ] && \
-     [ "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ] && \
-     cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/ || true)
-# Copy prepared directory (will be empty if no custom migrations exist - that's fine)
+# Directory is prepared in builder stage (always exists, may be empty)
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
 
 # Expose port
