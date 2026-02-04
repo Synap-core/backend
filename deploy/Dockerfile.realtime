@@ -16,10 +16,23 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 # Build the realtime package
 RUN pnpm turbo build --filter=@synap/realtime
 
+# Verify build created server.js
+RUN echo "=== Verifying build output ===" && \
+    ls -la /app/packages/realtime/dist/ && \
+    (test -f /app/packages/realtime/dist/server.js && echo "✓ server.js exists in build" || echo "✗ server.js NOT found in build")
+
 # Deploy realtime package (pnpm deploy works perfectly for single package)
 # Same pattern as API - pnpm deploy places package at root with dist/ folder
 RUN rm -rf /app/deploy && \
     pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy
+
+# Debug: Check what was actually created
+RUN echo "=== Deploy structure ===" && \
+    ls -la /app/deploy/ && \
+    echo "=== dist contents ===" && \
+    (ls -la /app/deploy/dist/ 2>/dev/null || echo "dist/ not found") && \
+    echo "=== Finding server.js ===" && \
+    find /app/deploy -name "server.js" -type f 2>/dev/null | head -10 || echo "server.js not found anywhere"
 
 # ============================================================================
 # Runner: Minimal production image

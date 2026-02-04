@@ -81,6 +81,11 @@ import { projectsRouter } from "./routers/projects.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
+import { skillsRouter } from "./routers/skills.js";
+import { backgroundTasksRouter } from "./routers/background-tasks.js";
+import { messageLinksRouter } from "./routers/message-links.js";
+import { typesenseRouter } from "./routers/typesense.js";
+import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -246,6 +251,31 @@ registerRouter("profileProperties", profilePropertiesRouter, {
   version: "1.0.0",
   source: "core",
   description: "Profile-property linking management (dynamic schema system)",
+});
+registerRouter("skills", skillsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "User-created skills management",
+});
+registerRouter("backgroundTasks", backgroundTasksRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Background task management",
+});
+registerRouter("messageLinks", messageLinksRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Message linking to entities, documents, and other objects",
+});
+registerRouter("typesense", typesenseRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Typesense search API for command palette and search",
+});
+registerRouter("n8nActions", n8nActionsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "n8n workflow actions integration",
 });
 
 import { coreRouter } from "./root.js";
