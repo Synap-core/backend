@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { getDb, sql } from "../client-pg.js";
+import { getDb } from "../client-pg.js";
 import {
   documents,
   documentVersions,
@@ -138,17 +138,7 @@ export async function ensureDefaultWhiteboard(
 
     let document;
     try {
-      // Check if 'type' column exists in database
-      // This allows the code to work both before and after migration
-      const columnCheck = await sql`
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name = 'documents' AND column_name = 'type'
-      `;
-
-      const hasTypeColumn =
-        Array.isArray(columnCheck) && columnCheck.length > 0;
-
+      // Insert document - type is required in schema
       const [insertedDocument] = await db
         .insert(documents)
         .values({
@@ -156,8 +146,7 @@ export async function ensureDefaultWhiteboard(
           userId,
           workspaceId,
           title: "Main Whiteboard",
-          // Conditionally include 'type' if column exists
-          ...(hasTypeColumn ? { type: documentType } : {}),
+          type: documentType, // Required field - schema defines it as NOT NULL
           // All documents use MinIO storage (unified approach)
           storageUrl: uploadResult.url,
           storageKey: uploadResult.path,
