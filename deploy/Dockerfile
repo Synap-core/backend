@@ -20,11 +20,27 @@ RUN pnpm turbo build --filter=api --filter=@synap/realtime
 # Build migration script independently
 RUN cd packages/database && pnpm build:migrate
 
-# Deploy both packages together to self-contained directory with hard-linked dependencies
-# This creates a portable, production-ready package with all dependencies
-# pnpm deploy handles dependency resolution and hard-linking automatically
+# Deploy packages separately (pnpm deploy limitation: can only deploy 1 project at a time)
+# Deploy API first to main directory
 RUN rm -rf /app/deploy && \
-    pnpm deploy --filter=api --filter=@synap/realtime --prod --legacy /app/deploy
+    pnpm deploy --filter=api --prod --legacy /app/deploy
+
+# Deploy realtime package separately, then merge dependencies
+# pnpm deploy creates self-contained deployments with all dependencies hard-linked
+RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy-realtime
+
+# Merge realtime package and dependencies into main deploy
+# Copy realtime package itself
+RUN cp -r /app/deploy-realtime/node_modules/@synap/realtime /app/deploy/node_modules/@synap/realtime
+
+# Merge node_modules: copy all dependencies from realtime that aren't already in deploy
+# This ensures socket.io, y-socket.io, yjs, and all transitive dependencies are included
+RUN cd /app/deploy-realtime/node_modules && \
+    for dir in */; do \
+      if [ ! -d "/app/deploy/node_modules/$dir" ]; then \
+        cp -r "$dir" /app/deploy/node_modules/; \
+      fi; \
+    done
 
 # Prepare custom migrations directory (optional - only if migrations-custom exists)
 # Create directory unconditionally, then copy files if they exist
