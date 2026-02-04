@@ -43,4 +43,4 @@ EXPOSE 4001
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "node_modules/@synap/realtime/dist/server.js"]
+CMD ["node", "dist/server.js"]

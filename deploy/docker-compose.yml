@@ -88,7 +88,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_BUCKET: synap-storage
       MINIO_USE_SSL: false
-    command: node node_modules/@synap/realtime/dist/server.js
+    command: node dist/server.js
     depends_on:
       postgres:
         condition: service_healthy
