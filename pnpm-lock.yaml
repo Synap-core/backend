@@ -435,8 +435,8 @@ importers:
   packages/api-types:
     dependencies:
       '@synap-core/types':
-        specifier: ^1.2.14
-        version: 1.2.16(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
+        specifier: ^1.5.0
+        version: 1.5.0(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       yjs:
         specifier: ^13.0.0
         version: 13.6.29
@@ -3545,8 +3545,8 @@ packages:
     peerDependencies:
       '@trpc/server': ^11.0.0
 
-  '@synap-core/types@1.2.16':
-    resolution: {integrity: sha512-nt3Q0qvcmVt/9d/3jRl1O7iVNpVrKklHDMiz31zXzdYYZ5EN6bt/iVqkEW46BA29JtZVgCE0vvw4NM0lZ3Lm8g==}
+  '@synap-core/types@1.5.0':
+    resolution: {integrity: sha512-HOWqUQUXqztdUJJFGolFaU7N9aLwrgeoJlQ+UGZKGNXlb6YiY1cj7N9UktZYauxyVlkiAJTBxMhhiS2Kq3KTNw==}
 
   '@tabler/icons-react@3.36.1':
     resolution: {integrity: sha512-/8nOXeNeMoze9xY/QyEKG65wuvRhkT3q9aytaur6Gj8bYU2A98YVJyLc9MRmc5nVvpy+bRlrrwK/Ykr8WGyUWg==}
@@ -10691,8 +10691,9 @@ snapshots:
       '@synap-core/types': link:packages/types
       '@trpc/server': 11.8.1(typescript@5.9.3)
 
-  '@synap-core/types@1.2.16(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
+  '@synap-core/types@1.5.0(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
     dependencies:
+      '@synap/database': link:packages/database
       drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       drizzle-zod: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
       yjs: 13.6.29
