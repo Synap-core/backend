@@ -1,3 +1,12 @@
+# ============================================================================
+# LEGACY DOCKERFILE - Combined API + Realtime (for backward compatibility)
+# ============================================================================
+# NOTE: This file is kept for backward compatibility and fallback scenarios.
+# For new deployments, use separate Dockerfiles:
+#   - Dockerfile.api (API service)
+#   - Dockerfile.realtime (Realtime service)
+# ============================================================================
+
 FROM node:20-alpine AS base
 RUN npm install -g pnpm@10.28.0
 WORKDIR /app
@@ -11,7 +20,6 @@ FROM base AS builder
 COPY . .
 
 # Install all dependencies (including dev deps for building)
-# Install all dependencies with retry mechanism
 RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
 
 # Build the project using Turborepo
@@ -20,25 +28,40 @@ RUN pnpm turbo build --filter=api --filter=@synap/realtime
 # Build migration script independently
 RUN cd packages/database && pnpm build:migrate
 
-# Deploy API package (pnpm deploy limitation: can only deploy 1 project at a time)
-RUN rm -rf /app/deploy && \
-    pnpm deploy --filter=api --prod --legacy /app/deploy
+# Best Practice: Copy built packages and use pnpm install --prod
+# This is the standard approach - let pnpm resolve all dependencies
+RUN rm -rf /app/deploy && mkdir -p /app/deploy
 
-# Copy realtime package from source (already built)
-RUN mkdir -p /app/deploy/node_modules/@synap/realtime && \
-    cp -r /app/packages/realtime/dist /app/deploy/node_modules/@synap/realtime/dist && \
-    cp /app/packages/realtime/package.json /app/deploy/node_modules/@synap/realtime/package.json
+# Copy built packages to workspace structure
+RUN mkdir -p /app/deploy/packages/api /app/deploy/packages/realtime && \
+    cp -r /app/packages/api/dist /app/deploy/packages/api/dist && \
+    cp /app/packages/api/package.json /app/deploy/packages/api/package.json && \
+    cp -r /app/packages/realtime/dist /app/deploy/packages/realtime/dist && \
+    cp /app/packages/realtime/package.json /app/deploy/packages/realtime/package.json
 
-# Copy realtime dependencies directly from workspace node_modules
-# All dependencies are already installed - just copy them!
-RUN cp -r /app/node_modules/socket.io /app/deploy/node_modules/socket.io && \
-    cp -r /app/node_modules/@socket.io /app/deploy/node_modules/@socket.io && \
-    cp -r /app/node_modules/y-socket.io /app/deploy/node_modules/y-socket.io && \
-    cp -r /app/node_modules/yjs /app/deploy/node_modules/yjs && \
-    cp -r /app/node_modules/lib0 /app/deploy/node_modules/lib0 2>/dev/null || true
+# Copy workspace packages they depend on
+RUN mkdir -p /app/deploy/packages && \
+    cp -r /app/packages/database /app/deploy/packages/ && \
+    cp -r /app/packages/storage /app/deploy/packages/ && \
+    cp -r /app/packages/core /app/deploy/packages/ && \
+    cp -r /app/packages/auth /app/deploy/packages/ && \
+    cp -r /app/packages/events /app/deploy/packages/ && \
+    cp -r /app/packages/jobs /app/deploy/packages/ && \
+    cp -r /app/packages/search /app/deploy/packages/ 2>/dev/null || true
+
+# Copy workspace config and lockfile
+RUN cp /app/pnpm-workspace.yaml /app/deploy/pnpm-workspace.yaml && \
+    cp /app/pnpm-lock.yaml /app/deploy/pnpm-lock.yaml && \
+    echo '{"name":"synap-backend-deploy","private":true,"dependencies":{"@synap/api":"workspace:*","@synap/realtime":"workspace:*"}}' > /app/deploy/package.json
+
+# Let pnpm install production dependencies (resolves everything automatically)
+RUN cd /app/deploy && pnpm install --prod --frozen-lockfile --legacy
+
+# Move API dist to root (where CMD expects it)
+RUN cp -r /app/deploy/packages/api/dist/* /app/deploy/dist/ 2>/dev/null || \
+    cp -r /app/deploy/node_modules/@synap/api/dist/* /app/deploy/dist/ 2>/dev/null || true
 
 # Prepare custom migrations directory (optional - only if migrations-custom exists)
-# Create directory unconditionally, then copy files if they exist
 RUN mkdir -p /app/migrations-custom-temp && \
     if [ -d "/app/packages/database/migrations-custom" ] && [ -n "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ]; then \
       cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/; \

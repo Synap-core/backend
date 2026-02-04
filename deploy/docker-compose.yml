@@ -11,7 +11,7 @@ services:
     # Build fallback: if image pull fails, build from source
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: deploy/Dockerfile.api
     restart: always
     environment:
       NODE_ENV: production
@@ -70,12 +70,12 @@ services:
   # REALTIME SERVER (WebSocket/Socket.IO)
   # ============================================================================
   realtime:
-    # Use same image as backend service (pulls or builds same way)
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    # Separate image for realtime service (smaller, cleaner)
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend-realtime}:${BACKEND_VERSION:-latest}
     # Build fallback: if image pull fails, build from source
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: deploy/Dockerfile.realtime
     restart: always
     environment:
       NODE_ENV: production
@@ -115,12 +115,12 @@ services:
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
-    # Use same image as backend service (pulls or builds same way)
+    # Use same image as backend service (needs migrations)
     image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
     # Build fallback: if image pull fails, build from source
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: deploy/Dockerfile.api
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       NODE_PATH: /app/node_modules

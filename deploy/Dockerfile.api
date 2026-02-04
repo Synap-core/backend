@@ -1,0 +1,66 @@
+FROM node:20-alpine AS base
+RUN npm install -g pnpm@10.28.0
+WORKDIR /app
+
+# ============================================================================
+# Builder: Install dependencies and build
+# ============================================================================
+FROM base AS builder
+
+# Copy all files for build
+COPY . .
+
+# Install all dependencies (including dev deps for building)
+RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
+
+# Build the API package
+RUN pnpm turbo build --filter=api
+
+# Build migration script independently
+RUN cd packages/database && pnpm build:migrate
+
+# Deploy API package (pnpm deploy works perfectly for single package)
+RUN rm -rf /app/deploy && \
+    pnpm deploy --filter=api --prod --legacy /app/deploy
+
+# Prepare custom migrations directory
+RUN mkdir -p /app/migrations-custom-temp && \
+    if [ -d "/app/packages/database/migrations-custom" ] && [ -n "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ]; then \
+      cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/; \
+    fi
+
+# ============================================================================
+# Runner: Minimal production image
+# ============================================================================
+FROM node:20-alpine AS runner
+
+# Install runtime dependencies
+RUN apk add --no-cache postgresql-client dumb-init
+
+# Create non-root user
+RUN addgroup -g 10001 -S nodejs && \
+  adduser -S nodejs -u 10001
+
+WORKDIR /app
+USER nodejs
+
+# Copy self-contained deployment (includes hard-linked node_modules)
+COPY --from=builder --chown=nodejs:nodejs /app/deploy .
+
+# Copy configuration files needed at runtime
+COPY --from=builder --chown=nodejs:nodejs kratos ./kratos
+COPY --from=builder --chown=nodejs:nodejs hydra ./hydra
+
+# Copy migration script (compiled from builder)
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./node_modules/@synap/database/dist/scripts
+
+# Copy migrations
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
+COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
+
+# Expose port
+EXPOSE 4000
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/index.js"]
