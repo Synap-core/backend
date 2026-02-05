@@ -19,35 +19,20 @@ RUN pnpm turbo build --filter=@synap/realtime
 # Verify build created server.js
 RUN echo "=== Verifying build output ===" && \
     ls -la /app/packages/realtime/dist/ && \
-    (test -f /app/packages/realtime/dist/server.js && echo "✓ server.js exists in build" || echo "✗ server.js NOT found in build")
+    (test -f /app/packages/realtime/dist/server.js && echo "✓ server.js exists in build" || (echo "✗ server.js NOT found in build" && exit 1))
 
-# Deploy realtime package (pnpm deploy works perfectly for single package)
-# Same pattern as API - pnpm deploy places package at root with dist/ folder
+# Deploy realtime package dependencies (but copy dist ourselves to ensure server.js is included)
 RUN rm -rf /app/deploy && \
+    mkdir -p /app/deploy && \
     pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy
 
-# Ensure dist directory exists and server.js is present
-# pnpm deploy might not include server.js if it's not the main entry point
-RUN mkdir -p /app/deploy/dist && \
-    if [ -f /app/packages/realtime/dist/server.js ]; then \
-      echo "Copying server.js from build output..." && \
-      cp /app/packages/realtime/dist/server.js /app/deploy/dist/server.js && \
-      cp /app/packages/realtime/dist/server.js.map /app/deploy/dist/server.js.map 2>/dev/null || true && \
-      echo "✓ server.js copied"; \
-    else \
-      echo "✗ ERROR: server.js not found in build output!" && \
-      ls -la /app/packages/realtime/dist/ && \
-      exit 1; \
-    fi
-
-# Debug: Check what was actually created
-RUN echo "=== Deploy structure ===" && \
-    ls -la /app/deploy/ && \
-    echo "=== dist contents ===" && \
-    (ls -la /app/deploy/dist/ 2>/dev/null || echo "dist/ not found") && \
-    echo "=== Finding server.js ===" && \
-    find /app/deploy -name "server.js" -type f 2>/dev/null | head -10 || echo "server.js not found anywhere" && \
-    (test -f /app/deploy/dist/server.js && echo "✓ server.js confirmed in deploy" || echo "✗ server.js STILL missing after copy attempt")
+# CRITICAL: Copy dist directory directly from build output
+# pnpm deploy might exclude server.js since it's not the main entry point
+# We copy the entire dist/ to ensure all files are included
+RUN echo "=== Copying dist directory ===" && \
+    cp -r /app/packages/realtime/dist /app/deploy/dist && \
+    echo "=== Verifying server.js after copy ===" && \
+    (test -f /app/deploy/dist/server.js && echo "✓ server.js confirmed in /app/deploy/dist/" || (echo "✗ ERROR: server.js missing after copy!" && ls -la /app/deploy/dist/ && exit 1))
 
 # ============================================================================
 # Runner: Minimal production image
@@ -67,13 +52,8 @@ USER nodejs
 # Copy self-contained deployment (includes hard-linked node_modules)
 COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 
-# Debug: Show what's actually in the container (for troubleshooting)
-RUN echo "=== Container contents ===" && \
-    ls -la /app/ && \
-    echo "=== dist contents ===" && \
-    (ls -la /app/dist/ 2>/dev/null || echo "dist/ not found") && \
-    echo "=== Finding server.js ===" && \
-    find /app -name "server.js" -type f 2>/dev/null | head -10 || echo "server.js not found"
+# Verify server.js exists in final image (fail build if missing)
+RUN test -f /app/dist/server.js || (echo "ERROR: /app/dist/server.js not found in final image!" && ls -la /app/ && ls -la /app/dist/ 2>/dev/null || echo "dist/ does not exist" && exit 1)
 
 # Expose port
 EXPOSE 4001
