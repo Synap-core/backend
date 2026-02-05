@@ -7,10 +7,9 @@
  * Located in @synap/database to avoid circular dependencies (both @synap/api and @synap/jobs can use it)
  */
 
-import { randomUUID } from "crypto";
-import { getDb } from "../client-pg.js";
+import { getDb, sql } from "../client-pg.js";
 import { views, workspaces } from "../schema/index.js";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ViewRepository } from "../repositories/view-repository.js";
 import { EventRepository } from "../repositories/event-repository.js";
@@ -90,7 +89,7 @@ export async function ensureDefaultViews(
     }
 
     // Create views using ViewRepository (emits events)
-    const eventRepo = new EventRepository(db);
+    const eventRepo = new EventRepository(sql);
     const viewRepo = new ViewRepository(db, eventRepo);
 
     const createdViewIds: string[] = [];

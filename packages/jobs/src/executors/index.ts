@@ -26,3 +26,4 @@ export * from "./thread-context-executor.js";
 export * from "./skills-executor.js";
 export * from "./background-tasks-executor.js";
 export * from "./default-whiteboard-executor.js";
+export * from "./default-views-executor.js";
