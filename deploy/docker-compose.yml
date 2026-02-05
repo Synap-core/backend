@@ -113,6 +113,9 @@ services:
       start_period: 30s
     networks:
       - synap-net
+    # Ensure proper DNS resolution (Docker's internal DNS can be flaky)
+    dns:
+      - 127.0.0.11 # Docker's internal DNS
 
   # ============================================================================
   # CODE MIGRATION SERVICE
@@ -368,7 +371,12 @@ services:
     networks:
       - synap-net
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      realtime:
+        condition: service_healthy # Wait for realtime to be healthy before starting Caddy
+    dns:
+      - 127.0.0.11 # Docker's internal DNS
 
   # ============================================================================
   # MONITORING (Dozzle)
