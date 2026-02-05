@@ -20,14 +20,9 @@
     # No manual header manipulation needed - it breaks the upgrade
     handle /socket.io/* {
         reverse_proxy realtime:4001 {
-            # Caddy automatically handles:
-            # - WebSocket upgrade detection
-            # - Connection header forwarding
-            # - Upgrade header forwarding
-            # Just preserve forwarding headers for logging/debugging
+            # Caddy automatically handles all headers
+            # Just preserve X-Real-IP for logging/debugging
             header_up X-Real-IP {remote}
-            header_up X-Forwarded-For {remote}
-            header_up X-Forwarded-Proto {scheme}
         }
     }
     
@@ -38,9 +33,8 @@
     
     # Realtime health check (for debugging)
     handle /realtime-health {
-        reverse_proxy realtime:4001 {
-            rewrite /realtime-health /health
-        }
+        rewrite /realtime-health /bridge/health
+        reverse_proxy realtime:4001
     }
 
     # Ory Kratos (Authentication)
