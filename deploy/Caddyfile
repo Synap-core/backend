@@ -16,14 +16,15 @@
     }
 
     # Realtime WebSocket (Socket.IO)
-    # Routes /socket.io/* and /realtime/* to realtime service
-    # Caddy automatically handles WebSocket upgrades
+    # Caddy v2 automatically detects and upgrades WebSocket connections
+    # No manual header manipulation needed - it breaks the upgrade
     handle /socket.io/* {
         reverse_proxy realtime:4001 {
-            # Preserve WebSocket upgrade headers
-            header_up Connection {>Connection}
-            header_up Upgrade {>Upgrade}
-            header_up Host {host}
+            # Caddy automatically handles:
+            # - WebSocket upgrade detection
+            # - Connection header forwarding
+            # - Upgrade header forwarding
+            # Just preserve forwarding headers for logging/debugging
             header_up X-Real-IP {remote}
             header_up X-Forwarded-For {remote}
             header_up X-Forwarded-Proto {scheme}

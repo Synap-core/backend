@@ -60,7 +60,28 @@ export async function createContext(req: Request): Promise<Context> {
     }
 
     // Extract workspace ID from header (set by frontend workspaceLink)
-    const workspaceId = req.headers.get("X-Workspace-Id") || null;
+    // Try both case variations (HTTP headers are case-insensitive, but some implementations are strict)
+    const workspaceId =
+      req.headers.get("X-Workspace-Id") ||
+      req.headers.get("x-workspace-id") ||
+      null;
+
+    // Debug logging for workspace ID extraction
+    if (process.env.NODE_ENV === "development" || process.env.DEBUG_WORKSPACE) {
+      const allHeaders = Array.from(req.headers.entries());
+      const workspaceHeaders = allHeaders.filter(([k]) =>
+        k.toLowerCase().includes("workspace")
+      );
+      contextLogger.debug(
+        {
+          workspaceId,
+          hasWorkspaceHeader: !!workspaceId,
+          workspaceHeaders,
+          allHeaderKeys: allHeaders.map(([k]) => k),
+        },
+        "Workspace ID extraction from headers"
+      );
+    }
 
     // Kratos session structure: { identity: { id, traits: { email, name } } }
     if (session && session.identity) {

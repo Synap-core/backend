@@ -29,7 +29,8 @@ import {
   toSynapError,
   validateConfig,
 } from "@synap-core/core";
-import { appRouter /*, createContext */ } from "@synap/api"; // createContext disabled - type mismatch
+import { appRouter } from "@synap/api";
+import { getDb } from "@synap/database";
 import { serve } from "@hono/node-server";
 import { serve as inngestServe } from "inngest/hono";
 import { inngest, functions } from "@synap/jobs";
@@ -368,39 +369,64 @@ app.use(
     // We use 'any' for the second argument to handle version differences in @hono/trpc-server
     // In newer versions, the Hono Context is passed as the second argument
     createContext: async (opts, c: any) => {
-      // Get database
-      const { getDb } = await import("@synap/database");
-      const db = await getDb();
+      // Get Hono context (already has validated session from orySessionMiddleware)
+      const honoCtx = (opts as any).c || c;
 
-      // Check if Hono middleware set auth data (from orySessionMiddleware)
-      // The context is passed as the second argument in newer @hono/trpc-server versions
-      // We check both opts.c (older) and c (newer)
-      const ctx = (opts as any).c || c;
-      const userId = ctx?.get?.("userId");
-      const user = ctx?.get?.("user");
-      const session = ctx?.get?.("session");
-      const authenticated = ctx?.get?.("authenticated");
-
-      if (authenticated && userId) {
-        // Auth middleware validated session
-        return {
-          db,
-          authenticated: true,
-          userId,
-          user,
-          session,
-          req: (opts as any).c?.req?.raw || opts.req,
-        };
+      if (!honoCtx) {
+        apiLogger.error("Hono context not available in tRPC createContext");
+        throw new Error("Hono context not available");
       }
 
-      // No auth - return unauthenticated context
+      // Extract workspace ID from Hono request (case-insensitive header lookup)
+      const workspaceId =
+        honoCtx.req.header("X-Workspace-Id") ||
+        honoCtx.req.header("x-workspace-id") ||
+        null;
+
+      // Get pre-validated session data from Hono context (set by orySessionMiddleware)
+      const userId = honoCtx.get("userId") || null;
+      const session = honoCtx.get("session") || null;
+      const user = honoCtx.get("user") || null;
+      const authenticated = honoCtx.get("authenticated") || false;
+
+      // Get database instance
+      const db = await getDb();
+
+      // Debug logging
+      if (
+        process.env.NODE_ENV === "development" ||
+        process.env.DEBUG_WORKSPACE
+      ) {
+        apiLogger.debug(
+          {
+            workspaceId,
+            userId,
+            authenticated,
+            hasSession: !!session,
+            hasUser: !!user,
+            headerKeys: honoCtx.req.header()
+              ? Object.keys(honoCtx.req.header())
+              : [],
+          },
+          "tRPC createContext - Using Hono context values"
+        );
+      }
+
+      // Return context with workspace ID from Hono request
       return {
         db,
-        authenticated: false,
-        userId: null,
-        user: null,
-        session: null,
-        req: (opts as any).c?.req?.raw || opts.req,
+        authenticated,
+        userId,
+        user: user
+          ? {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+            }
+          : null,
+        session,
+        req: honoCtx.req.raw || honoCtx.req, // Keep raw Request for compatibility
+        workspaceId,
       };
     },
     onError({ error, path }) {

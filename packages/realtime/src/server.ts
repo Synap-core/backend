@@ -25,15 +25,22 @@ const httpServer = createServer();
 // Create Socket.IO server
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN, // true = allow all origins
+    // Allow all origins when behind reverse proxy (Caddy handles auth)
+    // In production, Caddy is the security boundary
+    origin: true, // Always allow all origins (Caddy is security boundary)
     credentials: true,
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "OPTIONS"], // Include OPTIONS for preflight
   },
   transports: ["websocket", "polling"],
   // Allow Socket.IO to work behind reverse proxy (Caddy)
   allowEIO3: true,
-  // Path for Socket.IO (default is /socket.io/)
+  // Path for Socket.IO (must match Caddy route)
   path: "/socket.io/",
+  // Connection state recovery (helps with reconnections)
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+    skipMiddlewares: true,
+  },
 });
 
 // ============================================================================
@@ -42,6 +49,21 @@ const io = new SocketIOServer(httpServer, {
 // Allows workers to emit real-time events to connected clients via HTTP POST
 // Also handles Yjs state management endpoints
 setupBridge(io, httpServer);
+
+// Log all connection attempts (for debugging WebSocket routing)
+io.engine.on("connection_error", (err) => {
+  console.error("[Socket.IO] Connection error:", err.req?.headers, err.message);
+});
+
+io.engine.on("initial_headers", (headers, req) => {
+  console.log("[Socket.IO] Initial connection attempt:", {
+    method: req.method,
+    url: req.url,
+    origin: req.headers.origin,
+    upgrade: req.headers.upgrade,
+    connection: req.headers.connection,
+  });
+});
 
 // Namespace for generic presence/collaboration
 const presenceNamespace = io.of("/presence");
