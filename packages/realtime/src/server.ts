@@ -84,30 +84,44 @@ presenceNamespace.on("connection", (socket) => {
   console.log(`[Presence] Client connected: ${socket.id}`);
 
   // Extract auth from handshake
-  const { userId, userName, viewId, viewType } = socket.handshake.auth;
+  const { userId, userName, viewId, viewType, workspaceId } =
+    socket.handshake.auth;
 
-  if (!userId || !viewId) {
-    console.error("[Presence] Missing auth params, disconnecting");
+  // Require userId, and either viewId or workspaceId (for workspace-level connections)
+  if (!userId) {
+    console.error("[Presence] Missing userId, disconnecting");
     socket.disconnect();
     return;
   }
 
-  // Join room for this view
-  socket.join(`view:${viewId}`);
+  // Use viewId if provided, otherwise use workspaceId as fallback for workspace-level presence
+  const effectiveViewId =
+    viewId || (workspaceId ? `workspace:${workspaceId}` : null);
+
+  if (!effectiveViewId) {
+    console.error("[Presence] Missing viewId or workspaceId, disconnecting");
+    socket.disconnect();
+    return;
+  }
+
+  // Join room for this view (or workspace)
+  socket.join(`view:${effectiveViewId}`);
 
   // Register user in collaboration manager
   const session = collaborationManager.userJoined({
-    viewId,
-    viewType: viewType || "document",
+    viewId: effectiveViewId,
+    viewType: viewType || (workspaceId ? "workspace" : "document"),
     userId,
     userName: userName || "Anonymous",
     socketId: socket.id,
   });
 
-  console.log(`[Presence] User ${userName} (${userId}) joined view ${viewId}`);
+  console.log(
+    `[Presence] User ${userName || userId} (${userId}) joined ${effectiveViewId}`
+  );
 
   // Send current active users to the new joiner
-  const activeUsers = collaborationManager.getActiveUsers(viewId);
+  const activeUsers = collaborationManager.getActiveUsers(effectiveViewId);
   socket.emit("presence:init", {
     users: activeUsers,
     yourColor: session.color,
@@ -117,7 +131,7 @@ presenceNamespace.on("connection", (socket) => {
   socket.on("cursor:move", (cursor: { x: number; y: number }) => {
     collaborationManager.updateCursor({
       socketId: socket.id,
-      viewId,
+      viewId: effectiveViewId,
       cursor,
     });
   });
@@ -126,7 +140,7 @@ presenceNamespace.on("connection", (socket) => {
   socket.on("typing", (isTyping: boolean) => {
     collaborationManager.setTyping({
       socketId: socket.id,
-      viewId,
+      viewId: effectiveViewId,
       isTyping,
     });
   });
@@ -140,7 +154,7 @@ presenceNamespace.on("connection", (socket) => {
   socket.on("collaboration:event", (event: any) => {
     collaborationManager.broadcastEvent({
       type: event.type,
-      viewId,
+      viewId: effectiveViewId,
       userId,
       data: event.data,
       timestamp: Date.now(),
@@ -149,7 +163,7 @@ presenceNamespace.on("connection", (socket) => {
 
   // Event: Request presence update
   socket.on("presence:request", () => {
-    const activeUsers = collaborationManager.getActiveUsers(viewId);
+    const activeUsers = collaborationManager.getActiveUsers(effectiveViewId);
     socket.emit("presence:update", activeUsers);
   });
 
