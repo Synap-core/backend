@@ -152,9 +152,10 @@ presenceNamespace.adapter.on("delete-room", (room: string) => {
 /**
  * Start server
  */
-httpServer.listen(PORT, () => {
+// Listen on 0.0.0.0 to accept connections from other containers (Caddy)
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(
-    `✅ Real-time WebSocket server running on http://localhost:${PORT}`
+    `✅ Real-time WebSocket server running on http://0.0.0.0:${PORT}`
   );
   console.log(`   - Generic presence (/presence): ✅`);
   console.log(`   - Yjs CRDT sync (/yjs): ✅`);
