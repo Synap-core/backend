@@ -44,6 +44,12 @@ export {
   type EnsureSystemProfilesResult,
 } from "./utils/ensure-system-profiles.js";
 
+// Export ensureDefaultViews utility
+export {
+  ensureDefaultViews,
+  type EnsureDefaultViewsResult,
+} from "./utils/ensure-default-views.js";
+
 // Export document types for type safety
 export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
 export {
