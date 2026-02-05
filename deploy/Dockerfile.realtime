@@ -21,18 +21,20 @@ RUN echo "=== Verifying build output ===" && \
     ls -la /app/packages/realtime/dist/ && \
     (test -f /app/packages/realtime/dist/server.js && echo "✓ server.js exists in build" || (echo "✗ server.js NOT found in build" && exit 1))
 
-# Deploy realtime package dependencies (but copy dist ourselves to ensure server.js is included)
+# Deploy realtime package (creates node_modules structure)
 RUN rm -rf /app/deploy && \
-    mkdir -p /app/deploy && \
     pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy
 
 # CRITICAL: Copy dist directory directly from build output
-# pnpm deploy might exclude server.js since it's not the main entry point
-# We copy the entire dist/ to ensure all files are included
-RUN echo "=== Copying dist directory ===" && \
+# pnpm deploy creates the package structure but we need to ensure dist/ is included
+# The dist/ directory contains server.js which is the entry point
+RUN echo "=== Verifying build output exists ===" && \
+    ls -la /app/packages/realtime/dist/ && \
+    test -f /app/packages/realtime/dist/server.js || (echo "✗ ERROR: server.js not found in build output!" && exit 1) && \
+    echo "=== Copying dist directory to deploy ===" && \
     cp -r /app/packages/realtime/dist /app/deploy/dist && \
     echo "=== Verifying server.js after copy ===" && \
-    (test -f /app/deploy/dist/server.js && echo "✓ server.js confirmed in /app/deploy/dist/" || (echo "✗ ERROR: server.js missing after copy!" && ls -la /app/deploy/dist/ && exit 1))
+    (test -f /app/deploy/dist/server.js && echo "✓ server.js confirmed in /app/deploy/dist/" || (echo "✗ ERROR: server.js missing after copy!" && ls -la /app/deploy/ && ls -la /app/deploy/dist/ 2>/dev/null || echo "dist/ does not exist" && exit 1))
 
 # ============================================================================
 # Runner: Minimal production image
@@ -49,8 +51,16 @@ RUN addgroup -g 10001 -S nodejs && \
 WORKDIR /app
 USER nodejs
 
-# Copy self-contained deployment (includes hard-linked node_modules)
+# Copy self-contained deployment (includes hard-linked node_modules and dist/)
 COPY --from=builder --chown=nodejs:nodejs /app/deploy .
+
+# Debug: Show what's actually in the container (for troubleshooting)
+RUN echo "=== Container contents ===" && \
+    ls -la /app/ && \
+    echo "=== dist contents ===" && \
+    (ls -la /app/dist/ 2>/dev/null || echo "dist/ not found") && \
+    echo "=== Finding server.js ===" && \
+    find /app -name "server.js" -type f 2>/dev/null | head -5 || echo "server.js not found anywhere"
 
 # Verify server.js exists in final image (fail build if missing)
 RUN test -f /app/dist/server.js || (echo "ERROR: /app/dist/server.js not found in final image!" && ls -la /app/ && ls -la /app/dist/ 2>/dev/null || echo "dist/ does not exist" && exit 1)
