@@ -24,39 +24,65 @@ async function getDbInstance() {
   return dbInstance;
 }
 
-export async function createContext(req: Request): Promise<Context> {
+/**
+ * Create tRPC context from Request
+ *
+ * If honoCtx is provided (from Hono middleware), uses pre-validated session
+ * to avoid duplication. Otherwise, validates session with Kratos.
+ *
+ * @param req - Request object (standard or from Hono)
+ * @param honoCtx - Optional Hono context with pre-validated session (from orySessionMiddleware)
+ */
+export async function createContext(
+  req: Request,
+  honoCtx?: { get: (key: string) => unknown }
+): Promise<Context> {
   // Initialize database
   const db = await getDbInstance();
 
   // Use Ory Kratos session for authentication
   try {
-    const authModule = await import("@synap/auth");
-    if (!authModule.getSession) {
-      throw new InternalServerError("getSession not available", {
-        module: "@synap/auth",
-      });
-    }
-    // Debug logging for cookie presence
-    const cookieHeader = req.headers.get("cookie");
-    contextLogger.info(
-      {
-        hasCookie: !!cookieHeader,
-        cookieLength: cookieHeader?.length || 0,
-      },
-      "Attempting to get session from request"
-    );
+    // If Hono context is provided, use pre-validated session (no duplication)
+    // This is the case when called from apps/api/src/index.ts with orySessionMiddleware
+    let session: KratosSession | null = null;
 
-    // Try cache first (optional optimization)
-    let session: any | null = null;
-    const cachedSession = sessionCache.get(cookieHeader || "");
-    if (cachedSession !== undefined) {
-      session = cachedSession;
-      contextLogger.debug({ cached: true }, "Using cached session");
+    if (honoCtx) {
+      // Use pre-validated session from Hono middleware (already validated by orySessionMiddleware)
+      session = (honoCtx.get("session") as KratosSession | undefined) || null;
+      contextLogger.debug(
+        { fromHonoContext: true },
+        "Using pre-validated session from Hono context"
+      );
     } else {
-      // Validate with Kratos
-      session = await authModule.getSession(req.headers);
-      // Cache result (only valid sessions are cached)
-      sessionCache.set(cookieHeader || "", session, 5000);
+      // No Hono context: validate session ourselves (for non-Hono usage)
+      const authModule = await import("@synap/auth");
+      if (!authModule.getSession) {
+        throw new InternalServerError("getSession not available", {
+          module: "@synap/auth",
+        });
+      }
+
+      // Debug logging for cookie presence
+      const cookieHeader = req.headers.get("cookie");
+      contextLogger.info(
+        {
+          hasCookie: !!cookieHeader,
+          cookieLength: cookieHeader?.length || 0,
+        },
+        "Attempting to get session from request"
+      );
+
+      // Try cache first (optional optimization)
+      const cachedSession = sessionCache.get(cookieHeader || "");
+      if (cachedSession !== undefined) {
+        session = cachedSession;
+        contextLogger.debug({ cached: true }, "Using cached session");
+      } else {
+        // Validate with Kratos
+        session = await authModule.getSession(req.headers);
+        // Cache result (only valid sessions are cached)
+        sessionCache.set(cookieHeader || "", session, 5000);
+      }
     }
 
     // Extract workspace ID from header (set by frontend workspaceLink)
@@ -68,16 +94,22 @@ export async function createContext(req: Request): Promise<Context> {
 
     // Debug logging for workspace ID extraction
     if (process.env.NODE_ENV === "development" || process.env.DEBUG_WORKSPACE) {
-      const allHeaders = Array.from(req.headers.entries());
-      const workspaceHeaders = allHeaders.filter(([k]) =>
-        k.toLowerCase().includes("workspace")
+      // Convert Headers to array of [key, value] tuples
+      // Use forEach which is more widely supported than entries()
+      const allHeaders: Array<[string, string]> = [];
+      req.headers.forEach((value, key) => {
+        allHeaders.push([key, value]);
+      });
+
+      const workspaceHeaders = allHeaders.filter(([key]) =>
+        key.toLowerCase().includes("workspace")
       );
       contextLogger.debug(
         {
           workspaceId,
           hasWorkspaceHeader: !!workspaceId,
           workspaceHeaders,
-          allHeaderKeys: allHeaders.map(([k]) => k),
+          allHeaderKeys: allHeaders.map(([key]) => key),
         },
         "Workspace ID extraction from headers"
       );

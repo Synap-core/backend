@@ -3,21 +3,21 @@
  *
  * Hono server with:
  * - tRPC API endpoints
- * - Ory Kratos routes (PostgreSQL only)
+ * - Ory Kratos routes (session-based authentication)
  * - Token Exchange endpoint
  * - Inngest handler
  */
 
 // Load environment variables from .env
-console.log("DEBUG: apps/api/src/index.ts starting evaluation");
 import "dotenv/config";
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
+// TODO: Enable tracing for production observability
 // import { initializeTracing } from "@synap-core/core";
 // initializeTracing();
 
-import { Hono } from "hono";
+import { Hono, type Context as HonoContext } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
@@ -29,34 +29,25 @@ import {
   toSynapError,
   validateConfig,
 } from "@synap-core/core";
-import { appRouter } from "@synap/api";
-import { getDb } from "@synap/database";
+import { appRouter, createContext as createApiContext } from "@synap/api";
 import { serve } from "@hono/node-server";
 import { serve as inngestServe } from "inngest/hono";
 import { inngest, functions } from "@synap/jobs";
 import crypto from "crypto";
 import { getCorsOrigins } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
-// import { webhookRouter } from "./webhooks/index.js";
-
-console.log("🔍 DEBUG: Starting API server index.ts execution");
+import { authMiddleware } from "@synap/auth";
 
 // Setup event broadcasting to SSE clients
-const debugLogger = createLogger({ module: "api-debug" });
-debugLogger.info("🔍 DEBUG: Execution reached index.ts top-level");
+const apiLogger = createLogger({ module: "api-server" });
 setupEventBroadcasting();
-debugLogger.info("🔍 DEBUG: setupEventBroadcasting() returned");
+apiLogger.info("Event broadcasting initialized");
 
 // Validate configuration at startup
-const apiLogger = createLogger({ module: "api-server" });
-apiLogger.info("🔍 DEBUG: Validating configuration");
-
 try {
-  // Validate database config
-  if (config.database.dialect === "postgres") {
-    validateConfig("postgres");
-    apiLogger.info("PostgreSQL configuration validated");
-  }
+  // Validate PostgreSQL database config
+  validateConfig("postgres");
+  apiLogger.info("PostgreSQL configuration validated");
 
   // Validate storage config only if explicitly set to R2
   // If R2 credentials are missing, provider will auto-switch to MinIO
@@ -89,48 +80,29 @@ try {
     apiLogger.info("AI configuration validated");
   }
 
-  // Validate auth config for PostgreSQL
-  if (config.database.dialect === "postgres") {
-    validateConfig("ory");
-    apiLogger.info("Ory Stack configuration validated");
-  }
+  // Validate Ory Stack (Kratos + Hydra) auth config
+  validateConfig("ory");
+  apiLogger.info("Ory Stack configuration validated");
 } catch (error) {
   apiLogger.error({ err: error }, "Configuration validation failed");
-  console.error(
-    "❌ Configuration Error:",
-    error instanceof Error ? error.message : String(error)
+  apiLogger.error(
+    {
+      error: error instanceof Error ? error.message : String(error),
+    },
+    "Please check your environment variables and configuration"
   );
-  console.error("Please check your environment variables and configuration.");
   process.exit(1);
 }
 
-// Static import to avoid dynamic import hangs (circular dep with @synap/api?)
-import * as oryAuth from "@synap/auth";
-
-// Dynamic auth import based on DB dialect
-const isPostgres = config.database.dialect === "postgres";
-let authMiddleware: any = null;
-
-if (isPostgres) {
-  // PostgreSQL: Ory Stack (Kratos + Hydra)
-  authMiddleware = oryAuth.authMiddleware; // Uses orySessionMiddleware for session-based auth
-} else {
-  // SQLite: Simple token auth (not implemented in PostgreSQL-only version)
-  // For SQLite mode, we would need to implement simple token auth
-  // For now, PostgreSQL-only version uses Ory
-  throw new Error("SQLite mode not supported in PostgreSQL-only version");
-}
-
-console.log("🔍 DEBUG: Initializing Hono app");
+// Initialize Hono app
 const app = new Hono();
 
 // Security Middleware (Applied First)
-console.log("🔍 DEBUG: Registering security middleware");
+// TODO: Enable rate limiting and request size limits for production
 // app.use("*", requestSizeLimit); // Max 10MB requests
 // app.use("*", rateLimitMiddleware); // 100 req/15min per IP
-// app.use("*", securityHeadersMiddleware); // Security headers
-app.use("*", secureHeaders()); // Hono built-in security
-console.log("🔍 DEBUG: Security middleware registered");
+app.use("*", secureHeaders()); // Hono built-in security headers
+apiLogger.info("Security middleware registered");
 
 // Logging & CORS
 app.use("*", logger());
@@ -162,9 +134,9 @@ app.get("/health", (c) => {
   return c.json({
     status: "ok",
     timestamp: new Date().toISOString(),
-    version: isPostgres ? "0.2.0-saas" : "0.1.0-local",
-    mode: isPostgres ? "multi-user" : "single-user",
-    auth: isPostgres ? "ory-stack" : "static-token",
+    version: "0.2.0-saas",
+    mode: "multi-user",
+    auth: "ory-stack",
   });
 });
 
@@ -177,115 +149,121 @@ app.get("/metrics", async (c) => {
   });
 });
 
-// Ory Kratos routes (PostgreSQL only)
+// Ory Kratos routes
 // Kratos handles its own routes via public API
 // We proxy the necessary endpoints for browser-based flows
 // This matches Caddy routing in production: /.ory/kratos/public/* -> Kratos
-if (isPostgres) {
-  const kratosPublicUrl =
-    process.env.KRATOS_PUBLIC_URL || "http://localhost:4433";
+const kratosPublicUrl =
+  process.env.KRATOS_PUBLIC_URL || "http://localhost:4433";
 
-  // Proxy function for Kratos requests
-  const proxyKratosRequest = async (c: any, kratosPath: string) => {
-    try {
-      // Forward request to Kratos public API
-      const targetUrl = `${kratosPublicUrl}${kratosPath}`;
+// Proxy function for Kratos requests
+const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
+  try {
+    // Forward request to Kratos public API
+    const targetUrl = `${kratosPublicUrl}${kratosPath}`;
 
-      // Prepare headers - forward cookies and other important headers
-      const headers: Record<string, string> = {
-        Cookie: c.req.header("cookie") || "",
-      };
+    // Prepare headers - forward cookies and other important headers
+    const headers: Record<string, string> = {
+      Cookie: c.req.header("cookie") || "",
+    };
 
-      // Forward content-type if present
+    // Forward content-type if present
+    const contentType = c.req.header("content-type");
+    if (contentType) {
+      headers["Content-Type"] = contentType;
+    }
+
+    // Get request body for POST/PUT/PATCH
+    let body: string | undefined;
+    if (["POST", "PUT", "PATCH"].includes(c.req.method)) {
       const contentType = c.req.header("content-type");
-      if (contentType) {
-        headers["Content-Type"] = contentType;
+      if (contentType?.includes("application/json")) {
+        body = JSON.stringify(await c.req.json());
+      } else {
+        body = await c.req.text();
       }
-
-      // Get request body for POST/PUT/PATCH
-      let body: string | undefined;
-      if (["POST", "PUT", "PATCH"].includes(c.req.method)) {
-        const contentType = c.req.header("content-type");
-        if (contentType?.includes("application/json")) {
-          body = JSON.stringify(await c.req.json());
-        } else {
-          body = await c.req.text();
-        }
-      }
-
-      const response = await fetch(targetUrl, {
-        method: c.req.method,
-        headers,
-        body,
-      });
-
-      // Get all response headers
-      const responseHeaders = new Headers();
-      response.headers.forEach((value, key) => {
-        responseHeaders.set(key, value);
-      });
-
-      // Return Response object (Hono accepts this)
-      return new Response(response.body, {
-        status: response.status,
-        headers: responseHeaders,
-      }) as any;
-    } catch (error) {
-      apiLogger.error(
-        { err: error, path: kratosPath },
-        "Error proxying Kratos request"
-      );
-      return c.json({ error: "Internal server error" }, 500);
     }
-  };
 
-  // Production route: /.ory/kratos/public/* (matches Caddy routing)
-  // This allows the frontend middleware to always use the same path
-  app.all("/.ory/kratos/public/*", async (c) => {
-    // Remove /.ory/kratos/public prefix, keep the rest
-    const kratosPath = c.req.path.replace("/.ory/kratos/public", "");
-    return proxyKratosRequest(c, kratosPath);
-  });
+    const response = await fetch(targetUrl, {
+      method: c.req.method,
+      headers,
+      body,
+    });
 
-  // Legacy route: /self-service/* (for backward compatibility)
-  app.all("/self-service/*", async (c) => {
-    const kratosPath = c.req.path.replace("/self-service", "");
-    return proxyKratosRequest(c, kratosPath);
-  });
+    // Get all response headers
+    const responseHeaders = new Headers();
+    response.headers.forEach((value, key) => {
+      responseHeaders.set(key, value);
+    });
 
-  // Token Exchange endpoint (for websites with external providers)
-  app.post("/api/auth/token-exchange", async (c) => {
-    try {
-      const body = await c.req.json();
-      const { exchangeToken } = await import("@synap/auth");
+    // Return Response object (Hono accepts Response directly)
+    return new Response(response.body, {
+      status: response.status,
+      headers: responseHeaders,
+    });
+  } catch (error) {
+    apiLogger.error(
+      { err: error, path: kratosPath },
+      "Error proxying Kratos request"
+    );
+    return c.json({ error: "Internal server error" }, 500);
+  }
+};
 
-      const result = await exchangeToken({
-        subject_token: body.subject_token,
-        subject_token_type:
-          body.subject_token_type ||
-          "urn:ietf:params:oauth:token-type:access_token",
-        client_id: body.client_id,
-        client_secret: body.client_secret,
-        requested_token_type:
-          body.requested_token_type ||
-          "urn:ietf:params:oauth:token-type:access_token",
-        scope: body.scope,
-      });
+// Production route: /.ory/kratos/public/* (matches Caddy routing)
+// This allows the frontend middleware to always use the same path
+app.all("/.ory/kratos/public/*", async (c) => {
+  // Remove /.ory/kratos/public prefix, keep the rest
+  const kratosPath = c.req.path.replace("/.ory/kratos/public", "");
+  return proxyKratosRequest(c, kratosPath);
+});
 
-      if (!result) {
-        return c.json({ error: "Token exchange failed" }, 400);
-      }
+// Legacy route: /self-service/* (for backward compatibility)
+app.all("/self-service/*", async (c) => {
+  const kratosPath = c.req.path.replace("/self-service", "");
+  return proxyKratosRequest(c, kratosPath);
+});
 
-      return c.json(result);
-    } catch (error) {
-      apiLogger.error({ err: error }, "Error in token exchange");
-      return c.json({ error: "Token exchange failed" }, 500);
+// Token Exchange endpoint (for websites with external providers)
+app.post("/api/auth/token-exchange", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    // Validate request body
+    if (!body.subject_token) {
+      return c.json({ error: "subject_token is required" }, 400);
     }
-  });
 
-  apiLogger.info("Ory Kratos routes enabled at /self-service/*");
-  apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
-}
+    const { exchangeToken } = await import("@synap/auth");
+
+    const result = await exchangeToken({
+      subject_token: body.subject_token,
+      subject_token_type:
+        body.subject_token_type ||
+        "urn:ietf:params:oauth:token-type:access_token",
+      client_id: body.client_id,
+      client_secret: body.client_secret,
+      requested_token_type:
+        body.requested_token_type ||
+        "urn:ietf:params:oauth:token-type:access_token",
+      scope: body.scope,
+    });
+
+    if (!result) {
+      return c.json({ error: "Token exchange failed" }, 400);
+    }
+
+    return c.json(result);
+  } catch (error) {
+    apiLogger.error({ err: error }, "Error in token exchange");
+    return c.json({ error: "Token exchange failed" }, 500);
+  }
+});
+
+apiLogger.info(
+  "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
+);
+apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
 
 // SSE endpoint for real-time event streaming (admin dashboard)
 // Server-Sent Events endpoint for event broadcasting
@@ -311,16 +289,20 @@ app.get("/api/events/stream", (c) => {
     },
   });
 
-  // Get CORS origins
-  const allowedOrigins = getCorsOrigins();
-  const origin = c.req.header("origin") || "";
-  const allowOrigin = Array.isArray(allowedOrigins)
-    ? allowedOrigins.includes(origin)
-      ? origin
-      : allowedOrigins[0]
-    : allowedOrigins;
+  // Get CORS origin for SSE response
+  const getAllowedOrigin = (): string => {
+    const allowedOrigins = getCorsOrigins();
+    const origin = c.req.header("origin") || "";
 
-  // Return Response object (Hono accepts this)
+    if (Array.isArray(allowedOrigins)) {
+      return allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+    }
+    return allowedOrigins;
+  };
+
+  const allowOrigin = getAllowedOrigin();
+
+  // Return Response object (Hono accepts Response directly)
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
@@ -329,7 +311,7 @@ app.get("/api/events/stream", (c) => {
       "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Credentials": "true",
     },
-  }) as any;
+  });
 });
 
 // tRPC routes (protected by auth, except public routes)
@@ -349,7 +331,8 @@ app.use("/trpc/*", async (c, next) => {
     return next();
   }
 
-  // Apply Kratos auth middleware for all protected routes
+  // Apply Kratos session-based auth middleware for all protected routes
+  // This validates the session cookie with Kratos and sets user context
   return authMiddleware(c, next);
 });
 
@@ -366,68 +349,43 @@ app.use(
   "/trpc/*",
   trpcServer({
     router: appRouter,
-    // We use 'any' for the second argument to handle version differences in @hono/trpc-server
-    // In newer versions, the Hono Context is passed as the second argument
-    createContext: async (opts, c: any) => {
+    // @hono/trpc-server passes Hono Context as second argument
+    // opts may also contain the context in some versions
+    createContext: async (
+      opts: { req?: Request; c?: HonoContext },
+      c?: HonoContext
+    ) => {
       // Get Hono context (already has validated session from orySessionMiddleware)
-      const honoCtx = (opts as any).c || c;
+      const honoCtx: HonoContext | undefined = opts.c || c;
 
       if (!honoCtx) {
         apiLogger.error("Hono context not available in tRPC createContext");
         throw new Error("Hono context not available");
       }
 
-      // Extract workspace ID from Hono request (case-insensitive header lookup)
-      const workspaceId =
-        honoCtx.req.header("X-Workspace-Id") ||
-        honoCtx.req.header("x-workspace-id") ||
-        null;
+      // Extract Request object from Hono context
+      const req = honoCtx.req.raw || honoCtx.req;
 
-      // Get pre-validated session data from Hono context (set by orySessionMiddleware)
-      const userId = honoCtx.get("userId") || null;
-      const session = honoCtx.get("session") || null;
-      const user = honoCtx.get("user") || null;
-      const authenticated = honoCtx.get("authenticated") || false;
+      // Use centralized createContext from @synap/api
+      // Pass Hono context so it can use pre-validated session (no duplication)
+      const context = await createApiContext(req, honoCtx);
 
-      // Get database instance
-      const db = await getDb();
+      // Log workspace ID extraction for debugging
+      apiLogger.info(
+        {
+          workspaceId: context.workspaceId,
+          userId: context.userId,
+          authenticated: context.authenticated,
+          hasSession: !!context.session,
+          hasUser: !!context.user,
+        },
+        "tRPC createContext - Using centralized context creation"
+      );
 
-      // Debug logging
-      if (
-        process.env.NODE_ENV === "development" ||
-        process.env.DEBUG_WORKSPACE
-      ) {
-        apiLogger.debug(
-          {
-            workspaceId,
-            userId,
-            authenticated,
-            hasSession: !!session,
-            hasUser: !!user,
-            headerKeys: honoCtx.req.header()
-              ? Object.keys(honoCtx.req.header())
-              : [],
-          },
-          "tRPC createContext - Using Hono context values"
-        );
-      }
-
-      // Return context with workspace ID from Hono request
-      return {
-        db,
-        authenticated,
-        userId,
-        user: user
-          ? {
-              id: user.id,
-              email: user.email,
-              name: user.name,
-            }
-          : null,
-        session,
-        req: honoCtx.req.raw || honoCtx.req, // Keep raw Request for compatibility
-        workspaceId,
-      };
+      // @hono/trpc-server requires Record<string, unknown>, but our Context is more specific
+      // This assertion is safe because Context only contains serializable values
+      // and is compatible with Record<string, unknown> at runtime
+      return context as unknown as Record<string, unknown>;
     },
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "tRPC error");
@@ -435,9 +393,6 @@ app.use(
   })
 );
 
-console.log("🔍 DEBUG: About to register Inngest serve handler...");
-
-// Inngest handler (for background jobs)
 // Inngest handler (for background jobs)
 app.use(
   "/api/inngest",
@@ -446,8 +401,7 @@ app.use(
     functions,
   })
 );
-
-console.log("✅ DEBUG: Inngest serve handler registered successfully!");
+apiLogger.info("Inngest handler registered at /api/inngest");
 
 // 404 handler
 app.notFound((c) => {
@@ -457,7 +411,7 @@ app.notFound((c) => {
 // Error handler
 app.onError((err, c) => {
   const errorId = crypto.randomUUID();
-  const apiLogger = createLogger({ module: "api-server" });
+  // Use existing apiLogger (created at line 50) instead of creating new one
 
   // Convert to SynapError if needed (standardized error handling)
   const synapError = isSynapError(err)
@@ -509,8 +463,8 @@ app.onError((err, c) => {
 });
 
 // Start server
-// Start server
-apiLogger.info("🔍 DEBUG: Calling serve() to start HTTP server...");
+const EVENT_PROCESSOR_START_DELAY_MS = 5000; // Delay to allow server to bind port first
+
 try {
   serve(
     {
@@ -528,16 +482,16 @@ try {
         "API server started"
       );
 
-      // ✨ Start event processor (Delayed to allow server to bind port first)
+      // Start event processor (delayed to allow server to bind port first)
       const { startEventProcessor } = await import("@synap/api");
       setTimeout(() => {
         startEventProcessor();
-        apiLogger.info("Event processor started (delayed)");
-      }, 5000);
+        apiLogger.info("Event processor started");
+      }, EVENT_PROCESSOR_START_DELAY_MS);
     }
   );
 } catch (err) {
-  console.error("❌ CRITICAL: serve() threw an error:", err);
+  apiLogger.error({ err }, "CRITICAL: Failed to start server");
   process.exit(1);
 }
 
@@ -548,7 +502,6 @@ runStartupHooks().catch((err) => {
 });
 
 process.on("SIGTERM", () => {
-  console.log("⚠️ DEBUG: SIGTERM received!");
   apiLogger.info("SIGTERM received, shutting down gracefully");
   process.exit(0);
 });
