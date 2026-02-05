@@ -35,6 +35,13 @@
     handle /realtime/* {
         reverse_proxy realtime:4001
     }
+    
+    # Realtime health check (for debugging)
+    handle /realtime-health {
+        reverse_proxy realtime:4001 {
+            rewrite /realtime-health /health
+        }
+    }
 
     # Ory Kratos (Authentication)
     # Route public API: /.ory/kratos/public/* -> kratos:4433

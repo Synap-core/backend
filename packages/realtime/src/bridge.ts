@@ -60,7 +60,8 @@ async function handleBridgeRequest(
   const url = req.url || "";
 
   // Health check
-  if (url === "/bridge/health" && req.method === "GET") {
+  // Health check endpoint (for debugging connectivity)
+  if ((url === "/bridge/health" || url === "/health") && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", timestamp: Date.now() }));
     return;
