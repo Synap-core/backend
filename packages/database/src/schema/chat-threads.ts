@@ -50,7 +50,7 @@ export const chatThreads = pgTable(
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
-    projectIds: uuid("project_ids").array(), // Optional: threads can be scoped to projects
+    // Projects: Removed - use relations table if needed
 
     // Thread metadata
     title: text("title"),
@@ -115,7 +115,6 @@ export const chatThreads = pgTable(
     parentThreadIdx: index("chat_threads_parent_thread_id_idx").on(
       table.parentThreadId
     ),
-    projectIdsIdx: index("chat_threads_project_ids_idx").on(table.projectIds),
     statusIdx: index("chat_threads_status_idx").on(table.status),
   })
 );

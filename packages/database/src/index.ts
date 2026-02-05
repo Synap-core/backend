@@ -38,6 +38,12 @@ export {
   type CreateDefaultWhiteboardResult,
 } from "./utils/create-default-whiteboard.js";
 
+// Export ensureSystemProfiles utility
+export {
+  ensureSystemProfiles,
+  type EnsureSystemProfilesResult,
+} from "./utils/ensure-system-profiles.js";
+
 // Export document types for type safety
 export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
 export {

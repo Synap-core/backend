@@ -25,7 +25,7 @@ export const inboxItems = pgTable(
     // Context
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id").notNull(), // Every inbox item belongs to a workspace
-    projectIds: uuid("project_ids").array(), // Optional: items can be related to projects
+    // Projects: Removed - use relations table if needed
 
     // External source (direct columns for queryability)
     provider: varchar("provider", { length: 50 }).notNull(), // 'gmail', 'google_calendar', 'slack'

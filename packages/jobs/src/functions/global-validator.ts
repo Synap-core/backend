@@ -96,15 +96,16 @@ export const globalValidator = inngest.createFunction(
           requiredPermission = "write";
         }
 
-        // Get projectIds from event data if present
-        const projectIds = data.projectIds || [];
+        // Projects: Removed projectIds from event data
+        // If project permissions are needed, query relations table (type "belongs_to_project")
+        // For now, use workspace-only permissions
 
-        // 🔐 NEW: 3-Level Permission Check
+        // 🔐 NEW: 3-Level Permission Check (workspace-only for now)
         const result = await verifyPermission({
           db,
           userId,
           workspace: { id: workspaceId },
-          project: projectIds.length > 0 ? { ids: projectIds } : undefined,
+          // Projects: Removed projectIds (use relations table if project permissions needed)
           requiredPermission,
         });
 
@@ -113,7 +114,6 @@ export const globalValidator = inngest.createFunction(
             {
               userId,
               workspaceId,
-              projectIds,
               requiredPermission,
               reason: result.reason,
             },

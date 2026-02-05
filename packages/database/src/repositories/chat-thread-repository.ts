@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, desc, arrayContains } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   chatThreads,
@@ -61,7 +61,6 @@ export class ChatThreadRepository {
       .values({
         id: threadId,
         userId: data.userId,
-        projectIds: data.projectId ? [data.projectId] : [],
         title: data.title,
         threadType: data.threadType || ChatThreadType.MAIN,
         parentThreadId: data.parentThreadId,
@@ -144,11 +143,8 @@ export class ChatThreadRepository {
   ): Promise<ChatThread[]> {
     const conditions = [eq(chatThreads.userId, userId)];
 
-    if (filters?.projectId) {
-      conditions.push(
-        arrayContains(chatThreads.projectIds, [filters.projectId])
-      );
-    }
+    // Projects: Use relations table to filter by project (if needed)
+    // TODO: Implement project filtering via relations table
     if (filters?.status) {
       conditions.push(eq(chatThreads.status, filters.status));
     }

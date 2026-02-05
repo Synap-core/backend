@@ -56,7 +56,7 @@ export const contextRouter = router({
         thread: {
           id: threadResult.thread.id,
           userId: threadResult.thread.userId,
-          projectId: threadResult.thread.projectIds?.[0] || undefined,
+          projectId: undefined, // Projects: Removed projectIds (use relations table if needed)
           agentId: threadResult.thread.agentId || undefined,
         },
         messages: messagesResult.messages.map((m) => ({

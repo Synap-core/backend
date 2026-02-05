@@ -17,7 +17,7 @@ export const relations = pgTable("relations", {
   // Context
   userId: text("user_id").notNull(),
   workspaceId: uuid("workspace_id").notNull(), // Every relation belongs to a workspace
-  projectIds: uuid("project_ids").array(), // Optional: relations can be scoped to projects
+  // Projects: Use relations table with type "belongs_to_project" (self-referencing)
 
   // The two entities being linked
   sourceEntityId: uuid("source_entity_id")
@@ -57,6 +57,7 @@ export const RelationTypeSchema = z.enum([
   "attended_by",
   "depends_on",
   "blocks",
+  "belongs_to_project", // Entity belongs to project (replaces projectIds array)
   // NEW - Computed from view content (optional, for analytics/backlinks)
   "embedded_in", // Entity/View embedded in View/Document
   "visualized_in", // Entity shown in View (for tracking)

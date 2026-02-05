@@ -106,8 +106,7 @@ export const documentsRouter = router({
         where: eq(entities.documentId, input.documentId),
       });
 
-      const workspaceId =
-        entity?.workspaceId || doc.projectIds?.[0] || input.userId;
+      const workspaceId = entity?.workspaceId || input.userId; // Projects: Removed projectIds
 
       // Create proposal in DB
       const [proposal] = await db

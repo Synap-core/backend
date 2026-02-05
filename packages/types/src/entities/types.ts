@@ -29,7 +29,7 @@ export const EntitySchema = z.object({
   fileSize: z.number().nullable(),
   fileType: z.string().nullable(),
   checksum: z.string().nullable(),
-  projectIds: z.array(z.string().uuid()).nullable(),
+  // Projects: Removed projectIds (use relations table with type "belongs_to_project")
   version: z.number(),
   createdAt: z.date(),
   updatedAt: z.date(),

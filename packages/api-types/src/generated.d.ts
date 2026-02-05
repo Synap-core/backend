@@ -121,62 +121,6 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
       {},
       {}
     >;
-    projectIds: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "project_ids";
-        tableName: "chat_threads";
-        dataType: "array";
-        columnType: "PgArray";
-        data: string[];
-        driverParam: string | string[];
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: import("drizzle-orm").Column<
-          {
-            name: "project_ids";
-            tableName: "chat_threads";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-          },
-          {},
-          {}
-        >;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {
-        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
-          {
-            name: "project_ids";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            enumValues: undefined;
-          },
-          {},
-          {},
-          import("drizzle-orm").ColumnBuilderExtraConfig
-        >;
-        size: undefined;
-      }
-    >;
     title: import("drizzle-orm/pg-core").PgColumn<
       {
         name: "title";
@@ -1167,7 +1111,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               fileSize: number | null;
               fileType: string | null;
               checksum: string | null;
-              projectIds: string[] | null;
               version: number;
               createdAt: Date;
               updatedAt: Date;
@@ -1198,7 +1141,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               fileSize: number | null;
               fileType: string | null;
               checksum: string | null;
-              projectIds: string[] | null;
               version: number;
               createdAt: Date;
               updatedAt: Date;
@@ -1251,7 +1193,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
       import("@trpc/server").TRPCDecorateCreateRouterOptions<{
         createThread: import("@trpc/server").TRPCMutationProcedure<{
           input: {
-            projectId?: string | undefined;
             parentThreadId?: string | undefined;
             branchPurpose?: string | undefined;
             agentId?: string | undefined;
@@ -1282,7 +1223,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   metadata: unknown;
-                  projectIds: string[] | null;
                   title: string | null;
                   status: ChatThreadStatus;
                   threadType: ChatThreadType;
@@ -1321,7 +1261,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   metadata: unknown;
-                  projectIds: string[] | null;
                   title: string | null;
                   status: ChatThreadStatus;
                   threadType: ChatThreadType;
@@ -1429,7 +1368,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         listThreads: import("@trpc/server").TRPCQueryProcedure<{
           input: {
-            projectId?: string | undefined;
             threadType?: "main" | "branch" | undefined;
             limit?: number | undefined;
           };
@@ -1440,7 +1378,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               metadata: unknown;
-              projectIds: string[] | null;
               title: string | null;
               status: ChatThreadStatus;
               threadType: ChatThreadType;
@@ -1467,7 +1404,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               metadata: unknown;
-              projectIds: string[] | null;
               title: string | null;
               status: ChatThreadStatus;
               threadType: ChatThreadType;
@@ -1507,7 +1443,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               metadata: unknown;
-              projectIds: string[] | null;
               title: string | null;
               status: ChatThreadStatus;
               threadType: ChatThreadType;
@@ -1599,7 +1534,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               metadata: unknown;
-              projectIds: string[] | null;
               title: string | null;
               status: ChatThreadStatus;
               threadType: ChatThreadType;
@@ -1618,7 +1552,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               metadata: unknown;
-              projectIds: string[] | null;
               title: string | null;
               status: ChatThreadStatus;
               threadType: ChatThreadType;
@@ -1637,7 +1570,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               metadata: unknown;
-              projectIds: string[] | null;
               title: string | null;
               status: ChatThreadStatus;
               threadType: ChatThreadType;
@@ -2421,7 +2353,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               id: string;
               userId: string;
               workspaceId: string;
-              projectIds: string[] | null;
               title: string;
               type: string;
               language: string | null;
@@ -2547,7 +2478,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               id: string;
               userId: string;
               workspaceId: string;
-              projectIds: string[] | null;
               title: string;
               type: string;
               language: string | null;
@@ -2788,11 +2718,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             id: string;
             data: unknown;
             updatedAt: Date;
-            tags: string[] | null;
             createdAt: Date;
             timestamp: Date;
             type: string;
-            projectIds: string[] | null;
             title: string;
             preview: string | null;
             status: string | null;
@@ -2802,6 +2730,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             deepLink: string | null;
             snoozedUntil: Date | null;
             priority: string | null;
+            tags: string[] | null;
             processedAt: Date | null;
           }[];
           meta: object;
@@ -3042,7 +2971,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              projectIds: string[] | null;
               profileId: string | null;
               title: string | null;
               preview: string | null;
@@ -3080,7 +3008,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              projectIds: string[] | null;
               profileId: string | null;
               title: string | null;
               preview: string | null;
@@ -3137,7 +3064,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               id: string;
               createdAt: Date;
               type: string;
-              projectIds: string[] | null;
               sourceEntityId: string;
               targetEntityId: string;
             }[];
@@ -3170,7 +3096,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              projectIds: string[] | null;
               profileId: string | null;
               title: string | null;
               preview: string | null;
@@ -3254,7 +3179,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   type: string;
-                  projectIds: string[] | null;
                   profileId: string | null;
                   title: string | null;
                   preview: string | null;
@@ -3275,7 +3199,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   type: string;
-                  projectIds: string[] | null;
                   profileId: string | null;
                   title: string | null;
                   preview: string | null;
@@ -3290,7 +3213,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   id: string;
                   createdAt: Date;
                   type: string;
-                  projectIds: string[] | null;
                   sourceEntityId: string;
                   targetEntityId: string;
                 }[];
@@ -3318,7 +3240,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               updatedAt: Date;
               createdAt: Date;
               type: string;
-              projectIds: string[] | null;
               profileId: string | null;
               title: string | null;
               preview: string | null;
@@ -3333,7 +3254,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               id: string;
               createdAt: Date;
               type: string;
-              projectIds: string[] | null;
               sourceEntityId: string;
               targetEntityId: string;
             }[];
@@ -3666,7 +3586,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             createdAt: Date;
             type: string;
             metadata: unknown;
-            projectIds: string[] | null;
             documentId: string | null;
             description: string | null;
             category: string;
@@ -3700,7 +3619,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               createdAt: Date;
               type: string;
               metadata: unknown;
-              projectIds: string[] | null;
               documentId: string | null;
               description: string | null;
               category: string;
@@ -3737,7 +3655,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   createdAt: Date;
                   type: string;
                   metadata: unknown;
-                  projectIds: string[] | null;
                   documentId: string | null;
                   description: string | null;
                   category: string;
@@ -3772,7 +3689,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   createdAt: Date;
                   type: string;
                   metadata: unknown;
-                  projectIds: string[] | null;
                   documentId: string | null;
                   description: string | null;
                   category: string;
@@ -3794,7 +3710,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   id: string;
                   userId: string;
                   workspaceId: string;
-                  projectIds: string[] | null;
                   profileId: string | null;
                   type: string;
                   title: string | null;
@@ -3810,7 +3725,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   id: string;
                   userId: string;
                   workspaceId: string;
-                  projectIds: string[] | null;
                   sourceEntityId: string;
                   targetEntityId: string;
                   type: string;
@@ -4254,7 +4168,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   updatedAt: Date;
                   createdAt: Date;
                   type: string;
-                  projectIds: string[] | null;
                   profileId: string | null;
                   title: string | null;
                   preview: string | null;
@@ -4274,7 +4187,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   createdAt: Date;
                   type: string;
                   metadata: unknown;
-                  projectIds: string[] | null;
                   documentId: string | null;
                   description: string | null;
                   category: string;
@@ -4357,7 +4269,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             description: string | null;
             userId: string | null;
             workspaceId: string | null;
-            projectIds: string[] | null;
             targetType: string;
             entityType: string | null;
             inboxItemType: string | null;
@@ -4703,7 +4614,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             id: string;
             updatedAt: Date;
             createdAt: Date;
-            projectIds: string[] | null;
             version: number;
             entityType: string | null;
             description: string | null;

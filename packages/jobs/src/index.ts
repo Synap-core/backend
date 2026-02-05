@@ -81,12 +81,10 @@ import { entityEmbeddingWorker } from "./functions/entity-embedding.js";
 import { handleWebhookDelivery } from "./functions/webhook-broker.js";
 import { globalValidator } from "./functions/global-validator.js";
 import {
-  tagsExecutor,
   viewsExecutor,
   entitiesExecutor,
   documentsExecutor,
   workspacesExecutor,
-  projectsExecutor,
   inboxExecutor,
   sharingExecutor,
   templatesExecutor,
@@ -125,12 +123,10 @@ export const functions = [
   globalValidator,
 
   // Executors (Unified Execution Layer)
-  tagsExecutor,
   viewsExecutor,
   entitiesExecutor,
   documentsExecutor,
   workspacesExecutor,
-  projectsExecutor,
   inboxExecutor,
   sharingExecutor,
   templatesExecutor,

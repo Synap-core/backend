@@ -22,7 +22,7 @@ export const views = pgTable("views", {
     onDelete: "cascade",
   }),
   userId: text("user_id").notNull(), // Creator
-  projectIds: uuid("project_ids").array(), // Optional: views can be scoped to projects
+  // Projects: Use relations table (if view is linked to entity) or remove projectIds
 
   // View type (extensible)
   type: text("type").notNull(),

@@ -89,7 +89,6 @@ export const entitiesRouter = router({
         updatedAt: new Date(),
         deletedAt: null,
         version: 1,
-        projectIds: [],
         fileUrl: null,
         filePath: null,
         fileSize: null,

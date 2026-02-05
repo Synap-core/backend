@@ -111,7 +111,7 @@ export interface UnifiedEventData {
 
   // Common Fields (all operations)
   workspaceId?: string;
-  projectIds?: string[];
+  // Projects: Removed projectIds (use relations table with type "belongs_to_project")
   tags?: string[];
   relations?: Array<{ targetId: string; type: string }>;
 

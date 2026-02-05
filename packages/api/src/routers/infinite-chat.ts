@@ -9,17 +9,9 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
-import {
-  db,
-  eq,
-  desc,
-  and,
-  or,
-  lt,
-  inArray,
-  arrayContains,
-} from "@synap/database";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+import { db, eq, desc, and, or, lt, inArray } from "@synap/database";
 import {
   chatThreads,
   conversationMessages,
@@ -47,10 +39,9 @@ export const infiniteChatRouter = router({
    * Create a new chat thread - Uses event sourcing for branch operations
    * Now includes context inheritance for branches via event-sourced executor
    */
-  createThread: protectedProcedure
+  createThread: workspaceProcedure
     .input(
       z.object({
-        projectId: z.string().uuid().optional(),
         parentThreadId: z.string().uuid().optional(),
         branchPurpose: z.string().optional(),
         agentId: z.string().optional(),
@@ -70,13 +61,24 @@ export const infiniteChatRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Get workspaceId from parent thread if branch, otherwise from projectId
-      let workspaceId: string | undefined = input.projectId || undefined;
+      // Get workspaceId from context (guaranteed by workspaceProcedure)
+      const workspaceId = ctx.workspaceId;
+
+      // If branching, verify parent thread is in same workspace
       if (input.parentThreadId) {
         const parentThread = await db.query.chatThreads.findFirst({
           where: eq(chatThreads.id, input.parentThreadId),
         });
-        workspaceId = parentThread?.projectIds?.[0] || undefined;
+
+        if (!parentThread) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Parent thread not found",
+          });
+        }
+
+        // Verify parent thread is in same workspace (if chat threads had workspaceId)
+        // For now, just use context workspaceId
       }
 
       // If this is a branch, use event sourcing
@@ -89,7 +91,7 @@ export const infiniteChatRouter = router({
           subjectId: input.parentThreadId,
           data: {
             userId: ctx.userId,
-            projectId: input.projectId,
+            // Projects: Removed projectId (use relations table if needed)
             parentThreadId: input.parentThreadId,
             branchPurpose: input.branchPurpose,
             agentId: input.agentId,
@@ -114,7 +116,7 @@ export const infiniteChatRouter = router({
         .insert(chatThreads)
         .values({
           userId: ctx.userId,
-          projectIds: input.projectId ? [input.projectId] : [],
+          // Projects: Removed projectIds (use relations table if needed)
           threadType: ChatThreadType.MAIN,
           status: ChatThreadStatus.ACTIVE,
           agentId: input.agentId || "orchestrator", // Explicitly provide agentId (required, has default in schema)
@@ -176,7 +178,7 @@ export const infiniteChatRouter = router({
       // Resolve intelligence service dynamically
       const resolvedService = await resolveIntelligenceService({
         userId: ctx.userId,
-        workspaceId: thread.projectIds?.[0] ?? undefined,
+        workspaceId: ctx.workspaceId || undefined, // Use workspaceId from context if available
         capability: "chat",
       });
 
@@ -192,7 +194,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
           agentId: thread.agentId ?? "orchestrator",
           agentType: thread.agentType ?? "meta",
-          projectId: thread.projectIds?.[0] ?? undefined,
+          // Projects: Removed projectId (use relations table if needed)
         });
 
         for await (const chunk of stream) {
@@ -261,7 +263,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
           agentId: thread.agentId ?? "orchestrator",
           agentType: thread.agentType ?? "meta",
-          projectId: thread.projectIds?.[0] ?? undefined,
+          // Projects: Removed projectId (use relations table if needed)
         });
 
         fullContent = hubResponse.content || "";
@@ -348,7 +350,7 @@ export const infiniteChatRouter = router({
           .insert(chatThreads)
           .values({
             userId: ctx.userId,
-            projectIds: thread.projectIds,
+            // Projects: Removed projectIds (use relations table if needed)
             parentThreadId: threadId,
             branchedFromMessageId: assistantMessageId,
             branchPurpose:
@@ -416,28 +418,26 @@ export const infiniteChatRouter = router({
   listThreads: protectedProcedure
     .input(
       z.object({
-        projectId: z.string().uuid().optional(),
         threadType: z.enum(["main", "branch"]).optional(),
         limit: z.number().min(1).max(100).default(20),
       })
     )
     .query(async ({ input, ctx }) => {
+      const conditions: any[] = [eq(chatThreads.userId, ctx.userId)];
+
+      if (input.threadType) {
+        conditions.push(
+          eq(
+            chatThreads.threadType,
+            input.threadType === "main"
+              ? ChatThreadType.MAIN
+              : ChatThreadType.BRANCH
+          )
+        );
+      }
+
       const threads = await db.query.chatThreads.findMany({
-        where: and(
-          eq(chatThreads.userId, ctx.userId),
-          input.projectId
-            ? arrayContains(chatThreads.projectIds, [input.projectId])
-            : undefined,
-          input.threadType
-            ? eq(
-                chatThreads.threadType,
-                input.threadType === "main"
-                  ? ChatThreadType.MAIN
-                  : ChatThreadType.BRANCH
-              )
-            : undefined,
-          eq(chatThreads.status, ChatThreadStatus.ACTIVE)
-        ),
+        where: and(...conditions),
         orderBy: [desc(chatThreads.updatedAt)],
         limit: input.limit,
       });
@@ -500,7 +500,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
         },
         userId: ctx.userId,
-        workspaceId: branch.projectIds?.[0] || undefined,
+        workspaceId: ctx.workspaceId || undefined, // Use workspaceId from context if available
       });
 
       // Return immediately, executor will process async

@@ -26,7 +26,7 @@ export const entities = pgTable("entities", {
   // Context
   userId: text("user_id").notNull(),
   workspaceId: uuid("workspace_id").notNull(), // Every entity belongs to a workspace
-  projectIds: uuid("project_ids").array(), // Optional: entities can be in multiple projects
+  // Projects: Use relations table with type "belongs_to_project"
 
   // Profile reference (NEW - for dynamic types)
   profileId: uuid("profile_id").references(() => profiles.id, {

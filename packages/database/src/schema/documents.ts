@@ -26,7 +26,7 @@ export const documents = pgTable(
     // Context
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id").notNull(), // Every document belongs to a workspace
-    projectIds: uuid("project_ids").array(), // Optional: documents can be in multiple projects
+    // Projects: Use relations table (if document is linked to entity) or remove projectIds
 
     // Document metadata
     title: text("title").notNull(),
