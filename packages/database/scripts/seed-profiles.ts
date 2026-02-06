@@ -89,6 +89,16 @@ async function seedProfiles() {
         constraints: {},
         uiHints: { label: "Tags", inputType: "tags" },
       },
+      {
+        slug: "content",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 100000 }, // 100KB limit for inline storage
+        uiHints: {
+          label: "Content",
+          inputType: "markdown",
+          placeholder: "Write your note...",
+        },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -191,7 +201,12 @@ async function seedProfiles() {
     // Event profile properties
     const eventProfileId = createdProfiles.get("event");
     if (eventProfileId) {
-      const eventProperties = [
+      const eventProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
         { slug: "title", required: true, displayOrder: 0 },
         { slug: "startTime", required: false, displayOrder: 1 },
         { slug: "endTime", required: false, displayOrder: 2 },
@@ -216,9 +231,15 @@ async function seedProfiles() {
     // Note profile properties
     const noteProfileId = createdProfiles.get("note");
     if (noteProfileId) {
-      const noteProperties = [
+      const noteProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
         { slug: "title", required: false, displayOrder: 0 },
-        { slug: "tags", required: false, displayOrder: 1 },
+        { slug: "content", required: true, displayOrder: 1 },
+        { slug: "tags", required: false, displayOrder: 2 },
       ];
 
       for (const prop of noteProperties) {
