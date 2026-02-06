@@ -40,6 +40,7 @@ services:
       TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      INNGEST_BASE_URL: http://inngest:8288
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ORY_HYDRA_SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
     depends_on:
@@ -144,9 +145,9 @@ services:
     # Mark as a one-shot service (runs once, then stops)
     # Removed profile - migrations should run automatically on startup
 
-  # ============================================================================
-  # POSTGRESQL
-  # ============================================================================
+    # ============================================================================
+    # POSTGRESQL
+    # ============================================================================
   postgres:
     image: timescale/timescaledb-ha:pg15
     restart: always
@@ -347,6 +348,8 @@ services:
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
     networks:
       - synap-net
+    ports:
+      - "8288:8288" # Expose for debugging
 
   # ============================================================================
   # CADDY (Reverse Proxy + SSL)

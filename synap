@@ -701,14 +701,23 @@ EOF
     echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
     generate_kratos_config "$DOMAIN"
     
-    # Build/pull image FIRST (migrations need the image to exist)
-    echo -e "${BLUE}🔨 Preparing backend image...${NC}"
+    # Build/pull images FIRST (migrations need the image to exist)
+    echo -e "${BLUE}🔨 Preparing backend images...${NC}"
     if [ "$FROM_SOURCE" = true ]; then
+        echo -e "${BLUE}  Building backend...${NC}"
         docker compose build backend
+        echo -e "${BLUE}  Building realtime...${NC}"
+        docker compose build realtime
     else
+        echo -e "${BLUE}  Pulling backend...${NC}"
         docker compose pull backend --ignore-pull-failures || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
             docker compose build backend
+        }
+        echo -e "${BLUE}  Pulling realtime...${NC}"
+        docker compose pull realtime --ignore-pull-failures || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build realtime
         }
     fi
     
@@ -976,14 +985,23 @@ cmd_update() {
     
     if [ "$force_build" = true ]; then
         echo -e "${BLUE}🔨 Building from source...${NC}"
+        echo -e "${BLUE}  Building backend...${NC}"
         docker compose build backend
+        echo -e "${BLUE}  Building realtime...${NC}"
+        docker compose build realtime
         version="local"
     else
-        echo -e "${BLUE}📥 Pulling image...${NC}"
+        echo -e "${BLUE}📥 Pulling images...${NC}"
+        echo -e "${BLUE}  Pulling backend...${NC}"
         docker compose pull backend || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
             docker compose build backend
             version="local"
+        }
+        echo -e "${BLUE}  Pulling realtime...${NC}"
+        docker compose pull realtime || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build realtime
         }
     fi
     
