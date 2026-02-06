@@ -99,6 +99,35 @@ async function seedProfiles() {
           placeholder: "Write your note...",
         },
       },
+      {
+        slug: "email",
+        valueType: PropertyValueType.STRING,
+        constraints: { format: "email", maxLength: 255 },
+        uiHints: {
+          label: "Email",
+          inputType: "email",
+          placeholder: "name@example.com",
+        },
+      },
+      {
+        slug: "phone",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 50 },
+        uiHints: {
+          label: "Phone",
+          inputType: "tel",
+          placeholder: "+1 (555) 000-0000",
+        },
+      },
+      {
+        slug: "company",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: {
+          label: "Company",
+          inputType: "text",
+        },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -122,7 +151,7 @@ async function seedProfiles() {
       {
         slug: "note",
         displayName: "Note",
-        uiHints: { icon: "file-text", color: "#6B7280" },
+        uiHints: { icon: "sticky-note", color: "#FEF3C7" }, // Yellow sticky note
       },
       {
         slug: "task",
@@ -253,6 +282,71 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'note'`);
+        }
+      }
+    }
+
+    // Project profile properties
+    const projectProfileId = createdProfiles.get("project");
+    if (projectProfileId) {
+      const projectProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: true, displayOrder: 0 },
+        {
+          slug: "status",
+          required: false,
+          displayOrder: 1,
+          defaultValue: "planning",
+        },
+        { slug: "tags", required: false, displayOrder: 2 },
+      ];
+
+      for (const prop of projectProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: projectProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'project'`);
+        }
+      }
+    }
+
+    // Person profile properties
+    const personProfileId = createdProfiles.get("person");
+    if (personProfileId) {
+      const personProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: false, displayOrder: 0 }, // Full name
+        { slug: "email", required: false, displayOrder: 1 },
+        { slug: "phone", required: false, displayOrder: 2 },
+        { slug: "company", required: false, displayOrder: 3 },
+        { slug: "tags", required: false, displayOrder: 4 },
+      ];
+
+      for (const prop of personProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: personProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'person'`);
         }
       }
     }
