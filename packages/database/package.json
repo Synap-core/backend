@@ -34,7 +34,7 @@
     "db:push:force": "tsx ./node_modules/drizzle-kit/bin.cjs push --force --verbose",
     "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
     "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop",
-    "build:migrate": "tsup scripts/migrate.ts --format esm --target node18 --out-dir dist/scripts"
+    "build:migrate": "tsup scripts/migrate.ts --format esm --target node18 --out-dir dist/scripts --no-config"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
