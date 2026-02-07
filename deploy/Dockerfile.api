@@ -54,6 +54,13 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 
+# Create migration script directory and copy the script
+# The script is built in builder stage but not included in pnpm deploy
+USER root
+RUN mkdir -p /app/node_modules/@synap/database/dist/scripts
+USER nodejs
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts/migrate.js /app/node_modules/@synap/database/dist/scripts/migrate.js
+
 # Copy migrations (SQL files not included in pnpm deploy)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
