@@ -130,8 +130,8 @@ services:
       dockerfile: deploy/Dockerfile.api
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
-      NODE_PATH: /app/node_modules
-    command: node /app/node_modules/@synap/database/dist/scripts/migrate.js
+      NODE_ENV: production
+    command: sh -c "cd node_modules/@synap/database && node ../../.bin/tsx scripts/migrate.ts"
     # Migration service should run once and exit successfully
     # No restart needed - migrations are idempotent
     deploy:

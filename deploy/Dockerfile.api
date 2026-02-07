@@ -16,12 +16,6 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 # Build the API package
 RUN pnpm turbo build --filter=api
 
-# Build migration script independently
-RUN cd packages/database && pnpm build:migrate
-
-# Verify migration script was built
-RUN ls -la /app/packages/database/dist/scripts/ || echo "ERROR: Migration script not found!"
-
 # Deploy API package (pnpm deploy works perfectly for single package)
 RUN rm -rf /app/deploy && \
   pnpm deploy --filter=api --prod --legacy /app/deploy
@@ -54,19 +48,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 
-# Create migration script directory and copy the script
-# The script is built in builder stage but not included in pnpm deploy
-USER root
-RUN mkdir -p /app/node_modules/@synap/database/dist/scripts
-USER nodejs
-COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts/migrate.js /app/node_modules/@synap/database/dist/scripts/migrate.js
-
 # Copy migrations (SQL files not included in pnpm deploy)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
-
-# Verify migration script exists in final image
-RUN ls -la /app/node_modules/@synap/database/dist/scripts/ || echo "ERROR: Migration script not in final image!"
 
 # Expose port
 EXPOSE 4000

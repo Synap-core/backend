@@ -34,7 +34,7 @@
     "db:push:force": "tsx ./node_modules/drizzle-kit/bin.cjs push --force --verbose",
     "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
     "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop",
-    "build:migrate": "tsup scripts/migrate.ts --format esm --target node18 --out-dir dist/scripts --no-config"
+    "migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
@@ -45,6 +45,7 @@
     "drizzle-zod": "0.8.3",
     "pgvector": "^0.2.1",
     "postgres": "^3.4.7",
+    "tsx": "^4.7.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -55,7 +56,6 @@
     "bcryptjs": "^3.0.3",
     "drizzle-kit": "^0.31.8",
     "tsup": "^8.0.0",
-    "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vite": "^7.2.2",
     "vitest": "^4.0.15"
