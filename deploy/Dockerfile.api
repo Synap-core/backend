@@ -54,10 +54,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 
-# Copy migration script (compiled from builder) - use absolute path
-COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts/migrate.js /app/node_modules/@synap/database/dist/scripts/migrate.js
-
-# Copy migrations
+# Copy migrations (SQL files not included in pnpm deploy)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
 
