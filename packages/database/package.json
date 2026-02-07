@@ -18,7 +18,8 @@
   },
   "files": [
     "dist",
-    "migrations-drizzle"
+    "migrations-drizzle",
+    "scripts"
   ],
   "scripts": {
     "build": "tsc",
