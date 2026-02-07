@@ -65,6 +65,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts/mi
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
 
+# Verify migration script exists in final image
+RUN ls -la /app/node_modules/@synap/database/dist/scripts/ || echo "ERROR: Migration script not in final image!"
+
 # Expose port
 EXPOSE 4000
 
