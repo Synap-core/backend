@@ -71,8 +71,9 @@ services:
   # REALTIME SERVER (WebSocket/Socket.IO)
   # ============================================================================
   realtime:
-    # Separate image for realtime service (smaller, cleaner)
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend-realtime}:${BACKEND_VERSION:-latest}
+    # Separate image for realtime service (must stay distinct from backend when building from source)
+    # Use -realtime suffix so GITHUB_REPOSITORY=synap-core/backend yields synap-core/backend-realtime
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}-realtime:${BACKEND_VERSION:-latest}
     # Build fallback: if image pull fails, build from source
     build:
       context: ..
