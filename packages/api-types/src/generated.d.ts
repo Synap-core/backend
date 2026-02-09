@@ -1149,6 +1149,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           meta: object;
         }>;
+        getByDocumentId: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            documentId: string;
+          };
+          output: {
+            entity: any;
+          };
+          meta: object;
+        }>;
         get: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             id: string;
@@ -2328,6 +2337,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         transformer: true;
       },
       import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        create: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            title: string;
+            content?: string | undefined;
+            type?: "code" | "text" | "markdown" | "pdf" | "docx" | undefined;
+            projectId?: string | undefined;
+          };
+          output: {
+            status: string;
+            message: string;
+            document: {
+              id: `${string}-${string}-${string}-${string}-${string}`;
+              title: string;
+            };
+          };
+          meta: object;
+        }>;
         upload: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             type: "code" | "text" | "markdown" | "pdf" | "docx";
@@ -3039,6 +3065,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         transformer: true;
       },
       import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        listTypes: import("@trpc/server").TRPCQueryProcedure<{
+          input: void;
+          output: {
+            types: {
+              label: string;
+              description: string;
+              directionality: "unidirectional" | "bidirectional";
+              category: "workflow" | "social" | "reference" | "hierarchy";
+              type: string;
+            }[];
+          };
+          meta: object;
+        }>;
         get: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             entityId: string;
@@ -3053,6 +3092,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "tagged_with"
               | "attended_by"
               | "blocks"
+              | "belongs_to_project"
+              | "embedded_in"
+              | "visualized_in"
+              | "references"
               | undefined;
             direction?: "source" | "target" | "both" | undefined;
             limit?: number | undefined;
@@ -3084,6 +3127,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "tagged_with"
               | "attended_by"
               | "blocks"
+              | "belongs_to_project"
+              | "embedded_in"
+              | "visualized_in"
+              | "references"
               | undefined;
             direction?: "source" | "target" | "both" | undefined;
             limit?: number | undefined;
@@ -3133,7 +3180,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | "relates_to"
               | "tagged_with"
               | "attended_by"
-              | "blocks";
+              | "blocks"
+              | "belongs_to_project"
+              | "embedded_in"
+              | "visualized_in"
+              | "references";
+            workspaceId: string;
             metadata?: Record<string, any> | undefined;
           };
           output: {
