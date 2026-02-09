@@ -13,28 +13,27 @@ COPY . .
 # Install all dependencies (including dev deps for building)
 RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
 
-# Build the realtime package
-RUN pnpm turbo build --filter=@synap/realtime
+# Build the realtime package with --force to bypass turbo cache
+# This ensures a fresh build every time, preventing cache-related issues
+RUN pnpm turbo build --filter=@synap/realtime --force
 
-# Verify build created server.js
+# Verify build created server.js BEFORE deploying
 RUN echo "=== Verifying build output ===" && \
     ls -la /app/packages/realtime/dist/ && \
-    (test -f /app/packages/realtime/dist/server.js && echo "✓ server.js exists in build" || (echo "✗ server.js NOT found in build" && exit 1))
+    test -f /app/packages/realtime/dist/server.js || (echo "✗ ERROR: server.js NOT found after build!" && exit 1) && \
+    echo "✓ server.js exists in build output"
 
-# Deploy realtime package (creates node_modules structure)
+# Deploy realtime package (creates self-contained deployment with node_modules)
+# The --legacy flag ensures dist/ is included even if not in git
 RUN rm -rf /app/deploy && \
     pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy
 
-# CRITICAL: Copy dist directory directly from build output
-# pnpm deploy creates the package structure but we need to ensure dist/ is included
-# The dist/ directory contains server.js which is the entry point
-RUN echo "=== Verifying build output exists ===" && \
-    ls -la /app/packages/realtime/dist/ && \
-    test -f /app/packages/realtime/dist/server.js || (echo "✗ ERROR: server.js not found in build output!" && exit 1) && \
-    echo "=== Copying dist directory to deploy ===" && \
-    cp -r /app/packages/realtime/dist /app/deploy/dist && \
-    echo "=== Verifying server.js after copy ===" && \
-    (test -f /app/deploy/dist/server.js && echo "✓ server.js confirmed in /app/deploy/dist/" || (echo "✗ ERROR: server.js missing after copy!" && ls -la /app/deploy/ && ls -la /app/deploy/dist/ 2>/dev/null || echo "dist/ does not exist" && exit 1))
+# Verify dist/ was included in deployment
+RUN echo "=== Verifying deployment ===" && \
+    ls -la /app/deploy/ && \
+    test -d /app/deploy/dist || (echo "✗ ERROR: dist/ not found in deployment!" && exit 1) && \
+    test -f /app/deploy/dist/server.js || (echo "✗ ERROR: server.js not found in deployment!" && exit 1) && \
+    echo "✓ Deployment successful with dist/server.js"
 
 # ============================================================================
 # Runner: Minimal production image
@@ -46,7 +45,7 @@ RUN apk add --no-cache dumb-init
 
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
-  adduser -S nodejs -u 10001
+    adduser -S nodejs -u 10001
 
 WORKDIR /app
 USER nodejs
