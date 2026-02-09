@@ -331,6 +331,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.926.0
         version: 3.967.0
+      '@hono/node-server':
+        specifier: ^1.19.9
+        version: 1.19.9(hono@4.11.4)
       '@hono/trpc-server':
         specifier: ^0.3.2
         version: 0.3.4(@trpc/server@11.8.1(typescript@5.9.3))(hono@4.11.4)
@@ -385,6 +388,9 @@ importers:
       drizzle-zod:
         specifier: 0.8.3
         version: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
+      hono:
+        specifier: ^4.11.4
+        version: 4.11.4
       inngest:
         specifier: 3.22.12
         version: 3.22.12(express@5.2.1)(hono@4.11.4)(typescript@5.9.3)
