@@ -4,6 +4,7 @@ import {
   EventRepository,
   RelationRepository,
   sql,
+  type RelationType,
 } from "@synap/database";
 import {
   extractEventInfo,
@@ -41,7 +42,7 @@ export const relationsHandler = async ({
           id: data.id as string,
           sourceEntityId: data.sourceEntityId as string,
           targetEntityId: data.targetEntityId as string,
-          type: data.type as string,
+          type: data.type as RelationType,
           workspaceId: data.workspaceId as string,
           userId,
           metadata: (data.metadata as Record<string, unknown>) || {},
