@@ -54,11 +54,52 @@ const UpdateDocumentSchema = z.object({
   message: z.string().optional(),
 });
 
+const CreateDocumentSchema = z.object({
+  title: z.string().min(1),
+  content: z.string().default(""),
+  type: DocumentTypeSchema.default("markdown"),
+  projectId: z.string().uuid().optional(),
+});
+
 // ============================================================================
 // ROUTER
 // ============================================================================
 
 export const documentsRouter = router({
+  /**
+   * Create a new empty document
+   */
+  create: protectedProcedure
+    .input(CreateDocumentSchema)
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const documentId = randomUUID();
+
+      await emitRequestEvent({
+        subjectType: "document",
+        action: "create",
+        subjectId: documentId,
+        data: {
+          id: documentId,
+          title: input.title,
+          type: input.type,
+          content: input.content,
+          projectId: input.projectId,
+          userId,
+        },
+        userId,
+      });
+
+      return {
+        status: "requested",
+        message: "Document creation requested",
+        document: {
+          id: documentId,
+          title: input.title,
+        },
+      };
+    }),
+
   /**
    * Upload a new document
    */
