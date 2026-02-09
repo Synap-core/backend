@@ -131,7 +131,7 @@ services:
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       NODE_ENV: production
-    command: tsx node_modules/@synap/database/scripts/migrate.ts
+    command: /usr/local/bin/tsx node_modules/@synap/database/scripts/migrate.ts
     # Migration service should run once and exit successfully
     # No restart needed - migrations are idempotent
     deploy:
