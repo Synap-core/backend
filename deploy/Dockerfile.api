@@ -11,7 +11,7 @@ FROM base AS builder
 COPY . .
 
 # Install all dependencies (including dev deps for building)
-RUN pnpm install --no-frozen-lockfile || (sleep 5 && pnpm install --no-frozen-lockfile) || (sleep 10 && pnpm install --no-frozen-lockfile)
+RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
 
 # Build the API package
 RUN pnpm turbo build --filter=api
@@ -34,9 +34,6 @@ FROM node:20-alpine AS runner
 # Install runtime dependencies
 RUN apk add --no-cache postgresql-client dumb-init
 
-# Install tsx globally for running TypeScript files
-RUN npm install -g tsx
-
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
   adduser -S nodejs -u 10001
@@ -46,6 +43,9 @@ USER nodejs
 
 # Copy self-contained deployment (includes hard-linked node_modules)
 COPY --from=builder --chown=nodejs:nodejs /app/deploy .
+
+# Install tsx locally to ensure it is available for migrations (bypassing pnpm/lockfile issues)
+RUN npm install tsx --no-save
 
 # Copy configuration files needed at runtime (from build context, not builder stage)
 COPY --chown=nodejs:nodejs kratos ./kratos
