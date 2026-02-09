@@ -5,7 +5,11 @@
  */
 
 import { eq, and } from "drizzle-orm";
-import { relations } from "../schema/relations.js";
+import {
+  relations,
+  RelationType,
+  RelationTypeSchema,
+} from "../schema/relations.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Relation, NewRelation } from "../schema/relations.js";
@@ -14,8 +18,10 @@ export interface CreateRelationInput {
   id?: string;
   sourceEntityId: string;
   targetEntityId: string;
-  type: string;
+  type: RelationType;
+  workspaceId: string;
   userId: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateRelationInput {
@@ -36,6 +42,9 @@ export class RelationRepository extends BaseRepository<
    * Emits: relations.create.completed
    */
   async create(data: CreateRelationInput, userId: string): Promise<Relation> {
+    // Validate relation type
+    RelationTypeSchema.parse(data.type);
+
     const [relation] = await this.db
       .insert(relations)
       .values({
@@ -43,7 +52,9 @@ export class RelationRepository extends BaseRepository<
         sourceEntityId: data.sourceEntityId,
         targetEntityId: data.targetEntityId,
         type: data.type,
+        workspaceId: data.workspaceId,
         userId: data.userId,
+        metadata: data.metadata || {},
       } as NewRelation)
       .returning();
 

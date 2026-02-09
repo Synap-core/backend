@@ -708,6 +708,21 @@ EOF
         docker compose build backend
         echo -e "${BLUE}  Building realtime...${NC}"
         docker compose build realtime
+        
+        # Verify realtime build succeeded (check for server.js)
+        echo -e "${BLUE}  Verifying realtime build...${NC}"
+        if docker compose run --rm realtime test -f /app/dist/server.js 2>/dev/null; then
+            echo -e "${GREEN}  ✓ Realtime build verified${NC}"
+        else
+            echo -e "${YELLOW}  ⚠️  Realtime verification failed, rebuilding with --no-cache...${NC}"
+            docker compose build --no-cache realtime
+            if docker compose run --rm realtime test -f /app/dist/server.js 2>/dev/null; then
+                echo -e "${GREEN}  ✓ Realtime rebuild successful${NC}"
+            else
+                echo -e "${RED}  ✗ Realtime build failed. Check logs with: docker compose logs realtime${NC}"
+                exit 1
+            fi
+        fi
     else
         echo -e "${BLUE}  Pulling backend...${NC}"
         docker compose pull backend --ignore-pull-failures || {
