@@ -29,13 +29,13 @@
     "test:unit": "vitest run -c vitest.unit.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
-    "db:migrate": "tsx scripts/migrate.ts",
+    "db:migrate": "tsx src/scripts/migrate.ts",
     "db:generate": "tsx ./node_modules/drizzle-kit/bin.cjs generate",
     "db:push": "tsx ./node_modules/drizzle-kit/bin.cjs push",
     "db:push:force": "tsx ./node_modules/drizzle-kit/bin.cjs push --force --verbose",
     "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
     "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop",
-    "migrate": "tsx scripts/migrate.ts"
+    "migrate": "tsx src/scripts/migrate.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",

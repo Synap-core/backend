@@ -211,8 +211,8 @@ async function runMigrations() {
     // Resolve paths - robust handling for Docker, Dev (ts-node/tsx), and Prod (compiled dist)
     const possibleDrizzlePaths = [
       "/app/migrations-drizzle", // Docker absolute path
-      path.join(__dirname, "../migrations-drizzle"), // Dev: packages/database/migrations-drizzle
-      path.join(__dirname, "../../migrations-drizzle"), // Prod: packages/database/dist/scripts/../../ migrations-drizzle
+      path.join(__dirname, "../../../migrations-drizzle"), // Dev: packages/database/src/scripts/../../migrations-drizzle -> packages/database/migrations-drizzle
+      path.join(__dirname, "../../../migrations-drizzle"), // Prod: packages/database/dist/scripts/../../../migrations-drizzle -> packages/database/migrations-drizzle
       path.join(process.cwd(), "migrations-drizzle"), // CWD fallback
     ];
     console.log(`Debug: Checking Drizzle paths:`, possibleDrizzlePaths);

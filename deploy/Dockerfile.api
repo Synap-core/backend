@@ -34,9 +34,6 @@ FROM node:20-alpine AS runner
 # Install runtime dependencies
 RUN apk add --no-cache postgresql-client dumb-init
 
-# Install tsx globally before copying app code (avoids package.json parsing errors)
-RUN npm install -g tsx
-
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
   adduser -S nodejs -u 10001
