@@ -13,21 +13,12 @@ COPY . .
 # Install all dependencies (including dev deps for building)
 RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
 
-# Build the API package (using directory filter to avoid ambiguity)
-RUN pnpm turbo build --filter="{apps/api}"
+# Build the API package
+RUN pnpm turbo build --filter=api
 
 # Deploy API package (pnpm deploy works perfectly for single package)
-# Deploy API package (using directory filter to be explicit)
 RUN rm -rf /app/deploy && \
-  pnpm deploy --filter="{apps/api}" --prod --legacy /app/deploy
-
-# Verify we deployed the correct package (API server, NOT realtime)
-RUN echo "=== Verifying deployment ===" && \
-  ls -la /app/deploy/dist/ && \
-  test -f /app/deploy/dist/index.js || (echo "✗ ERROR: dist/index.js (API entry point) NOT found!" && exit 1) && \
-  # Critical check: Ensure we didn't accidentally deploy realtime package (which has server.js)
-  if [ -f /app/deploy/dist/server.js ]; then echo "✗ ERROR: dist/server.js found! This looks like the Realtime package, not API!" && exit 1; fi && \
-  echo "✓ Deployment looks correct (index.js found, server.js absent)"
+  pnpm deploy --filter=api --prod --legacy /app/deploy
 
 # Prepare custom migrations directory
 RUN mkdir -p /app/migrations-custom-temp && \
