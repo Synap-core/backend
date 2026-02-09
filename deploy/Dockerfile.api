@@ -17,11 +17,8 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 RUN pnpm turbo build --filter=api
 
 # Deploy API package (pnpm deploy works perfectly for single package)
-# Then install tsx explicitly in the deployment (pnpm handles workspace protocols correctly)
 RUN rm -rf /app/deploy && \
-  pnpm deploy --filter=api --prod --legacy /app/deploy && \
-  cd /app/deploy && \
-  pnpm add -D tsx
+  pnpm deploy --filter=api --prod --legacy /app/deploy
 
 # Prepare custom migrations directory
 RUN mkdir -p /app/migrations-custom-temp && \
@@ -36,6 +33,9 @@ FROM node:20-alpine AS runner
 
 # Install runtime dependencies
 RUN apk add --no-cache postgresql-client dumb-init
+
+# Install tsx globally before copying app code (avoids package.json parsing errors)
+RUN npm install -g tsx
 
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
