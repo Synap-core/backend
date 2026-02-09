@@ -11,7 +11,7 @@ FROM base AS builder
 COPY . .
 
 # Install all dependencies (including dev deps for building)
-RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
+RUN pnpm install --no-frozen-lockfile || (sleep 5 && pnpm install --no-frozen-lockfile) || (sleep 10 && pnpm install --no-frozen-lockfile)
 
 # Build the API package
 RUN pnpm turbo build --filter=api
@@ -35,7 +35,7 @@ FROM node:20-alpine AS runner
 RUN apk add --no-cache postgresql-client dumb-init
 
 # Install tsx globally for running TypeScript files
-RUN echo "Installing tsx..." && npm install -g tsx
+RUN npm install -g tsx
 
 # Create non-root user
 RUN addgroup -g 10001 -S nodejs && \
