@@ -148,4 +148,29 @@ export const messageLinksRouter = router({
 
       return links;
     }),
+
+  /**
+   * List messages linked to a target (entity, document, etc.) with message content.
+   * For "messages linked to this entity/document" UI. Paginated via cursor.
+   */
+  listLinkedMessages: workspaceProcedure
+    .input(
+      z.object({
+        targetType: z.nativeEnum(MessageLinkTargetType),
+        targetId: z.string().uuid(),
+        limit: z.number().min(1).max(100).default(50).optional(),
+        cursor: z.string().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      const linksRepo = new MessageLinksRepository(db);
+
+      return linksRepo.getByTargetWithMessages(
+        input.targetType,
+        input.targetId,
+        ctx.workspaceId,
+        { limit: input.limit, cursor: input.cursor }
+      );
+    }),
 });

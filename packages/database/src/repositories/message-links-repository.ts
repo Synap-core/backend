@@ -7,10 +7,11 @@
 
 import {
   messageLinks,
+  conversationMessages,
   type MessageLink,
   type NewMessageLink,
 } from "../schema/index.js";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, desc, lt, or, isNull } from "drizzle-orm";
 
 export interface CreateMessageLinkInput {
   messageId: string;
@@ -29,6 +30,27 @@ export interface QueryMessageLinksInput {
   targetId?: string;
   relationshipType?: string;
   workspaceId?: string;
+}
+
+/** Options for getByTargetWithMessages */
+export interface GetByTargetWithMessagesOptions {
+  limit?: number;
+  cursor?: string; // opaque: "createdAt:linkId" for next page
+}
+
+/** Minimal message fields for list/preview */
+export interface LinkedMessagePreview {
+  id: string;
+  threadId: string;
+  role: string;
+  content: string;
+  timestamp: Date;
+  userId: string;
+}
+
+export interface LinkedMessageItem {
+  link: MessageLink;
+  message: LinkedMessagePreview;
 }
 
 export class MessageLinksRepository {
@@ -99,6 +121,101 @@ export class MessageLinksRepository {
         )
       )
       .orderBy(messageLinks.createdAt);
+  }
+
+  /**
+   * Get all links to a target with joined message content (for "messages linked to this entity/document").
+   * Excludes soft-deleted messages. Ordered by link createdAt desc. Supports cursor pagination.
+   */
+  async getByTargetWithMessages(
+    targetType: string,
+    targetId: string,
+    workspaceId: string,
+    options: GetByTargetWithMessagesOptions = {}
+  ): Promise<{
+    items: LinkedMessageItem[];
+    nextCursor: string | undefined;
+    hasMore: boolean;
+  }> {
+    const { limit = 50, cursor } = options;
+    const limitFetch = limit + 1;
+
+    type Row = {
+      link: typeof messageLinks.$inferSelect;
+      id: string;
+      threadId: string;
+      role: string;
+      content: string;
+      timestamp: Date;
+      userId: string;
+    };
+
+    const conditions = [
+      eq(messageLinks.targetType, targetType),
+      eq(messageLinks.targetId, targetId),
+      eq(messageLinks.workspaceId, workspaceId),
+      isNull(conversationMessages.deletedAt),
+    ];
+
+    if (cursor) {
+      try {
+        const [cursorDateStr, cursorLinkId] = cursor.split(":");
+        const cursorDate = new Date(cursorDateStr);
+        conditions.push(
+          or(
+            lt(messageLinks.createdAt, cursorDate),
+            and(
+              eq(messageLinks.createdAt, cursorDate),
+              lt(messageLinks.id, cursorLinkId)
+            )
+          )!
+        );
+      } catch {
+        // invalid cursor: ignore
+      }
+    }
+
+    const rows = await this.db
+      .select({
+        link: messageLinks,
+        id: conversationMessages.id,
+        threadId: conversationMessages.threadId,
+        role: conversationMessages.role,
+        content: conversationMessages.content,
+        timestamp: conversationMessages.timestamp,
+        userId: conversationMessages.userId,
+      })
+      .from(messageLinks)
+      .innerJoin(
+        conversationMessages,
+        eq(messageLinks.messageId, conversationMessages.id)
+      )
+      .where(and(...conditions))
+      .orderBy(desc(messageLinks.createdAt))
+      .limit(limitFetch);
+
+    const hasMore = rows.length > limit;
+    const items = (hasMore ? rows.slice(0, limit) : rows).map(
+      (row: Row): LinkedMessageItem => ({
+        link: row.link,
+        message: {
+          id: row.id,
+          threadId: row.threadId,
+          role: row.role,
+          content: row.content,
+          timestamp: row.timestamp,
+          userId: row.userId,
+        },
+      })
+    );
+
+    const last = items[items.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? `${last.link.createdAt.toISOString()}:${last.link.id}`
+        : undefined;
+
+    return { items, nextCursor, hasMore };
   }
 
   /**
