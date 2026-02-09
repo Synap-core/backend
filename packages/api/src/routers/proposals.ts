@@ -116,15 +116,15 @@ export const proposalsRouter = router({
         user: { id: userId },
       });
 
-      // 2. Mark proposal as validated (archived)
+      // 2. Mark proposal as approved (archived)
       await db
         .update(proposals)
         .set({
-          status: "validated",
+          status: ProposalStatus.APPROVED,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        } as any)
+        })
         .where(eq(proposals.id, input.proposalId));
 
       return { success: true };
@@ -146,12 +146,12 @@ export const proposalsRouter = router({
       await db
         .update(proposals)
         .set({
-          status: "rejected",
+          status: ProposalStatus.REJECTED,
           rejectionReason: input.reason,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        } as any)
+        })
         .where(eq(proposals.id, input.proposalId));
 
       return { success: true };
