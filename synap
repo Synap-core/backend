@@ -721,14 +721,7 @@ EOF
         }
     fi
     
-    # Run migrations before starting services (CRITICAL - must succeed)
-    echo -e "${BLUE}🔄 Running database migrations...${NC}"
-    if ! docker compose run --rm backend-migrate; then
-        echo -e "${RED}❌ Migrations failed!${NC}"
-        echo -e "${YELLOW}⚠️  Backend cannot start without migrations${NC}"
-        echo -e "${YELLOW}⚠️  Please check the migration logs and fix any issues${NC}"
-        exit 1
-    fi
+
     
     # Start services
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
