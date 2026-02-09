@@ -214,6 +214,47 @@ export const entitiesRouter = router({
     }),
 
   /**
+   * Get entity by document ID (reverse lookup)
+   * Returns the entity that owns this document, or null if the document is standalone.
+   */
+  getByDocumentId: workspaceProcedure
+    .input(
+      z.object({
+        documentId: z.string().uuid(),
+      })
+    )
+    .output(
+      z.object({
+        entity: z.any().nullable(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const entity = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.documentId, input.documentId),
+          eq(entities.workspaceId, ctx.workspaceId),
+          eq(entities.userId, ctx.userId)
+        ),
+      });
+
+      if (!entity) {
+        return { entity: null };
+      }
+
+      const typedEntity = {
+        ...entity,
+        properties: entity.properties || {},
+        fileUrl: null,
+        filePath: null,
+        fileSize: null,
+        fileType: null,
+        checksum: null,
+      } as Entity;
+
+      return { entity: typedEntity };
+    }),
+
+  /**
    * Get entity by ID
    */
   get: workspaceProcedure
