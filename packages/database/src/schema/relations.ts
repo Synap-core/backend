@@ -6,7 +6,7 @@
  * PostgreSQL-only schema with Row-Level Security (RLS) for multi-user support.
  */
 
-import { pgTable, uuid, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { entities } from "./entities.js";
 import { z } from "zod";
 
@@ -29,6 +29,9 @@ export const relations = pgTable("relations", {
 
   // Relationship type
   type: text("type").notNull(),
+
+  // Metadata (JSONB for extensibility)
+  metadata: jsonb("metadata").default("{}"),
 
   // Timestamps
   createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

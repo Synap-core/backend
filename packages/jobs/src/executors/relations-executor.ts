@@ -42,7 +42,9 @@ export const relationsHandler = async ({
           sourceEntityId: data.sourceEntityId as string,
           targetEntityId: data.targetEntityId as string,
           type: data.type as string,
+          workspaceId: data.workspaceId as string,
           userId,
+          metadata: (data.metadata as Record<string, unknown>) || {},
         },
         userId
       );
