@@ -17,8 +17,11 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 RUN pnpm turbo build --filter=api
 
 # Deploy API package (pnpm deploy works perfectly for single package)
+# Then install tsx explicitly in the deployment (pnpm handles workspace protocols correctly)
 RUN rm -rf /app/deploy && \
-  pnpm deploy --filter=api --prod --legacy /app/deploy
+  pnpm deploy --filter=api --prod --legacy /app/deploy && \
+  cd /app/deploy && \
+  pnpm add -D tsx
 
 # Prepare custom migrations directory
 RUN mkdir -p /app/migrations-custom-temp && \
@@ -43,9 +46,6 @@ USER nodejs
 
 # Copy self-contained deployment (includes hard-linked node_modules)
 COPY --from=builder --chown=nodejs:nodejs /app/deploy .
-
-# Install tsx locally to ensure it is available for migrations (bypassing pnpm/lockfile issues)
-RUN npm install tsx --no-save
 
 # Copy configuration files needed at runtime (from build context, not builder stage)
 COPY --chown=nodejs:nodejs kratos ./kratos
