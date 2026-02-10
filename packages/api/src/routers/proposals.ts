@@ -72,7 +72,8 @@ export const proposalsRouter = router({
 
   /**
    * Approve a proposal
-   * Emits the original request event as *.validated
+   * For hub-created document proposals (AI edit): applies proposedContent to storage + DB.
+   * For other proposals: emits the original request event as *.validated.
    */
   approve: protectedProcedure
     .input(
@@ -95,28 +96,78 @@ export const proposalsRouter = router({
         });
       }
 
-      // 1. Emit the VALIDATED event
-      // We reconstruct the event from the stored request
-      const request = proposal.data as any;
-      const { inngest } = await import("@synap/jobs");
+      const request = proposal.data as Record<string, unknown>;
 
-      // Construct event name: e.g. "documents.create.validated"
-      const eventName = `${request.targetType}s.${request.changeType}.validated`;
+      // B3: Hub-created document proposal (AI edit) – apply content directly
+      if (
+        proposal.targetType === "document" &&
+        request &&
+        typeof request.proposedContent === "string"
+      ) {
+        const { storage } = await import("@synap/storage");
+        const { documents } = await import("@synap/database/schema");
 
-      await inngest.send({
-        name: eventName,
-        data: {
-          ...request.data, // original payload
-          // Inject approval metadata
-          approvedBy: userId,
-          approvedAt: new Date().toISOString(),
-          approvalComment: input.comment,
-          requestId: request.requestId, // Maintain trace
-        },
-        user: { id: userId },
-      });
+        const document = await db.query.documents.findFirst({
+          where: eq(documents.id, proposal.targetId),
+        });
 
-      // 2. Mark proposal as approved (archived)
+        if (!document?.storageKey) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Document not found or has no storage key",
+          });
+        }
+
+        await storage.upload(
+          document.storageKey,
+          Buffer.from(request.proposedContent as string, "utf-8"),
+          { contentType: document.mimeType || "text/plain" }
+        );
+
+        await db
+          .update(documents)
+          .set({
+            currentVersion: (document.currentVersion ?? 1) + 1,
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, proposal.targetId));
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
+      // Generic flow: emit validated event (requires request.targetType and request.changeType)
+      const targetType = request?.targetType as string | undefined;
+      const changeType = request?.changeType as string | undefined;
+
+      if (targetType && changeType) {
+        const { inngest } = await import("@synap/jobs");
+        const eventName = `${targetType}s.${changeType}.validated`;
+
+        await inngest.send({
+          name: eventName,
+          data: {
+            ...(typeof request?.data === "object" && request.data !== null
+              ? (request.data as object)
+              : {}),
+            approvedBy: userId,
+            approvedAt: new Date().toISOString(),
+            approvalComment: input.comment,
+            requestId: (request as any).requestId,
+          },
+          user: { id: userId },
+        });
+      }
+
       await db
         .update(proposals)
         .set({

@@ -71,7 +71,8 @@ export const entitiesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const callerContext = await createHubProtocolCallerContext(
         ctx.userId!,
-        ctx.scopes || []
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -111,7 +112,8 @@ export const entitiesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const callerContext = await createHubProtocolCallerContext(
         ctx.userId!,
-        ctx.scopes || []
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 

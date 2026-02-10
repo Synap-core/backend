@@ -29,7 +29,11 @@ import {
   toSynapError,
   validateConfig,
 } from "@synap-core/core";
-import { appRouter, createContext as createApiContext } from "@synap/api";
+import {
+  appRouter,
+  createContext as createApiContext,
+  hubProtocolRestApp,
+} from "@synap/api";
 import { serve } from "@hono/node-server";
 import { serve as inngestServe } from "inngest/hono";
 import { inngest, functions } from "@synap/jobs";
@@ -343,6 +347,9 @@ app.route("/api/admin", adminRouter);
 // Webhook routes (before auth - uses webhook secret auth)
 import { webhookRouter } from "./webhooks/index.js";
 app.route("/webhooks", webhookRouter);
+
+// Hub Protocol REST adapter (for Intelligence Service; API key auth)
+app.route("/api/hub", hubProtocolRestApp);
 
 // tRPC endpoint
 app.use(

@@ -12,13 +12,17 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { infiniteChatRouter } from "../infinite-chat.js";
 import { entitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { db } from "@synap/database";
+import { entities, documents } from "@synap/database/schema";
+import { inArray } from "@synap/database";
 
 export const contextRouter = router({
   /**
-   * Get thread context (messages + metadata)
+   * Get thread context (messages + metadata + linked entities/documents)
    * Requires: hub-protocol.read scope
    *
-   * Calls regular API's getThread and getMessages endpoints internally
+   * Calls regular API's getThread and getMessages endpoints internally.
+   * Includes linked entities and documents (from thread_entities, thread_documents) for AI context.
    */
   getThreadContext: scopedProcedure(["hub-protocol.read"])
     .input(
@@ -34,7 +38,7 @@ export const contextRouter = router({
       const chatCaller = infiniteChatRouter.createCaller(callerContext);
       const entitiesCaller = entitiesRouter.createCaller(callerContext);
 
-      // Get thread with context
+      // Get thread with context (includes thread_entities and thread_documents rows)
       const threadResult = await chatCaller.getThread({
         threadId: input.threadId,
         includeContext: true,
@@ -52,11 +56,49 @@ export const contextRouter = router({
         limit: 10,
       });
 
+      // Linked entities/documents (B2): from thread_entities and thread_documents
+      const linkedEntityIds: string[] = (threadResult.entities ?? []).map(
+        (e: { entityId: string }) => e.entityId
+      );
+      const linkedDocumentIds: string[] = (threadResult.documents ?? []).map(
+        (d: { documentId: string }) => d.documentId
+      );
+
+      // Resolve linked entities and documents for prompt injection (id, type/title)
+      let linkedEntities: Array<{
+        id: string;
+        type: string;
+        title: string | null;
+      }> = [];
+      let linkedDocuments: Array<{ id: string; title: string | null }> = [];
+
+      if (linkedEntityIds.length > 0) {
+        const rows = await db.query.entities.findMany({
+          where: inArray(entities.id, linkedEntityIds),
+          columns: { id: true, type: true, title: true },
+        });
+        linkedEntities = rows.map((r) => ({
+          id: r.id,
+          type: r.type,
+          title: r.title ?? null,
+        }));
+      }
+      if (linkedDocumentIds.length > 0) {
+        const rows = await db.query.documents.findMany({
+          where: inArray(documents.id, linkedDocumentIds),
+          columns: { id: true, title: true },
+        });
+        linkedDocuments = rows.map((r) => ({
+          id: r.id,
+          title: r.title ?? null,
+        }));
+      }
+
       return {
         thread: {
           id: threadResult.thread.id,
           userId: threadResult.thread.userId,
-          projectId: undefined, // Projects: Removed projectIds (use relations table if needed)
+          projectId: undefined,
           agentId: threadResult.thread.agentId || undefined,
         },
         messages: messagesResult.messages.map((m) => ({
@@ -70,6 +112,10 @@ export const contextRouter = router({
           type: e.type,
           title: e.title || null,
         })),
+        linkedEntityIds,
+        linkedDocumentIds,
+        linkedEntities,
+        linkedDocuments,
       };
     }),
 

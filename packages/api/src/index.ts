@@ -17,6 +17,7 @@ export { chatRouter } from "./routers/chat.js";
 export { suggestionsRouter } from "./routers/suggestions.js";
 export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
+export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
