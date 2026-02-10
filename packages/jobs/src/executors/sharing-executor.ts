@@ -49,6 +49,14 @@ export const sharingHandler = async ({
             | "edit"
             | "admin",
           metadata: (data.metadata as Record<string, unknown>) || {},
+          publicToken: data.publicToken as string | undefined,
+          tokenHash: data.tokenHash as string | undefined,
+          visibility: (data.visibility as string) || "private",
+          expiresAt: data.expiresAt ? new Date(data.expiresAt as string) : null,
+          access:
+            (data.access as "workspace_only" | "anyone_with_link") ||
+            "anyone_with_link",
+          passwordHash: (data.passwordHash as string) || null,
         },
         userId
       );

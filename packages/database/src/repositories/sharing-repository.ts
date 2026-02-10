@@ -17,13 +17,24 @@ export interface CreateSharingInput {
   sharedByUserId: string;
   sharedWithUserId?: string;
   sharedWithEmail?: string;
-  permission: "view" | "edit" | "admin";
+  permission?: "view" | "edit" | "admin";
   metadata?: Record<string, unknown>;
+  /** Public link fields */
+  publicToken?: string;
+  tokenHash?: string;
+  visibility?: string;
+  expiresAt?: Date | null;
+  access?: "workspace_only" | "anyone_with_link";
+  passwordHash?: string | null;
 }
 
 export interface UpdateSharingInput {
   permission?: "view" | "edit" | "admin";
   metadata?: Record<string, unknown>;
+  revokedAt?: Date | null;
+  expiresAt?: Date | null;
+  tokenHash?: string;
+  publicToken?: string | null;
 }
 
 export class SharingRepository extends BaseRepository<
@@ -50,13 +61,15 @@ export class SharingRepository extends BaseRepository<
         resourceType: data.resourceType,
         resourceId: data.resourceId,
         createdBy: data.sharedByUserId,
-        // Map sharing-specific fields to resource share schema
-        metadata: {
-          sharedWithUserId: data.sharedWithUserId,
-          sharedWithEmail: data.sharedWithEmail,
-          permission: data.permission,
-          ...data.metadata,
-        },
+        visibility: data.visibility ?? "private",
+        publicToken: data.publicToken ?? null,
+        tokenHash: data.tokenHash ?? null,
+        passwordHash: data.passwordHash ?? null,
+        access: data.access ?? "anyone_with_link",
+        expiresAt: data.expiresAt ?? null,
+        permissions: data.permission
+          ? { [data.permission]: true }
+          : { read: true },
       } as NewResourceShare)
       .returning();
 
@@ -75,12 +88,18 @@ export class SharingRepository extends BaseRepository<
     data: UpdateSharingInput,
     userId: string
   ): Promise<ResourceShare> {
+    const updates: Partial<NewResourceShare> = {
+      updatedAt: new Date(),
+    };
+    if (data.permission) updates.permissions = { [data.permission]: true };
+    if (data.revokedAt !== undefined) updates.revokedAt = data.revokedAt;
+    if (data.expiresAt !== undefined) updates.expiresAt = data.expiresAt;
+    if (data.tokenHash !== undefined) updates.tokenHash = data.tokenHash;
+    if (data.publicToken !== undefined) updates.publicToken = data.publicToken;
+
     const [share] = await this.db
       .update(resourceShares)
-      .set({
-        permissions: data.permission ? { [data.permission]: true } : undefined,
-        updatedAt: new Date(),
-      } as Partial<NewResourceShare>)
+      .set(updates)
       .where(eq(resourceShares.id, id))
       .returning();
 

@@ -12,13 +12,29 @@
 import * as Y from "yjs";
 import { YSocketIO } from "y-socket.io/dist/server";
 import type { Server as SocketIOServer } from "socket.io";
-import { db, eq, desc, and } from "@synap/database";
-import { views, documents, documentVersions } from "@synap/database/schema";
+import { db, eq, and } from "@synap/database";
+import { documents, documentVersions } from "@synap/database/schema";
 import { storage } from "@synap/storage";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
   persistenceInterval?: number; // ms between saves
+}
+
+/**
+ * Parse room name to get documentId.
+ * - "whiteboard-{documentId}" -> documentId (whiteboard room)
+ * - "{documentId}" (raw UUID) -> documentId (document room, e.g. TipTap)
+ */
+function parseRoomName(roomName: string): string | null {
+  if (roomName.startsWith("whiteboard-")) {
+    return roomName.slice("whiteboard-".length);
+  }
+  // Raw documentId (e.g. for TipTap documents)
+  if (roomName.length > 0) {
+    return roomName;
+  }
+  return null;
 }
 
 /**
@@ -30,34 +46,25 @@ class DatabasePersistence {
    */
   async bindState(roomName: string, ydoc: Y.Doc): Promise<void> {
     try {
-      const [type, id] = roomName.split("-");
-
-      if (type !== "whiteboard" && type !== "document") {
-        console.warn(`[Yjs] Invalid room type: ${type}`);
+      const documentId = parseRoomName(roomName);
+      if (!documentId) {
+        console.warn(`[Yjs] Invalid room name: ${roomName}`);
         return;
       }
 
-      // Get view to find document
-      const view = await db.query.views.findFirst({
-        where: eq(views.id, id),
+      const doc = await db.query.documents.findFirst({
+        where: eq(documents.id, documentId),
       });
 
-      if (!view?.documentId) {
+      if (!doc) {
         console.log(`[Yjs] New document for room: ${roomName}`);
         return;
       }
 
-      // Get document to check current version
-      const doc = await db.query.documents.findFirst({
-        where: eq(documents.id, view.documentId),
-      });
-
-      if (!doc) return;
-
-      // Try to load from working version (currentVersion) first
+      // Load from working version (currentVersion)
       const workingVersion = await db.query.documentVersions.findFirst({
         where: and(
-          eq(documentVersions.documentId, view.documentId),
+          eq(documentVersions.documentId, documentId),
           eq(documentVersions.version, doc.currentVersion)
         ),
       });
@@ -101,63 +108,40 @@ class DatabasePersistence {
    */
   async writeState(roomName: string, ydoc: Y.Doc): Promise<void> {
     try {
-      const [type, id] = roomName.split("-");
+      const documentId = parseRoomName(roomName);
+      if (!documentId) return;
 
-      if (type !== "whiteboard" && type !== "document") return;
-
-      // Get view to find document
-      const view = await db.query.views.findFirst({
-        where: eq(views.id, id),
-      });
-
-      if (!view?.documentId) {
-        console.warn(`[Yjs] No document found for view ${id}`);
-        return;
-      }
-
-      // Get current document
       const doc = await db.query.documents.findFirst({
-        where: eq(documents.id, view.documentId),
+        where: eq(documents.id, documentId),
       });
 
       if (!doc) return;
 
-      // Encode Y.Doc as binary state
       const state = Y.encodeStateAsUpdate(ydoc);
       const base64State = Buffer.from(state).toString("base64");
       const yjsContent = `yjs:${base64State}`;
-
       const workingVersion = doc.currentVersion;
 
-      // Update working version (don't create new - N+1 pattern)
-      // During realtime editing, we update the same working version
       const existingWorkingVersion = await db.query.documentVersions.findFirst({
         where: and(
-          eq(documentVersions.documentId, view.documentId),
+          eq(documentVersions.documentId, documentId),
           eq(documentVersions.version, workingVersion)
         ),
       });
 
       if (existingWorkingVersion) {
-        // Update existing working version
         await db
           .update(documentVersions)
-          .set({
-            content: yjsContent,
-          })
+          .set({ content: yjsContent })
           .where(
             and(
-              eq(documentVersions.documentId, view.documentId),
+              eq(documentVersions.documentId, documentId),
               eq(documentVersions.version, workingVersion)
             )
           );
       } else {
-        // Working version doesn't exist - create it (shouldn't happen, but safety check)
-        console.warn(
-          `[Yjs] Working version ${workingVersion} not found, creating it for ${roomName}`
-        );
         await db.insert(documentVersions).values({
-          documentId: view.documentId,
+          documentId,
           version: workingVersion,
           content: yjsContent,
           author: "system",
@@ -166,17 +150,10 @@ class DatabasePersistence {
         });
       }
 
-      // Note: Storage update during Yjs sync is deferred to explicit save operations
-      // This keeps the sync fast and avoids complex content extraction from Yjs
-      // Storage will be updated when user explicitly saves (via document-snapshots worker)
-
-      // Update document timestamp (version number stays the same)
       await db
         .update(documents)
-        .set({
-          updatedAt: new Date(),
-        })
-        .where(eq(documents.id, view.documentId));
+        .set({ updatedAt: new Date() })
+        .where(eq(documents.id, documentId));
 
       console.log(
         `[Yjs] Updated working version ${workingVersion} for ${roomName}`

@@ -105,7 +105,8 @@ export const proposalsRouter = router({
         typeof request.proposedContent === "string"
       ) {
         const { storage } = await import("@synap/storage");
-        const { documents } = await import("@synap/database/schema");
+        const { documents, documentVersions } =
+          await import("@synap/database/schema");
 
         const document = await db.query.documents.findFirst({
           where: eq(documents.id, proposal.targetId),
@@ -118,16 +119,29 @@ export const proposalsRouter = router({
           });
         }
 
+        const newVersion = (document.currentVersion ?? 1) + 1;
+        const content = request.proposedContent as string;
+
         await storage.upload(
           document.storageKey,
-          Buffer.from(request.proposedContent as string, "utf-8"),
+          Buffer.from(content, "utf-8"),
           { contentType: document.mimeType || "text/plain" }
         );
+
+        await db.insert(documentVersions).values({
+          documentId: proposal.targetId,
+          version: newVersion,
+          content,
+          author: "user",
+          authorId: userId,
+          message: "AI edit accepted",
+        });
 
         await db
           .update(documents)
           .set({
-            currentVersion: (document.currentVersion ?? 1) + 1,
+            currentVersion: newVersion,
+            lastSavedVersion: newVersion,
             updatedAt: new Date(),
           })
           .where(eq(documents.id, proposal.targetId));
@@ -152,13 +166,32 @@ export const proposalsRouter = router({
       if (targetType && changeType) {
         const { inngest } = await import("@synap/jobs");
         const eventName = `${targetType}s.${changeType}.validated`;
+        const payload =
+          typeof request?.data === "object" && request.data !== null
+            ? (request.data as Record<string, unknown>)
+            : {};
+        if (targetType === "entity") {
+          if (
+            changeType === "update" &&
+            payload.entityId != null &&
+            payload.id == null
+          ) {
+            payload.id = payload.entityId;
+          }
+          if (
+            changeType === "create" &&
+            payload.description != null &&
+            payload.preview == null
+          ) {
+            payload.preview = payload.description;
+          }
+        }
 
         await inngest.send({
           name: eventName,
           data: {
-            ...(typeof request?.data === "object" && request.data !== null
-              ? (request.data as object)
-              : {}),
+            ...payload,
+            workspaceId: proposal.workspaceId,
             approvedBy: userId,
             approvedAt: new Date().toISOString(),
             approvalComment: input.comment,

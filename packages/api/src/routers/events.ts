@@ -127,4 +127,126 @@ export const eventsRouter = router({
 
       return events;
     }),
+
+  /**
+   * Search events (Admin/Owner access)
+   *
+   * Allows searching events with filters:
+   * - System Admin: Can search ALL events
+   * - Workspace Owner: Can search events for their workspace
+   */
+  search: protectedProcedure
+    .input(
+      z.object({
+        userId: z.string().optional(),
+        eventType: z.string().optional(),
+        subjectType: subjectTypeSchema.optional(),
+        subjectId: z.string().optional(),
+        correlationId: z.string().optional(),
+        fromDate: z.date().optional(),
+        toDate: z.date().optional(),
+        limit: z.number().min(1).max(100).default(50),
+        offset: z.number().min(0).default(0),
+        workspaceId: z.string().uuid().optional(), // Optional context for owners
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const eventRepo = getEventRepository();
+
+      // Permission Check
+      // 1. System Admin (implemented via specific role or flag - placeholder for now)
+      // For now, we'll assume if no workspaceId is provided, it requires system admin
+      // TODO: Implement proper system admin check
+      const isSystemAdmin = false; // Replace with actual check
+
+      // 2. Workspace Owner
+      if (input.workspaceId) {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: (members, { and, eq }) =>
+            and(
+              eq(members.workspaceId, input.workspaceId!),
+              eq(members.userId, ctx.userId)
+            ),
+        });
+
+        if (!membership || !["owner", "admin"].includes(membership.role)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Insufficient permissions for this workspace",
+          });
+        }
+      } else if (!isSystemAdmin) {
+        // If not checking a specific workspace and not system admin, restrict to own events
+        // This effectively makes it behave like 'list' but with more filters
+        if (input.userId && input.userId !== ctx.userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Cannot view events of other users",
+          });
+        }
+        // Force userId filter to current user if not system admin
+        input.userId = ctx.userId;
+      }
+
+      // Perform search
+      const events = await eventRepo.searchEvents({
+        userId: input.userId,
+        eventType: input.eventType,
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        correlationId: input.correlationId,
+        fromDate: input.fromDate,
+        toDate: input.toDate,
+        limit: input.limit,
+        offset: input.offset,
+      });
+
+      return events;
+    }),
+
+  /**
+   * Count events (for pagination/analytics)
+   */
+  count: protectedProcedure
+    .input(
+      z.object({
+        userId: z.string().optional(),
+        eventType: z.string().optional(),
+        subjectType: subjectTypeSchema.optional(),
+        fromDate: z.date().optional(),
+        toDate: z.date().optional(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const eventRepo = getEventRepository();
+
+      // Same permission logic as search
+      // TODO: Refactor into shared permission helper
+      if (input.workspaceId) {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: (members, { and, eq }) =>
+            and(
+              eq(members.workspaceId, input.workspaceId!),
+              eq(members.userId, ctx.userId)
+            ),
+        });
+        if (!membership || !["owner", "admin"].includes(membership.role)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+        }
+      } else {
+        // Default to current user
+        input.userId = ctx.userId;
+      }
+
+      const count = await eventRepo.countEvents({
+        userId: input.userId,
+        eventType: input.eventType,
+        subjectType: input.subjectType,
+        fromDate: input.fromDate,
+        toDate: input.toDate,
+      });
+
+      return { count };
+    }),
 });
