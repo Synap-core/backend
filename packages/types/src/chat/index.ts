@@ -11,6 +11,7 @@ import type {
   BranchDecision,
   AgentTypeString,
   MessageMetadata,
+  ProposedAction,
 } from "../hub-protocol/index.js";
 
 // =============================================================================
@@ -79,13 +80,15 @@ export interface BranchNode {
 }
 
 /**
- * Chat UI state for components
+ * Chat UI state for components (streaming + completed message)
  */
 export interface ChatUIState {
   isStreaming: boolean;
   currentContent: string;
   aiSteps: AIStep[];
   extractedEntities: ExtractedEntity[];
+  /** In-stream action proposals (create/update entity or document) */
+  proposedActions?: ProposedAction[];
   branchDecision?: BranchDecision;
   error?: string;
 }
@@ -100,6 +103,8 @@ export interface ChatUIState {
 export interface SendMessageRequest {
   threadId: string;
   content: string;
+  /** Active workspace (for entity create/update – event chain). Sent by frontend when available. */
+  workspaceId?: string;
   agentType?: AgentTypeString;
   agentConfig?: Record<string, unknown>;
 }
@@ -158,6 +163,7 @@ export interface UseStreamingMessageResult {
   content: string;
   aiSteps: AIStep[];
   entities: ExtractedEntity[];
+  proposedActions?: ProposedAction[];
   branchDecision?: BranchDecision;
   isStreaming: boolean;
   error?: string;

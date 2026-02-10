@@ -26,7 +26,7 @@ import {
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
-import type { AIStep, HubResponse } from "@synap-core/types";
+import type { AIStep, HubResponse, ProposedAction } from "@synap-core/types";
 import type { ChatThread } from "@synap/database/schema";
 
 /**
@@ -145,10 +145,13 @@ export const infiniteChatRouter = router({
       z.object({
         threadId: z.string().uuid(),
         content: z.string().min(1),
+        /** Active workspace (for entity create/update – event chain). Prefer from context when using workspaceProcedure. */
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const { threadId, content } = input;
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
 
       // Get thread
       const thread = await db.query.chatThreads.findFirst({
@@ -185,6 +188,7 @@ export const infiniteChatRouter = router({
       // Stream from Intelligence Service (now dynamic)
       let fullContent = "";
       const aiSteps: AIStep[] = [];
+      const proposedActions: ProposedAction[] = [];
       let hubResponse: Partial<HubResponse> = { content: "" };
 
       try {
@@ -194,14 +198,13 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
           agentId: thread.agentId ?? "orchestrator",
           agentType: thread.agentType ?? "meta",
-          // Projects: Removed projectId (use relations table if needed)
+          workspaceId,
         });
 
         for await (const chunk of stream) {
           if (chunk.type === "chunk" && chunk.content) {
             fullContent += chunk.content;
 
-            // Emit via Socket.IO
             ctx.socketIO?.emit("chat:stream", {
               threadId,
               type: "chunk",
@@ -211,28 +214,33 @@ export const infiniteChatRouter = router({
           } else if (chunk.type === "step" && chunk.step) {
             aiSteps.push(chunk.step);
 
-            // Emit AI step
             ctx.socketIO?.emit("ai:step", {
               threadId,
               messageId: userMessageId,
               step: chunk.step,
             });
+          } else if (chunk.type === "proposal" && chunk.proposal) {
+            proposedActions.push(chunk.proposal);
+            ctx.socketIO?.emit("ai:proposal", {
+              threadId,
+              messageId: userMessageId,
+              proposal: chunk.proposal,
+            });
           } else if (chunk.type === "entities" && chunk.entities) {
-            // ✅ ADDED: Handle entities from stream
             hubResponse.entities = chunk.entities;
           } else if (chunk.type === "branch_decision" && chunk.decision) {
-            // ✅ ADDED: Handle branch decision from stream
             hubResponse.branchDecision = chunk.decision;
           } else if (chunk.type === "complete") {
-            // ✅ FIXED: Extract data from complete event
             if (chunk.data) {
-              hubResponse = {
-                ...hubResponse,
-                ...(chunk.data as Partial<HubResponse>),
-              };
+              const data = chunk.data as Partial<HubResponse>;
+              hubResponse = { ...hubResponse, ...data };
+              if (data.proposedActions?.length) {
+                proposedActions.push(...data.proposedActions);
+              }
             }
+            hubResponse.proposedActions =
+              proposedActions.length > 0 ? proposedActions : undefined;
 
-            // Final emission
             ctx.socketIO?.emit("chat:stream", {
               threadId,
               type: "complete",
@@ -263,7 +271,7 @@ export const infiniteChatRouter = router({
           userId: ctx.userId,
           agentId: thread.agentId ?? "orchestrator",
           agentType: thread.agentType ?? "meta",
-          // Projects: Removed projectId (use relations table if needed)
+          workspaceId,
         });
 
         fullContent = hubResponse.content || "";
@@ -286,7 +294,10 @@ export const infiniteChatRouter = router({
         metadata: {
           aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
           tokens: hubResponse?.usage?.totalTokens,
-        } as any, // Drizzle JSONB type is flexible
+          proposedActions: hubResponse?.proposedActions?.length
+            ? hubResponse.proposedActions
+            : undefined,
+        } as any,
       });
 
       // Create entities via event chain for consistency
@@ -322,7 +333,6 @@ export const infiniteChatRouter = router({
         }
       }
 
-      // Emit real-time event for new message
       ctx.socketIO?.emit("chat:message", {
         threadId,
         message: {
@@ -337,6 +347,7 @@ export const infiniteChatRouter = router({
           metadata: {
             aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
             tokens: hubResponse?.usage?.totalTokens,
+            proposedActions: hubResponse?.proposedActions,
           },
         },
         userId: ctx.userId,

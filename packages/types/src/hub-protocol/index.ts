@@ -86,6 +86,16 @@ export interface HubRequest {
 }
 
 /**
+ * Action proposal from the AI (in-stream or in complete)
+ */
+export interface ProposedAction {
+  id: string;
+  toolName: string;
+  description: string;
+  args: Record<string, unknown>;
+}
+
+/**
  * Response from Intelligence Service to Backend
  */
 export interface HubResponse {
@@ -103,6 +113,9 @@ export interface HubResponse {
 
   /** Token usage statistics (optional) */
   usage?: TokenUsage;
+
+  /** Action proposals (create/update entity or document) for user approval */
+  proposedActions?: ProposedAction[];
 }
 
 // =============================================================================
@@ -115,6 +128,7 @@ export interface HubResponse {
 export enum StreamEventType {
   CONTENT = "content",
   STEP = "step",
+  PROPOSAL = "proposal",
   ENTITIES = "entities",
   BRANCH_DECISION = "branch_decision",
   COMPLETE = "complete",
@@ -128,6 +142,8 @@ export interface HubStreamEvent {
   type: StreamEventType | string;
   content?: string;
   step?: AIStep;
+  /** Incremental proposal (one per action proposal in stream) */
+  proposal?: ProposedAction;
   entities?: ExtractedEntity[];
   decision?: BranchDecision;
   data?: unknown;
@@ -230,15 +246,22 @@ export interface TokenUsage {
 // =============================================================================
 
 /**
- * Metadata stored in conversation_messages.metadata
+ * Metadata stored in conversation_messages.metadata (and emitted in chat:message).
  *
+ * Backend populates these from the Intelligence Service stream/response.
  * Intelligence Service can add custom fields beyond these.
  */
 export interface MessageMetadata {
+  /** AI steps (thinking, tool_call, tool_result) for this message */
   aiSteps?: AIStep[];
+  /** Extracted entities (legacy/optional) */
   entities?: ExtractedEntity[];
+  /** Branch decision from meta-agent (optional) */
   branchDecision?: BranchDecision;
+  /** Token usage (optional) */
   usage?: TokenUsage;
+  /** In-stream action proposals (create/update entity or document) for user approval */
+  proposedActions?: ProposedAction[];
   [key: string]: unknown; // Allow custom metadata
 }
 

@@ -7,12 +7,49 @@
  */
 
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { documentsRouter as regularDocumentsRouter } from "../documents.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { emitRequestEvent } from "../../utils/emit-event.js";
 
 export const documentsRouter = router({
+  /**
+   * Create a new document (B4)
+   * Requires: hub-protocol.write scope
+   * Emits documents.create.requested; returns document id for the agent.
+   */
+  createDocument: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        title: z.string().min(1),
+        content: z.string().default(""),
+        type: z
+          .enum(["text", "markdown", "code", "pdf", "docx"])
+          .default("markdown"),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const documentId = randomUUID();
+      await emitRequestEvent({
+        subjectType: "document",
+        action: "create",
+        subjectId: documentId,
+        data: {
+          id: documentId,
+          title: input.title,
+          type: input.type,
+          content: input.content,
+          userId: input.userId,
+        },
+        userId: ctx.userId!,
+        source: "intelligence",
+      });
+      return { id: documentId, documentId };
+    }),
+
   /**
    * Get document content by ID
    * Requires: hub-protocol.read scope

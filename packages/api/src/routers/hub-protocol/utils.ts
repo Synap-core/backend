@@ -9,11 +9,14 @@ import type { Context } from "../../types/context.js";
 
 /**
  * Create a tRPC caller context for Hub Protocol
- * This allows Hub Protocol to call regular API endpoints programmatically
+ * This allows Hub Protocol to call regular API endpoints programmatically.
+ * When calling workspace-scoped procedures (e.g. entities create/update),
+ * pass workspaceId so the same event chain and validation apply.
  */
 export async function createHubProtocolCallerContext(
   userId: string,
-  scopes: string[]
+  scopes: string[],
+  workspaceId?: string | null
 ): Promise<
   Context & {
     scopes?: string[];
@@ -23,7 +26,6 @@ export async function createHubProtocolCallerContext(
 > {
   const db = await getDb();
 
-  // Create context matching API key middleware structure
   const ctx: Context & {
     scopes?: string[];
     apiKeyId?: string;
@@ -38,6 +40,7 @@ export async function createHubProtocolCallerContext(
     req: null as any,
     user: null,
     session: null,
+    workspaceId: workspaceId ?? null,
   };
 
   return ctx;

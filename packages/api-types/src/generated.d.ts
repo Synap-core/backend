@@ -503,6 +503,224 @@ declare enum ProposalStatus {
   APPROVED = "approved",
   REJECTED = "rejected",
 }
+declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
+  name: "message_links";
+  schema: undefined;
+  columns: {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: true;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    messageId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "message_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    targetType: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "target_type";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    targetId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "target_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    relationshipType: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "relationship_type";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    position: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "position";
+        tableName: "message_links";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    metadata: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "metadata";
+        tableName: "message_links";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "user_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "workspace_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "created_at";
+        tableName: "message_links";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+  };
+  dialect: "pg";
+}>;
+export type MessageLink = typeof messageLinks.$inferSelect;
 declare enum PropertyValueType {
   STRING = "string",
   NUMBER = "number",
@@ -699,6 +917,19 @@ export interface EventRecord {
   causationId?: string;
   correlationId?: string;
   source: string;
+}
+/** Minimal message fields for list/preview */
+export interface LinkedMessagePreview {
+  id: string;
+  threadId: string;
+  role: string;
+  content: string;
+  timestamp: Date;
+  userId: string;
+}
+export interface LinkedMessageItem {
+  link: MessageLink;
+  message: LinkedMessagePreview;
 }
 export interface EffectiveProperty extends PropertyDef {
   required: boolean;
@@ -1253,6 +1484,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           input: {
             threadId: string;
             content: string;
+            workspaceId?: string | undefined;
           };
           output: {
             messageId: `${string}-${string}-${string}-${string}-${string}`;
@@ -3107,6 +3339,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               id: string;
               createdAt: Date;
               type: string;
+              metadata: unknown;
               sourceEntityId: string;
               targetEntityId: string;
             }[];
@@ -3265,6 +3498,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   id: string;
                   createdAt: Date;
                   type: string;
+                  metadata: unknown;
                   sourceEntityId: string;
                   targetEntityId: string;
                 }[];
@@ -3306,6 +3540,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               id: string;
               createdAt: Date;
               type: string;
+              metadata: unknown;
               sourceEntityId: string;
               targetEntityId: string;
             }[];
@@ -3780,6 +4015,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   sourceEntityId: string;
                   targetEntityId: string;
                   type: string;
+                  metadata: unknown;
                   createdAt: Date;
                 }[];
                 columns: ViewColumn[];
@@ -5048,6 +5284,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             messageId: string;
             position: unknown;
           }[];
+          meta: object;
+        }>;
+        listLinkedMessages: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            targetType: MessageLinkTargetType;
+            targetId: string;
+            limit?: number | undefined;
+            cursor?: string | undefined;
+          };
+          output: {
+            items: LinkedMessageItem[];
+            nextCursor: string | undefined;
+            hasMore: boolean;
+          };
           meta: object;
         }>;
       }>

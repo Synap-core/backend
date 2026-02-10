@@ -11,6 +11,7 @@ import type {
   BranchDecision,
   TokenUsage,
   AIStep,
+  ProposedAction,
 } from "@synap-core/types";
 
 export interface IntelligenceHubRequest {
@@ -21,18 +22,21 @@ export interface IntelligenceHubRequest {
   agentType?: string;
   agentConfig?: Record<string, unknown>;
   projectId?: string;
+  /** Active workspace (required for entity create/update – event chain) */
+  workspaceId?: string;
   // Data Pod credentials for Hub Protocol access
   dataPodUrl?: string;
   dataPodApiKey?: string;
 }
 
-// Re-export HubResponse from types package
+// Re-export from types package
 export type {
   HubResponse,
   ExtractedEntity,
   BranchDecision,
   TokenUsage,
   AIStep,
+  ProposedAction,
 };
 
 // Legacy interface for backwards compatibility
@@ -71,6 +75,7 @@ export class IntelligenceHubClient {
           userId: request.userId,
           agentId: request.agentId || "orchestrator",
           projectId: request.projectId,
+          workspaceId: request.workspaceId,
           dataPodUrl:
             request.dataPodUrl ||
             process.env.PUBLIC_URL ||
@@ -138,6 +143,7 @@ export class IntelligenceHubClient {
         agentConfig: request.agentConfig,
         projectId: request.projectId,
         stream: true,
+        workspaceId: request.workspaceId,
         dataPodUrl:
           request.dataPodUrl ||
           process.env.PUBLIC_URL ||
@@ -183,14 +189,16 @@ export class IntelligenceHubClient {
                 yield { type: "chunk", content: data.content };
               } else if (data.type === "step" && data.step) {
                 yield { type: "step", step: data.step };
+              } else if (data.type === "proposal" && data.data) {
+                yield { type: "proposal", proposal: data.data };
               } else if (data.type === "entities" && data.entities) {
-                yield { type: "entities", entities: data.entities }; // ✅ ADDED
+                yield { type: "entities", entities: data.entities };
               } else if (data.type === "branch_decision" && data.decision) {
-                yield { type: "branch_decision", decision: data.decision }; // ✅ ADDED
+                yield { type: "branch_decision", decision: data.decision };
               } else if (data.type === "error") {
-                yield { type: "error", error: data.error }; // ✅ ADDED
+                yield { type: "error", error: data.error };
               } else if (data.type === "complete") {
-                yield { type: "complete", data: data.data }; // ✅ FIXED: Include data
+                yield { type: "complete", data: data.data };
               }
             } catch (parseError) {
               console.error("Failed to parse SSE data:", line, parseError);
