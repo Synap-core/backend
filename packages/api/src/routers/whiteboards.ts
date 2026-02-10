@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, desc, and } from "@synap/database";
-import { views, documentVersions } from "@synap/database/schema";
+import { views, documents, documentVersions } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 
 export const whiteboardsRouter = router({
@@ -36,12 +36,14 @@ export const whiteboardsRouter = router({
         });
       }
 
-      if (!view.documentId || !view.yjsRoomId) {
+      if (!view.documentId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Whiteboard not properly initialized",
         });
       }
+
+      const yjsRoomId = view.yjsRoomId ?? `whiteboard-${view.documentId}`;
 
       // Publish snapshot event (async processing)
       const { inngest } = await import("@synap/jobs");
@@ -51,7 +53,7 @@ export const whiteboardsRouter = router({
         data: {
           viewId: input.viewId,
           documentId: view.documentId,
-          yjsRoomId: view.yjsRoomId,
+          yjsRoomId,
           message: input.message || "Manual snapshot",
           userId: ctx.userId,
         },
@@ -87,14 +89,27 @@ export const whiteboardsRouter = router({
         });
       }
 
-      // Get versions
-      const versions = await db.query.documentVersions.findMany({
-        where: eq(documentVersions.documentId, view.documentId),
-        orderBy: desc(documentVersions.createdAt),
-        limit: input.limit,
-      });
+      const [versions, doc] = await Promise.all([
+        db.query.documentVersions.findMany({
+          where: eq(documentVersions.documentId, view.documentId),
+          orderBy: desc(documentVersions.createdAt),
+          limit: input.limit,
+        }),
+        db.query.documents.findFirst({
+          where: eq(documents.id, view.documentId),
+          columns: { currentVersion: true, lastSavedVersion: true },
+        }),
+      ]);
 
-      return { versions };
+      return {
+        versions,
+        latest: doc
+          ? {
+              currentVersion: doc.currentVersion,
+              lastSavedVersion: doc.lastSavedVersion ?? 0,
+            }
+          : { currentVersion: 1, lastSavedVersion: 0 },
+      };
     }),
 
   /**
@@ -113,12 +128,14 @@ export const whiteboardsRouter = router({
         where: and(eq(views.id, input.viewId), eq(views.userId, ctx.userId)),
       });
 
-      if (!view?.yjsRoomId) {
+      if (!view?.documentId) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Whiteboard not found",
         });
       }
+
+      const yjsRoomId = view.yjsRoomId ?? `whiteboard-${view.documentId}`;
 
       // Get version
       const version = await db.query.documentVersions.findFirst({
@@ -140,7 +157,7 @@ export const whiteboardsRouter = router({
         data: {
           viewId: input.viewId,
           versionId: input.versionId,
-          yjsRoomId: view.yjsRoomId,
+          yjsRoomId,
           content: version.content,
           userId: ctx.userId,
         },

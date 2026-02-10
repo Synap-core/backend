@@ -185,4 +185,115 @@ export const apiKeysRouter = router({
         message: "API key rotation requested. New key will be generated.",
       };
     }),
+
+  /**
+   * List all system keys (System Admin only)
+   */
+  listSystemKeys: protectedProcedure.query(async ({ ctx }) => {
+    // TODO: Implement proper system admin check
+    const isSystemAdmin = false; // Replace with actual check
+
+    if (!isSystemAdmin) {
+      // For now, allow if user is owner of any workspace (temporary for demo)
+      // Real implementation should check system role
+      const ownedWorkspaces = await db.query.workspaceMembers.findFirst({
+        where: (members, { and, eq }) =>
+          and(eq(members.userId, ctx.userId), eq(members.role, "owner")),
+      });
+
+      if (!ownedWorkspaces) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Requires system admin privileges",
+        });
+      }
+    }
+
+    const keys = await db.query.apiKeys.findMany({
+      orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
+      with: {
+        user: true, // Include user details
+      },
+    });
+
+    return keys.map((key) => ({
+      id: key.id,
+      keyName: key.keyName,
+      keyPrefix: key.keyPrefix,
+      hubId: key.hubId,
+      scope: key.scope,
+      isActive: key.isActive,
+      expiresAt: key.expiresAt,
+      lastUsedAt: key.lastUsedAt,
+      usageCount: key.usageCount,
+      createdAt: key.createdAt,
+      user: {
+        id: key.user.id,
+        email: key.user.email,
+        name: key.user.name,
+      },
+    }));
+  }),
+
+  /**
+   * List workspace keys (Workspace Owner/Admin only)
+   */
+  listWorkspaceKeys: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Check permissions
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: (members, { and, eq }) =>
+          and(
+            eq(members.workspaceId, input.workspaceId),
+            eq(members.userId, ctx.userId)
+          ),
+      });
+
+      if (!membership || !["owner", "admin"].includes(membership.role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Insufficient permissions",
+        });
+      }
+
+      // Get all members of workspace
+      const members = await db.query.workspaceMembers.findMany({
+        where: eq(workspaceMembers.workspaceId, input.workspaceId),
+        columns: { userId: true },
+      });
+
+      const memberIds = members.map((m) => m.userId);
+
+      if (memberIds.length === 0) {
+        return [];
+      }
+
+      // Get keys for these users
+      const keys = await db.query.apiKeys.findMany({
+        where: (apiKeys, { inArray }) => inArray(apiKeys.userId, memberIds),
+        orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
+        with: {
+          user: true,
+        },
+      });
+
+      return keys.map((key) => ({
+        id: key.id,
+        keyName: key.keyName,
+        keyPrefix: key.keyPrefix,
+        hubId: key.hubId,
+        scope: key.scope,
+        isActive: key.isActive,
+        expiresAt: key.expiresAt,
+        lastUsedAt: key.lastUsedAt,
+        usageCount: key.usageCount,
+        createdAt: key.createdAt,
+        user: {
+          id: key.user.id,
+          email: key.user.email,
+          name: key.user.name,
+        },
+      }));
+    }),
 });

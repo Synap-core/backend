@@ -24,6 +24,10 @@ export const resourceShares = pgTable("resource_shares", {
 
   // Public link
   publicToken: text("public_token"),
+  tokenHash: text("token_hash"),
+  passwordHash: text("password_hash"),
+  access: text("access").default("anyone_with_link"), // 'workspace_only' | 'anyone_with_link'
+  revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
 
   // Invited users
   invitedUsers: text("invited_users").array().default([]),

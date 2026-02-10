@@ -22,6 +22,8 @@ import {
   ChatThreadAgentType,
   ThreadEntityRelationshipType,
   ThreadDocumentRelationshipType,
+  proposals,
+  ProposalStatus,
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { randomUUID } from "crypto";
@@ -277,11 +279,121 @@ export const infiniteChatRouter = router({
         fullContent = hubResponse.content || "";
       }
 
+      // Create proposal rows for each stream proposedAction so approve/reject use the same table
+      const proposedActions = hubResponse?.proposedActions ?? [];
+      const proposalIds: string[] = [];
+      const resolvedWorkspaceId = workspaceId ?? ctx.workspaceId ?? null;
+
+      if (proposedActions.length > 0 && resolvedWorkspaceId) {
+        const { documents, entities } = await import("@synap/database/schema");
+
+        for (const action of proposedActions) {
+          try {
+            if (action.toolName === "update_document") {
+              const documentId = action.args?.documentId as string | undefined;
+              const proposedContent = action.args?.content as
+                | string
+                | undefined;
+              if (!documentId || typeof proposedContent !== "string") continue;
+
+              const doc = await db.query.documents.findFirst({
+                where: eq(documents.id, documentId),
+              });
+              if (!doc) continue;
+
+              const entity = await db.query.entities.findFirst({
+                where: eq(entities.documentId, documentId),
+              });
+              const docWorkspaceId = entity?.workspaceId ?? resolvedWorkspaceId;
+              const originalContent = action.args?.originalContent as
+                | string
+                | undefined;
+              const expiresAt = new Date();
+              expiresAt.setDate(expiresAt.getDate() + 7);
+
+              const [proposal] = await db
+                .insert(proposals)
+                .values({
+                  workspaceId: docWorkspaceId,
+                  targetType: "document",
+                  targetId: documentId,
+                  proposalType: "ai_edit",
+                  data: {
+                    proposedBy: "ai",
+                    changes: [
+                      {
+                        op: "replace",
+                        range: [0, (originalContent ?? "").length],
+                        text: proposedContent,
+                      },
+                    ],
+                    originalContent: originalContent ?? null,
+                    proposedContent,
+                    expiresAt: expiresAt.toISOString(),
+                    messageId: undefined,
+                    threadId,
+                  },
+                  status: ProposalStatus.PENDING,
+                })
+                .returning();
+
+              if (proposal?.id) proposalIds.push(proposal.id);
+            } else if (
+              action.toolName === "create_entity" ||
+              action.toolName === "update_entity"
+            ) {
+              const targetId =
+                (action.args?.entityId as string | undefined) ??
+                `pending-${action.id}`;
+              const changeType =
+                action.toolName === "create_entity" ? "create" : "update";
+
+              const [proposal] = await db
+                .insert(proposals)
+                .values({
+                  workspaceId: resolvedWorkspaceId,
+                  targetType: "entity",
+                  targetId,
+                  proposalType: changeType,
+                  data: {
+                    ...action,
+                    targetType: "entity",
+                    changeType,
+                    requestId: action.id,
+                    messageId: undefined,
+                    threadId,
+                    data: action.args,
+                  },
+                  status: ProposalStatus.PENDING,
+                })
+                .returning();
+
+              if (proposal?.id) proposalIds.push(proposal.id);
+            }
+          } catch (err) {
+            console.error(
+              "[infinite-chat] Failed to create proposal row for action:",
+              action.id,
+              action.toolName,
+              err
+            );
+          }
+        }
+      }
+
       // Save assistant message
       const assistantMessageId = randomUUID();
       const assistantMessageHash = createHash("sha256")
         .update(`${assistantMessageId}${fullContent}${userMessageHash}`)
         .digest("hex");
+
+      const messageMetadata = {
+        aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
+        tokens: hubResponse?.usage?.totalTokens,
+        proposedActions:
+          proposedActions.length > 0 ? proposedActions : undefined,
+        proposalIds: proposalIds.length > 0 ? proposalIds : undefined,
+      };
 
       await db.insert(conversationMessages).values({
         id: assistantMessageId,
@@ -291,13 +403,7 @@ export const infiniteChatRouter = router({
         userId: ctx.userId,
         previousHash: userMessageHash,
         hash: assistantMessageHash,
-        metadata: {
-          aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
-          tokens: hubResponse?.usage?.totalTokens,
-          proposedActions: hubResponse?.proposedActions?.length
-            ? hubResponse.proposedActions
-            : undefined,
-        } as any,
+        metadata: messageMetadata as any,
       });
 
       // Create entities via event chain for consistency
@@ -344,11 +450,7 @@ export const infiniteChatRouter = router({
           timestamp: new Date(),
           previousHash: userMessageHash,
           hash: assistantMessageHash,
-          metadata: {
-            aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
-            tokens: hubResponse?.usage?.totalTokens,
-            proposedActions: hubResponse?.proposedActions,
-          },
+          metadata: messageMetadata,
         },
         userId: ctx.userId,
       });

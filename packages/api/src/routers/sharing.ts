@@ -9,12 +9,22 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, publicProcedure } from "../trpc.js";
-import { db, eq, and, sqlDrizzle } from "@synap/database";
-import { resourceShares, views, entities } from "@synap/database/schema";
+import { db, eq, and, or, inArray, sqlDrizzle } from "@synap/database";
+import {
+  resourceShares,
+  views,
+  entities,
+  documents,
+} from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
-import { randomBytes } from "crypto";
 import { verifyPermission } from "@synap/database";
 import { emitRequestEvent } from "../utils/emit-event.js";
+import {
+  generateShareToken,
+  hashToken,
+  hashPassword,
+  verifyPassword,
+} from "../utils/share-token.js";
 
 export const sharingRouter = router({
   /**
@@ -26,6 +36,8 @@ export const sharingRouter = router({
         resourceType: z.enum(["view", "entity", "document"]),
         resourceId: z.string().uuid(),
         expiresInDays: z.number().min(1).max(365).optional(),
+        access: z.enum(["workspace_only", "anyone_with_link"]).optional(),
+        password: z.string().min(1).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -87,12 +99,17 @@ export const sharingRouter = router({
           });
       }
 
-      // Generate secure token
-      const token = randomBytes(16).toString("hex");
+      const token = generateShareToken();
+      const tokenHash = hashToken(token);
       const { randomUUID } = await import("crypto");
       const shareId = randomUUID();
+      const expiresAt = input.expiresInDays
+        ? new Date(
+            Date.now() + (input.expiresInDays as number) * 24 * 60 * 60 * 1000
+          )
+        : null;
+      const passwordHash = input.password ? hashPassword(input.password) : null;
 
-      // Emit event for share creation
       await emitRequestEvent({
         subjectType: "sharing",
         action: "create",
@@ -103,13 +120,11 @@ export const sharingRouter = router({
           resourceId: input.resourceId,
           visibility: "public",
           publicToken: token,
+          tokenHash,
           permission: "view",
-          expiresAt: input.expiresInDays
-            ? new Date(
-                Date.now() +
-                  (input.expiresInDays as number) * 24 * 60 * 60 * 1000
-              )
-            : null,
+          expiresAt,
+          access: input.access ?? "anyone_with_link",
+          passwordHash,
           sharedByUserId: ctx.userId,
           userId: ctx.userId,
         },
@@ -186,27 +201,49 @@ export const sharingRouter = router({
     .input(
       z.object({
         token: z.string(),
+        password: z.string().optional(),
       })
     )
     .query(async ({ input }) => {
-      // Find share
-      const share = await db.query.resourceShares.findFirst({
-        where: and(
-          eq(resourceShares.publicToken, input.token),
-          eq(resourceShares.visibility, "public")
-        ),
+      const tokenHash = hashToken(input.token);
+      const shares = await db.query.resourceShares.findMany({
+        where: and(eq(resourceShares.visibility, "public")),
       });
+      const share = shares.find(
+        (s) => s.tokenHash === tokenHash || s.publicToken === input.token
+      );
 
       if (!share) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
-      // Check expiration
+      if (share.revokedAt) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Link has been revoked",
+        });
+      }
+
       if (share.expiresAt && share.expiresAt < new Date()) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Link has expired",
         });
+      }
+
+      if (share.passwordHash) {
+        if (!input.password) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Password required",
+          });
+        }
+        if (!verifyPassword(input.password, share.passwordHash)) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Invalid password",
+          });
+        }
       }
 
       // Fetch resource
@@ -237,7 +274,100 @@ export const sharingRouter = router({
 
       return {
         resource,
+        resourceType: share.resourceType,
         permissions: share.permissions,
+      };
+    }),
+
+  /**
+   * List all active (non-revoked) shares for the current workspace.
+   * Used by Settings > Sharing to show "what I've shared".
+   */
+  listByWorkspace: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: input.workspaceId },
+        requiredPermission: "read",
+      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason || "Insufficient permissions",
+        });
+
+      const [viewRows, entityRows, documentRows] = await Promise.all([
+        db.query.views.findMany({
+          where: eq(views.workspaceId, input.workspaceId),
+          columns: { id: true, name: true },
+        }),
+        db.query.entities.findMany({
+          where: eq(entities.workspaceId, input.workspaceId),
+          columns: { id: true, title: true },
+        }),
+        db.query.documents.findMany({
+          where: eq(documents.workspaceId, input.workspaceId),
+          columns: { id: true, title: true },
+        }),
+      ]);
+
+      const viewIds = viewRows.map((r) => r.id);
+      const entityIds = entityRows.map((r) => r.id);
+      const documentIds = documentRows.map((r) => r.id);
+
+      if (
+        viewIds.length === 0 &&
+        entityIds.length === 0 &&
+        documentIds.length === 0
+      ) {
+        return { shares: [], resourceLabels: {} };
+      }
+
+      const conditions: ReturnType<typeof and>[] = [];
+      if (viewIds.length)
+        conditions.push(
+          and(
+            eq(resourceShares.resourceType, "view"),
+            inArray(resourceShares.resourceId, viewIds)
+          )
+        );
+      if (entityIds.length)
+        conditions.push(
+          and(
+            eq(resourceShares.resourceType, "entity"),
+            inArray(resourceShares.resourceId, entityIds)
+          )
+        );
+      if (documentIds.length)
+        conditions.push(
+          and(
+            eq(resourceShares.resourceType, "document"),
+            inArray(resourceShares.resourceId, documentIds)
+          )
+        );
+
+      const allShares = await db.query.resourceShares.findMany({
+        where: or(...conditions),
+      });
+
+      const active = allShares.filter((s) => !s.revokedAt);
+
+      const resourceLabels: Record<string, string> = {};
+      viewRows.forEach((r) => {
+        resourceLabels[`view:${r.id}`] = r.name ?? "View";
+      });
+      entityRows.forEach((r) => {
+        resourceLabels[`entity:${r.id}`] = r.title ?? "Entity";
+      });
+      documentRows.forEach((r) => {
+        resourceLabels[`document:${r.id}`] = r.title ?? "Document";
+      });
+
+      return {
+        shares: active,
+        resourceLabels,
       };
     }),
 
@@ -290,12 +420,13 @@ export const sharingRouter = router({
           message: permResult.reason || "Insufficient permissions",
         });
 
-      return await db.query.resourceShares.findMany({
+      const all = await db.query.resourceShares.findMany({
         where: and(
           eq(resourceShares.resourceType, input.resourceType as string),
           eq(resourceShares.resourceId, input.resourceId as string)
         ),
       });
+      return all.filter((s) => !s.revokedAt);
     }),
 
   /**
@@ -351,18 +482,110 @@ export const sharingRouter = router({
           message: permResult.reason || "Insufficient permissions",
         });
 
-      // Emit event for share revocation
-      await emitRequestEvent({
-        subjectType: "sharing",
-        action: "delete",
-        subjectId: input.shareId,
-        data: {
-          id: input.shareId,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
+      await db
+        .update(resourceShares)
+        .set({ revokedAt: new Date() })
+        .where(eq(resourceShares.id, input.shareId));
 
-      return { status: "requested" };
+      return { status: "revoked" };
+    }),
+
+  /**
+   * Extend share link expiry
+   */
+  extendShareLink: protectedProcedure
+    .input(
+      z.object({
+        shareId: z.string().uuid(),
+        expiresInDays: z.number().min(1).max(365),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const share = await db.query.resourceShares.findFirst({
+        where: eq(resourceShares.id, input.shareId),
+      });
+      if (!share) throw new TRPCError({ code: "NOT_FOUND" });
+
+      let resource;
+      if (share.resourceType === "view") {
+        resource = await db.query.views.findFirst({
+          where: eq(views.id, share.resourceId),
+        });
+      } else {
+        resource = await db.query.entities.findFirst({
+          where: eq(entities.id, share.resourceId),
+        });
+      }
+      if (!resource?.workspaceId) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: resource.workspaceId },
+        requiredPermission: "write",
+      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason || "Insufficient permissions",
+        });
+
+      const expiresAt = new Date(
+        Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000
+      );
+      await db
+        .update(resourceShares)
+        .set({ expiresAt, revokedAt: null })
+        .where(eq(resourceShares.id, input.shareId));
+
+      return { status: "extended", expiresAt };
+    }),
+
+  /**
+   * Rotate share link token - generates new token, invalidates old
+   */
+  rotateShareLinkToken: protectedProcedure
+    .input(z.object({ shareId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const share = await db.query.resourceShares.findFirst({
+        where: eq(resourceShares.id, input.shareId),
+      });
+      if (!share) throw new TRPCError({ code: "NOT_FOUND" });
+
+      let resource;
+      if (share.resourceType === "view") {
+        resource = await db.query.views.findFirst({
+          where: eq(views.id, share.resourceId),
+        });
+      } else {
+        resource = await db.query.entities.findFirst({
+          where: eq(entities.id, share.resourceId),
+        });
+      }
+      if (!resource?.workspaceId) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: resource.workspaceId },
+        requiredPermission: "write",
+      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason || "Insufficient permissions",
+        });
+
+      const token = generateShareToken();
+      const tokenHash = hashToken(token);
+      await db
+        .update(resourceShares)
+        .set({ tokenHash, publicToken: null })
+        .where(eq(resourceShares.id, input.shareId));
+
+      return {
+        status: "rotated",
+        url: `${process.env.APP_URL}/s/${token}`,
+      };
     }),
 });

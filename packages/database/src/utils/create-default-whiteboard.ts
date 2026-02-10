@@ -189,6 +189,7 @@ export async function ensureDefaultWhiteboard(
     const viewId = randomUUID();
     // Use 'canvas' category for whiteboard (from @synap-core/types)
     const category = "canvas";
+    const yjsRoomId = `whiteboard-${document.id}`;
     const [view] = await db
       .insert(views)
       .values({
@@ -200,6 +201,7 @@ export async function ensureDefaultWhiteboard(
         name: "Main Whiteboard",
         description: "Default whiteboard for this workspace",
         documentId: document.id,
+        yjsRoomId,
         metadata: {
           entityCount: 0,
           createdBy: userId,

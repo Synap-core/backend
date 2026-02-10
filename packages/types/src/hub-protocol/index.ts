@@ -262,6 +262,8 @@ export interface MessageMetadata {
   usage?: TokenUsage;
   /** In-stream action proposals (create/update entity or document) for user approval */
   proposedActions?: ProposedAction[];
+  /** Proposal row IDs (same order as proposedActions) – use with proposals.approve/reject */
+  proposalIds?: string[];
   [key: string]: unknown; // Allow custom metadata
 }
 
