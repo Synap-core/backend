@@ -280,14 +280,14 @@ export const infiniteChatRouter = router({
       }
 
       // Create proposal rows for each stream proposedAction so approve/reject use the same table
-      const proposedActions = hubResponse?.proposedActions ?? [];
+      const finalProposedActions = hubResponse?.proposedActions ?? [];
       const proposalIds: string[] = [];
       const resolvedWorkspaceId = workspaceId ?? ctx.workspaceId ?? null;
 
-      if (proposedActions.length > 0 && resolvedWorkspaceId) {
+      if (finalProposedActions.length > 0 && resolvedWorkspaceId) {
         const { documents, entities } = await import("@synap/database/schema");
 
-        for (const action of proposedActions) {
+        for (const action of finalProposedActions) {
           try {
             if (action.toolName === "update_document") {
               const documentId = action.args?.documentId as string | undefined;

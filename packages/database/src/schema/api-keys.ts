@@ -138,3 +138,14 @@ export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 export function isValidScope(scope: string): scope is ApiKeyScope {
   return API_KEY_SCOPES.includes(scope as ApiKeyScope);
 }
+
+// Relations
+import { relations } from "drizzle-orm";
+import { users } from "./users.js";
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  user: one(users, {
+    fields: [apiKeys.userId],
+    references: [users.id],
+  }),
+}));
