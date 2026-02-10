@@ -8,9 +8,10 @@
  */
 
 import { router, protectedProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { API_KEY_SCOPES } from "@synap/database/schema";
-import { db, eq, apiKeys } from "@synap/database";
+import { db, eq, and, apiKeys, workspaceMembers } from "@synap/database";
 import { emitRequestEvent } from "../utils/emit-event.js";
 import { randomUUID, randomBytes } from "crypto";
 
