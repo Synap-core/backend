@@ -380,6 +380,69 @@ export type UserPreferencesUpdateValidatedEvent = BaseEvent<
 >;
 
 // ============================================================================
+// API KEY EVENTS
+// ============================================================================
+
+export type ApiKeyCreateRequestedEvent = BaseEvent<
+  "apiKeys.create.requested",
+  "apiKey",
+  {
+    keyName: string;
+    scope: string[];
+    expiresAt?: Date;
+    userId: string;
+  }
+>;
+
+export type ApiKeyRevokeRequestedEvent = BaseEvent<
+  "apiKeys.revoke.requested",
+  "apiKey",
+  {
+    id: string;
+    reason?: string;
+  }
+>;
+
+// ============================================================================
+// USER EVENTS
+// ============================================================================
+
+export type UserUpdateRequestedEvent = BaseEvent<
+  "users.update.requested",
+  "user",
+  {
+    updates: Record<string, unknown>;
+  }
+>;
+
+// ============================================================================
+// SYSTEM EVENTS
+// ============================================================================
+
+export type SystemOperationEvent = BaseEvent<
+  "system.operation.performed",
+  "system",
+  {
+    operation: string;
+    details: Record<string, unknown>;
+  }
+>;
+
+// ============================================================================
+// RELATION EVENTS
+// ============================================================================
+
+export type RelationCreateRequestedEvent = BaseEvent<
+  "relations.create.requested",
+  "relation",
+  {
+    sourceId: string;
+    targetId: string;
+    type: string;
+  }
+>;
+
+// ============================================================================
 // DOMAIN EVENT UNION
 // ============================================================================
 
@@ -418,11 +481,13 @@ export type DomainEvent =
   | ViewUpdateValidatedEvent
   // User preferences events (V3.0)
   | UserPreferencesUpdateRequestedEvent
-  | UserPreferencesUpdateValidatedEvent;
-
-// ============================================================================
-// TYPE HELPERS
-// ============================================================================
+  | UserPreferencesUpdateValidatedEvent
+  // New Events
+  | ApiKeyCreateRequestedEvent
+  | ApiKeyRevokeRequestedEvent
+  | UserUpdateRequestedEvent
+  | SystemOperationEvent
+  | RelationCreateRequestedEvent;
 
 /**
  * Extract all possible event type strings
