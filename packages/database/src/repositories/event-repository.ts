@@ -31,12 +31,13 @@ export type EventHook = (event: EventRecord) => void | Promise<void>;
 // LEGACY TYPES (for backward compatibility during migration)
 // ============================================================================
 
-export enum subjectType {
-  ENTITY = "entity",
-  RELATION = "relation",
-  USER = "user",
-  SYSTEM = "system",
-}
+export type subjectType = string;
+// export enum subjectType {
+//   ENTITY = "entity",
+//   RELATION = "relation",
+//   USER = "user",
+//   SYSTEM = "system",
+// }
 
 export enum EventSource {
   API = "api",

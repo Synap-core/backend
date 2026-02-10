@@ -14,13 +14,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 // REMOVED: Domain package - using simple string schemas instead
 // import { subjectTypeSchema, EventSourceSchema } from '@synap/domain';
 import { createSynapEvent } from "@synap-core/core";
-import {
-  db,
-  eq,
-  and,
-  workspaceMembers,
-  getEventRepository,
-} from "@synap/database";
+import { db, getEventRepository } from "@synap/database";
 import type { EventType, SubjectType } from "@synap/events";
 import { publishEvent } from "../utils/inngest-client.js";
 import { randomUUID } from "crypto";
