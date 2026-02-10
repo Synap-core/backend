@@ -9,17 +9,37 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
 import { requireUserId } from "../utils/user-scoped.js";
 // REMOVED: Domain package - using simple string schemas instead
 // import { subjectTypeSchema, EventSourceSchema } from '@synap/domain';
 import { createSynapEvent } from "@synap-core/core";
-import type { EventType } from "@synap/events";
-import { getEventRepository } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  workspaceMembers,
+  getEventRepository,
+} from "@synap/database";
+import type { EventType, SubjectType } from "@synap/events";
 import { publishEvent } from "../utils/inngest-client.js";
 import { randomUUID } from "crypto";
 
 // Temporary schemas until we refactor
-const subjectTypeSchema = z.enum(["entity", "relation", "user", "system"]);
+const subjectTypeSchema = z.enum([
+  "entity",
+  "relation",
+  "user",
+  "system",
+  "workspace",
+  "project",
+  "task",
+  "document",
+  "chat",
+  "message",
+  "apiKey",
+  "member",
+]) as z.ZodType<SubjectType>;
 const EventSourceSchema = z.enum([
   "api",
   "automation",
