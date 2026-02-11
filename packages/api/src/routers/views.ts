@@ -35,7 +35,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
 import { emitRequestEvent } from "../utils/emit-event.js";
-import { verifyPermission } from "@synap/database";
+import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 
 // Proper package imports
 import {
@@ -81,6 +81,8 @@ export const viewsRouter = router({
         config: z.record(z.string(), z.any()).optional(),
         // NEW: Embedded view IDs (for composite views)
         embeddedViewIds: z.array(z.string().uuid()).optional(),
+        // Optional metadata (e.g. homeScope: 'user' for user-scoped Home)
+        metadata: z.record(z.string(), z.any()).optional(),
         // Legacy: initialContent (for canvas views)
         initialContent: z.any().optional(),
       })
@@ -179,6 +181,11 @@ export const viewsRouter = router({
       const { randomUUID } = await import("crypto");
       const viewId = randomUUID();
 
+      const baseMetadata = {
+        entityCount: 0,
+        createdBy: ctx.userId,
+        ...input.metadata,
+      };
       const optimisticView = {
         id: viewId,
         workspaceId: input.workspaceId,
@@ -188,10 +195,7 @@ export const viewsRouter = router({
         name: input.name,
         description: input.description,
         documentId: doc.id,
-        metadata: {
-          entityCount: 0,
-          createdBy: ctx.userId,
-        },
+        metadata: baseMetadata,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -212,6 +216,7 @@ export const viewsRouter = router({
           query: input.query || {},
           config: input.config || {},
           embeddedViewIds: input.embeddedViewIds || [],
+          metadata: baseMetadata,
           userId: ctx.userId,
         },
         userId: ctx.userId,
@@ -260,6 +265,62 @@ export const viewsRouter = router({
       });
 
       return await query;
+    }),
+
+  /**
+   * Get Home bento view for a workspace (workspace-level, user-level, or effective).
+   * - effective: user home if exists, else workspace home
+   * - workspace: base home (admin-only edit)
+   * - user: current user's home (null if not created)
+   */
+  getHome: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        scope: z.enum(["workspace", "user", "effective"]).default("effective"),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const permResult = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: input.workspaceId },
+        requiredPermission: "read",
+      });
+      if (!permResult.allowed)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: permResult.reason ?? "Insufficient permissions",
+        });
+
+      const homeScope = (m: unknown) =>
+        (m as Record<string, string> | null)?.homeScope;
+
+      if (input.scope === "user" || input.scope === "effective") {
+        const bentoViews = await db.query.views.findMany({
+          where: and(
+            eq(views.workspaceId, input.workspaceId),
+            eq(views.type, "bento"),
+            eq(views.userId, ctx.userId)
+          ),
+        });
+        const userHome = bentoViews.find(
+          (v) => homeScope(v.metadata) === "user"
+        );
+        if (userHome) return { view: userHome };
+        if (input.scope === "user") return { view: null };
+      }
+
+      const bentoViews = await db.query.views.findMany({
+        where: and(
+          eq(views.workspaceId, input.workspaceId),
+          eq(views.type, "bento")
+        ),
+      });
+      const workspaceHome = bentoViews.find(
+        (v) => homeScope(v.metadata) === "workspace"
+      );
+      return { view: workspaceHome ?? null };
     }),
 
   /**
@@ -703,13 +764,29 @@ export const viewsRouter = router({
         db,
         userId: ctx.userId,
         workspace: { id: view.workspaceId },
-        requiredPermission: "write", // or 'read' for requireViewer
+        requiredPermission: "write",
       });
       if (!permResult.allowed)
         throw new TRPCError({
           code: "FORBIDDEN",
           message: permResult.reason || "Insufficient permissions",
         });
+
+      // Workspace Home (metadata.homeScope === 'workspace') is editable only by admin/owner
+      const metadata = (view.metadata as Record<string, unknown>) || {};
+      if (metadata.homeScope === "workspace") {
+        const member = await getWorkspaceMembership(
+          db,
+          view.workspaceId,
+          ctx.userId
+        );
+        const role = member?.role;
+        if (role !== "admin" && role !== "owner")
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace admins can edit the workspace Home",
+          });
+      }
 
       // Validate config against view type schema (use input.type or existing view.type)
       const viewType = (input.type || view.type) as ViewType;

@@ -46,6 +46,7 @@ export const viewsHandler = async ({
           query: (data.query as Record<string, unknown>) || undefined,
           config: (data.config as Record<string, unknown>) || undefined,
           embeddedViewIds: (data.embeddedViewIds as string[]) || undefined,
+          metadata: (data.metadata as Record<string, unknown>) || undefined,
           userId,
         },
         userId
