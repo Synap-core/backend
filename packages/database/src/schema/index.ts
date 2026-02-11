@@ -51,6 +51,7 @@ export {
   type DefaultTemplates,
   type CustomEntityType,
   type EntityMetadataSchemas,
+  type EntityOpenMode,
   type UIPreferences,
   type GraphPreferences,
   insertUserPreferenceSchema,

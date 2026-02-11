@@ -1238,7 +1238,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         log: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             subjectId: string;
-            subjectType: "user" | "system" | "entity" | "relation";
+            subjectType: unknown;
             eventType: string;
             data: Record<string, unknown>;
             version: number;
@@ -1262,6 +1262,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             type?: string | undefined;
           };
           output: EventRecord[];
+          meta: object;
+        }>;
+        search: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            userId?: string | undefined;
+            eventType?: string | undefined;
+            subjectType?: unknown;
+            subjectId?: string | undefined;
+            correlationId?: string | undefined;
+            fromDate?: Date | undefined;
+            toDate?: Date | undefined;
+            limit?: number | undefined;
+            offset?: number | undefined;
+            workspaceId?: string | undefined;
+          };
+          output: EventRecord[];
+          meta: object;
+        }>;
+        count: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            userId?: string | undefined;
+            eventType?: string | undefined;
+            subjectType?: unknown;
+            fromDate?: Date | undefined;
+            toDate?: Date | undefined;
+            workspaceId?: string | undefined;
+          };
+          output: {
+            count: number;
+          };
           meta: object;
         }>;
       }>
@@ -1883,8 +1913,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             targetType?:
               | "entity"
               | "document"
-              | "whiteboard"
               | "view"
+              | "whiteboard"
               | undefined;
             targetId?: string | undefined;
             status?: "pending" | "validated" | "rejected" | "all" | undefined;
@@ -1934,9 +1964,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             targetType:
               | "workspace"
               | "entity"
-              | "relation"
               | "document"
-              | "view";
+              | "view"
+              | "relation";
             changeType: "create" | "update" | "delete";
             data: Record<string, any>;
             targetId?: string | undefined;
@@ -2416,6 +2446,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             status: string;
             message: string;
           };
+          meta: object;
+        }>;
+        listSystemKeys: import("@trpc/server").TRPCQueryProcedure<{
+          input: void;
+          output: {
+            id: string;
+            keyName: string;
+            keyPrefix: string;
+            hubId: string | null;
+            scope: string[];
+            isActive: boolean;
+            expiresAt: Date | null;
+            lastUsedAt: Date | null;
+            usageCount: number;
+            createdAt: Date;
+            user: {
+              id: string;
+              email: string;
+              name: string | null;
+            };
+          }[];
+          meta: object;
+        }>;
+        listWorkspaceKeys: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            workspaceId: string;
+          };
+          output: {
+            id: string;
+            keyName: string;
+            keyPrefix: string;
+            hubId: string | null;
+            scope: string[];
+            isActive: boolean;
+            expiresAt: Date | null;
+            lastUsedAt: Date | null;
+            usageCount: number;
+            createdAt: Date;
+            user: {
+              id: string;
+              email: string;
+              name: string | null;
+            };
+          }[];
           meta: object;
         }>;
       }>
@@ -3218,7 +3292,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         entities: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             query: string;
-            type?: "task" | "document" | "note" | "project" | undefined;
+            type?: "task" | "document" | "project" | "note" | undefined;
             limit?: number | undefined;
           };
           output: {
@@ -3243,7 +3317,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         semantic: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             query: string;
-            type?: "task" | "document" | "note" | "project" | undefined;
+            type?: "task" | "document" | "project" | "note" | undefined;
             limit?: number | undefined;
             threshold?: number | undefined;
           };
@@ -3686,6 +3760,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             role: string;
             joinedAt: Date;
             invitedBy: string | null;
+            user: {
+              email: string;
+              name: string | null;
+              id: string;
+              updatedAt: Date;
+              emailVerified: boolean;
+              avatarUrl: string | null;
+              timezone: string;
+              locale: string;
+              kratosIdentityId: string;
+              lastSyncedAt: Date | null;
+              createdAt: Date;
+            };
           }[];
           meta: object;
         }>;
@@ -3704,7 +3791,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           input: {
             workspaceId: string;
             userId: string;
-            role: "editor" | "viewer" | "admin";
+            role: "admin" | "editor" | "viewer";
           };
           output: {
             status: string;
@@ -3716,7 +3803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           input: {
             workspaceId: string;
             email: string;
-            role: "editor" | "viewer" | "admin";
+            role: "admin" | "editor" | "viewer";
           };
           output: {
             email: string;
@@ -4414,6 +4501,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             resourceType: "entity" | "document" | "view";
             resourceId: string;
             expiresInDays?: number | undefined;
+            access?: "workspace_only" | "anyone_with_link" | undefined;
+            password?: string | undefined;
           };
           output: {
             status: string;
@@ -4446,6 +4535,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         getPublic: import("@trpc/server").TRPCQueryProcedure<{
           input: {
             token: string;
+            password?: string | undefined;
           };
           output: {
             resource:
@@ -4491,7 +4581,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   embeddedViewIds: string[] | null;
                   document: never;
                 };
+            resourceType: string;
             permissions: unknown;
+          };
+          meta: object;
+        }>;
+        listByWorkspace: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            workspaceId: string;
+          };
+          output: {
+            shares: {
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              expiresAt: Date | null;
+              createdBy: string;
+              revokedAt: Date | null;
+              permissions: unknown;
+              resourceType: string;
+              resourceId: string;
+              visibility: string;
+              publicToken: string | null;
+              tokenHash: string | null;
+              passwordHash: string | null;
+              access: string | null;
+              invitedUsers: string[] | null;
+              viewCount: number | null;
+              lastAccessedAt: Date | null;
+            }[];
+            resourceLabels: Record<string, string>;
           };
           meta: object;
         }>;
@@ -4508,11 +4627,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             createdAt: Date;
             expiresAt: Date | null;
             createdBy: string;
+            revokedAt: Date | null;
             permissions: unknown;
             resourceType: string;
             resourceId: string;
             visibility: string;
             publicToken: string | null;
+            tokenHash: string | null;
+            passwordHash: string | null;
+            access: string | null;
             invitedUsers: string[] | null;
             viewCount: number | null;
             lastAccessedAt: Date | null;
@@ -4525,6 +4648,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           output: {
             status: string;
+          };
+          meta: object;
+        }>;
+        extendShareLink: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            shareId: string;
+            expiresInDays: number;
+          };
+          output: {
+            status: string;
+            expiresAt: Date;
+          };
+          meta: object;
+        }>;
+        rotateShareLinkToken: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            shareId: string;
+          };
+          output: {
+            status: string;
+            url: string;
           };
           meta: object;
         }>;
@@ -4542,9 +4686,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           input: {
             targetType?:
               | "entity"
+              | "inbox_item"
               | "document"
               | "project"
-              | "inbox_item"
               | undefined;
             entityType?: string | undefined;
             inboxItemType?: string | undefined;
@@ -4572,7 +4716,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         getDefault: import("@trpc/server").TRPCQueryProcedure<{
           input: {
-            targetType: "entity" | "document" | "project" | "inbox_item";
+            targetType: "entity" | "inbox_item" | "document" | "project";
             entityType?: string | undefined;
             inboxItemType?: string | undefined;
             workspaceId?: string | undefined;
@@ -4583,7 +4727,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         create: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             name: string;
-            targetType: "entity" | "document" | "project" | "inbox_item";
+            targetType: "entity" | "inbox_item" | "document" | "project";
             config: {
               layout?:
                 | {
@@ -4960,6 +5104,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               authorId: string;
               message: string | null;
             }[];
+            latest: {
+              currentVersion: number;
+              lastSavedVersion: number;
+            };
           };
           meta: object;
         }>;

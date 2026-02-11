@@ -16,6 +16,7 @@ export type {
   DefaultTemplates,
   CustomEntityType,
   EntityMetadataSchemas,
+  EntityOpenMode,
   UIPreferences,
   GraphPreferences,
 } from "../../../database/src/schema/index.js";

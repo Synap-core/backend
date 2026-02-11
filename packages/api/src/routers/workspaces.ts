@@ -274,6 +274,7 @@ export const workspacesRouter = router({
       return await db.query.workspaceMembers.findMany({
         where: eq(workspaceMembers.workspaceId, input.workspaceId),
         orderBy: [desc(workspaceMembers.joinedAt)],
+        with: { user: true },
       });
     }),
 
