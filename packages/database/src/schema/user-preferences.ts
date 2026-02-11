@@ -47,6 +47,9 @@ export interface EntityMetadataSchemas {
   [entityType: string]: Record<string, any>;
 }
 
+/** How to open entity detail when user clicks an entity (workspace-wide) */
+export type EntityOpenMode = "floating" | "side" | "modal";
+
 export interface UIPreferences {
   sidebarCollapsed?: boolean;
   panelPositions?: Record<string, { x: number; y: number }>;
@@ -55,6 +58,8 @@ export interface UIPreferences {
   fontSize?: string;
   animations?: boolean;
   defaultView?: "list" | "grid" | "timeline";
+  /** Where to open entity detail: floating panel (default), side panel, or modal */
+  entityOpenMode?: EntityOpenMode;
 }
 
 export interface GraphPreferences {

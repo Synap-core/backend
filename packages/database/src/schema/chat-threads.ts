@@ -50,7 +50,8 @@ export const chatThreads = pgTable(
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
-    // Projects: Removed - use relations table if needed
+    /** Workspace scope for listing/filtering; null = legacy (user-scoped only). */
+    workspaceId: uuid("workspace_id"),
 
     // Thread metadata
     title: text("title"),
@@ -112,6 +113,9 @@ export const chatThreads = pgTable(
   },
   (table) => ({
     userIdIdx: index("chat_threads_user_id_idx").on(table.userId),
+    workspaceIdIdx: index("chat_threads_workspace_id_idx").on(
+      table.workspaceId
+    ),
     parentThreadIdx: index("chat_threads_parent_thread_id_idx").on(
       table.parentThreadId
     ),

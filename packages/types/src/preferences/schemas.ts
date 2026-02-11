@@ -64,6 +64,8 @@ export const UIPreferencesSchema = z
     fontSize: z.string().optional(),
     animations: z.boolean().optional(),
     defaultView: z.enum(["list", "grid", "timeline"]).optional(),
+    /** Where to open entity detail: floating | side | modal */
+    entityOpenMode: z.enum(["floating", "side", "modal"]).optional(),
   })
   .optional();
 

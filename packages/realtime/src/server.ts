@@ -106,6 +106,10 @@ presenceNamespace.on("connection", (socket) => {
 
   // Join room for this view (or workspace)
   socket.join(`view:${effectiveViewId}`);
+  // Also join workspace room so bridge emissions to workspace:${workspaceId} reach this client
+  if (workspaceId) {
+    socket.join(`workspace:${workspaceId}`);
+  }
 
   // Register user in collaboration manager
   const session = collaborationManager.userJoined({

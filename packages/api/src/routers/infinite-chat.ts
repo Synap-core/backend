@@ -26,6 +26,7 @@ import {
   ProposalStatus,
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import type { AIStep, HubResponse, ProposedAction } from "@synap-core/types";
@@ -118,7 +119,7 @@ export const infiniteChatRouter = router({
         .insert(chatThreads)
         .values({
           userId: ctx.userId,
-          // Projects: Removed projectIds (use relations table if needed)
+          workspaceId: workspaceId ?? null,
           threadType: ChatThreadType.MAIN,
           status: ChatThreadStatus.ACTIVE,
           agentId: input.agentId || "orchestrator", // Explicitly provide agentId (required, has default in schema)
@@ -130,9 +131,11 @@ export const infiniteChatRouter = router({
 
       const threadId = thread.id;
 
-      // Emit real-time events
-      ctx.socketIO?.emit("thread:created", {
-        threadId,
+      // Emit real-time events via Realtime bridge
+      emitChatEvent({
+        event: "thread:created",
+        data: { threadId, userId: ctx.userId },
+        workspaceId: workspaceId ?? null,
         userId: ctx.userId,
       });
 
@@ -140,20 +143,52 @@ export const infiniteChatRouter = router({
     }),
 
   /**
-   * Send message to Intelligence Hub and get AI response (with streaming)
+   * Send message to Intelligence Hub and get AI response (with streaming).
+   * When threadId is omitted, the backend creates a new thread and attaches the message (e.g. for command-palette "Ask AI" or first message).
    */
   sendMessage: protectedProcedure
     .input(
       z.object({
-        threadId: z.string().uuid(),
+        /** When omitted, backend creates a new thread and returns its id in the response. */
+        threadId: z.string().uuid().optional(),
         content: z.string().min(1),
-        /** Active workspace (for entity create/update – event chain). Prefer from context when using workspaceProcedure. */
+        /** Required when threadId is omitted; otherwise used for entity create/update – event chain. */
         workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const { threadId, content } = input;
+      let threadId = input.threadId;
+      const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+
+      // Create thread when not provided (single entry point: "send message" from anywhere)
+      if (!threadId) {
+        if (!workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "workspaceId is required when sending a message without a thread",
+          });
+        }
+        const [thread] = await db
+          .insert(chatThreads)
+          .values({
+            userId: ctx.userId,
+            workspaceId: workspaceId ?? null,
+            threadType: ChatThreadType.MAIN,
+            status: ChatThreadStatus.ACTIVE,
+            agentId: "orchestrator",
+            agentType: ChatThreadAgentType.DEFAULT,
+          })
+          .returning();
+        threadId = thread.id;
+        emitChatEvent({
+          event: "thread:created",
+          data: { threadId, userId: ctx.userId },
+          workspaceId: workspaceId ?? null,
+          userId: ctx.userId,
+        });
+      }
 
       // Get thread
       const thread = await db.query.chatThreads.findFirst({
@@ -161,7 +196,10 @@ export const infiniteChatRouter = router({
       });
 
       if (!thread) {
-        throw new Error("Thread not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Thread not found",
+        });
       }
 
       // Save user message
@@ -207,26 +245,41 @@ export const infiniteChatRouter = router({
           if (chunk.type === "chunk" && chunk.content) {
             fullContent += chunk.content;
 
-            ctx.socketIO?.emit("chat:stream", {
-              threadId,
-              type: "chunk",
-              content: chunk.content,
-              isComplete: false,
+            emitChatEvent({
+              event: "chat:stream",
+              data: {
+                threadId,
+                type: "chunk",
+                content: chunk.content,
+                isComplete: false,
+              },
+              workspaceId: workspaceId ?? null,
+              userId: ctx.userId,
             });
           } else if (chunk.type === "step" && chunk.step) {
             aiSteps.push(chunk.step);
 
-            ctx.socketIO?.emit("ai:step", {
-              threadId,
-              messageId: userMessageId,
-              step: chunk.step,
+            emitChatEvent({
+              event: "ai:step",
+              data: {
+                threadId,
+                messageId: userMessageId,
+                step: chunk.step,
+              },
+              workspaceId: workspaceId ?? null,
+              userId: ctx.userId,
             });
           } else if (chunk.type === "proposal" && chunk.proposal) {
             proposedActions.push(chunk.proposal);
-            ctx.socketIO?.emit("ai:proposal", {
-              threadId,
-              messageId: userMessageId,
-              proposal: chunk.proposal,
+            emitChatEvent({
+              event: "ai:proposal",
+              data: {
+                threadId,
+                messageId: userMessageId,
+                proposal: chunk.proposal,
+              },
+              workspaceId: workspaceId ?? null,
+              userId: ctx.userId,
             });
           } else if (chunk.type === "entities" && chunk.entities) {
             hubResponse.entities = chunk.entities;
@@ -243,10 +296,11 @@ export const infiniteChatRouter = router({
             hubResponse.proposedActions =
               proposedActions.length > 0 ? proposedActions : undefined;
 
-            ctx.socketIO?.emit("chat:stream", {
-              threadId,
-              type: "complete",
-              isComplete: true,
+            emitChatEvent({
+              event: "chat:stream",
+              data: { threadId, type: "complete", isComplete: true },
+              workspaceId: workspaceId ?? null,
+              userId: ctx.userId,
             });
           }
         }
@@ -257,13 +311,18 @@ export const infiniteChatRouter = router({
         );
 
         // ✅ ADDED: Notify frontend of streaming failure (Issue #9)
-        ctx.socketIO?.emit("chat:stream:error", {
-          threadId,
-          error:
-            streamError instanceof Error
-              ? streamError.message
-              : "Streaming failed",
-          fallback: true,
+        emitChatEvent({
+          event: "chat:stream:error",
+          data: {
+            threadId,
+            error:
+              streamError instanceof Error
+                ? streamError.message
+                : "Streaming failed",
+            fallback: true,
+          },
+          workspaceId: workspaceId ?? null,
+          userId: ctx.userId,
         });
 
         // Fallback to non-streaming using the same resolved service
@@ -439,19 +498,24 @@ export const infiniteChatRouter = router({
         }
       }
 
-      ctx.socketIO?.emit("chat:message", {
-        threadId,
-        message: {
-          id: assistantMessageId,
+      emitChatEvent({
+        event: "chat:message",
+        data: {
           threadId,
-          role: "assistant",
-          content: fullContent,
+          message: {
+            id: assistantMessageId,
+            threadId,
+            role: "assistant",
+            content: fullContent,
+            userId: ctx.userId,
+            timestamp: new Date(),
+            previousHash: userMessageHash,
+            hash: assistantMessageHash,
+            metadata: messageMetadata,
+          },
           userId: ctx.userId,
-          timestamp: new Date(),
-          previousHash: userMessageHash,
-          hash: assistantMessageHash,
-          metadata: messageMetadata,
         },
+        workspaceId: workspaceId ?? null,
         userId: ctx.userId,
       });
 
@@ -483,6 +547,7 @@ export const infiniteChatRouter = router({
         .where(eq(chatThreads.id, threadId));
 
       return {
+        threadId,
         messageId: assistantMessageId,
         content: fullContent,
         entities: createdEntities,
@@ -503,7 +568,33 @@ export const infiniteChatRouter = router({
         limit: z.number().min(1).max(100).default(50),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      const thread = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, input.threadId),
+      });
+      if (!thread) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Thread not found",
+        });
+      }
+      if (thread.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Access denied to this thread",
+        });
+      }
+      if (
+        ctx.workspaceId &&
+        thread.workspaceId &&
+        thread.workspaceId !== ctx.workspaceId
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Thread is not in the current workspace",
+        });
+      }
+
       const messages = await db.query.conversationMessages.findMany({
         where: and(
           eq(conversationMessages.threadId, input.threadId),
@@ -526,17 +617,23 @@ export const infiniteChatRouter = router({
     }),
 
   /**
-   * List threads
+   * List threads (optionally filtered by workspace)
    */
   listThreads: protectedProcedure
     .input(
       z.object({
+        /** When provided, only threads in this workspace are returned. Omit for legacy: all user threads. */
+        workspaceId: z.string().uuid().optional(),
         threadType: z.enum(["main", "branch"]).optional(),
         limit: z.number().min(1).max(100).default(20),
       })
     )
     .query(async ({ input, ctx }) => {
       const conditions: any[] = [eq(chatThreads.userId, ctx.userId)];
+
+      if (input.workspaceId !== undefined) {
+        conditions.push(eq(chatThreads.workspaceId, input.workspaceId));
+      }
 
       if (input.threadType) {
         conditions.push(
@@ -644,7 +741,20 @@ export const infiniteChatRouter = router({
       });
 
       if (!thread) {
-        throw new Error("Thread not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Thread not found",
+        });
+      }
+      if (
+        ctx.workspaceId &&
+        thread.workspaceId &&
+        thread.workspaceId !== ctx.workspaceId
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Thread is not in the current workspace",
+        });
       }
 
       // Get context (entities/documents) if requested
@@ -733,9 +843,10 @@ export const infiniteChatRouter = router({
         })
         .where(eq(chatThreads.id, input.threadId));
 
-      // Emit real-time event
-      ctx.socketIO?.emit("thread:updated", {
-        threadId: input.threadId,
+      emitChatEvent({
+        event: "thread:updated",
+        data: { threadId: input.threadId, userId: ctx.userId },
+        workspaceId: thread.workspaceId ?? ctx.workspaceId ?? null,
         userId: ctx.userId,
       });
 
@@ -776,9 +887,10 @@ export const infiniteChatRouter = router({
         })
         .where(eq(chatThreads.id, input.threadId));
 
-      // Emit real-time event
-      ctx.socketIO?.emit("thread:archived", {
-        threadId: input.threadId,
+      emitChatEvent({
+        event: "thread:archived",
+        data: { threadId: input.threadId, userId: ctx.userId },
+        workspaceId: thread.workspaceId ?? ctx.workspaceId ?? null,
         userId: ctx.userId,
       });
 

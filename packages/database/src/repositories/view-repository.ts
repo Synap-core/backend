@@ -47,6 +47,8 @@ export interface CreateViewInput {
   config?: Record<string, unknown>;
   // NEW: Embedded view IDs (for composite views)
   embeddedViewIds?: string[];
+  // Optional metadata (e.g. homeScope: 'user' for user-scoped Home)
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateViewInput {
@@ -115,8 +117,8 @@ export class ViewRepository extends BaseRepository<
         config: data.config || {},
         // NEW: Embedded view IDs (for composite views)
         embeddedViewIds: data.embeddedViewIds || [],
-        // Metadata (for entity orders, etc.)
-        metadata: {},
+        // Metadata (entity orders, homeScope, etc.)
+        metadata: (data.metadata ?? {}) as Record<string, unknown>,
       } as NewView)
       .returning();
 

@@ -177,11 +177,11 @@ export const BentoViewConfigSchema = z.object({
         }),
         variant: z.enum(["compact", "detailed"]).optional(),
       }),
-      // Widget block
+      // Widget block (widgetType = opaque string; frontend registry decides renderer)
       z.object({
         id: z.string(),
         kind: z.literal("widget"),
-        widgetType: z.enum(["metric", "chart"]),
+        widgetType: z.string().min(1),
         query: z
           .object({
             scopeProfileIds: z.array(z.string().uuid()),
