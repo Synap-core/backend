@@ -35,6 +35,10 @@ export * from "./user-entity-state.js";
 // Intelligence Service Registry
 export * from "./intelligence-services.js";
 
+// Intelligence Commands & Runs (Raycast-style commands + audit)
+export * from "./intelligence-commands.js";
+export * from "./command-runs.js";
+
 // NEW: Workspace system
 export * from "./workspaces.js";
 export * from "./project-members.js";

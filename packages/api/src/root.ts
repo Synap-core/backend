@@ -33,6 +33,7 @@ import { messageLinksRouter } from "./routers/message-links.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
+import { intelligenceRouter } from "./routers/intelligence.js";
 
 /**
  * Core API Router
@@ -55,6 +56,7 @@ export const coreRouter = router({
   storage: filesRouter,
   notifications: inboxRouter,
   intelligenceRegistry: intelligenceRegistryRouter,
+  intelligence: intelligenceRouter,
   capabilities: capabilitiesRouter,
   search: searchRouter,
   relations: relationsRouter,
