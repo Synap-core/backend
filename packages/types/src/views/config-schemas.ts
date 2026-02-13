@@ -44,9 +44,10 @@ export const TableViewConfigSchema = BaseViewConfigSchema.extend({
 
 /**
  * Kanban view config
+ * groupByField optional so partial/empty config on load doesn't fail validation; frontend applies default (e.g. metadata.status)
  */
 export const KanbanViewConfigSchema = BaseViewConfigSchema.extend({
-  groupByField: z.string(),
+  groupByField: z.string().optional(),
   cardFields: z.array(z.string()).optional(),
   cardSettings: z
     .object({
@@ -84,27 +85,30 @@ export const GalleryViewConfigSchema = BaseViewConfigSchema.extend({
 
 /**
  * Calendar view config
+ * dateField optional so partial config on load doesn't fail validation
  */
 export const CalendarViewConfigSchema = BaseViewConfigSchema.extend({
-  dateField: z.string(),
+  dateField: z.string().optional(),
   endDateField: z.string().optional(),
   colorField: z.string().optional(),
 });
 
 /**
  * Gantt view config
+ * dateField/endDateField optional so partial config on load doesn't fail validation
  */
 export const GanttViewConfigSchema = BaseViewConfigSchema.extend({
-  dateField: z.string(),
-  endDateField: z.string(),
+  dateField: z.string().optional(),
+  endDateField: z.string().optional(),
   groupByField: z.string().optional(),
 });
 
 /**
  * Timeline view config
+ * timeField optional so partial config on load doesn't fail validation
  */
 export const TimelineViewConfigSchema = BaseViewConfigSchema.extend({
-  timeField: z.string(),
+  timeField: z.string().optional(),
   groupByField: z.string().optional(),
 });
 
