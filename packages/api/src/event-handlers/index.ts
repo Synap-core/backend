@@ -110,9 +110,14 @@ export async function processEvents() {
         if (eventInfo) {
           const { phase } = eventInfo;
 
-          // Forward validated/completed events to Inngest for background processing
+          // Forward requested/validated/completed events to Inngest for background processing
           // This is the bridge between the Event Store and Inngest
-          if (phase === "requested" || phase === "validated") {
+          // "completed" is needed for workspaces.create.completed (default whiteboard, views, commands)
+          if (
+            phase === "requested" ||
+            phase === "validated" ||
+            phase === "completed"
+          ) {
             logger.info(
               { eventId: event.id, eventType: event.type, phase },
               "Forwarding event to Inngest"
@@ -129,7 +134,8 @@ export async function processEvents() {
           // Legacy event format - try to forward if it looks like a unified event
           if (
             event.type.includes(".requested") ||
-            event.type.includes(".validated")
+            event.type.includes(".validated") ||
+            event.type.includes(".completed")
           ) {
             logger.info(
               { eventId: event.id, eventType: event.type },

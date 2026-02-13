@@ -99,6 +99,7 @@ import {
   backgroundTasksExecutor,
   createDefaultWhiteboard,
   createDefaultViews,
+  createDefaultCommands,
 } from "./executors/index.js";
 
 /**
@@ -142,4 +143,5 @@ export const functions = [
   backgroundTasksExecutor,
   createDefaultWhiteboard,
   createDefaultViews,
+  createDefaultCommands,
 ];

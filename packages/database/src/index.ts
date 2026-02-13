@@ -50,6 +50,12 @@ export {
   type EnsureDefaultViewsResult,
 } from "./utils/ensure-default-views.js";
 
+// Export ensureDefaultCommands utility
+export {
+  ensureDefaultCommands,
+  type EnsureDefaultCommandsResult,
+} from "./utils/ensure-default-commands.js";
+
 // Export document types for type safety
 export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
 export {
