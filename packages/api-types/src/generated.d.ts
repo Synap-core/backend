@@ -121,6 +121,27 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
       {},
       {}
     >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "workspace_id";
+        tableName: "chat_threads";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
     title: import("drizzle-orm/pg-core").PgColumn<
       {
         name: "title";
@@ -454,6 +475,18 @@ declare enum ThreadDocumentConflictStatus {
   NONE = "none",
   PENDING = "pending",
   RESOLVED = "resolved",
+}
+export interface DerivedInput {
+  name: string;
+  label?: string;
+  type?: string;
+  options?: string[];
+  default?: string;
+}
+export interface InputOverride {
+  label?: string;
+  default?: string;
+  options?: string[];
 }
 /**
  * Workspaces Schema - Multi-user workspace support
@@ -1488,6 +1521,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             | {
                 threadId: string;
                 thread: {
+                  workspaceId: string | null;
                   userId: string;
                   id: string;
                   updatedAt: Date;
@@ -1512,11 +1546,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         sendMessage: import("@trpc/server").TRPCMutationProcedure<{
           input: {
-            threadId: string;
             content: string;
+            threadId?: string | undefined;
             workspaceId?: string | undefined;
           };
           output: {
+            threadId: string;
             messageId: `${string}-${string}-${string}-${string}-${string}`;
             content: string;
             entities: {
@@ -1527,6 +1562,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             branchDecision: BranchDecision | undefined;
             branchThread:
               | {
+                  workspaceId: string | null;
                   userId: string;
                   id: string;
                   updatedAt: Date;
@@ -1639,11 +1675,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         listThreads: import("@trpc/server").TRPCQueryProcedure<{
           input: {
+            workspaceId?: string | undefined;
             threadType?: "main" | "branch" | undefined;
             limit?: number | undefined;
           };
           output: {
             threads: {
+              workspaceId: string | null;
               userId: string;
               id: string;
               updatedAt: Date;
@@ -1670,6 +1708,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           output: {
             branches: {
+              workspaceId: string | null;
               userId: string;
               id: string;
               updatedAt: Date;
@@ -1709,6 +1748,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           output: {
             thread: {
+              workspaceId: string | null;
               userId: string;
               id: string;
               updatedAt: Date;
@@ -1800,6 +1840,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               children: any[];
             } | null;
             flatBranches: {
+              workspaceId: string | null;
               userId: string;
               id: string;
               updatedAt: Date;
@@ -1818,6 +1859,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               mergedAt: Date | null;
             }[];
             activeBranches: {
+              workspaceId: string | null;
               userId: string;
               id: string;
               updatedAt: Date;
@@ -1836,6 +1878,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               mergedAt: Date | null;
             }[];
             mergedBranches: {
+              workspaceId: string | null;
               userId: string;
               id: string;
               updatedAt: Date;
@@ -1912,8 +1955,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             workspaceId?: string | undefined;
             targetType?:
               | "entity"
-              | "document"
               | "view"
+              | "document"
               | "whiteboard"
               | undefined;
             targetId?: string | undefined;
@@ -1964,8 +2007,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             targetType:
               | "workspace"
               | "entity"
-              | "document"
               | "view"
+              | "document"
               | "relation";
             changeType: "create" | "update" | "delete";
             data: Record<string, any>;
@@ -3239,6 +3282,233 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
       }>
     >;
+    intelligence: import("@trpc/server").TRPCBuiltRouter<
+      {
+        ctx: Context;
+        meta: object;
+        errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+        transformer: true;
+      },
+      import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+        listCommands: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            limit?: number | undefined;
+          };
+          output: {
+            commands: {
+              workspaceId: string;
+              id: string;
+              updatedAt: Date;
+              createdAt: Date;
+              title: string;
+              createdBy: string;
+              promptTemplate: string;
+              compiledTemplateAst: unknown;
+              derivedInputs: DerivedInput[] | null;
+              inputOverrides: Record<string, InputOverride> | null;
+              allowedTools: string[] | null;
+              allowedEntityTypes: string[] | null;
+              maxEntitiesCreatedPerRun: number | null;
+              canCreateViews: boolean;
+              outputMode: "text" | "proposal" | "view";
+              permissionsProfile: "read_only" | "propose_writes";
+              sharedScope: "workspace" | "user";
+            }[];
+          };
+          meta: object;
+        }>;
+        getCommand: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            workspaceId: string;
+            id: string;
+            updatedAt: Date;
+            createdAt: Date;
+            title: string;
+            createdBy: string;
+            promptTemplate: string;
+            compiledTemplateAst: unknown;
+            derivedInputs: DerivedInput[] | null;
+            inputOverrides: Record<string, InputOverride> | null;
+            allowedTools: string[] | null;
+            allowedEntityTypes: string[] | null;
+            maxEntitiesCreatedPerRun: number | null;
+            canCreateViews: boolean;
+            outputMode: "text" | "proposal" | "view";
+            permissionsProfile: "read_only" | "propose_writes";
+            sharedScope: "workspace" | "user";
+          };
+          meta: object;
+        }>;
+        createCommand: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            title: string;
+            promptTemplate: string;
+            inputOverrides?: Record<string, any> | undefined;
+            allowedTools?: string[] | undefined;
+            allowedEntityTypes?: string[] | undefined;
+            maxEntitiesCreatedPerRun?: number | undefined;
+            canCreateViews?: boolean | undefined;
+            outputMode?: "text" | "proposal" | "view" | undefined;
+            permissionsProfile?: "read_only" | "propose_writes" | undefined;
+            sharedScope?: "workspace" | "user" | undefined;
+          };
+          output: {
+            workspaceId: string;
+            id: string;
+            updatedAt: Date;
+            createdAt: Date;
+            title: string;
+            createdBy: string;
+            promptTemplate: string;
+            compiledTemplateAst: unknown;
+            derivedInputs: DerivedInput[] | null;
+            inputOverrides: Record<string, InputOverride> | null;
+            allowedTools: string[] | null;
+            allowedEntityTypes: string[] | null;
+            maxEntitiesCreatedPerRun: number | null;
+            canCreateViews: boolean;
+            outputMode: "text" | "proposal" | "view";
+            permissionsProfile: "read_only" | "propose_writes";
+            sharedScope: "workspace" | "user";
+          };
+          meta: object;
+        }>;
+        updateCommand: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+            title?: string | undefined;
+            promptTemplate?: string | undefined;
+            inputOverrides?: Record<string, any> | undefined;
+            allowedTools?: string[] | undefined;
+            allowedEntityTypes?: string[] | undefined;
+            maxEntitiesCreatedPerRun?: number | null | undefined;
+            canCreateViews?: boolean | undefined;
+            outputMode?: "text" | "proposal" | "view" | undefined;
+            permissionsProfile?: "read_only" | "propose_writes" | undefined;
+            sharedScope?: "workspace" | "user" | undefined;
+          };
+          output: {
+            id: string;
+            workspaceId: string;
+            createdBy: string;
+            title: string;
+            promptTemplate: string;
+            compiledTemplateAst: unknown;
+            derivedInputs: DerivedInput[] | null;
+            inputOverrides: Record<string, InputOverride> | null;
+            allowedTools: string[] | null;
+            allowedEntityTypes: string[] | null;
+            maxEntitiesCreatedPerRun: number | null;
+            canCreateViews: boolean;
+            outputMode: "text" | "proposal" | "view";
+            permissionsProfile: "read_only" | "propose_writes";
+            sharedScope: "workspace" | "user";
+            createdAt: Date;
+            updatedAt: Date;
+          };
+          meta: object;
+        }>;
+        deleteCommand: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            success: boolean;
+          };
+          meta: object;
+        }>;
+        runCommand: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            commandId: string;
+            argumentValues: Record<string, string>;
+            selectionContext?:
+              | {
+                  type: "entities" | "documents" | "text" | "viewRows";
+                  entityIds?: string[] | undefined;
+                  viewId?: string | undefined;
+                  rowEntityIds?: string[] | undefined;
+                  documentIds?: string[] | undefined;
+                  text?: string | undefined;
+                }
+              | undefined;
+          };
+          output: {
+            runId: string;
+            threadId: string;
+          };
+          meta: object;
+        }>;
+        listRuns: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            limit?: number | undefined;
+            cursor?: string | undefined;
+          };
+          output: {
+            runs: {
+              workspaceId: string;
+              userId: string;
+              id: string;
+              errorMessage: string | null;
+              startedAt: Date;
+              threadId: string;
+              status: "completed" | "running" | "failed";
+              commandId: string;
+              permissionsSnapshot: Record<string, unknown> | null;
+              inputs: Record<string, unknown> | null;
+              selectionContextSnapshot: unknown;
+              outputSummary: string | null;
+              proposedActions: unknown[] | null;
+              approvedActions: unknown[] | null;
+              completedAt: Date | null;
+            }[];
+            nextCursor: string | undefined;
+            hasMore: boolean;
+          };
+          meta: object;
+        }>;
+        getRun: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            id: string;
+          };
+          output: {
+            workspaceId: string;
+            userId: string;
+            id: string;
+            errorMessage: string | null;
+            startedAt: Date;
+            threadId: string;
+            status: "completed" | "running" | "failed";
+            commandId: string;
+            permissionsSnapshot: Record<string, unknown> | null;
+            inputs: Record<string, unknown> | null;
+            selectionContextSnapshot: unknown;
+            outputSummary: string | null;
+            proposedActions: unknown[] | null;
+            approvedActions: unknown[] | null;
+            completedAt: Date | null;
+          };
+          meta: object;
+        }>;
+        getEffectiveService: import("@trpc/server").TRPCQueryProcedure<{
+          input: Record<string, never>;
+          output: {
+            serviceId: string;
+            endpoint: string;
+            manifest: {
+              name: string;
+              version?: string;
+              capabilities: string[];
+              endpoints?: string[];
+              authType?: string;
+            };
+          };
+          meta: object;
+        }>;
+      }>
+    >;
     capabilities: import("@trpc/server").TRPCBuiltRouter<
       {
         ctx: Context;
@@ -3727,6 +3997,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
           };
           meta: object;
         }>;
+        setIntelligenceService: import("@trpc/server").TRPCMutationProcedure<{
+          input: {
+            workspaceId: string;
+            serviceId: string | null;
+          };
+          output: {
+            status: string;
+            message: string;
+          };
+          meta: object;
+        }>;
         delete: import("@trpc/server").TRPCMutationProcedure<{
           input: {
             id: string;
@@ -3895,6 +4176,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
               | undefined;
             config?: Record<string, any> | undefined;
             embeddedViewIds?: string[] | undefined;
+            metadata?: Record<string, any> | undefined;
             initialContent?: any;
           };
           output: {
@@ -3975,6 +4257,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
             snapshotUpdatedAt: Date | null;
             embeddedViewIds: string[] | null;
           }[];
+          meta: object;
+        }>;
+        getHome: import("@trpc/server").TRPCQueryProcedure<{
+          input: {
+            workspaceId: string;
+            scope?: "workspace" | "user" | "effective" | undefined;
+          };
+          output: {
+            view: {
+              name: string;
+              workspaceId: string | null;
+              userId: string;
+              id: string;
+              query: unknown;
+              columns: unknown;
+              updatedAt: Date;
+              createdAt: Date;
+              type: string;
+              metadata: unknown;
+              documentId: string | null;
+              description: string | null;
+              category: string;
+              scopeProfileIds: string[] | null;
+              scopeMode: string | null;
+              config: unknown;
+              filter: unknown;
+              sort: unknown;
+              layoutConfig: unknown;
+              yjsRoomId: string | null;
+              thumbnailUrl: string | null;
+              schemaSnapshot: unknown;
+              snapshotUpdatedAt: Date | null;
+              embeddedViewIds: string[] | null;
+            } | null;
+          };
           meta: object;
         }>;
         get: import("@trpc/server").TRPCQueryProcedure<{
@@ -4268,6 +4585,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
                   fontSize?: string | undefined;
                   animations?: boolean | undefined;
                   defaultView?: "list" | "grid" | "timeline" | undefined;
+                  entityOpenMode?: "floating" | "side" | "modal" | undefined;
                 }
               | undefined;
             graphPreferences?:
@@ -4498,7 +4816,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
       import("@trpc/server").TRPCDecorateCreateRouterOptions<{
         createPublicLink: import("@trpc/server").TRPCMutationProcedure<{
           input: {
-            resourceType: "entity" | "document" | "view";
+            resourceType: "entity" | "view" | "document";
             resourceId: string;
             expiresInDays?: number | undefined;
             access?: "workspace_only" | "anyone_with_link" | undefined;
@@ -4513,7 +4831,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         invite: import("@trpc/server").TRPCMutationProcedure<{
           input: {
-            resourceType: "entity" | "document" | "view";
+            resourceType: "entity" | "view" | "document";
             resourceId: string;
             userEmail: string;
           };
@@ -4616,7 +4934,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<
         }>;
         list: import("@trpc/server").TRPCQueryProcedure<{
           input: {
-            resourceType: "entity" | "document" | "view";
+            resourceType: "entity" | "view" | "document";
             resourceId: string;
             visibility?: "public" | "private" | undefined;
             expiresAt?: Date | undefined;
