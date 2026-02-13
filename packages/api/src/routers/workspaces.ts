@@ -17,6 +17,7 @@ import {
   workspaces,
   workspaceMembers,
   workspaceInvites,
+  intelligenceServices,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
@@ -193,6 +194,93 @@ export const workspacesRouter = router({
       return {
         status: "requested",
         message: "Workspace update requested",
+      };
+    }),
+
+  /**
+   * Set intelligence service for workspace (owner/admin only)
+   */
+  setIntelligenceService: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        serviceId: z.string().nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          eq(workspaceMembers.userId, ctx.userId)
+        ),
+      });
+
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Access denied",
+        });
+      }
+
+      if (membership.role !== "owner" && membership.role !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only workspace owner or admin can change intelligence service",
+        });
+      }
+
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, input.workspaceId),
+      });
+
+      if (!workspace) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      }
+
+      if (input.serviceId && input.serviceId !== "default") {
+        const service = await db.query.intelligenceServices.findFirst({
+          where: and(
+            eq(intelligenceServices.serviceId, input.serviceId),
+            eq(intelligenceServices.status, "active")
+          ),
+        });
+        if (!service) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Intelligence service not found or not active",
+          });
+        }
+      }
+
+      const currentSettings = (workspace.settings || {}) as Record<
+        string,
+        unknown
+      >;
+      const mergedSettings = {
+        ...currentSettings,
+        intelligenceServiceId: input.serviceId ?? undefined,
+      };
+
+      await emitRequestEvent({
+        subjectType: "workspace",
+        action: "update",
+        subjectId: input.workspaceId,
+        data: {
+          id: input.workspaceId,
+          name: workspace.name,
+          settings: mergedSettings,
+          userId: ctx.userId,
+        },
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "requested",
+        message: "Intelligence service update requested",
       };
     }),
 
