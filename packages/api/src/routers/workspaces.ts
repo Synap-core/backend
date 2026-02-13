@@ -116,33 +116,57 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
-      // Ensure default whiteboard exists (for existing workspaces created before this feature)
-      // This is a one-time operation per workspace
-      // Use static import for better type safety (database package is always available)
-      const { ensureDefaultWhiteboard } = await import("@synap/database");
+      // Ensure default workspace setup (for existing workspaces created before these features)
+      // These are one-time operations per workspace - same pattern as whiteboard
+      const {
+        ensureDefaultWhiteboard,
+        ensureDefaultViews,
+        ensureDefaultCommands,
+      } = await import("@synap/database");
+
       const whiteboardResult = await ensureDefaultWhiteboard(
         input.id,
         ctx.userId
       );
-
-      // Log for debugging
       console.log(
-        `[workspaces.get] ensureDefaultWhiteboard result:`,
+        `[workspaces.get] ensureDefaultWhiteboard:`,
         whiteboardResult.status,
-        whiteboardResult.message,
-        whiteboardResult.whiteboardId
+        whiteboardResult.message
       );
-
-      // If whiteboard creation failed, log error but don't fail the workspace fetch
-      // Frontend will handle missing whiteboard gracefully
       if (whiteboardResult.status === "error") {
         console.error(
-          `[workspaces.get] Failed to ensure default whiteboard for workspace ${input.id}:`,
+          `[workspaces.get] Failed to ensure default whiteboard:`,
           whiteboardResult.message,
           whiteboardResult.error
         );
-        // ⚠️ Note: We still return the workspace, but without mainWhiteboardId
-        // Frontend should handle this case and show appropriate error/retry UI
+      }
+
+      const viewsResult = await ensureDefaultViews(input.id, ctx.userId);
+      console.log(
+        `[workspaces.get] ensureDefaultViews:`,
+        viewsResult.status,
+        viewsResult.message
+      );
+      if (viewsResult.status === "error") {
+        console.error(
+          `[workspaces.get] Failed to ensure default views:`,
+          viewsResult.message,
+          viewsResult.error
+        );
+      }
+
+      const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);
+      console.log(
+        `[workspaces.get] ensureDefaultCommands:`,
+        commandsResult.status,
+        commandsResult.message
+      );
+      if (commandsResult.status === "error") {
+        console.error(
+          `[workspaces.get] Failed to ensure default commands:`,
+          commandsResult.message,
+          commandsResult.error
+        );
       }
 
       // If whiteboard was just created, refetch workspace to get updated settings
