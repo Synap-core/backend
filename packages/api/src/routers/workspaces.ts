@@ -45,7 +45,7 @@ export const workspacesRouter = router({
       const workspaceId = randomUUID();
 
       await emitRequestEvent({
-        subjectType: "workspace",
+        subjectType: "workspaces",
         action: "create",
         subjectId: workspaceId,
         data: {
@@ -202,7 +202,7 @@ export const workspacesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        subjectType: "workspace",
+        subjectType: "workspaces",
         action: "update",
         subjectId: input.id,
         data: {
@@ -290,7 +290,7 @@ export const workspacesRouter = router({
       };
 
       await emitRequestEvent({
-        subjectType: "workspace",
+        subjectType: "workspaces",
         action: "update",
         subjectId: input.workspaceId,
         data: {
@@ -315,7 +315,7 @@ export const workspacesRouter = router({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await emitRequestEvent({
-        subjectType: "workspace",
+        subjectType: "workspaces",
         action: "delete",
         subjectId: input.id,
         data: {

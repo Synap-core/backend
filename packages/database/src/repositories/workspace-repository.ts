@@ -28,7 +28,7 @@ export class WorkspaceRepository extends BaseRepository<
   UpdateWorkspaceInput
 > {
   constructor(db: any, eventRepo: EventRepository) {
-    super(db, eventRepo, { subjectType: "workspace" });
+    super(db, eventRepo, { subjectType: "workspaces" });
   }
 
   /**

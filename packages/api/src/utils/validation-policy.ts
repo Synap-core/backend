@@ -89,6 +89,11 @@ const GLOBAL_VALIDATION_DEFAULTS: Record<
     update: true,
     delete: true,
   },
+  workspaces: {
+    create: true,
+    update: true,
+    delete: true,
+  },
 
   project: {
     create: true,
