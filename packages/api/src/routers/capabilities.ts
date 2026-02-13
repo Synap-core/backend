@@ -12,6 +12,22 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "capabilities" });
 
+/** Default (proprietary) Synap Intelligence service — always available when no custom service configured. */
+const DEFAULT_INTELLIGENCE_SERVICE = {
+  id: "default",
+  serviceId: "default",
+  name: "Synap Intelligence",
+  capabilities: [
+    "chat",
+    "analysis",
+    "commands",
+    "proposals",
+    "threads",
+  ] as string[],
+  pricing: "free" as const,
+  version: "1.0",
+};
+
 export const capabilitiesRouter = router({
   /**
    * List all available capabilities
@@ -28,8 +44,8 @@ export const capabilitiesRouter = router({
     const plugins: Array<{ name: string; version: string; enabled: boolean }> =
       [];
 
-    // Get active intelligence services
-    const services = await db.query.intelligenceServices.findMany({
+    // Get active intelligence services from DB
+    const dbServices = await db.query.intelligenceServices.findMany({
       where: eq(intelligenceServices.status, "active"),
       columns: {
         id: true,
@@ -40,6 +56,12 @@ export const capabilitiesRouter = router({
         version: true,
       },
     });
+
+    // Include default (proprietary) service if not already in DB
+    const hasDefault = dbServices.some((s) => s.serviceId === "default");
+    const services = hasDefault
+      ? dbServices
+      : [DEFAULT_INTELLIGENCE_SERVICE, ...dbServices];
 
     const response = {
       core: {
@@ -82,14 +104,16 @@ export const capabilitiesRouter = router({
   hasCapability: publicProcedure
     .input(z.object({ capability: z.string() }))
     .query(async ({ input }) => {
-      const services = await db.query.intelligenceServices.findMany({
+      const dbServices = await db.query.intelligenceServices.findMany({
         where: eq(intelligenceServices.status, "active"),
       });
 
-      const available = services.some((s) =>
-        s.capabilities.includes(input.capability)
+      const hasDefaultCapability =
+        DEFAULT_INTELLIGENCE_SERVICE.capabilities.includes(input.capability);
+      const hasDbCapability = dbServices.some((s) =>
+        (s.capabilities as string[]).includes(input.capability)
       );
 
-      return { available };
+      return { available: hasDefaultCapability || hasDbCapability };
     }),
 });

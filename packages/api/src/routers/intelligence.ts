@@ -29,6 +29,19 @@ import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { infiniteChatRouter } from "./infinite-chat.js";
 
+/** Default (proprietary) Synap Intelligence service manifest — used when no custom service is configured. */
+const DEFAULT_SERVICE_MANIFEST = {
+  name: "Synap Intelligence",
+  version: "1.0",
+  capabilities: [
+    "chat",
+    "analysis",
+    "commands",
+    "proposals",
+    "threads",
+  ] as string[],
+};
+
 const selectionContextSchema = z.object({
   type: z.enum(["entities", "viewRows", "documents", "text"]),
   entityIds: z.array(z.string().uuid()).optional(),
@@ -370,9 +383,6 @@ export const intelligenceRouter = router({
         capabilities: string[];
         endpoints?: string[];
         authType?: string;
-      } = {
-        name: resolved.serviceId,
-        capabilities: [],
       };
 
       if (serviceId) {
@@ -387,12 +397,14 @@ export const intelligenceRouter = router({
             endpoints: (service.metadata as any)?.endpoints,
             authType: (service.metadata as any)?.authType,
           };
+        } else {
+          manifest = { name: serviceId, capabilities: [] };
         }
       } else {
-        manifest.name =
+        manifest =
           resolved.serviceId === "default"
-            ? "Synap Intelligence"
-            : resolved.serviceId;
+            ? DEFAULT_SERVICE_MANIFEST
+            : { name: resolved.serviceId, capabilities: [] };
       }
 
       return {
