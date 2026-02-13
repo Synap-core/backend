@@ -192,35 +192,37 @@ export async function ensureDefaultViews(
           sm: { cols: 4, rowHeight: 100, gap: 16 },
         },
         blocks: [
+          // Top row: Welcome (left), Workspace card (center), Tabs (right)
           {
             id: "welcome",
             kind: "widget",
             widgetType: "welcome",
-            pos: { x: 0, y: 0, w: 12, h: 2 },
+            pos: { x: 0, y: 0, w: 4, h: 2 },
           },
           {
-            id: "quick-access",
+            id: "workspace-card",
             kind: "widget",
-            widgetType: "quick-access",
-            pos: { x: 0, y: 2, w: 4, h: 2 },
+            widgetType: "workspace-info",
+            pos: { x: 4, y: 0, w: 4, h: 2 },
           },
           {
-            id: "recent",
+            id: "tabs",
             kind: "widget",
-            widgetType: "recent-items",
-            pos: { x: 0, y: 4, w: 4, h: 4 },
+            widgetType: "home-tabs",
+            pos: { x: 8, y: 0, w: 4, h: 2 },
+          },
+          // Bottom row: Calendar (2/3 width), Feed (1/3 width)
+          {
+            id: "calendar",
+            kind: "widget",
+            widgetType: "calendar",
+            pos: { x: 0, y: 2, w: 8, h: 8 },
           },
           {
             id: "feed",
             kind: "widget",
             widgetType: "feed",
-            pos: { x: 0, y: 8, w: 4, h: 6 },
-          },
-          {
-            id: "calendar",
-            kind: "widget",
-            widgetType: "calendar",
-            pos: { x: 4, y: 2, w: 8, h: 12 },
+            pos: { x: 8, y: 2, w: 4, h: 8 },
           },
         ],
       };
