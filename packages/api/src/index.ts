@@ -67,6 +67,7 @@ import { contentRouter } from "./routers/content.js";
 import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
+import { intelligenceRouter } from "./routers/intelligence.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
 import { searchRouter } from "./routers/search.js";
 import { relationsRouter } from "./routers/relations.js";
@@ -158,7 +159,7 @@ registerRouter("documents", documentsRouter, {
   source: "core",
   description: "Document management and collaboration",
 });
-registerRouter("contentApi", contentRouter, {
+registerRouter("content", contentRouter, {
   version: "1.0.0",
   source: "core",
   description: "Unified content creation (notes and files)",
@@ -168,15 +169,20 @@ registerRouter("storage", filesRouter, {
   source: "core",
   description: "File storage browsing and management",
 });
-registerRouter("inbox", inboxRouter, {
+registerRouter("notifications", inboxRouter, {
   version: "1.0.0",
   source: "core",
-  description: "Life Feed inbox",
+  description: "Life Feed inbox and notifications",
 });
 registerRouter("intelligenceRegistry", intelligenceRegistryRouter, {
   version: "1.0.0",
   source: "core",
   description: "Intelligence Service Registry",
+});
+registerRouter("intelligence", intelligenceRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Commands, runs, and effective service for Intelligence app",
 });
 registerRouter("capabilities", capabilitiesRouter, {
   version: "1.0.0",
