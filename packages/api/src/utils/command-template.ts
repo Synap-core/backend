@@ -19,7 +19,9 @@ export interface SelectionContext {
 
 const ARGUMENT_REGEX =
   /\{argument\s+name\s*=\s*["']([^"']+)["'](?:\s+options\s*=\s*["']([^"']*)["'])?(?:\s+default\s*=\s*["']([^"']*)["'])?\}/gi;
-const SELECTION_PLACEHOLDER = /\{selection\}/g;
+/** Matches {selection} and {selection type="viewRows"} (optional type: entities | viewRows | documents | text). */
+const SELECTION_PLACEHOLDER =
+  /\{selection(?:\s+type\s*=\s*["'](entities|viewRows|documents|text)["'])?\}/gi;
 
 export interface ParsedTemplate {
   /** Derived argument definitions from the template (parser-owned base set). */
@@ -69,11 +71,9 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
       return argumentValues[name] ?? "";
     });
 
-    // Replace {selection} with serialized selection context
-    if (SELECTION_PLACEHOLDER.test(out)) {
-      const selectionText = formatSelectionContext(selectionContext);
-      out = out.replace(SELECTION_PLACEHOLDER, selectionText);
-    }
+    // Replace {selection} and {selection type="..."} with serialized selection context
+    const selectionText = formatSelectionContext(selectionContext);
+    out = out.replace(SELECTION_PLACEHOLDER, selectionText);
 
     return out;
   }

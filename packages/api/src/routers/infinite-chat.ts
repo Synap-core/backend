@@ -27,6 +27,11 @@ import {
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { MessageLinksRepository } from "@synap/database";
+import {
+  MessageLinkTargetType,
+  MessageLinkRelationshipType,
+} from "@synap-core/types";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import type { AIStep, HubResponse, ProposedAction } from "@synap-core/types";
@@ -140,6 +145,77 @@ export const infiniteChatRouter = router({
       });
 
       return { threadId, thread };
+    }),
+
+  /**
+   * Create a document comment: new thread with one user message linked to the document at the given selection.
+   * No AI response. Used when user selects text and clicks "Add comment" in the editor.
+   */
+  createDocumentComment: workspaceProcedure
+    .input(
+      z.object({
+        documentId: z.string().uuid(),
+        position: z.object({
+          start: z.number().int().nonnegative(),
+          end: z.number().int().nonnegative(),
+        }),
+        content: z.string().min(1),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace context required",
+        });
+      }
+
+      const threadId = randomUUID();
+      const userMessageId = randomUUID();
+      const userMessageHash = createHash("sha256")
+        .update(`${userMessageId}${input.content}`)
+        .digest("hex");
+
+      await db.insert(chatThreads).values({
+        id: threadId,
+        userId: ctx.userId,
+        workspaceId,
+        threadType: ChatThreadType.MAIN,
+        status: ChatThreadStatus.ACTIVE,
+        agentId: "orchestrator",
+        agentType: ChatThreadAgentType.DEFAULT,
+      });
+
+      await db.insert(conversationMessages).values({
+        id: userMessageId,
+        threadId,
+        role: "user",
+        content: input.content,
+        userId: ctx.userId,
+        previousHash: "",
+        hash: userMessageHash,
+      });
+
+      const linksRepo = new MessageLinksRepository(db);
+      await linksRepo.create({
+        messageId: userMessageId,
+        targetType: MessageLinkTargetType.DOCUMENT,
+        targetId: input.documentId,
+        relationshipType: MessageLinkRelationshipType.COMMENTS,
+        position: input.position,
+        userId: ctx.userId,
+        workspaceId,
+      });
+
+      emitChatEvent({
+        event: "thread:created",
+        data: { threadId, userId: ctx.userId },
+        workspaceId,
+        userId: ctx.userId,
+      });
+
+      return { threadId, messageId: userMessageId };
     }),
 
   /**

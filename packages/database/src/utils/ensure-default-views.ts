@@ -192,23 +192,17 @@ export async function ensureDefaultViews(
           sm: { cols: 4, rowHeight: 100, gap: 16 },
         },
         blocks: [
-          // Top row: Welcome (left), Workspace card (center), Tabs (right)
+          // Top row: Welcome + Tabs + Settings (left 2/3), DataPod (right 1/3)
           {
-            id: "welcome",
+            id: "welcome-header",
             kind: "widget",
-            widgetType: "welcome",
-            pos: { x: 0, y: 0, w: 4, h: 2 },
+            widgetType: "welcome-header",
+            pos: { x: 0, y: 0, w: 8, h: 2 },
           },
           {
             id: "workspace-card",
             kind: "widget",
             widgetType: "workspace-info",
-            pos: { x: 4, y: 0, w: 4, h: 2 },
-          },
-          {
-            id: "tabs",
-            kind: "widget",
-            widgetType: "home-tabs",
             pos: { x: 8, y: 0, w: 4, h: 2 },
           },
           // Bottom row: Calendar (2/3 width), Feed (1/3 width)

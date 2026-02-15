@@ -6,10 +6,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, and, desc } from "@synap/database";
+import { db, proposals, documents, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 
 export const proposalsRouter = router({
@@ -296,5 +297,94 @@ export const proposalsRouter = router({
         status: "requested",
         message: "Proposal submitted for validation",
       };
+    }),
+
+  /**
+   * Create a document edit proposal (suggest edit): replace text in range [from, to] with replacementText.
+   * Used when user selects text and clicks "Suggest edit" in the editor.
+   */
+  createDocumentEdit: workspaceProcedure
+    .input(
+      z.object({
+        documentId: z.string().uuid(),
+        from: z.number().int().nonnegative(),
+        to: z.number().int().nonnegative(),
+        replacementText: z.string(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace context required",
+        });
+      }
+
+      const document = await db.query.documents.findFirst({
+        where: eq(documents.id, input.documentId),
+      });
+
+      if (!document) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found",
+        });
+      }
+
+      if (document.workspaceId !== workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Document is not in the current workspace",
+        });
+      }
+
+      let currentContent: string;
+      if (document.storageKey) {
+        const contentBuffer = await storage.downloadBuffer(document.storageKey);
+        currentContent =
+          (document.mimeType?.includes("base64") ?? false)
+            ? contentBuffer.toString("base64")
+            : contentBuffer.toString("utf-8");
+      } else {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Document has no stored content (e.g. whiteboard); suggest edit not supported",
+        });
+      }
+
+      const from = Math.min(input.from, currentContent.length);
+      const to = Math.min(input.to, currentContent.length);
+      const proposedContent =
+        currentContent.slice(0, from) +
+        input.replacementText +
+        currentContent.slice(to);
+
+      const [proposal] = await db
+        .insert(proposals)
+        .values({
+          workspaceId,
+          targetType: "document",
+          targetId: input.documentId,
+          proposalType: "user_edit",
+          data: {
+            proposedContent,
+            range: [from, to],
+            originalSnippet: currentContent.slice(from, to),
+            replacementText: input.replacementText,
+          },
+          status: ProposalStatus.PENDING,
+        })
+        .returning();
+
+      if (!proposal) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create proposal",
+        });
+      }
+
+      return { proposalId: proposal.id };
     }),
 });
