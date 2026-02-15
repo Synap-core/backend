@@ -54,7 +54,7 @@ export const templatesHandler = async ({
         },
         userId
       );
-      // BaseRepository.emitCompleted() automatically emits "templates.create.completed"
+      // BaseRepository.emitCompleted() automatically emits "template.create.completed"
     });
   } else if (action === "update") {
     await step.run("update-template", async () => {
@@ -71,12 +71,12 @@ export const templatesHandler = async ({
         },
         userId
       );
-      // BaseRepository.emitCompleted() automatically emits "templates.update.completed"
+      // BaseRepository.emitCompleted() automatically emits "template.update.completed"
     });
   } else if (action === "delete") {
     await step.run("delete-template", async () => {
       await templateRepo.delete(data.id as string, userId);
-      // BaseRepository.emitCompleted() automatically emits "templates.delete.completed"
+      // BaseRepository.emitCompleted() automatically emits "template.delete.completed"
     });
   }
 
@@ -89,6 +89,6 @@ export const templatesExecutor = inngest.createFunction(
     name: "Execute Template Operations",
     concurrency: { limit: 20 },
   },
-  { event: "templates.*.validated" },
+  { event: "template.*" },
   templatesHandler
 );

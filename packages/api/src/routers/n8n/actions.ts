@@ -75,7 +75,7 @@ export const n8nActionsRouter = router({
       try {
         // Create generic entity event
         const event = createSynapEvent({
-          type: "entities.create.validated",
+          type: "entity.create.validated",
           userId,
           data: {
             entityType: type,

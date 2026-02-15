@@ -17,7 +17,7 @@ export const createDefaultWhiteboard = inngest.createFunction(
     name: "Create Default Whiteboard for Workspace",
     retries: 3,
   },
-  { event: "workspaces.create.completed" },
+  { event: "workspace.create.completed" },
   async ({ event, step }) => {
     // Event data contains the workspace object, event.user contains userId
     const workspaceId = event.data.id;

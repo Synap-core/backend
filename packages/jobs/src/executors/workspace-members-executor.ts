@@ -80,6 +80,6 @@ export const workspaceMembersExecutor = inngest.createFunction(
     name: "Execute Workspace Member Operations",
     concurrency: { limit: 10 },
   },
-  { event: "workspaceMembers.*.validated" },
+  { event: "workspaceMember.*" },
   workspaceMembersHandler
 );

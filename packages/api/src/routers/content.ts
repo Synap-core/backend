@@ -70,7 +70,7 @@ export const contentRouter = router({
 
       // Create event
       const event = createSynapEvent({
-        type: "entities.create.requested",
+        type: "entity.create.requested",
         userId,
         subjectId,
         data: {
@@ -160,7 +160,7 @@ export const contentRouter = router({
 
         // PHASE 2: Publish event
         const event = createSynapEvent({
-          type: "entities.create.requested",
+          type: "entity.create.requested",
           userId,
           subjectId,
           data: {

@@ -18,11 +18,7 @@ export const agentsExecutor = inngest.createFunction(
     name: "Agents Executor",
     retries: 3,
   },
-  [
-    { event: "agents.create.validated" },
-    { event: "agents.update.validated" },
-    { event: "agents.delete.validated" },
-  ],
+  { event: "agent.*" },
   async ({ event, step }) => {
     const eventInfo = extractEventInfo(event.name);
     const { action, phase } = eventInfo;

@@ -69,8 +69,8 @@ export const entityEmbeddingWorker = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: "entities.create.approved" },
-    { event: "entities.update.approved" },
+    { event: "entity.create.completed" },
+    { event: "entity.update.completed" },
   ],
   async ({ event, step }) => {
     const { entityId, userId, entityType, title, preview } = event.data;

@@ -10,9 +10,17 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "inngest-client" });
 
-// Determine if we're in dev mode
+// Whether we're using a self-hosted Inngest server (inngest dev container)
+// When self-hosted, isDev must be true because `inngest dev` does not sign
+// its execution callbacks — signature verification only applies to Inngest Cloud.
+// This does NOT affect NODE_ENV or any other application behavior.
+const selfHosted = !!process.env.INNGEST_BASE_URL;
+
+// isDev: true when self-hosted (inngest dev doesn't sign requests),
+//        OR when running in local dev/test (no inngest server at all).
+// isDev: false only when using Inngest Cloud (which signs all requests).
 const isDev =
-  process.env.INNGEST_DEV === "true" ||
+  selfHosted ||
   process.env.NODE_ENV === "test" ||
   process.env.NODE_ENV === "development";
 
@@ -22,21 +30,17 @@ export const inngest = new Inngest({
   name: "Synap Backend",
   eventKey: process.env.INNGEST_EVENT_KEY,
   isDev,
-  // In dev/test mode, connect to local dev server
-  // In production, connects to Inngest Cloud
-  ...(isDev && process.env.INNGEST_BASE_URL
-    ? { baseUrl: process.env.INNGEST_BASE_URL }
-    : {}),
+  // Always use INNGEST_BASE_URL when set — points SDK at the self-hosted server
+  ...(selfHosted ? { baseUrl: process.env.INNGEST_BASE_URL } : {}),
 });
 
 // Log initialization
 logger.info(
   {
     isDev,
+    selfHosted,
     hasEventKey: !!process.env.INNGEST_EVENT_KEY,
-    baseUrl: isDev
-      ? process.env.INNGEST_BASE_URL || "http://localhost:8288"
-      : "cloud",
+    baseUrl: selfHosted ? process.env.INNGEST_BASE_URL : "inngest-cloud",
   },
   "Inngest client initialized"
 );

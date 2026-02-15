@@ -183,3 +183,6 @@ export const DomainEventNames = {
 
 export type DomainEventName =
   (typeof DomainEventNames)[keyof typeof DomainEventNames];
+
+// Unified backend event system (SubjectType, EventAction, EventPhase, EventName)
+export * from "./unified.js";

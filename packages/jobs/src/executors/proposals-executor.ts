@@ -20,8 +20,7 @@ export const proposalsExecutor = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: "proposals.update.validated" },
-    { event: "proposals.delete.validated" },
+    { event: "proposal.*" },
   ],
   async ({ event, step }) => {
     const eventInfo = extractEventInfo(event.name);

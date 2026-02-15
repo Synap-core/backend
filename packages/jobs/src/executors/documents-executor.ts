@@ -124,7 +124,7 @@ export const documentsHandler = async ({
 
     await step.run("delete-document", async () => {
       await docRepo.delete(data.id as string, userId);
-      // BaseRepository.emitCompleted() automatically emits "documents.delete.completed"
+      // BaseRepository.emitCompleted() automatically emits "document.delete.completed"
     });
   }
 
@@ -141,6 +141,6 @@ export const documentsExecutor = inngest.createFunction(
     name: "Execute Document Operations",
     concurrency: { limit: 10 }, // Lower concurrency for complex operations
   },
-  { event: "documents.*.validated" },
+  { event: "document.*" },
   documentsHandler
 );

@@ -51,7 +51,7 @@ export const viewsHandler = async ({
         },
         userId
       );
-      // BaseRepository.emitCompleted() automatically emits "views.create.completed"
+      // BaseRepository.emitCompleted() automatically emits "view.create.completed"
       break;
 
     case "update":
@@ -71,12 +71,12 @@ export const viewsHandler = async ({
         },
         userId
       );
-      // BaseRepository.emitCompleted() automatically emits "views.update.completed"
+      // BaseRepository.emitCompleted() automatically emits "view.update.completed"
       break;
 
     case "delete":
       await viewRepo.delete(data.id as string, userId);
-      // BaseRepository.emitCompleted() automatically emits "views.delete.completed"
+      // BaseRepository.emitCompleted() automatically emits "view.delete.completed"
       break;
   }
 
@@ -89,6 +89,6 @@ export const viewsExecutor = inngest.createFunction(
     name: "Execute View Operations",
     concurrency: { limit: 100 }, // High concurrency for fast operations
   },
-  { event: "views.*.validated" },
+  { event: "view.*" },
   viewsHandler
 );

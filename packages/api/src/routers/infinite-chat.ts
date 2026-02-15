@@ -551,7 +551,7 @@ export const infiniteChatRouter = router({
         for (const entity of entities) {
           // ✅ Publish .requested event
           await inngest.send({
-            name: "entities.create.requested",
+            name: "entity.create.requested",
             data: {
               type: entity.type,
               title: entity.title,

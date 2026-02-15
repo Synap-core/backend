@@ -291,7 +291,7 @@ export const documentsRouter = router({
       // Publish event for worker to process
       const { inngest } = await import("@synap/jobs");
       await inngest.send({
-        name: "documents.snapshot.requested",
+        name: "document.snapshot.requested",
         data: {
           documentId: input.documentId,
           message: input.message,
@@ -374,7 +374,7 @@ export const documentsRouter = router({
       // Publish event for worker
       const { inngest } = await import("@synap/jobs");
       await inngest.send({
-        name: "documents.restore.requested",
+        name: "document.restore.requested",
         data: {
           documentId: input.documentId,
           versionId: input.versionId,

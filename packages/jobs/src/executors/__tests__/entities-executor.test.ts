@@ -30,7 +30,7 @@ describe("EntitiesExecutor", () => {
 
   it("should handle create action", async () => {
     const event = {
-      name: "entities.create.validated",
+      name: "entity.create.validated",
       data: {
         entityType: "note",
         title: "Test Entity",
@@ -60,7 +60,7 @@ describe("EntitiesExecutor", () => {
 
   it("should handle update action", async () => {
     const event = {
-      name: "entities.update.validated",
+      name: "entity.update.validated",
       data: { id: "entity-1", title: "Updated" },
       user: { userId: "user-1" },
     };
@@ -80,7 +80,7 @@ describe("EntitiesExecutor", () => {
 
   it("should handle delete action", async () => {
     const event = {
-      name: "entities.delete.validated",
+      name: "entity.delete.validated",
       data: { id: "entity-1" },
       user: { userId: "user-1" },
     };

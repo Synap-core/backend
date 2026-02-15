@@ -16,10 +16,7 @@ import {
   ThreadDocumentConflictStatus,
 } from "@synap/database/schema";
 import { eq, and } from "@synap/database";
-import {
-  extractEventInfo,
-  type UnifiedEventData,
-} from "../types/unified-events.js";
+import type { UnifiedEventData } from "../types/unified-events.js";
 
 export const threadContextExecutor = inngest.createFunction(
   {
@@ -28,12 +25,12 @@ export const threadContextExecutor = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: "thread_entities.link.validated" },
-    { event: "thread_documents.link.validated" },
+    { event: "threadEntity.*" },
+    { event: "threadDocument.*" },
   ],
   async ({ event, step }) => {
-    const eventInfo = extractEventInfo(event.name);
-    const { phase } = eventInfo;
+    // Parse phase directly — extractEventInfo throws on non-standard actions like "link"
+    const phase = event.name.split(".")[2];
     const data = event.data as UnifiedEventData;
 
     // Ensure we're handling a validated event
@@ -47,7 +44,7 @@ export const threadContextExecutor = inngest.createFunction(
     return await step.run("execute-context-link", async () => {
       const db = await getDb();
 
-      if (event.name === "thread_entities.link.validated") {
+      if (event.name.startsWith("threadEntity.")) {
         // Check if link already exists
         const relationshipType =
           data.relationshipType as ThreadEntityRelationshipType;
@@ -83,7 +80,7 @@ export const threadContextExecutor = inngest.createFunction(
         };
       }
 
-      if (event.name === "thread_documents.link.validated") {
+      if (event.name.startsWith("threadDocument.")) {
         // Check if link already exists
         const relationshipType =
           data.relationshipType as ThreadDocumentRelationshipType;

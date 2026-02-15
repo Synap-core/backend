@@ -7,7 +7,7 @@
  * automated with an event bus/dispatcher system.
  */
 
-import { db, events, desc } from "@synap/database";
+import { db, events, asc, gt } from "@synap/database";
 import { handleInboxItemReceived } from "./inbox-storage.js";
 import { handleInboxItemIntelligence } from "./inbox-intelligence.js";
 import { handleInboxItemAnalyzed } from "./inbox-analysis.js";
@@ -15,6 +15,13 @@ import { createLogger } from "@synap-core/core";
 import { extractEventInfo, type UnifiedEventData } from "@synap/jobs";
 
 const logger = createLogger({ module: "event-handlers" });
+
+/**
+ * Watermark: only forward events newer than this timestamp to Inngest.
+ * Initialized to epoch so existing unprocessed events are forwarded once on startup.
+ * Updated after each poll to the newest event's timestamp.
+ */
+let lastForwardedTimestamp: Date = new Date(0);
 
 /**
  * Process all unprocessed events
@@ -29,11 +36,13 @@ export async function processEvents() {
   logger.debug("Processing events");
 
   try {
-    // Get latest events (last 100)
+    // Only fetch events newer than the last forwarded timestamp (watermark).
+    // This prevents re-sending the same events to Inngest on every poll.
     const latestEvents = await db
       .select()
       .from(events)
-      .orderBy(desc(events.timestamp))
+      .where(gt(events.timestamp, lastForwardedTimestamp))
+      .orderBy(asc(events.timestamp))
       .limit(100);
 
     for (const event of latestEvents) {
@@ -160,6 +169,18 @@ export async function processEvents() {
           "Error processing event"
         );
         // Continue processing other events
+      }
+    }
+
+    // Advance watermark to the newest event processed so next poll skips them
+    if (latestEvents.length > 0) {
+      const newest = latestEvents[latestEvents.length - 1];
+      if (newest.timestamp > lastForwardedTimestamp) {
+        lastForwardedTimestamp = newest.timestamp;
+        logger.debug(
+          { watermark: lastForwardedTimestamp, count: latestEvents.length },
+          "Advanced event watermark"
+        );
       }
     }
 

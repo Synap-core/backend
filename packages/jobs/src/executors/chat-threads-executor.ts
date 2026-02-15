@@ -24,14 +24,7 @@ export const chatThreadsExecutor = inngest.createFunction(
     name: "Chat Threads Executor",
     retries: 3,
   },
-  [
-    { event: "chat_threads.create.validated" },
-    { event: "chat_threads.update.validated" },
-    { event: "chat_threads.delete.validated" },
-    { event: "chat_threads.branch.validated" },
-    { event: "chat_threads.merge.validated" },
-    { event: "chat_threads.archive.validated" },
-  ],
+  { event: "chatThread.*" },
   async ({ event, step }) => {
     const eventInfo = extractEventInfo(event.name);
     const { action, phase } = eventInfo;
@@ -56,7 +49,7 @@ export const chatThreadsExecutor = inngest.createFunction(
       // Handle custom actions (branch, merge, archive) and standard actions
       if (
         action === "create" ||
-        event.name === "chat_threads.create.validated"
+        event.name === "chatThread.create.validated"
       ) {
         const thread = await repo.create({
           id: data.id as string | undefined,
@@ -82,7 +75,7 @@ export const chatThreadsExecutor = inngest.createFunction(
         };
       }
 
-      if (event.name === "chat_threads.branch.validated") {
+      if (event.name === "chatThread.branch.validated") {
         // Create branch thread with context inheritance
         const threadId = randomUUID();
         const thread = await repo.create({
@@ -163,7 +156,7 @@ export const chatThreadsExecutor = inngest.createFunction(
         };
       }
 
-      if (event.name === "chat_threads.merge.validated") {
+      if (event.name === "chatThread.merge.validated") {
         // Merge branch: update parent context and mark branch as merged
         const branchId = data.branchId as string;
         const branch = await repo.getById(branchId);
@@ -212,7 +205,7 @@ export const chatThreadsExecutor = inngest.createFunction(
         };
       }
 
-      if (event.name === "chat_threads.archive.validated") {
+      if (event.name === "chatThread.archive.validated") {
         // Archive thread (soft delete)
         await repo.update(
           data.threadId as string,

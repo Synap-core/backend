@@ -49,7 +49,7 @@ export const relationsHandler = async ({
         },
         userId
       );
-      // BaseRepository.emitCompleted() automatically emits "relations.create.completed"
+      // BaseRepository.emitCompleted() automatically emits "relation.create.completed"
     });
   } else if (action === "update") {
     await step.run("update-relation", async () => {
@@ -60,12 +60,12 @@ export const relationsHandler = async ({
         },
         userId
       );
-      // BaseRepository.emitCompleted() automatically emits "relations.update.completed"
+      // BaseRepository.emitCompleted() automatically emits "relation.update.completed"
     });
   } else if (action === "delete") {
     await step.run("delete-relation", async () => {
       await relationRepo.delete(data.id as string, userId);
-      // BaseRepository.emitCompleted() automatically emits "relations.delete.completed"
+      // BaseRepository.emitCompleted() automatically emits "relation.delete.completed"
     });
   }
 
@@ -78,6 +78,6 @@ export const relationsExecutor = inngest.createFunction(
     name: "Execute Relation Operations",
     concurrency: { limit: 50 },
   },
-  { event: "relations.*.validated" },
+  { event: "relation.*" },
   relationsHandler
 );

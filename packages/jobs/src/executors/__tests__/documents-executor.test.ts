@@ -30,7 +30,7 @@ describe("DocumentsExecutor", () => {
 
   it("should handle create action", async () => {
     const event = {
-      name: "documents.create.validated",
+      name: "document.create.validated",
       data: {
         title: "Test Doc",
         type: "markdown",
@@ -67,7 +67,7 @@ describe("DocumentsExecutor", () => {
 
   it("should handle update action", async () => {
     const event = {
-      name: "documents.update.validated",
+      name: "document.update.validated",
       data: { id: "doc-1", title: "Updated" },
       user: { userId: "user-1" },
     };
@@ -87,7 +87,7 @@ describe("DocumentsExecutor", () => {
 
   it("should handle delete action", async () => {
     const event = {
-      name: "documents.delete.validated",
+      name: "document.delete.validated",
       data: { id: "doc-1" },
       user: { userId: "user-1" },
     };

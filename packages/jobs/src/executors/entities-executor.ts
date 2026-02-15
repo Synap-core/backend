@@ -218,7 +218,7 @@ export const entitiesHandler = async ({
     // Delete entity
     await step.run("delete-entity", async () => {
       await entityRepo.delete(data.id as string, userId, { deleteDocument });
-      // BaseRepository.emitCompleted() automatically emits "entities.delete.completed"
+      // BaseRepository.emitCompleted() automatically emits "entity.delete.completed"
     });
   }
 
@@ -235,6 +235,6 @@ export const entitiesExecutor = inngest.createFunction(
     name: "Execute Entity Operations",
     concurrency: { limit: 20 },
   },
-  { event: "entities.*.validated" },
+  { event: "entity.*" },
   entitiesHandler
 );

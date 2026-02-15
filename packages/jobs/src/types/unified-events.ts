@@ -4,57 +4,24 @@
  * Generic event type system that works for ALL entities.
  * Pattern: {subjectType}.{action}.{phase}
  *
- * Examples:
- * - "entities.create.requested"
- * - "documents.update.validated"
- * - "workspaces.delete.completed"
+ * SubjectType, EventAction, EventPhase are the single source of truth —
+ * defined in @synap-core/types and re-exported here for convenience.
  */
 
 import { randomUUID } from "crypto";
 import type { EnhancedEventMetadata } from "@synap-core/core";
+import {
+  SUBJECT_TYPES,
+  EVENT_ACTIONS,
+  EVENT_PHASES,
+  buildEventName,
+  subjectTrigger,
+} from "@synap-core/types";
+import type { SubjectType, EventAction, EventPhase, EventName } from "@synap-core/types";
 
-// ============================================================================
-// EVENT PHASES & ACTIONS
-// ============================================================================
-
-/**
- * Event Phases
- */
-export type EventPhase = "requested" | "validated" | "completed" | "denied";
-
-/**
- * Event Actions
- */
-export type EventAction =
-  | "create"
-  | "update"
-  | "delete"
-  | "archive"
-  | "restore";
-
-/**
- * Subject Types (all entity types in the system)
- */
-export type SubjectType =
-  | "entity"
-  | "document"
-  | "workspace"
-  | "view"
-  | "relation"
-  | "tag"
-  | "project"
-  | "proposal"
-  | "message"
-  | "user"
-  | "role"
-  | "apiKey"
-  | "skill"
-  | "backgroundTask"
-  | "agent"
-  | "chatThread"
-  | "template"
-  | "inboxItem"
-  | "sharing";
+// Re-export canonical type definitions from @synap-core/types
+export type { SubjectType, EventAction, EventPhase, EventName };
+export { SUBJECT_TYPES, EVENT_ACTIONS, EVENT_PHASES, buildEventName, subjectTrigger };
 
 // ============================================================================
 // GENERIC EVENT TYPE GENERATOR
@@ -250,11 +217,11 @@ export function extractEventInfo(eventType: string): {
 
   const [subjectType, action, phase] = parts;
 
-  if (!["create", "update", "delete", "archive", "restore"].includes(action)) {
+  if (!EVENT_ACTIONS.includes(action as EventAction)) {
     throw new Error(`Invalid action: ${action}`);
   }
 
-  if (!["requested", "validated", "completed", "denied"].includes(phase)) {
+  if (!EVENT_PHASES.includes(phase as EventPhase)) {
     throw new Error(`Invalid phase: ${phase}`);
   }
 

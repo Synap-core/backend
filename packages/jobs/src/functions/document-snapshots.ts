@@ -19,7 +19,7 @@ export const documentSnapshotWorker = inngest.createFunction(
     id: "document-snapshots",
     name: "Save Document Version Snapshot",
   },
-  { event: "documents.snapshot.requested" },
+  { event: "document.snapshot.requested" },
   async ({ event, step }) => {
     const { documentId, message, userId } = event.data;
 
@@ -103,7 +103,7 @@ export const documentRestoreWorker = inngest.createFunction(
     id: "document-restore",
     name: "Restore Document to Previous Version",
   },
-  { event: "documents.restore.requested" },
+  { event: "document.restore.requested" },
   async ({ event, step }) => {
     const { documentId, versionId, userId } = event.data;
 

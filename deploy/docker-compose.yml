@@ -352,10 +352,13 @@ services:
   inngest:
     image: inngest/inngest:latest
     restart: always
-    command: inngest dev
+    command: inngest dev -u http://backend:4000/api/inngest
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+    depends_on:
+      backend:
+        condition: service_healthy
     networks:
       - synap-net
     ports:

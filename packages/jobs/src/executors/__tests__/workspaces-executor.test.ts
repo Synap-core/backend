@@ -30,7 +30,7 @@ describe("WorkspacesExecutor", () => {
 
   it("should handle create action", async () => {
     const event = {
-      name: "workspaces.create.validated",
+      name: "workspace.create.validated",
       data: {
         name: "Test WS",
         slug: "test-ws",
@@ -56,7 +56,7 @@ describe("WorkspacesExecutor", () => {
 
   it("should handle update action", async () => {
     const event = {
-      name: "workspaces.update.validated",
+      name: "workspace.update.validated",
       data: { id: "ws-1", name: "Updated" },
       user: { userId: "user-1" },
     };
@@ -76,7 +76,7 @@ describe("WorkspacesExecutor", () => {
 
   it("should handle delete action", async () => {
     const event = {
-      name: "workspaces.delete.validated",
+      name: "workspace.delete.validated",
       data: { id: "ws-1" },
       user: { userId: "user-1" },
     };

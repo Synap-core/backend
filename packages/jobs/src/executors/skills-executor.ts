@@ -18,11 +18,7 @@ export const skillsExecutor = inngest.createFunction(
     name: "Skills Executor",
     retries: 3,
   },
-  [
-    { event: "skills.create.validated" },
-    { event: "skills.update.validated" },
-    { event: "skills.delete.validated" },
-  ],
+  { event: "skill.*" },
   async ({ event, step }) => {
     const eventInfo = extractEventInfo(event.name);
     const { action, phase } = eventInfo;

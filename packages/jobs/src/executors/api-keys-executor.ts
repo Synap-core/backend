@@ -100,6 +100,6 @@ export const apiKeysExecutor = inngest.createFunction(
     name: "Execute API Key Operations",
     concurrency: { limit: 20 },
   },
-  { event: "api_keys.*.validated" },
+  { event: "apiKey.*" },
   apiKeysHandler
 );
