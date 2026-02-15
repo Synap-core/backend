@@ -49,7 +49,7 @@ export const whiteboardsRouter = router({
       const { inngest } = await import("@synap/jobs");
 
       await inngest.send({
-        name: "whiteboards.snapshot.requested",
+        name: "whiteboard.snapshot.requested",
         data: {
           viewId: input.viewId,
           documentId: view.documentId,
@@ -153,7 +153,7 @@ export const whiteboardsRouter = router({
       const { inngest } = await import("@synap/jobs");
 
       await inngest.send({
-        name: "whiteboards.restore.requested",
+        name: "whiteboard.restore.requested",
         data: {
           viewId: input.viewId,
           versionId: input.versionId,

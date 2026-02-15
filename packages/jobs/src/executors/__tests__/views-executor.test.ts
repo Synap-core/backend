@@ -25,7 +25,7 @@ describe("ViewsExecutor", () => {
 
   it("should handle create action", async () => {
     const event = {
-      name: "views.create.validated",
+      name: "view.create.validated",
       data: {
         name: "Test View",
         type: "kanban",
@@ -47,7 +47,7 @@ describe("ViewsExecutor", () => {
 
   it("should handle update action", async () => {
     const event = {
-      name: "views.update.validated",
+      name: "view.update.validated",
       data: { id: "view-1", name: "Updated" },
       user: { userId: "user-1" },
     };
@@ -63,7 +63,7 @@ describe("ViewsExecutor", () => {
 
   it("should handle delete action", async () => {
     const event = {
-      name: "views.delete.validated",
+      name: "view.delete.validated",
       data: { id: "view-1" },
       user: { userId: "user-1" },
     };

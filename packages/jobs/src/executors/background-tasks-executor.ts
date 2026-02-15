@@ -18,11 +18,7 @@ export const backgroundTasksExecutor = inngest.createFunction(
     name: "Background Tasks Executor",
     retries: 3,
   },
-  [
-    { event: "background_tasks.create.validated" },
-    { event: "background_tasks.update.validated" },
-    { event: "background_tasks.delete.validated" },
-  ],
+  { event: "backgroundTask.*" },
   async ({ event, step }) => {
     const eventInfo = extractEventInfo(event.name);
     const { action, phase } = eventInfo;

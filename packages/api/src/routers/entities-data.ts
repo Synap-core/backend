@@ -38,7 +38,7 @@ export const entitiesDataRouter = router({
       const { inngest } = await import("@synap/jobs");
 
       await inngest.send({
-        name: "entities.create.requested",
+        name: "entity.create.requested",
         data: {
           profileSlug: input.profileSlug || input.type,
           type: input.type, // Legacy
@@ -257,7 +257,7 @@ export const entitiesDataRouter = router({
       const { inngest } = await import("@synap/jobs");
 
       await inngest.send({
-        name: "entities.update.requested",
+        name: "entity.update.requested",
         data: {
           entityId: input.id,
           title: input.title,
@@ -287,7 +287,7 @@ export const entitiesDataRouter = router({
       const { inngest } = await import("@synap/jobs");
 
       await inngest.send({
-        name: "entities.delete.requested",
+        name: "entity.delete.requested",
         data: {
           entityId: input.id,
           userId: ctx.userId,

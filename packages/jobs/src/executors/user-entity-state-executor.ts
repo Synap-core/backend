@@ -19,8 +19,7 @@ export const userEntityStateExecutor = inngest.createFunction(
     retries: 3,
   },
   [
-    { event: "user_entity_state.update.validated" },
-    { event: "user_entity_state.delete.validated" },
+    { event: "userEntityState.*" },
   ],
   async ({ event, step }) => {
     const eventInfo = extractEventInfo(event.name);

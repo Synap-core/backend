@@ -92,6 +92,6 @@ export const sharingExecutor = inngest.createFunction(
     name: "Execute Sharing Operations",
     concurrency: { limit: 30 },
   },
-  { event: "sharing.*.validated" },
+  { event: "sharing.*" },
   sharingHandler
 );

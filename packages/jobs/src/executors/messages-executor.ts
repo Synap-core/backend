@@ -66,6 +66,6 @@ export const messagesExecutor = inngest.createFunction(
     name: "Execute Message Operations",
     concurrency: { limit: 10 },
   },
-  { event: "messages.*.validated" },
+  { event: "message.*" },
   messagesHandler
 );

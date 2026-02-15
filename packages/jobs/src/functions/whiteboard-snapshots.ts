@@ -28,7 +28,7 @@ export const whiteboardSnapshotWorker = inngest.createFunction(
     name: "Process Whiteboard Snapshots",
     retries: 3,
   },
-  { event: "whiteboards.snapshot.requested" },
+  { event: "whiteboard.snapshot.requested" },
   async ({ event, step }) => {
     const { viewId, documentId, yjsRoomId, message, userId } = event.data;
 
@@ -154,7 +154,7 @@ export const whiteboardRestoreWorker = inngest.createFunction(
     name: "Restore Whiteboard Version",
     retries: 2,
   },
-  { event: "whiteboards.restore.requested" },
+  { event: "whiteboard.restore.requested" },
   async ({ event, step }) => {
     const { viewId, versionId, yjsRoomId, content, userId } = event.data;
 

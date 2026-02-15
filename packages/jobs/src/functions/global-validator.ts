@@ -31,7 +31,28 @@ export const globalValidator = inngest.createFunction(
     name: "Global Validator & Proposal Router",
     retries: 2,
   },
-  [{ event: "entities.create.requested" }, { event: "*.*.requested" }],
+  [
+    // All subject types — singular, matching createUnifiedEvent / emitRequestEvent output
+    { event: "entity.*" },
+    { event: "document.*" },
+    { event: "view.*" },
+    { event: "workspace.*" },
+    { event: "relation.*" },
+    { event: "message.*" },
+    { event: "role.*" },
+    { event: "apiKey.*" },
+    { event: "skill.*" },
+    { event: "template.*" },
+    { event: "inboxItem.*" },
+    { event: "sharing.*" },
+    { event: "backgroundTask.*" },
+    { event: "agent.*" },
+    { event: "chatThread.*" },
+    { event: "proposal.*" },
+    { event: "project.*" },
+    { event: "workspaceMember.*" },
+    { event: "projectMember.*" },
+  ],
   async ({ event, step }) => {
     const eventName = event.name as string;
 

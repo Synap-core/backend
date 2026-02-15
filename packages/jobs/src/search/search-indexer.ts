@@ -12,33 +12,38 @@ export const searchIndexer = inngest.createFunction(
     name: "Search Indexer - Event Listener",
     retries: 3,
   },
-  // Listen to all .completed events
+  // Listen to .completed events using trailing wildcards (Inngest-compatible)
   [
-    { event: "entities.*.completed" },
-    { event: "documents.*.completed" },
-    { event: "views.*.completed" },
-    { event: "projects.*.completed" },
-    { event: "chat_threads.*.completed" },
-    { event: "agents.*.completed" },
+    { event: "entity.*" },
+    { event: "document.*" },
+    { event: "view.*" },
+    { event: "project.*" },
+    { event: "chatThread.*" },
+    { event: "agent.*" },
   ],
   async ({ event, step }) => {
     return await step.run("queue-for-indexing", async () => {
-      // Parse event type
-      const [table, operation, _] = event.name.split(".");
+      // Parse event type: {subjectType}.{action}.{phase}
+      const [subjectType, operation, phase] = event.name.split(".");
 
-      // Map table to collection
+      // Only index on completed events
+      if (phase !== "completed") {
+        return { status: "skipped", reason: "Not a completed event", phase };
+      }
+
+      // Map singular subject type to Typesense collection name
       const collectionMap: Record<string, string> = {
-        entities: "entities",
-        documents: "documents",
-        views: "views",
-        projects: "projects",
-        chat_threads: "chat_threads",
-        agents: "agents",
+        entity: "entities",
+        document: "documents",
+        view: "views",
+        project: "projects",
+        chatThread: "chat_threads",
+        agent: "agents",
       };
 
-      const collection = collectionMap[table];
+      const collection = collectionMap[subjectType];
       if (!collection) {
-        return { status: "skipped", reason: "Unknown table", table };
+        return { status: "skipped", reason: "Unknown subject type", subjectType };
       }
 
       // Queue for bulk indexing

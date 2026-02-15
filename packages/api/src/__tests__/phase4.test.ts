@@ -46,7 +46,7 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
 
       // Create event (simulating what the mutation does)
       const event = createSynapEvent({
-        type: "entities.create.requested",
+        type: "entity.create.requested",
         userId: userAId,
         subjectId: entityId,
         data: {
@@ -135,7 +135,7 @@ describe("Phase 4: CQRS API Layer Integration Test", () => {
       // Create a note for user A
       const userANoteId = randomUUID();
       const userAEvent = createSynapEvent({
-        type: "entities.create.requested",
+        type: "entity.create.requested",
         userId: userAId,
         subjectId: userANoteId,
         data: {

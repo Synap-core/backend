@@ -29,7 +29,7 @@ export const rolesHandler = async ({
 
   if (action === "create") {
     await step.run("create-role", async () => {
-      // BaseRepository.emitCompleted() automatically emits "roles.create.completed"
+      // BaseRepository.emitCompleted() automatically emits "role.create.completed"
       return roleRepo.create(
         {
           name: (data.name as string) || "Untitled",
@@ -44,7 +44,7 @@ export const rolesHandler = async ({
     });
   } else if (action === "update") {
     await step.run("update-role", async () => {
-      // BaseRepository.emitCompleted() automatically emits "roles.update.completed"
+      // BaseRepository.emitCompleted() automatically emits "role.update.completed"
       return roleRepo.update(
         data.id as string,
         {
@@ -59,7 +59,7 @@ export const rolesHandler = async ({
     });
   } else if (action === "delete") {
     await step.run("delete-role", async () => {
-      // BaseRepository.emitCompleted() automatically emits "roles.delete.completed"
+      // BaseRepository.emitCompleted() automatically emits "role.delete.completed"
       return roleRepo.delete(data.id as string, userId);
     });
   }
@@ -73,6 +73,6 @@ export const rolesExecutor = inngest.createFunction(
     name: "Execute Role Operations",
     concurrency: { limit: 20 },
   },
-  { event: "roles.*.validated" },
+  { event: "role.*" },
   rolesHandler
 );

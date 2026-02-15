@@ -100,6 +100,6 @@ export const inboxExecutor = inngest.createFunction(
     name: "Execute Inbox Operations",
     concurrency: { limit: 50 },
   },
-  { event: "inbox.*.validated" },
+  { event: "inboxItem.*" },
   inboxHandler
 );

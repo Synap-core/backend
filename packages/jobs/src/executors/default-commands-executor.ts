@@ -14,7 +14,7 @@ export const createDefaultCommands = inngest.createFunction(
     name: "Create Default Commands for Workspace",
     retries: 3,
   },
-  { event: "workspaces.create.completed" },
+  { event: "workspace.create.completed" },
   async ({ event, step }) => {
     const workspaceId = event.data.id;
     const userId = event.user.id;

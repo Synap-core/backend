@@ -58,7 +58,7 @@ export const workspacesHandler = async ({
         `[workspacesExecutor] Workspace created successfully:`,
         created.id
       );
-      // BaseRepository.emitCompleted() automatically emits "workspaces.create.completed"
+      // BaseRepository.emitCompleted() automatically emits "workspace.create.completed"
       return created;
     });
   } else if (action === "update") {
@@ -73,13 +73,13 @@ export const workspacesHandler = async ({
       );
     });
 
-    // BaseRepository.emitCompleted() automatically emits "workspaces.update.completed"
+    // BaseRepository.emitCompleted() automatically emits "workspace.update.completed"
   } else if (action === "delete") {
     await step.run("delete-workspace", async () => {
       await workspaceRepo.delete(data.id as string, userId);
     });
 
-    // BaseRepository.emitCompleted() automatically emits "workspaces.delete.completed"
+    // BaseRepository.emitCompleted() automatically emits "workspace.delete.completed"
   }
 
   return { success: true, action };
@@ -91,6 +91,6 @@ export const workspacesExecutor = inngest.createFunction(
     name: "Execute Workspace Operations",
     concurrency: { limit: 20 }, // Moderate concurrency
   },
-  { event: "workspaces.*.validated" },
+  { event: "workspace.*" },
   workspacesHandler
 );

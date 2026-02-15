@@ -79,6 +79,6 @@ export const projectMembersExecutor = inngest.createFunction(
     name: "Execute Project Member Operations",
     concurrency: { limit: 10 },
   },
-  { event: "projectMembers.*.validated" },
+  { event: "projectMember.*" },
   projectMembersHandler
 );
