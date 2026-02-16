@@ -58,8 +58,8 @@ services:
         condition: service_healthy
       backend-migrate:
         condition: service_completed_successfully
-      backend-init:
-        condition: service_completed_successfully
+      # backend-init:
+      #   condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -256,7 +256,11 @@ services:
   typesense:
     image: typesense/typesense:0.25.2
     restart: always
-    command: "--data-dir /data --api-key=${TYPESENSE_API_KEY} --enable-cors"
+    command: >
+      --data-dir /data
+      --api-key=${TYPESENSE_ADMIN_API_KEY}
+      --search-only-api-key=${TYPESENSE_API_KEY}
+      --enable-cors
     volumes:
       - typesense_data:/data
     networks:
@@ -264,9 +268,9 @@ services:
     ports:
       - "8108:8108"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/localhost/8108' || exit 1"]
+      interval: 10s
+      timeout: 5s
       retries: 3
 
   # ============================================================================

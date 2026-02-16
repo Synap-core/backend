@@ -636,7 +636,7 @@ EOF
             OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
 
             # Require OpenAI key
-            while [ -z "$OPENAI_API_KEY" ]; then
+            while [ -z "$OPENAI_API_KEY" ]; do
                 echo -e "${RED}OpenAI API key is required for embeddings/vector search${NC}"
                 read -p "OpenAI API key: " OPENAI_API_KEY
             done

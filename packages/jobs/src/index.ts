@@ -78,6 +78,8 @@ import { documentPersistenceWorker } from "./functions/document-persistence.js";
 import { analyzeCapturedThought } from "./functions/ai-analyzer.js";
 import { processAnalyzedThought } from "./functions/thought-processor.js";
 import { entityEmbeddingWorker } from "./functions/entity-embedding.js";
+import { searchIndexer } from "./search/search-indexer.js";
+import { bulkIndexer } from "./search/bulk-indexer.js";
 import { handleWebhookDelivery } from "./functions/webhook-broker.js";
 import { globalValidator, globalValidator2 } from "./functions/global-validator.js";
 import {
@@ -119,6 +121,10 @@ export const functions = [
   analyzeCapturedThought,
   processAnalyzedThought,
   entityEmbeddingWorker,
+
+  // Search workers
+  searchIndexer,
+  bulkIndexer,
 
   // Shared workers
   handleWebhookDelivery,

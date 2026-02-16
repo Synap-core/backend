@@ -40,8 +40,8 @@ export const searchRouter = router({
         "Searching entities"
       );
 
-      // Simple text search using ILIKE for now
-      // TODO: Implement full-text search with tsvector/tsquery
+      // Full-text search using PostgreSQL tsvector
+      // Uses GIN index on search_vector for fast performance
       const conditions = [
         eq(entities.userId, userId),
         sql`${entities.deletedAt} IS NULL`,
@@ -51,21 +51,29 @@ export const searchRouter = router({
         conditions.push(eq(entities.type, input.type));
       }
 
-      // Search in title and preview
-      const searchPattern = `%${input.query}%`;
-      conditions.push(
-        sql`(${entities.title} ILIKE ${searchPattern} OR ${entities.preview} ILIKE ${searchPattern})`
-      );
-
-      const results = await db.query.entities.findMany({
-        where: and(...conditions),
-        orderBy: [desc(entities.updatedAt)],
-        limit: input.limit,
-      });
+      // Full-text search with ranking
+      // plainto_tsquery converts user input to tsquery (handles spaces, special chars)
+      // ts_rank scores relevance (higher = better match)
+      const results = await db.execute(sql`
+        SELECT
+          e.*,
+          ts_rank(e.search_vector, plainto_tsquery('english', ${input.query})) as rank
+        FROM ${entities} e
+        WHERE ${sql.join(conditions, sql` AND `)}
+          AND e.search_vector @@ plainto_tsquery('english', ${input.query})
+        ORDER BY rank DESC, e.updated_at DESC
+        LIMIT ${input.limit}
+      `);
 
       logger.debug({ userId, resultCount: results.length }, "Search complete");
 
-      return { entities: results };
+      // Cast results to entity type (remove rank field from response)
+      const entitiesResults = results.map((r: any) => {
+        const { rank, ...entity } = r;
+        return entity;
+      });
+
+      return { entities: entitiesResults };
     }),
 
   /**

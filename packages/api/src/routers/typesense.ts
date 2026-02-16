@@ -27,7 +27,6 @@ export const typesenseRouter = router({
               "entities",
               "documents",
               "views",
-              "projects",
               "chat_threads",
               "agents",
             ])
@@ -58,7 +57,6 @@ export const typesenseRouter = router({
           "entities",
           "documents",
           "views",
-          "projects",
           "chat_threads",
           "agents",
         ]),

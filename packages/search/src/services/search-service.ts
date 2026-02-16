@@ -27,7 +27,6 @@ export class SearchService {
     entities: "title,content,description",
     documents: "title,content",
     views: "name,description",
-    projects: "name,description",
     chat_threads: "title,summary",
     agents: "name,description,systemPrompt",
   };
@@ -43,7 +42,6 @@ export class SearchService {
       "entities",
       "documents",
       "views",
-      "projects",
       "chat_threads",
       "agents",
     ];

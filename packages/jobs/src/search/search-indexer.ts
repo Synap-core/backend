@@ -17,7 +17,6 @@ export const searchIndexer = inngest.createFunction(
     { event: "entity.*" },
     { event: "document.*" },
     { event: "view.*" },
-    { event: "project.*" },
     { event: "chatThread.*" },
     { event: "agent.*" },
   ],
@@ -36,7 +35,6 @@ export const searchIndexer = inngest.createFunction(
         entity: "entities",
         document: "documents",
         view: "views",
-        project: "projects",
         chatThread: "chat_threads",
         agent: "agents",
       };
