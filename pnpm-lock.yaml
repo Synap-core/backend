@@ -537,9 +537,6 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
-      '@synap-core/types':
-        specifier: workspace:*
-        version: link:../types
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
@@ -867,6 +864,12 @@ importers:
 
   packages/types:
     dependencies:
+      '@synap-core/core':
+        specifier: workspace:*
+        version: link:../core
+      '@synap/database':
+        specifier: workspace:*
+        version: link:../database
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)

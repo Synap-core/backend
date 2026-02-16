@@ -72,12 +72,13 @@ export const documentsHandler = async ({
       await docRepo.create(
         {
           title: (data.title as string) || "Untitled",
-          type: docType as "text" | "markdown" | "code" | "pdf" | "docx", // DocumentRepository doesn't support whiteboard yet
+          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
           language: (data.language as string) || undefined,
           storageUrl: uploadResult.url,
           storageKey: uploadResult.key,
           size: uploadResult.size,
           mimeType: (data.mimeType as string) || "text/plain",
+          workspaceId: (data.workspaceId as string) || undefined,
           projectId: (data.projectId as string) || undefined,
           metadata: (data.metadata as Record<string, unknown>) || {},
           userId,

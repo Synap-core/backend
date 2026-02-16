@@ -18,6 +18,7 @@ export interface CreateDocumentInput {
   storageKey: string;
   size: number;
   mimeType: string;
+  workspaceId?: string;
   projectId?: string;
   metadata?: Record<string, unknown>;
   userId: string;
@@ -48,6 +49,7 @@ export class DocumentRepository extends BaseRepository<
       .insert(documents)
       .values({
         userId,
+        workspaceId: data.workspaceId,
         title: data.title,
         type: data.type,
         language: data.language,

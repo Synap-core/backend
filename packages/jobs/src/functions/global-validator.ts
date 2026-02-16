@@ -25,40 +25,31 @@ import type { EnhancedEventMetadata } from "@synap-core/core";
 
 const logger = createLogger({ module: "global-validator" });
 
-export const globalValidator = inngest.createFunction(
-  {
-    id: "global-validator",
-    name: "Global Validator & Proposal Router",
-    retries: 2,
-  },
-  [
-    // All subject types — singular, matching createUnifiedEvent / emitRequestEvent output
-    { event: "entity.*" },
-    { event: "document.*" },
-    { event: "view.*" },
-    { event: "workspace.*" },
-    { event: "relation.*" },
-    { event: "message.*" },
-    { event: "role.*" },
-    { event: "apiKey.*" },
-    { event: "skill.*" },
-    { event: "template.*" },
-    { event: "inboxItem.*" },
-    { event: "sharing.*" },
-    { event: "backgroundTask.*" },
-    { event: "agent.*" },
-    { event: "chatThread.*" },
-    { event: "proposal.*" },
-    { event: "project.*" },
-    { event: "workspaceMember.*" },
-    { event: "projectMember.*" },
-  ],
-  async ({ event, step }) => {
+/**
+ * Shared handler for both globalValidator instances.
+ * Inngest dev (self-hosted) limits functions to 10 triggers — we split into two.
+ */
+async function globalValidatorHandler({
+  event,
+  step,
+}: {
+  event: { name: string; data: any; user?: { id: string } };
+  step: any;
+}) {
     const eventName = event.name as string;
 
-    // Extract event info using unified event system
-    const eventInfo = extractEventInfo(eventName);
-    const { subjectType, action, phase } = eventInfo;
+    // Try to extract event info — skip gracefully if event name is non-standard
+    let subjectType: string;
+    let action: import("../types/unified-events.js").EventAction;
+    let phase: import("../types/unified-events.js").EventPhase;
+    try {
+      const eventInfo = extractEventInfo(eventName);
+      subjectType = eventInfo.subjectType;
+      action = eventInfo.action;
+      phase = eventInfo.phase;
+    } catch {
+      return { status: "skipped", reason: "Non-standard event format" };
+    }
 
     // Ensure we're handling a requested event
     if (phase !== "requested") {
@@ -375,5 +366,40 @@ export const globalValidator = inngest.createFunction(
       status: "proposal_created",
       proposalId: proposalResult.proposalId,
     };
-  }
+}
+
+// Inngest dev (self-hosted) hard limit: max 10 triggers per function.
+// Split the 19 subject-type triggers across two function registrations.
+
+export const globalValidator = inngest.createFunction(
+  { id: "global-validator", name: "Global Validator & Proposal Router", retries: 2 },
+  [
+    { event: "entity.*" },
+    { event: "document.*" },
+    { event: "view.*" },
+    { event: "workspace.*" },
+    { event: "relation.*" },
+    { event: "message.*" },
+    { event: "role.*" },
+    { event: "apiKey.*" },
+    { event: "skill.*" },
+    { event: "template.*" },
+  ],
+  globalValidatorHandler
+);
+
+export const globalValidator2 = inngest.createFunction(
+  { id: "global-validator-2", name: "Global Validator & Proposal Router (2)", retries: 2 },
+  [
+    { event: "inboxItem.*" },
+    { event: "sharing.*" },
+    { event: "backgroundTask.*" },
+    { event: "agent.*" },
+    { event: "chatThread.*" },
+    { event: "proposal.*" },
+    { event: "project.*" },
+    { event: "workspaceMember.*" },
+    { event: "projectMember.*" },
+  ],
+  globalValidatorHandler
 );
