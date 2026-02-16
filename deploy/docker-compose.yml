@@ -58,6 +58,8 @@ services:
         condition: service_healthy
       backend-migrate:
         condition: service_completed_successfully
+      backend-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -154,6 +156,34 @@ services:
       - synap-net
     # Mark as a one-shot service (runs once, then stops)
     # Removed profile - migrations should run automatically on startup
+
+  # ============================================================================
+  # DATABASE INITIALIZATION (Seed API Keys)
+  # ============================================================================
+  backend-init:
+    # Use same image as backend service
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
+      HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
+      NODE_ENV: production
+    # Run database initialization script (seeds API keys)
+    command: node node_modules/@synap/database/dist/scripts/init-hub-keys.js
+    # One-shot service - runs once after migrations
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
+    networks:
+      - synap-net
 
     # ============================================================================
     # POSTGRESQL
