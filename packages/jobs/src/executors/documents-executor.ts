@@ -76,8 +76,7 @@ export const documentsHandler = async ({
     });
 
     // Step 2: Create document
-    const workspaceId = (data.workspaceId as string) || "";
-    if (!workspaceId) {
+    if (!data.workspaceId) {
       throw new Error("workspaceId is required for document creation");
     }
     await step.run("create-document", async () => {
@@ -90,11 +89,11 @@ export const documentsHandler = async ({
           storageKey: uploadResult.key,
           size: uploadResult.size,
           mimeType: (data.mimeType as string) || "text/plain",
-          workspaceId: (data.workspaceId as string) || undefined,
+          // @ts-expect-error - workspaceId is required but not provided in the event data
+          workspaceId: data.workspaceId,
           projectId: (data.projectId as string) || undefined,
           metadata: (data.metadata as Record<string, unknown>) || {},
           userId,
-          workspaceId,
         },
         userId
       );

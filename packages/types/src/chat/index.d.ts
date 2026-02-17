@@ -4,156 +4,134 @@
  * Chat-related types for Synap's infinite chat with branching.
  * Leverages database-generated types and Hub Protocol types.
  */
-import type {
-  AIStep,
-  ExtractedEntity,
-  BranchDecision,
-  AgentTypeString,
-  MessageMetadata,
-  ProposedAction,
-} from "../hub-protocol/index.js";
+import type { AIStep, ExtractedEntity, BranchDecision, AgentTypeString, MessageMetadata, ProposedAction } from "../hub-protocol/index.js";
 /**
  * Chat thread (conversation)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ChatThread,
-  NewChatThread,
-} from "../../../database/src/schema/index.js";
+export type { ChatThread, NewChatThread, } from "../../../database/src/schema/index.js";
 /**
  * Chat message
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ConversationMessageRow as ChatMessage,
-  NewConversationMessageRow as NewChatMessage,
-} from "../../../database/src/schema/index.js";
+export type { ConversationMessageRow as ChatMessage, NewConversationMessageRow as NewChatMessage, } from "../../../database/src/schema/index.js";
 /**
  * Thread entities (context tracking)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ThreadEntity,
-  NewThreadEntity,
-} from "../../../database/src/schema/index.js";
+export type { ThreadEntity, NewThreadEntity, } from "../../../database/src/schema/index.js";
 /**
  * Thread documents (context tracking)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ThreadDocument,
-  NewThreadDocument,
-} from "../../../database/src/schema/index.js";
+export type { ThreadDocument, NewThreadDocument, } from "../../../database/src/schema/index.js";
 /**
  * Branch node for UI tree visualization
  */
 export interface BranchNode {
-  id: string;
-  threadId: string;
-  parentId?: string;
-  children: string[];
-  depth: number;
-  agentType: AgentTypeString;
-  status: "active" | "archived" | "merged";
-  title?: string;
-  branchPurpose?: string;
-  createdAt: string;
-  mergedAt?: string;
+    id: string;
+    threadId: string;
+    parentId?: string;
+    children: string[];
+    depth: number;
+    agentType: AgentTypeString;
+    status: "active" | "archived" | "merged";
+    title?: string;
+    branchPurpose?: string;
+    createdAt: string;
+    mergedAt?: string;
 }
 /**
  * Chat UI state for components (streaming + completed message)
  */
 export interface ChatUIState {
-  isStreaming: boolean;
-  currentContent: string;
-  aiSteps: AIStep[];
-  extractedEntities: ExtractedEntity[];
-  /** In-stream action proposals (create/update entity or document) */
-  proposedActions?: ProposedAction[];
-  branchDecision?: BranchDecision;
-  error?: string;
+    isStreaming: boolean;
+    currentContent: string;
+    aiSteps: AIStep[];
+    extractedEntities: ExtractedEntity[];
+    /** In-stream action proposals (create/update entity or document) */
+    proposedActions?: ProposedAction[];
+    branchDecision?: BranchDecision;
+    error?: string;
 }
 /**
  * Send message request
  */
 export interface SendMessageRequest {
-  threadId: string;
-  content: string;
-  /** Active workspace (for entity create/update – event chain). Sent by frontend when available. */
-  workspaceId?: string;
-  agentType?: AgentTypeString;
-  agentConfig?: Record<string, unknown>;
+    threadId: string;
+    content: string;
+    /** Active workspace (for entity create/update – event chain). Sent by frontend when available. */
+    workspaceId?: string;
+    agentType?: AgentTypeString;
+    agentConfig?: Record<string, unknown>;
 }
 /**
  * Send message response
  */
 export interface SendMessageResponse {
-  messageId: string;
-  content: string;
-  metadata?: MessageMetadata;
+    messageId: string;
+    content: string;
+    metadata?: MessageMetadata;
 }
 /**
  * Create branch request
  */
 export interface CreateBranchRequest {
-  parentThreadId: string;
-  branchedFromMessageId: string;
-  agentType: AgentTypeString;
-  title?: string;
-  purpose?: string;
+    parentThreadId: string;
+    branchedFromMessageId: string;
+    agentType: AgentTypeString;
+    title?: string;
+    purpose?: string;
 }
 /**
  * Create branch response
  */
 export interface CreateBranchResponse {
-  threadId: string;
-  thread: any;
+    threadId: string;
+    thread: any;
 }
 /**
  * useChatThread hook result
  */
 export interface UseChatThreadResult {
-  thread: any;
-  messages: any[];
-  isLoading: boolean;
-  error: Error | null;
-  sendMessage: (content: string) => Promise<void>;
-  createBranch: (
-    messageId: string,
-    agentType: AgentTypeString
-  ) => Promise<string>;
+    thread: any;
+    messages: any[];
+    isLoading: boolean;
+    error: Error | null;
+    sendMessage: (content: string) => Promise<void>;
+    createBranch: (messageId: string, agentType: AgentTypeString) => Promise<string>;
 }
 /**
  * useStreamingMessage hook result
  */
 export interface UseStreamingMessageResult {
-  content: string;
-  aiSteps: AIStep[];
-  entities: ExtractedEntity[];
-  proposedActions?: ProposedAction[];
-  branchDecision?: BranchDecision;
-  isStreaming: boolean;
-  error?: string;
+    content: string;
+    aiSteps: AIStep[];
+    entities: ExtractedEntity[];
+    proposedActions?: ProposedAction[];
+    branchDecision?: BranchDecision;
+    isStreaming: boolean;
+    error?: string;
 }
 /**
  * useAISteps hook result
  */
 export interface UseAIStepsResult {
-  steps: AIStep[];
-  currentStep?: AIStep;
-  isThinking: boolean;
+    steps: AIStep[];
+    currentStep?: AIStep;
+    isThinking: boolean;
 }
 /**
  * useBranchTree hook result
  */
 export interface UseBranchTreeResult {
-  nodes: BranchNode[];
-  rootNode?: BranchNode;
-  currentNode?: BranchNode;
-  isLoading: boolean;
+    nodes: BranchNode[];
+    rootNode?: BranchNode;
+    currentNode?: BranchNode;
+    isLoading: boolean;
 }
 //# sourceMappingURL=index.d.ts.map

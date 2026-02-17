@@ -2,215 +2,79 @@
  * Resource Sharing Schema - Public links and invitations
  */
 export declare const resourceShares: import("drizzle-orm/pg-core").PgTableWithColumns<{
-  name: "resource_shares";
-  schema: undefined;
-  columns: {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "id";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: true;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    resourceType: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "resource_type";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    resourceId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "resource_id";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    visibility: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "visibility";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    publicToken: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "public_token";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    tokenHash: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "token_hash";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    passwordHash: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "password_hash";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    access: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "access";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    revokedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "revoked_at";
-        tableName: "resource_shares";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    invitedUsers: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "invited_users";
-        tableName: "resource_shares";
-        dataType: "array";
-        columnType: "PgArray";
-        data: string[];
-        driverParam: string | string[];
-        notNull: false;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: import("drizzle-orm").Column<
-          {
-            name: "invited_users";
+    name: "resource_shares";
+    schema: undefined;
+    columns: {
+        id: import("drizzle-orm/pg-core").PgColumn<{
+            name: "id";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: true;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        resourceType: import("drizzle-orm/pg-core").PgColumn<{
+            name: "resource_type";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        resourceId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "resource_id";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        visibility: import("drizzle-orm/pg-core").PgColumn<{
+            name: "visibility";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        publicToken: import("drizzle-orm/pg-core").PgColumn<{
+            name: "public_token";
             tableName: "resource_shares";
             dataType: "string";
             columnType: "PgText";
@@ -225,191 +89,247 @@ export declare const resourceShares: import("drizzle-orm/pg-core").PgTableWithCo
             baseColumn: never;
             identity: undefined;
             generated: undefined;
-          },
-          {},
-          {}
-        >;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {
-        size: undefined;
-        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
-          {
-            name: "invited_users";
+        }, {}, {}>;
+        tokenHash: import("drizzle-orm/pg-core").PgColumn<{
+            name: "token_hash";
+            tableName: "resource_shares";
             dataType: "string";
             columnType: "PgText";
             data: string;
-            enumValues: [string, ...string[]];
             driverParam: string;
-          },
-          {},
-          {},
-          import("drizzle-orm").ColumnBuilderExtraConfig
-        >;
-      }
-    >;
-    permissions: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "permissions";
-        tableName: "resource_shares";
-        dataType: "json";
-        columnType: "PgJsonb";
-        data: unknown;
-        driverParam: unknown;
-        notNull: false;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    expiresAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "expires_at";
-        tableName: "resource_shares";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdBy: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "created_by";
-        tableName: "resource_shares";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "created_at";
-        tableName: "resource_shares";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "updated_at";
-        tableName: "resource_shares";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    viewCount: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "view_count";
-        tableName: "resource_shares";
-        dataType: "number";
-        columnType: "PgInteger";
-        data: number;
-        driverParam: string | number;
-        notNull: false;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "last_accessed_at";
-        tableName: "resource_shares";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-  };
-  dialect: "pg";
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        passwordHash: import("drizzle-orm/pg-core").PgColumn<{
+            name: "password_hash";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        access: import("drizzle-orm/pg-core").PgColumn<{
+            name: "access";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        revokedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "revoked_at";
+            tableName: "resource_shares";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        invitedUsers: import("drizzle-orm/pg-core").PgColumn<{
+            name: "invited_users";
+            tableName: "resource_shares";
+            dataType: "array";
+            columnType: "PgArray";
+            data: string[];
+            driverParam: string | string[];
+            notNull: false;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: import("drizzle-orm").Column<{
+                name: "invited_users";
+                tableName: "resource_shares";
+                dataType: "string";
+                columnType: "PgText";
+                data: string;
+                driverParam: string;
+                notNull: false;
+                hasDefault: false;
+                isPrimaryKey: false;
+                isAutoincrement: false;
+                hasRuntimeDefault: false;
+                enumValues: [string, ...string[]];
+                baseColumn: never;
+                identity: undefined;
+                generated: undefined;
+            }, {}, {}>;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {
+            size: undefined;
+            baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
+                name: "invited_users";
+                dataType: "string";
+                columnType: "PgText";
+                data: string;
+                enumValues: [string, ...string[]];
+                driverParam: string;
+            }, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+        }>;
+        permissions: import("drizzle-orm/pg-core").PgColumn<{
+            name: "permissions";
+            tableName: "resource_shares";
+            dataType: "json";
+            columnType: "PgJsonb";
+            data: unknown;
+            driverParam: unknown;
+            notNull: false;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        expiresAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "expires_at";
+            tableName: "resource_shares";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        createdBy: import("drizzle-orm/pg-core").PgColumn<{
+            name: "created_by";
+            tableName: "resource_shares";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        createdAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "created_at";
+            tableName: "resource_shares";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "updated_at";
+            tableName: "resource_shares";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        viewCount: import("drizzle-orm/pg-core").PgColumn<{
+            name: "view_count";
+            tableName: "resource_shares";
+            dataType: "number";
+            columnType: "PgInteger";
+            data: number;
+            driverParam: string | number;
+            notNull: false;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "last_accessed_at";
+            tableName: "resource_shares";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+    };
+    dialect: "pg";
 }>;
 export type ResourceShare = typeof resourceShares.$inferSelect;
 export type NewResourceShare = typeof resourceShares.$inferInsert;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchema<
-  "insert",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchema<"insert", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "resource_shares";
         dataType: "string";
@@ -425,12 +345,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    resourceType: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    resourceType: import("drizzle-orm/pg-core").PgColumn<{
         name: "resource_type";
         tableName: "resource_shares";
         dataType: "string";
@@ -446,12 +362,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    resourceId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    resourceId: import("drizzle-orm/pg-core").PgColumn<{
         name: "resource_id";
         tableName: "resource_shares";
         dataType: "string";
@@ -467,12 +379,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    visibility: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    visibility: import("drizzle-orm/pg-core").PgColumn<{
         name: "visibility";
         tableName: "resource_shares";
         dataType: "string";
@@ -488,12 +396,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    publicToken: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    publicToken: import("drizzle-orm/pg-core").PgColumn<{
         name: "public_token";
         tableName: "resource_shares";
         dataType: "string";
@@ -509,12 +413,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    tokenHash: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    tokenHash: import("drizzle-orm/pg-core").PgColumn<{
         name: "token_hash";
         tableName: "resource_shares";
         dataType: "string";
@@ -530,12 +430,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    passwordHash: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    passwordHash: import("drizzle-orm/pg-core").PgColumn<{
         name: "password_hash";
         tableName: "resource_shares";
         dataType: "string";
@@ -551,12 +447,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    access: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    access: import("drizzle-orm/pg-core").PgColumn<{
         name: "access";
         tableName: "resource_shares";
         dataType: "string";
@@ -572,12 +464,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    revokedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    revokedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "revoked_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -593,12 +481,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    invitedUsers: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    invitedUsers: import("drizzle-orm/pg-core").PgColumn<{
         name: "invited_users";
         tableName: "resource_shares";
         dataType: "array";
@@ -611,8 +495,7 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         isAutoincrement: false;
         hasRuntimeDefault: false;
         enumValues: [string, ...string[]];
-        baseColumn: import("drizzle-orm").Column<
-          {
+        baseColumn: import("drizzle-orm").Column<{
             name: "invited_users";
             tableName: "resource_shares";
             dataType: "string";
@@ -628,33 +511,21 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
             baseColumn: never;
             identity: undefined;
             generated: undefined;
-          },
-          {},
-          {}
-        >;
+        }, {}, {}>;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {
+    }, {}, {
         size: undefined;
-        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
-          {
+        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
             name: "invited_users";
             dataType: "string";
             columnType: "PgText";
             data: string;
             enumValues: [string, ...string[]];
             driverParam: string;
-          },
-          {},
-          {},
-          import("drizzle-orm").ColumnBuilderExtraConfig
-        >;
-      }
-    >;
-    permissions: import("drizzle-orm/pg-core").PgColumn<
-      {
+        }, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+    }>;
+    permissions: import("drizzle-orm/pg-core").PgColumn<{
         name: "permissions";
         tableName: "resource_shares";
         dataType: "json";
@@ -670,12 +541,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    expiresAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    expiresAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "expires_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -691,12 +558,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdBy: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdBy: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_by";
         tableName: "resource_shares";
         dataType: "string";
@@ -712,12 +575,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -733,12 +592,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "updated_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -754,12 +609,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    viewCount: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    viewCount: import("drizzle-orm/pg-core").PgColumn<{
         name: "view_count";
         tableName: "resource_shares";
         dataType: "number";
@@ -775,12 +626,8 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "last_accessed_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -796,22 +643,13 @@ export declare const insertResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchema<
-  "select",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchema<"select", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "resource_shares";
         dataType: "string";
@@ -827,12 +665,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    resourceType: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    resourceType: import("drizzle-orm/pg-core").PgColumn<{
         name: "resource_type";
         tableName: "resource_shares";
         dataType: "string";
@@ -848,12 +682,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    resourceId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    resourceId: import("drizzle-orm/pg-core").PgColumn<{
         name: "resource_id";
         tableName: "resource_shares";
         dataType: "string";
@@ -869,12 +699,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    visibility: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    visibility: import("drizzle-orm/pg-core").PgColumn<{
         name: "visibility";
         tableName: "resource_shares";
         dataType: "string";
@@ -890,12 +716,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    publicToken: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    publicToken: import("drizzle-orm/pg-core").PgColumn<{
         name: "public_token";
         tableName: "resource_shares";
         dataType: "string";
@@ -911,12 +733,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    tokenHash: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    tokenHash: import("drizzle-orm/pg-core").PgColumn<{
         name: "token_hash";
         tableName: "resource_shares";
         dataType: "string";
@@ -932,12 +750,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    passwordHash: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    passwordHash: import("drizzle-orm/pg-core").PgColumn<{
         name: "password_hash";
         tableName: "resource_shares";
         dataType: "string";
@@ -953,12 +767,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    access: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    access: import("drizzle-orm/pg-core").PgColumn<{
         name: "access";
         tableName: "resource_shares";
         dataType: "string";
@@ -974,12 +784,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    revokedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    revokedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "revoked_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -995,12 +801,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    invitedUsers: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    invitedUsers: import("drizzle-orm/pg-core").PgColumn<{
         name: "invited_users";
         tableName: "resource_shares";
         dataType: "array";
@@ -1013,8 +815,7 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         isAutoincrement: false;
         hasRuntimeDefault: false;
         enumValues: [string, ...string[]];
-        baseColumn: import("drizzle-orm").Column<
-          {
+        baseColumn: import("drizzle-orm").Column<{
             name: "invited_users";
             tableName: "resource_shares";
             dataType: "string";
@@ -1030,33 +831,21 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
             baseColumn: never;
             identity: undefined;
             generated: undefined;
-          },
-          {},
-          {}
-        >;
+        }, {}, {}>;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {
+    }, {}, {
         size: undefined;
-        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
-          {
+        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
             name: "invited_users";
             dataType: "string";
             columnType: "PgText";
             data: string;
             enumValues: [string, ...string[]];
             driverParam: string;
-          },
-          {},
-          {},
-          import("drizzle-orm").ColumnBuilderExtraConfig
-        >;
-      }
-    >;
-    permissions: import("drizzle-orm/pg-core").PgColumn<
-      {
+        }, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+    }>;
+    permissions: import("drizzle-orm/pg-core").PgColumn<{
         name: "permissions";
         tableName: "resource_shares";
         dataType: "json";
@@ -1072,12 +861,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    expiresAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    expiresAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "expires_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -1093,12 +878,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdBy: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdBy: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_by";
         tableName: "resource_shares";
         dataType: "string";
@@ -1114,12 +895,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -1135,12 +912,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "updated_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -1156,12 +929,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    viewCount: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    viewCount: import("drizzle-orm/pg-core").PgColumn<{
         name: "view_count";
         tableName: "resource_shares";
         dataType: "number";
@@ -1177,12 +946,8 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "last_accessed_at";
         tableName: "resource_shares";
         dataType: "date";
@@ -1198,12 +963,6 @@ export declare const selectResourceShareSchema: import("drizzle-zod").BuildSchem
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 //# sourceMappingURL=sharing.d.ts.map

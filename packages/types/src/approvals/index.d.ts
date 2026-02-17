@@ -17,95 +17,91 @@ export type ApprovalType = "entity" | "document" | "action" | "branch";
  * Base approval request interface
  */
 export interface BaseApprovalRequest {
-  id: string;
-  type: ApprovalType;
-  status: ApprovalStatus;
-  requestedBy: string;
-  requestedAt: string;
-  reviewedBy?: string;
-  reviewedAt?: string;
-  reason?: string;
-  confidence?: number;
+    id: string;
+    type: ApprovalType;
+    status: ApprovalStatus;
+    requestedBy: string;
+    requestedAt: string;
+    reviewedBy?: string;
+    reviewedAt?: string;
+    reason?: string;
+    confidence?: number;
 }
 /**
  * Entity approval request
  */
 export interface EntityApprovalRequest extends BaseApprovalRequest {
-  type: "entity";
-  entityType: string;
-  title: string;
-  description?: string;
-  data: Record<string, unknown>;
+    type: "entity";
+    entityType: string;
+    title: string;
+    description?: string;
+    data: Record<string, unknown>;
 }
 /**
  * Document approval request
  */
 export interface DocumentApprovalRequest extends BaseApprovalRequest {
-  type: "document";
-  operation: "create" | "update" | "delete";
-  documentId?: string;
-  title?: string;
-  content?: string;
-  changes?: Record<string, unknown>;
+    type: "document";
+    operation: "create" | "update" | "delete";
+    documentId?: string;
+    title?: string;
+    content?: string;
+    changes?: Record<string, unknown>;
 }
 /**
  * Action approval request
  */
 export interface ActionApprovalRequest extends BaseApprovalRequest {
-  type: "action";
-  action: string;
-  description: string;
-  args: Record<string, unknown>;
+    type: "action";
+    action: string;
+    description: string;
+    args: Record<string, unknown>;
 }
 /**
  * Branch approval request
  */
 export interface BranchApprovalRequest extends BaseApprovalRequest {
-  type: "branch";
-  agentType: AgentTypeString;
-  title: string;
-  purpose: string;
+    type: "branch";
+    agentType: AgentTypeString;
+    title: string;
+    purpose: string;
 }
 /**
  * Union type for all approval requests
  */
-export type ApprovalRequest =
-  | EntityApprovalRequest
-  | DocumentApprovalRequest
-  | ActionApprovalRequest
-  | BranchApprovalRequest;
+export type ApprovalRequest = EntityApprovalRequest | DocumentApprovalRequest | ActionApprovalRequest | BranchApprovalRequest;
 /**
  * Approve request input
  */
 export interface ApproveRequestInput {
-  requestId: string;
-  reason?: string;
+    requestId: string;
+    reason?: string;
 }
 /**
  * Reject request input
  */
 export interface RejectRequestInput {
-  requestId: string;
-  reason: string;
+    requestId: string;
+    reason: string;
 }
 /**
  * Approval filter parameters
  */
 export interface ApprovalFilter {
-  type?: ApprovalType | ApprovalType[];
-  status?: ApprovalStatus | ApprovalStatus[];
-  requestedBy?: string;
-  createdAfter?: string;
-  createdBefore?: string;
+    type?: ApprovalType | ApprovalType[];
+    status?: ApprovalStatus | ApprovalStatus[];
+    requestedBy?: string;
+    createdAfter?: string;
+    createdBefore?: string;
 }
 /**
  * Approval query parameters
  */
 export interface ApprovalQuery {
-  filter?: ApprovalFilter;
-  limit?: number;
-  offset?: number;
-  sortBy?: "createdAt" | "status" | "type";
-  sortOrder?: "asc" | "desc";
+    filter?: ApprovalFilter;
+    limit?: number;
+    offset?: number;
+    sortBy?: "createdAt" | "status" | "type";
+    sortOrder?: "asc" | "desc";
 }
 //# sourceMappingURL=index.d.ts.map

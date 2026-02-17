@@ -5,20 +5,7 @@
  * Provides type safety for view configs in frontend and backend.
  */
 import type { z } from "zod";
-import {
-  TableViewConfigSchema,
-  KanbanViewConfigSchema,
-  ListViewConfigSchema,
-  GridViewConfigSchema,
-  GalleryViewConfigSchema,
-  CalendarViewConfigSchema,
-  GanttViewConfigSchema,
-  TimelineViewConfigSchema,
-  GraphViewConfigSchema,
-  BentoViewConfigSchema,
-  WhiteboardViewConfigSchema,
-  MindmapViewConfigSchema,
-} from "./config-schemas.js";
+import { TableViewConfigSchema, KanbanViewConfigSchema, ListViewConfigSchema, GridViewConfigSchema, GalleryViewConfigSchema, CalendarViewConfigSchema, GanttViewConfigSchema, TimelineViewConfigSchema, GraphViewConfigSchema, BentoViewConfigSchema, WhiteboardViewConfigSchema, MindmapViewConfigSchema } from "./config-schemas.js";
 /**
  * Table view config type
  */
@@ -71,53 +58,41 @@ export type MindmapViewConfig = z.infer<typeof MindmapViewConfigSchema>;
  * Discriminated union of all view config types
  * Use the view type to narrow the config type
  */
-export type ViewConfigByType =
-  | {
-      type: "table";
-      config: TableViewConfig;
-    }
-  | {
-      type: "kanban";
-      config: KanbanViewConfig;
-    }
-  | {
-      type: "list";
-      config: ListViewConfig;
-    }
-  | {
-      type: "grid";
-      config: GridViewConfig;
-    }
-  | {
-      type: "gallery";
-      config: GalleryViewConfig;
-    }
-  | {
-      type: "calendar";
-      config: CalendarViewConfig;
-    }
-  | {
-      type: "gantt";
-      config: GanttViewConfig;
-    }
-  | {
-      type: "timeline";
-      config: TimelineViewConfig;
-    }
-  | {
-      type: "graph";
-      config: GraphViewConfig;
-    }
-  | {
-      type: "bento";
-      config: BentoViewConfig;
-    }
-  | {
-      type: "whiteboard";
-      config: WhiteboardViewConfig;
-    }
-  | {
-      type: "mindmap";
-      config: MindmapViewConfig;
-    };
+export type ViewConfigByType = {
+    type: "table";
+    config: TableViewConfig;
+} | {
+    type: "kanban";
+    config: KanbanViewConfig;
+} | {
+    type: "list";
+    config: ListViewConfig;
+} | {
+    type: "grid";
+    config: GridViewConfig;
+} | {
+    type: "gallery";
+    config: GalleryViewConfig;
+} | {
+    type: "calendar";
+    config: CalendarViewConfig;
+} | {
+    type: "gantt";
+    config: GanttViewConfig;
+} | {
+    type: "timeline";
+    config: TimelineViewConfig;
+} | {
+    type: "graph";
+    config: GraphViewConfig;
+} | {
+    type: "bento";
+    config: BentoViewConfig;
+} | {
+    type: "whiteboard";
+    config: WhiteboardViewConfig;
+} | {
+    type: "mindmap";
+    config: MindmapViewConfig;
+};
 //# sourceMappingURL=config-types.d.ts.map

@@ -22,24 +22,19 @@
  * - Optional context for debugging
  */
 export declare class SynapError extends Error {
-  readonly code: string;
-  readonly statusCode: number;
-  readonly context?: Record<string, unknown>;
-  constructor(
-    message: string,
-    code: string,
-    statusCode?: number,
-    context?: Record<string, unknown>
-  );
-  /**
-   * Convert error to JSON for API responses
-   */
-  toJSON(): {
-    error: string;
-    code: string;
-    message: string;
-    context?: Record<string, unknown>;
-  };
+    readonly code: string;
+    readonly statusCode: number;
+    readonly context?: Record<string, unknown>;
+    constructor(message: string, code: string, statusCode?: number, context?: Record<string, unknown>);
+    /**
+     * Convert error to JSON for API responses
+     */
+    toJSON(): {
+        error: string;
+        code: string;
+        message: string;
+        context?: Record<string, unknown>;
+    };
 }
 /**
  * Validation error (400 Bad Request)
@@ -54,7 +49,7 @@ export declare class SynapError extends Error {
  * ```
  */
 export declare class ValidationError extends SynapError {
-  constructor(message: string, context?: Record<string, unknown>);
+    constructor(message: string, context?: Record<string, unknown>);
 }
 /**
  * Not found error (404 Not Found)
@@ -70,7 +65,7 @@ export declare class ValidationError extends SynapError {
  * ```
  */
 export declare class NotFoundError extends SynapError {
-  constructor(resource: string, id?: string, context?: Record<string, unknown>);
+    constructor(resource: string, id?: string, context?: Record<string, unknown>);
 }
 /**
  * Unauthorized error (401 Unauthorized)
@@ -85,7 +80,7 @@ export declare class NotFoundError extends SynapError {
  * ```
  */
 export declare class UnauthorizedError extends SynapError {
-  constructor(message?: string, context?: Record<string, unknown>);
+    constructor(message?: string, context?: Record<string, unknown>);
 }
 /**
  * Forbidden error (403 Forbidden)
@@ -100,7 +95,7 @@ export declare class UnauthorizedError extends SynapError {
  * ```
  */
 export declare class ForbiddenError extends SynapError {
-  constructor(message?: string, context?: Record<string, unknown>);
+    constructor(message?: string, context?: Record<string, unknown>);
 }
 /**
  * Conflict error (409 Conflict)
@@ -115,7 +110,7 @@ export declare class ForbiddenError extends SynapError {
  * ```
  */
 export declare class ConflictError extends SynapError {
-  constructor(message: string, context?: Record<string, unknown>);
+    constructor(message: string, context?: Record<string, unknown>);
 }
 /**
  * Rate limit error (429 Too Many Requests)
@@ -130,11 +125,7 @@ export declare class ConflictError extends SynapError {
  * ```
  */
 export declare class RateLimitError extends SynapError {
-  constructor(
-    message?: string,
-    retryAfter?: number,
-    context?: Record<string, unknown>
-  );
+    constructor(message?: string, retryAfter?: number, context?: Record<string, unknown>);
 }
 /**
  * Internal server error (500 Internal Server Error)
@@ -152,7 +143,7 @@ export declare class RateLimitError extends SynapError {
  * ```
  */
 export declare class InternalServerError extends SynapError {
-  constructor(message: string, context?: Record<string, unknown>);
+    constructor(message: string, context?: Record<string, unknown>);
 }
 /**
  * Service unavailable error (503 Service Unavailable)
@@ -167,7 +158,7 @@ export declare class InternalServerError extends SynapError {
  * ```
  */
 export declare class ServiceUnavailableError extends SynapError {
-  constructor(message: string, context?: Record<string, unknown>);
+    constructor(message: string, context?: Record<string, unknown>);
 }
 /**
  * Check if error is a SynapError instance
@@ -187,8 +178,5 @@ export declare function isSynapError(error: unknown): error is SynapError;
  * }
  * ```
  */
-export declare function toSynapError(
-  error: unknown,
-  defaultMessage?: string
-): SynapError;
+export declare function toSynapError(error: unknown, defaultMessage?: string): SynapError;
 //# sourceMappingURL=index.d.ts.map

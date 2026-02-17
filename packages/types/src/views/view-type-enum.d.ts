@@ -15,18 +15,18 @@ export declare const VIEW_TYPES: ViewType[];
  * Generated from ViewType to ensure consistency
  */
 export declare const ViewTypeEnum: z.ZodEnum<{
-  table: "table";
-  calendar: "calendar";
-  whiteboard: "whiteboard";
-  list: "list";
-  grid: "grid";
-  timeline: "timeline";
-  graph: "graph";
-  kanban: "kanban";
-  gallery: "gallery";
-  gantt: "gantt";
-  mindmap: "mindmap";
-  bento: "bento";
+    table: "table";
+    calendar: "calendar";
+    whiteboard: "whiteboard";
+    list: "list";
+    grid: "grid";
+    timeline: "timeline";
+    graph: "graph";
+    kanban: "kanban";
+    gallery: "gallery";
+    gantt: "gantt";
+    mindmap: "mindmap";
+    bento: "bento";
 }>;
 /**
  * Type guard: Check if a string is a valid ViewType

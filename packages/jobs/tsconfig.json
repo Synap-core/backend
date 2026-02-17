@@ -3,12 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "declaration": true,
-    "baseUrl": ".",
-    "paths": {
-      "@synap-core/types": ["../types/src/index.ts"],
-      "@synap-core/types/*": ["../types/src/*"]
-    }
+    "declaration": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

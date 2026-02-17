@@ -6,12 +6,7 @@
     "skipLibCheck": true,
     "declaration": true,
     "preserveSymlinks": true,
-    "noEmit": false,
-    "baseUrl": ".",
-    "paths": {
-      "@synap-core/types": ["../types/src/index.ts"],
-      "@synap-core/types/*": ["../types/src/*"]
-    }
+    "noEmit": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

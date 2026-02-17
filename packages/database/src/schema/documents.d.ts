@@ -7,779 +7,636 @@
  * Stores metadata about uploaded documents
  */
 export declare const documents: import("drizzle-orm/pg-core").PgTableWithColumns<{
-  name: "documents";
-  schema: undefined;
-  columns: {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "id";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: true;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    userId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "user_id";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "workspace_id";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    title: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "title";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    type: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "type";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    language: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "language";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    storageUrl: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "storage_url";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    storageKey: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "storage_key";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    size: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "size";
-        tableName: "documents";
-        dataType: "number";
-        columnType: "PgInteger";
-        data: number;
-        driverParam: string | number;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    mimeType: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "mime_type";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    currentVersion: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "current_version";
-        tableName: "documents";
-        dataType: "number";
-        columnType: "PgInteger";
-        data: number;
-        driverParam: string | number;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    lastSavedVersion: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "last_saved_version";
-        tableName: "documents";
-        dataType: "number";
-        columnType: "PgInteger";
-        data: number;
-        driverParam: string | number;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workingState: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "working_state";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workingStateUpdatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "working_state_updated_at";
-        tableName: "documents";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    entityId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "entity_id";
-        tableName: "documents";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    metadata: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "metadata";
-        tableName: "documents";
-        dataType: "json";
-        columnType: "PgJsonb";
-        data: unknown;
-        driverParam: unknown;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "created_at";
-        tableName: "documents";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "updated_at";
-        tableName: "documents";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    deletedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "deleted_at";
-        tableName: "documents";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-  };
-  dialect: "pg";
+    name: "documents";
+    schema: undefined;
+    columns: {
+        id: import("drizzle-orm/pg-core").PgColumn<{
+            name: "id";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: true;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        userId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "user_id";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "workspace_id";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        title: import("drizzle-orm/pg-core").PgColumn<{
+            name: "title";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        type: import("drizzle-orm/pg-core").PgColumn<{
+            name: "type";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        language: import("drizzle-orm/pg-core").PgColumn<{
+            name: "language";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        storageUrl: import("drizzle-orm/pg-core").PgColumn<{
+            name: "storage_url";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        storageKey: import("drizzle-orm/pg-core").PgColumn<{
+            name: "storage_key";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        size: import("drizzle-orm/pg-core").PgColumn<{
+            name: "size";
+            tableName: "documents";
+            dataType: "number";
+            columnType: "PgInteger";
+            data: number;
+            driverParam: string | number;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        mimeType: import("drizzle-orm/pg-core").PgColumn<{
+            name: "mime_type";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        currentVersion: import("drizzle-orm/pg-core").PgColumn<{
+            name: "current_version";
+            tableName: "documents";
+            dataType: "number";
+            columnType: "PgInteger";
+            data: number;
+            driverParam: string | number;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        lastSavedVersion: import("drizzle-orm/pg-core").PgColumn<{
+            name: "last_saved_version";
+            tableName: "documents";
+            dataType: "number";
+            columnType: "PgInteger";
+            data: number;
+            driverParam: string | number;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        workingState: import("drizzle-orm/pg-core").PgColumn<{
+            name: "working_state";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        workingStateUpdatedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "working_state_updated_at";
+            tableName: "documents";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        entityId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "entity_id";
+            tableName: "documents";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        metadata: import("drizzle-orm/pg-core").PgColumn<{
+            name: "metadata";
+            tableName: "documents";
+            dataType: "json";
+            columnType: "PgJsonb";
+            data: unknown;
+            driverParam: unknown;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        createdAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "created_at";
+            tableName: "documents";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "updated_at";
+            tableName: "documents";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        deletedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "deleted_at";
+            tableName: "documents";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+    };
+    dialect: "pg";
 }>;
 /**
  * Document versions table
  * Stores each version of the document for history
  */
 export declare const documentVersions: import("drizzle-orm/pg-core").PgTableWithColumns<{
-  name: "document_versions";
-  schema: undefined;
-  columns: {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "id";
-        tableName: "document_versions";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: true;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    documentId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "document_id";
-        tableName: "document_versions";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    version: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "version";
-        tableName: "document_versions";
-        dataType: "number";
-        columnType: "PgInteger";
-        data: number;
-        driverParam: string | number;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    content: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "content";
-        tableName: "document_versions";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    author: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "author";
-        tableName: "document_versions";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    authorId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "author_id";
-        tableName: "document_versions";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    message: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "message";
-        tableName: "document_versions";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "created_at";
-        tableName: "document_versions";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-  };
-  dialect: "pg";
+    name: "document_versions";
+    schema: undefined;
+    columns: {
+        id: import("drizzle-orm/pg-core").PgColumn<{
+            name: "id";
+            tableName: "document_versions";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: true;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        documentId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "document_id";
+            tableName: "document_versions";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        version: import("drizzle-orm/pg-core").PgColumn<{
+            name: "version";
+            tableName: "document_versions";
+            dataType: "number";
+            columnType: "PgInteger";
+            data: number;
+            driverParam: string | number;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        content: import("drizzle-orm/pg-core").PgColumn<{
+            name: "content";
+            tableName: "document_versions";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        author: import("drizzle-orm/pg-core").PgColumn<{
+            name: "author";
+            tableName: "document_versions";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        authorId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "author_id";
+            tableName: "document_versions";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        message: import("drizzle-orm/pg-core").PgColumn<{
+            name: "message";
+            tableName: "document_versions";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        createdAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "created_at";
+            tableName: "document_versions";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+    };
+    dialect: "pg";
 }>;
 /**
  * Document sessions table
  * Tracks active editing sessions with AI collaboration
  */
 export declare const documentSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
-  name: "document_sessions";
-  schema: undefined;
-  columns: {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "id";
-        tableName: "document_sessions";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: true;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    documentId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "document_id";
-        tableName: "document_sessions";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    userId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "user_id";
-        tableName: "document_sessions";
-        dataType: "string";
-        columnType: "PgText";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: [string, ...string[]];
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    chatThreadId: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "chat_thread_id";
-        tableName: "document_sessions";
-        dataType: "string";
-        columnType: "PgUUID";
-        data: string;
-        driverParam: string;
-        notNull: true;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    isActive: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "is_active";
-        tableName: "document_sessions";
-        dataType: "boolean";
-        columnType: "PgBoolean";
-        data: boolean;
-        driverParam: boolean;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    activeCollaborators: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "active_collaborators";
-        tableName: "document_sessions";
-        dataType: "json";
-        columnType: "PgJsonb";
-        data: unknown;
-        driverParam: unknown;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    startedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "started_at";
-        tableName: "document_sessions";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: true;
-        hasDefault: true;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-    endedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
-        name: "ended_at";
-        tableName: "document_sessions";
-        dataType: "date";
-        columnType: "PgTimestamp";
-        data: Date;
-        driverParam: string;
-        notNull: false;
-        hasDefault: false;
-        isPrimaryKey: false;
-        isAutoincrement: false;
-        hasRuntimeDefault: false;
-        enumValues: undefined;
-        baseColumn: never;
-        identity: undefined;
-        generated: undefined;
-      },
-      {},
-      {}
-    >;
-  };
-  dialect: "pg";
+    name: "document_sessions";
+    schema: undefined;
+    columns: {
+        id: import("drizzle-orm/pg-core").PgColumn<{
+            name: "id";
+            tableName: "document_sessions";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: true;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        documentId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "document_id";
+            tableName: "document_sessions";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        userId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "user_id";
+            tableName: "document_sessions";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        chatThreadId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "chat_thread_id";
+            tableName: "document_sessions";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        isActive: import("drizzle-orm/pg-core").PgColumn<{
+            name: "is_active";
+            tableName: "document_sessions";
+            dataType: "boolean";
+            columnType: "PgBoolean";
+            data: boolean;
+            driverParam: boolean;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        activeCollaborators: import("drizzle-orm/pg-core").PgColumn<{
+            name: "active_collaborators";
+            tableName: "document_sessions";
+            dataType: "json";
+            columnType: "PgJsonb";
+            data: unknown;
+            driverParam: unknown;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        startedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "started_at";
+            tableName: "document_sessions";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        endedAt: import("drizzle-orm/pg-core").PgColumn<{
+            name: "ended_at";
+            tableName: "document_sessions";
+            dataType: "date";
+            columnType: "PgTimestamp";
+            data: Date;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+    };
+    dialect: "pg";
 }>;
 export type Document = typeof documents.$inferSelect;
 export type NewDocument = typeof documents.$inferInsert;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
-  "insert",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<"insert", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "documents";
         dataType: "string";
@@ -795,12 +652,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    userId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    userId: import("drizzle-orm/pg-core").PgColumn<{
         name: "user_id";
         tableName: "documents";
         dataType: "string";
@@ -816,12 +669,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<{
         name: "workspace_id";
         tableName: "documents";
         dataType: "string";
@@ -837,12 +686,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    title: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    title: import("drizzle-orm/pg-core").PgColumn<{
         name: "title";
         tableName: "documents";
         dataType: "string";
@@ -858,12 +703,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    type: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    type: import("drizzle-orm/pg-core").PgColumn<{
         name: "type";
         tableName: "documents";
         dataType: "string";
@@ -879,12 +720,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    language: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    language: import("drizzle-orm/pg-core").PgColumn<{
         name: "language";
         tableName: "documents";
         dataType: "string";
@@ -900,12 +737,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    storageUrl: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    storageUrl: import("drizzle-orm/pg-core").PgColumn<{
         name: "storage_url";
         tableName: "documents";
         dataType: "string";
@@ -921,12 +754,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    storageKey: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    storageKey: import("drizzle-orm/pg-core").PgColumn<{
         name: "storage_key";
         tableName: "documents";
         dataType: "string";
@@ -942,12 +771,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    size: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    size: import("drizzle-orm/pg-core").PgColumn<{
         name: "size";
         tableName: "documents";
         dataType: "number";
@@ -963,12 +788,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    mimeType: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    mimeType: import("drizzle-orm/pg-core").PgColumn<{
         name: "mime_type";
         tableName: "documents";
         dataType: "string";
@@ -984,12 +805,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    currentVersion: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    currentVersion: import("drizzle-orm/pg-core").PgColumn<{
         name: "current_version";
         tableName: "documents";
         dataType: "number";
@@ -1005,12 +822,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    lastSavedVersion: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    lastSavedVersion: import("drizzle-orm/pg-core").PgColumn<{
         name: "last_saved_version";
         tableName: "documents";
         dataType: "number";
@@ -1026,12 +839,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workingState: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    workingState: import("drizzle-orm/pg-core").PgColumn<{
         name: "working_state";
         tableName: "documents";
         dataType: "string";
@@ -1047,12 +856,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workingStateUpdatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    workingStateUpdatedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "working_state_updated_at";
         tableName: "documents";
         dataType: "date";
@@ -1068,12 +873,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    entityId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    entityId: import("drizzle-orm/pg-core").PgColumn<{
         name: "entity_id";
         tableName: "documents";
         dataType: "string";
@@ -1089,12 +890,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    metadata: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    metadata: import("drizzle-orm/pg-core").PgColumn<{
         name: "metadata";
         tableName: "documents";
         dataType: "json";
@@ -1110,12 +907,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_at";
         tableName: "documents";
         dataType: "date";
@@ -1131,12 +924,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "updated_at";
         tableName: "documents";
         dataType: "date";
@@ -1152,12 +941,8 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    deletedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    deletedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "deleted_at";
         tableName: "documents";
         dataType: "date";
@@ -1173,22 +958,13 @@ export declare const insertDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
-  "select",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<"select", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "documents";
         dataType: "string";
@@ -1204,12 +980,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    userId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    userId: import("drizzle-orm/pg-core").PgColumn<{
         name: "user_id";
         tableName: "documents";
         dataType: "string";
@@ -1225,12 +997,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<{
         name: "workspace_id";
         tableName: "documents";
         dataType: "string";
@@ -1246,12 +1014,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    title: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    title: import("drizzle-orm/pg-core").PgColumn<{
         name: "title";
         tableName: "documents";
         dataType: "string";
@@ -1267,12 +1031,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    type: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    type: import("drizzle-orm/pg-core").PgColumn<{
         name: "type";
         tableName: "documents";
         dataType: "string";
@@ -1288,12 +1048,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    language: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    language: import("drizzle-orm/pg-core").PgColumn<{
         name: "language";
         tableName: "documents";
         dataType: "string";
@@ -1309,12 +1065,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    storageUrl: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    storageUrl: import("drizzle-orm/pg-core").PgColumn<{
         name: "storage_url";
         tableName: "documents";
         dataType: "string";
@@ -1330,12 +1082,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    storageKey: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    storageKey: import("drizzle-orm/pg-core").PgColumn<{
         name: "storage_key";
         tableName: "documents";
         dataType: "string";
@@ -1351,12 +1099,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    size: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    size: import("drizzle-orm/pg-core").PgColumn<{
         name: "size";
         tableName: "documents";
         dataType: "number";
@@ -1372,12 +1116,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    mimeType: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    mimeType: import("drizzle-orm/pg-core").PgColumn<{
         name: "mime_type";
         tableName: "documents";
         dataType: "string";
@@ -1393,12 +1133,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    currentVersion: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    currentVersion: import("drizzle-orm/pg-core").PgColumn<{
         name: "current_version";
         tableName: "documents";
         dataType: "number";
@@ -1414,12 +1150,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    lastSavedVersion: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    lastSavedVersion: import("drizzle-orm/pg-core").PgColumn<{
         name: "last_saved_version";
         tableName: "documents";
         dataType: "number";
@@ -1435,12 +1167,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workingState: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    workingState: import("drizzle-orm/pg-core").PgColumn<{
         name: "working_state";
         tableName: "documents";
         dataType: "string";
@@ -1456,12 +1184,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    workingStateUpdatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    workingStateUpdatedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "working_state_updated_at";
         tableName: "documents";
         dataType: "date";
@@ -1477,12 +1201,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    entityId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    entityId: import("drizzle-orm/pg-core").PgColumn<{
         name: "entity_id";
         tableName: "documents";
         dataType: "string";
@@ -1498,12 +1218,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    metadata: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    metadata: import("drizzle-orm/pg-core").PgColumn<{
         name: "metadata";
         tableName: "documents";
         dataType: "json";
@@ -1519,12 +1235,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_at";
         tableName: "documents";
         dataType: "date";
@@ -1540,12 +1252,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "updated_at";
         tableName: "documents";
         dataType: "date";
@@ -1561,12 +1269,8 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    deletedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    deletedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "deleted_at";
         tableName: "documents";
         dataType: "date";
@@ -1582,24 +1286,15 @@ export declare const selectDocumentSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 export type DocumentVersion = typeof documentVersions.$inferSelect;
 export type NewDocumentVersion = typeof documentVersions.$inferInsert;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSchema<
-  "insert",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSchema<"insert", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "document_versions";
         dataType: "string";
@@ -1615,12 +1310,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    documentId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    documentId: import("drizzle-orm/pg-core").PgColumn<{
         name: "document_id";
         tableName: "document_versions";
         dataType: "string";
@@ -1636,12 +1327,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    version: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    version: import("drizzle-orm/pg-core").PgColumn<{
         name: "version";
         tableName: "document_versions";
         dataType: "number";
@@ -1657,12 +1344,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    content: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    content: import("drizzle-orm/pg-core").PgColumn<{
         name: "content";
         tableName: "document_versions";
         dataType: "string";
@@ -1678,12 +1361,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    author: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    author: import("drizzle-orm/pg-core").PgColumn<{
         name: "author";
         tableName: "document_versions";
         dataType: "string";
@@ -1699,12 +1378,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    authorId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    authorId: import("drizzle-orm/pg-core").PgColumn<{
         name: "author_id";
         tableName: "document_versions";
         dataType: "string";
@@ -1720,12 +1395,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    message: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    message: import("drizzle-orm/pg-core").PgColumn<{
         name: "message";
         tableName: "document_versions";
         dataType: "string";
@@ -1741,12 +1412,8 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_at";
         tableName: "document_versions";
         dataType: "date";
@@ -1762,22 +1429,13 @@ export declare const insertDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSchema<
-  "select",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSchema<"select", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "document_versions";
         dataType: "string";
@@ -1793,12 +1451,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    documentId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    documentId: import("drizzle-orm/pg-core").PgColumn<{
         name: "document_id";
         tableName: "document_versions";
         dataType: "string";
@@ -1814,12 +1468,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    version: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    version: import("drizzle-orm/pg-core").PgColumn<{
         name: "version";
         tableName: "document_versions";
         dataType: "number";
@@ -1835,12 +1485,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    content: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    content: import("drizzle-orm/pg-core").PgColumn<{
         name: "content";
         tableName: "document_versions";
         dataType: "string";
@@ -1856,12 +1502,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    author: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    author: import("drizzle-orm/pg-core").PgColumn<{
         name: "author";
         tableName: "document_versions";
         dataType: "string";
@@ -1877,12 +1519,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    authorId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    authorId: import("drizzle-orm/pg-core").PgColumn<{
         name: "author_id";
         tableName: "document_versions";
         dataType: "string";
@@ -1898,12 +1536,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    message: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    message: import("drizzle-orm/pg-core").PgColumn<{
         name: "message";
         tableName: "document_versions";
         dataType: "string";
@@ -1919,12 +1553,8 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "created_at";
         tableName: "document_versions";
         dataType: "date";
@@ -1940,24 +1570,15 @@ export declare const selectDocumentVersionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 export type DocumentSession = typeof documentSessions.$inferSelect;
 export type NewDocumentSession = typeof documentSessions.$inferInsert;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSchema<
-  "insert",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSchema<"insert", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "document_sessions";
         dataType: "string";
@@ -1973,12 +1594,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    documentId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    documentId: import("drizzle-orm/pg-core").PgColumn<{
         name: "document_id";
         tableName: "document_sessions";
         dataType: "string";
@@ -1994,12 +1611,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    userId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    userId: import("drizzle-orm/pg-core").PgColumn<{
         name: "user_id";
         tableName: "document_sessions";
         dataType: "string";
@@ -2015,12 +1628,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    chatThreadId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    chatThreadId: import("drizzle-orm/pg-core").PgColumn<{
         name: "chat_thread_id";
         tableName: "document_sessions";
         dataType: "string";
@@ -2036,12 +1645,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    isActive: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    isActive: import("drizzle-orm/pg-core").PgColumn<{
         name: "is_active";
         tableName: "document_sessions";
         dataType: "boolean";
@@ -2057,12 +1662,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    activeCollaborators: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    activeCollaborators: import("drizzle-orm/pg-core").PgColumn<{
         name: "active_collaborators";
         tableName: "document_sessions";
         dataType: "json";
@@ -2078,12 +1679,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    startedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    startedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "started_at";
         tableName: "document_sessions";
         dataType: "date";
@@ -2099,12 +1696,8 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    endedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    endedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "ended_at";
         tableName: "document_sessions";
         dataType: "date";
@@ -2120,22 +1713,13 @@ export declare const insertDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSchema<
-  "select",
-  {
-    id: import("drizzle-orm/pg-core").PgColumn<
-      {
+export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSchema<"select", {
+    id: import("drizzle-orm/pg-core").PgColumn<{
         name: "id";
         tableName: "document_sessions";
         dataType: "string";
@@ -2151,12 +1735,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    documentId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    documentId: import("drizzle-orm/pg-core").PgColumn<{
         name: "document_id";
         tableName: "document_sessions";
         dataType: "string";
@@ -2172,12 +1752,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    userId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    userId: import("drizzle-orm/pg-core").PgColumn<{
         name: "user_id";
         tableName: "document_sessions";
         dataType: "string";
@@ -2193,12 +1769,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    chatThreadId: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    chatThreadId: import("drizzle-orm/pg-core").PgColumn<{
         name: "chat_thread_id";
         tableName: "document_sessions";
         dataType: "string";
@@ -2214,12 +1786,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    isActive: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    isActive: import("drizzle-orm/pg-core").PgColumn<{
         name: "is_active";
         tableName: "document_sessions";
         dataType: "boolean";
@@ -2235,12 +1803,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    activeCollaborators: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    activeCollaborators: import("drizzle-orm/pg-core").PgColumn<{
         name: "active_collaborators";
         tableName: "document_sessions";
         dataType: "json";
@@ -2256,12 +1820,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    startedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    startedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "started_at";
         tableName: "document_sessions";
         dataType: "date";
@@ -2277,12 +1837,8 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-    endedAt: import("drizzle-orm/pg-core").PgColumn<
-      {
+    }, {}, {}>;
+    endedAt: import("drizzle-orm/pg-core").PgColumn<{
         name: "ended_at";
         tableName: "document_sessions";
         dataType: "date";
@@ -2298,12 +1854,6 @@ export declare const selectDocumentSessionSchema: import("drizzle-zod").BuildSch
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-      },
-      {},
-      {}
-    >;
-  },
-  undefined,
-  undefined
->;
+    }, {}, {}>;
+}, undefined, undefined>;
 //# sourceMappingURL=documents.d.ts.map
