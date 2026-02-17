@@ -42,6 +42,14 @@ export const documentsHandler = async ({
   const docRepo = new DocumentRepository(db, eventRepo);
 
   if (action === "create") {
+    // Guard: workspaceId is required (NOT NULL constraint). If missing, skip gracefully
+    // rather than failing and causing Inngest to retry indefinitely.
+    if (!data.workspaceId) {
+      console.warn(
+        `[documentsExecutor] Skipping document.create — missing workspaceId in event data (id: ${data.id})`
+      );
+      return { success: false, reason: "Missing workspaceId" };
+    }
     const docId = (data.id as string) || randomUUID();
     const docType = normalizeDocumentType(data.type, "markdown");
 

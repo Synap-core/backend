@@ -10,16 +10,20 @@ import { sql } from "@synap/database";
 // Intelligence Hub client configuration
 const INTELLIGENCE_HUB_URL =
   process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
+const INTELLIGENCE_HUB_API_KEY = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
 /**
  * Generate embedding using Intelligence Hub
  */
 async function generateEmbedding(text: string): Promise<number[]> {
   const response = await fetch(
-    `${INTELLIGENCE_HUB_URL}/api/embeddings/generate`,
+    `${INTELLIGENCE_HUB_URL}/api/embeddings`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": INTELLIGENCE_HUB_API_KEY,
+      },
       body: JSON.stringify({ text }),
     }
   );
