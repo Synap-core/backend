@@ -23,10 +23,7 @@ import type {
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ChatThread,
-  NewChatThread,
-} from "../../../database/src/schema/index.js";
+export type { ChatThread, NewChatThread } from "@synap/database";
 
 /**
  * Chat message
@@ -36,27 +33,21 @@ export type {
 export type {
   ConversationMessageRow as ChatMessage,
   NewConversationMessageRow as NewChatMessage,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";
 
 /**
  * Thread entities (context tracking)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ThreadEntity,
-  NewThreadEntity,
-} from "../../../database/src/schema/index.js";
+export type { ThreadEntity, NewThreadEntity } from "@synap/database";
 
 /**
  * Thread documents (context tracking)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type {
-  ThreadDocument,
-  NewThreadDocument,
-} from "../../../database/src/schema/index.js";
+export type { ThreadDocument, NewThreadDocument } from "@synap/database";
 
 // =============================================================================
 // UI State Types

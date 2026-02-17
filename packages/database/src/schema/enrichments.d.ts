@@ -240,7 +240,7 @@ export declare const entityRelationships: import("drizzle-orm/pg-core").PgTableW
             tableName: "entity_relationships";
             dataType: "string";
             columnType: "PgText";
-            data: "related_to" | "part_of" | "depends_on" | "mentioned_in" | "created_from" | "supersedes" | "similar_to" | "contradicts";
+            data: "depends_on" | "related_to" | "part_of" | "mentioned_in" | "created_from" | "supersedes" | "similar_to" | "contradicts";
             driverParam: string;
             notNull: true;
             hasDefault: false;
@@ -391,7 +391,7 @@ export declare const reasoningTraces: import("drizzle-orm/pg-core").PgTableWithC
             tableName: "reasoning_traces";
             dataType: "string";
             columnType: "PgText";
-            data: "task" | "message" | "query" | "entity" | "thread";
+            data: "query" | "message" | "entity" | "thread" | "task";
             driverParam: string;
             notNull: true;
             hasDefault: false;

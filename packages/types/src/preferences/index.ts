@@ -19,12 +19,12 @@ export type {
   EntityOpenMode,
   UIPreferences,
   GraphPreferences,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";
 
 export {
   insertUserPreferenceSchema,
   selectUserPreferenceSchema,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Frontend Validation)

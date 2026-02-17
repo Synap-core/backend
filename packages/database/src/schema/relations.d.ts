@@ -160,7 +160,6 @@ export type NewRelation = typeof relations.$inferInsert;
  */
 export declare const RelationTypeSchema: z.ZodEnum<{
     created_by: "created_by";
-    depends_on: "depends_on";
     assigned_to: "assigned_to";
     mentions: "mentions";
     links_to: "links_to";
@@ -168,6 +167,7 @@ export declare const RelationTypeSchema: z.ZodEnum<{
     relates_to: "relates_to";
     tagged_with: "tagged_with";
     attended_by: "attended_by";
+    depends_on: "depends_on";
     blocks: "blocks";
     belongs_to_project: "belongs_to_project";
     embedded_in: "embedded_in";

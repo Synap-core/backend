@@ -16,4 +16,4 @@ export type {
   NewEntityRelationship,
   ReasoningTrace,
   NewReasoningTrace,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";

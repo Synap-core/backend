@@ -9,15 +9,12 @@
 // DATABASE RE-EXPORTS (Single Source of Truth)
 // ============================================================================
 
-export type {
-  EntityTemplate,
-  NewEntityTemplate,
-} from "../../../database/src/schema/index.js";
+export type { EntityTemplate, NewEntityTemplate } from "@synap/database";
 
 export {
   insertEntityTemplateSchema,
   selectEntityTemplateSchema,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Layout & Styling Configuration)

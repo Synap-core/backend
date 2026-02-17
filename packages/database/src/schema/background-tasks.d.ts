@@ -98,7 +98,7 @@ export declare const backgroundTasks: import("drizzle-orm/pg-core").PgTableWithC
             tableName: "background_tasks";
             dataType: "string";
             columnType: "PgText";
-            data: "event" | "cron" | "interval";
+            data: "cron" | "event" | "interval";
             driverParam: string;
             notNull: true;
             hasDefault: false;
@@ -427,7 +427,7 @@ export declare const insertBackgroundTaskSchema: import("drizzle-zod").BuildSche
         tableName: "background_tasks";
         dataType: "string";
         columnType: "PgText";
-        data: "event" | "cron" | "interval";
+        data: "cron" | "event" | "interval";
         driverParam: string;
         notNull: true;
         hasDefault: false;
@@ -752,7 +752,7 @@ export declare const selectBackgroundTaskSchema: import("drizzle-zod").BuildSche
         tableName: "background_tasks";
         dataType: "string";
         columnType: "PgText";
-        data: "event" | "cron" | "interval";
+        data: "cron" | "event" | "interval";
         driverParam: string;
         notNull: true;
         hasDefault: false;

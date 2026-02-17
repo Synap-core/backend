@@ -5,15 +5,9 @@
  */
 
 // Re-export database types for proposals
-export type {
-  Proposal,
-  NewProposal,
-} from "../../../database/src/schema/index.js";
+export type { Proposal, NewProposal } from "@synap/database";
 
-export {
-  insertProposalSchema,
-  selectProposalSchema,
-} from "../../../database/src/schema/index.js";
+export { insertProposalSchema, selectProposalSchema } from "@synap/database";
 
 /**
  * Universal Update Request

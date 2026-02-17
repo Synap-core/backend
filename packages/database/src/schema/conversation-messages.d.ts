@@ -65,7 +65,7 @@ export declare const conversationMessages: import("drizzle-orm/pg-core").PgTable
             tableName: "conversation_messages";
             dataType: "string";
             columnType: "PgText";
-            data: "user" | "assistant" | "system";
+            data: "user" | "system" | "assistant";
             driverParam: string;
             notNull: true;
             hasDefault: false;
@@ -108,7 +108,7 @@ export declare const conversationMessages: import("drizzle-orm/pg-core").PgTable
                     }[];
                     executionSummaries: {
                         tool: string;
-                        status: "error" | "success" | "skipped";
+                        status: "success" | "error" | "skipped";
                         result?: unknown;
                         error?: string | undefined;
                     }[];
@@ -169,7 +169,7 @@ export declare const conversationMessages: import("drizzle-orm/pg-core").PgTable
                     }[];
                     executionSummaries: {
                         tool: string;
-                        status: "error" | "success" | "skipped";
+                        status: "success" | "error" | "skipped";
                         result?: unknown;
                         error?: string | undefined;
                     }[];

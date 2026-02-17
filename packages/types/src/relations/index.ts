@@ -7,10 +7,7 @@
  */
 
 // Direct re-exports from database
-export type {
-  Relation,
-  NewRelation,
-} from "../../../database/src/schema/index.js";
+export type { Relation, NewRelation } from "@synap/database";
 
 // Relation type definitions
 export type RelationType =

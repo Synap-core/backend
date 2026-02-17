@@ -261,7 +261,7 @@ export declare const intelligenceCommands: import("drizzle-orm/pg-core").PgTable
             tableName: "intelligence_commands";
             dataType: "string";
             columnType: "PgText";
-            data: "user" | "workspace";
+            data: "workspace" | "user";
             driverParam: string;
             notNull: true;
             hasDefault: true;

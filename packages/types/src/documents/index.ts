@@ -9,7 +9,7 @@ export type {
   NewDocumentVersion,
   DocumentSession,
   NewDocumentSession,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";
 
 // Re-export Zod schemas for runtime validation
 export {
@@ -17,4 +17,4 @@ export {
   selectDocumentVersionSchema,
   insertDocumentSessionSchema,
   selectDocumentSessionSchema,
-} from "../../../database/src/schema/index.js";
+} from "@synap/database";

@@ -97,7 +97,7 @@ export declare const projects: import("drizzle-orm/pg-core").PgTableWithColumns<
             tableName: "projects";
             dataType: "string";
             columnType: "PgText";
-            data: "completed" | "active" | "archived";
+            data: "active" | "archived" | "completed";
             driverParam: string;
             notNull: true;
             hasDefault: true;
