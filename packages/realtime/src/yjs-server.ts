@@ -37,12 +37,15 @@ function parseRoomName(roomName: string): string | null {
   return null;
 }
 
+/** Tldraw store snapshot format: Record<id, record> */
+type TldrawStoreSnapshot = Record<string, unknown>;
+
 /**
- * Custom persistence adapter for database storage
+ * Custom persistence adapter: MinIO for whiteboards (canonical), document_versions for others.
  */
 class DatabasePersistence {
   /**
-   * Load Y.Doc from database
+   * Load Y.Doc: whiteboard rooms from MinIO (Tldraw JSON), others from document_versions.
    */
   async bindState(roomName: string, ydoc: Y.Doc): Promise<void> {
     try {
@@ -61,7 +64,51 @@ class DatabasePersistence {
         return;
       }
 
-      // Load from working version (currentVersion)
+      const isWhiteboard = roomName.startsWith("whiteboard-");
+
+      if (isWhiteboard && doc.storageKey) {
+        // Whiteboard: load from MinIO (canonical source)
+        try {
+          const contentBuffer = await storage.downloadBuffer(doc.storageKey);
+          const content = contentBuffer.toString("utf-8");
+
+          // Legacy: content might be yjs:base64 from old document_versions backfill
+          if (content.startsWith("yjs:")) {
+            const state = Buffer.from(content.substring(4), "base64");
+            Y.applyUpdate(ydoc, state);
+            console.log(
+              `[Yjs] Loaded whiteboard from MinIO (legacy Yjs) for ${roomName}`
+            );
+            return;
+          }
+
+          const parsed = JSON.parse(content || "{}") as {
+            store?: TldrawStoreSnapshot;
+          };
+          const store = parsed.store ?? parsed;
+          if (typeof store === "object" && store !== null) {
+            const yMap = ydoc.getMap(`tl_map_${documentId}`);
+            ydoc.transact(() => {
+              for (const [key, val] of Object.entries(store)) {
+                if (val != null && typeof val === "object") {
+                  yMap.set(key, val);
+                }
+              }
+            });
+            console.log(
+              `[Yjs] Loaded whiteboard from MinIO for ${roomName} (${Object.keys(store).length} records)`
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[Yjs] Failed to load whiteboard from MinIO for ${roomName}:`,
+            error
+          );
+        }
+        return;
+      }
+
+      // Non-whiteboard: load from document_versions (legacy)
       const workingVersion = await db.query.documentVersions.findFirst({
         where: and(
           eq(documentVersions.documentId, documentId),
@@ -69,33 +116,25 @@ class DatabasePersistence {
         ),
       });
 
-      if (workingVersion && workingVersion.content.startsWith("yjs:")) {
-        // Extract base64-encoded Yjs state from working version
+      if (workingVersion?.content.startsWith("yjs:")) {
         const base64State = workingVersion.content.substring(4);
         const state = Buffer.from(base64State, "base64");
         Y.applyUpdate(ydoc, state);
         console.log(
           `[Yjs] Loaded working version ${doc.currentVersion} for ${roomName}`
         );
-      } else {
-        // Fallback: Load from storage (current content)
-        // This handles documents that don't have Yjs state yet
-        if (doc.storageKey) {
-          try {
-            const contentBuffer = await storage.downloadBuffer(doc.storageKey);
-            const content = contentBuffer.toString("utf-8");
-
-            // For whiteboards, content is Tldraw JSON - convert to Yjs if needed
-            // For now, we'll let Yjs initialize fresh and sync from storage
-            console.log(
-              `[Yjs] No working version found, will initialize fresh for ${roomName}`
-            );
-          } catch (error) {
-            console.warn(
-              `[Yjs] Failed to load from storage for ${roomName}:`,
-              error
-            );
+      } else if (doc.storageKey) {
+        // Fallback: try MinIO for markdown/text
+        try {
+          const contentBuffer = await storage.downloadBuffer(doc.storageKey);
+          const content = contentBuffer.toString("utf-8");
+          // Raw Y.Doc state (base64) – future: support MinIO for markdown
+          if (content.startsWith("yjs:")) {
+            const state = Buffer.from(content.substring(4), "base64");
+            Y.applyUpdate(ydoc, state);
           }
+        } catch {
+          // Ignore – will initialize fresh
         }
       }
     } catch (error) {
@@ -104,7 +143,8 @@ class DatabasePersistence {
   }
 
   /**
-   * Save Y.Doc to database
+   * Save Y.Doc: whiteboard rooms to MinIO (canonical, no version), others to document_versions.
+   * Realtime save every 30s – working state only, no version creation.
    */
   async writeState(roomName: string, ydoc: Y.Doc): Promise<void> {
     try {
@@ -117,6 +157,32 @@ class DatabasePersistence {
 
       if (!doc) return;
 
+      const isWhiteboard = roomName.startsWith("whiteboard-");
+
+      if (isWhiteboard && doc.storageKey) {
+        // Whiteboard: save to MinIO (canonical source, no version)
+        const yMap = ydoc.getMap(`tl_map_${documentId}`);
+        const store: TldrawStoreSnapshot = {};
+        yMap.forEach((val, key) => {
+          if (val != null && typeof val === "object") {
+            store[key] = val as unknown;
+          }
+        });
+        const tldrawJson = JSON.stringify({ store });
+        await storage.upload(doc.storageKey, Buffer.from(tldrawJson, "utf-8"), {
+          contentType: "application/json",
+        });
+        await db
+          .update(documents)
+          .set({ updatedAt: new Date() })
+          .where(eq(documents.id, documentId));
+        console.log(
+          `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} records)`
+        );
+        return;
+      }
+
+      // Non-whiteboard: save to document_versions (legacy)
       const state = Y.encodeStateAsUpdate(ydoc);
       const base64State = Buffer.from(state).toString("base64");
       const yjsContent = `yjs:${base64State}`;
@@ -170,7 +236,7 @@ class DatabasePersistence {
 export function setupYjsServer(
   config: YjsServerConfig
 ): YSocketIO & { documents: Map<string, Y.Doc> } {
-  const { io, persistenceInterval = 10000 } = config;
+  const { io, persistenceInterval = 30000 } = config;
   const persistence = new DatabasePersistence();
 
   console.log("[Yjs] Initializing y-socket.io server...");
