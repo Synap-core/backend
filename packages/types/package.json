@@ -74,6 +74,8 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@synap-core/core": "workspace:*",
+    "@synap/database": "workspace:*",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "yjs": "^13.6.11",

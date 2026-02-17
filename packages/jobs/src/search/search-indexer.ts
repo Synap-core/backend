@@ -17,7 +17,6 @@ export const searchIndexer = inngest.createFunction(
     { event: "entity.*" },
     { event: "document.*" },
     { event: "view.*" },
-    { event: "project.*" },
     { event: "chatThread.*" },
     { event: "agent.*" },
   ],
@@ -36,14 +35,17 @@ export const searchIndexer = inngest.createFunction(
         entity: "entities",
         document: "documents",
         view: "views",
-        project: "projects",
         chatThread: "chat_threads",
         agent: "agents",
       };
 
       const collection = collectionMap[subjectType];
       if (!collection) {
-        return { status: "skipped", reason: "Unknown subject type", subjectType };
+        return {
+          status: "skipped",
+          reason: "Unknown subject type",
+          subjectType,
+        };
       }
 
       // Queue for bulk indexing

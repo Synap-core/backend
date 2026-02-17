@@ -104,6 +104,10 @@ COMPOSE_PROJECT_NAME=synap-backend
 DOMAIN=${domain}
 LETSENCRYPT_EMAIL=${email:-noreply@localhost}
 
+# PUBLIC_URL: How intelligence hub calls back to this backend
+# This MUST be the public-facing URL (not internal Docker network)
+PUBLIC_URL=https://${domain}
+
 # Intelligence Service
 INTELLIGENCE_HUB_URL=${intelligence_url}
 INTELLIGENCE_HUB_API_KEY=${intelligence_key}
@@ -570,11 +574,13 @@ EOF
             ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
         fi
         
-        # Intelligence Service Configuration
+        # Intelligence Service Configuration (REQUIRED)
         echo ""
-        echo -e "${BLUE}🧠 Intelligence Service Configuration${NC}"
+        echo -e "${BLUE}🧠 Intelligence Service Configuration (REQUIRED)${NC}"
         echo "Connect to your deployed Synap Intelligence Service."
-        
+        echo "If you don't have one yet, run 'intelligence-hub/deploy/synap install' first."
+        echo ""
+
         if [ -z "$INTELLIGENCE_URL" ]; then
              # Try to detect local IP as a suggestion
             local LOCAL_IP=""
@@ -582,40 +588,58 @@ EOF
                 LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
             fi
             local SUGGESTION=${DEFAULT_INTEL_URL:-"http://${LOCAL_IP:-localhost}:3001"}
-            
+
             read -p "Intelligence URL [${SUGGESTION}]: " INTELLIGENCE_URL
             INTELLIGENCE_URL=${INTELLIGENCE_URL:-$SUGGESTION}
+
+            # Require intelligence URL
+            while [ -z "$INTELLIGENCE_URL" ]; do
+                echo -e "${RED}Intelligence Hub URL is required${NC}"
+                read -p "Intelligence URL: " INTELLIGENCE_URL
+            done
         fi
-        
+
         if [ -z "$INTELLIGENCE_KEY" ]; then
-             local prompt="Intelligence API Key"
+             local prompt="Intelligence API Key (from hub installation)"
              if [ -n "$DEFAULT_INTEL_KEY" ]; then
-                prompt="$prompt [${DEFAULT_INTEL_KEY:0:5}...] (press Enter to keep): "
+                prompt="$prompt [${DEFAULT_INTEL_KEY:0:5}...]: "
              else
                 prompt="$prompt: "
              fi
              read -p "$prompt" INTELLIGENCE_KEY
              INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
+
+             # Require intelligence key
+             while [ -z "$INTELLIGENCE_KEY" ]; do
+                echo -e "${RED}Intelligence Hub API Key is required${NC}"
+                echo "  Get this from your Intelligence Hub installation output"
+                read -p "Intelligence API Key: " INTELLIGENCE_KEY
+             done
         fi
         
-        # AI Configuration - all in one section
+        # AI Configuration
         echo ""
-        echo -e "${BLUE}🤖 AI Configuration${NC}"
-        echo "Configure AI provider API keys (optional, but required for AI features)."
-        
-        # Ask for OpenAI API key
+        echo -e "${BLUE}🤖 AI Configuration (REQUIRED)${NC}"
+        echo "OpenAI API key is required for vector embeddings and semantic search."
+        echo "Get your key at: https://platform.openai.com/api-keys"
+        echo ""
+
+        # Ask for OpenAI API key (REQUIRED)
         if [ -z "$OPENAI_API_KEY" ]; then
             local prompt="Enter OpenAI API key"
             if [ -n "$DEFAULT_OPENAI_KEY" ]; then
-                prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...] (press Enter to skip): "
+                prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...]: "
             else
-                prompt="$prompt (press Enter to skip): "
+                prompt="$prompt: "
             fi
             read -p "$prompt" OPENAI_API_KEY
             OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
-            if [ -z "$OPENAI_API_KEY" ]; then
-                echo -e "${YELLOW}⚠️  Skipping OpenAI API key. AI features will not work.${NC}"
-            fi
+
+            # Require OpenAI key
+            while [ -z "$OPENAI_API_KEY" ]; do
+                echo -e "${RED}OpenAI API key is required for embeddings/vector search${NC}"
+                read -p "OpenAI API key: " OPENAI_API_KEY
+            done
         fi
         
         # Ask for optional AI providers

@@ -8,7 +8,6 @@ import {
   entitiesCollectionSchema,
   documentsCollectionSchema,
   viewsCollectionSchema,
-  projectsCollectionSchema,
   chatThreadsCollectionSchema,
   agentsCollectionSchema,
 } from "../collections/index.js";
@@ -18,7 +17,6 @@ export class CollectionService {
     entitiesCollectionSchema,
     documentsCollectionSchema,
     viewsCollectionSchema,
-    projectsCollectionSchema,
     chatThreadsCollectionSchema,
     agentsCollectionSchema,
   ];

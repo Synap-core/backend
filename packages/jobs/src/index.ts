@@ -45,7 +45,10 @@ export { entityEmbeddingWorker } from "./functions/entity-embedding.js";
 // ============================================================================
 
 export { handleWebhookDelivery } from "./functions/webhook-broker.js";
-export { globalValidator } from "./functions/global-validator.js";
+export {
+  globalValidator,
+  globalValidator2,
+} from "./functions/global-validator.js";
 
 // ============================================================================
 // Executors (Unified Execution Layer)
@@ -78,8 +81,13 @@ import { documentPersistenceWorker } from "./functions/document-persistence.js";
 import { analyzeCapturedThought } from "./functions/ai-analyzer.js";
 import { processAnalyzedThought } from "./functions/thought-processor.js";
 import { entityEmbeddingWorker } from "./functions/entity-embedding.js";
+import { searchIndexer } from "./search/search-indexer.js";
+import { bulkIndexer } from "./search/bulk-indexer.js";
 import { handleWebhookDelivery } from "./functions/webhook-broker.js";
-import { globalValidator } from "./functions/global-validator.js";
+import {
+  globalValidator,
+  globalValidator2,
+} from "./functions/global-validator.js";
 import {
   viewsExecutor,
   entitiesExecutor,
@@ -120,9 +128,14 @@ export const functions = [
   processAnalyzedThought,
   entityEmbeddingWorker,
 
+  // Search workers
+  searchIndexer,
+  bulkIndexer,
+
   // Shared workers
   handleWebhookDelivery,
   globalValidator,
+  globalValidator2,
 
   // Executors (Unified Execution Layer)
   viewsExecutor,

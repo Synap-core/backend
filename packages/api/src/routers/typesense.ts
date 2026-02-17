@@ -23,14 +23,7 @@ export const typesenseRouter = router({
         workspaceId: z.string().optional(),
         collections: z
           .array(
-            z.enum([
-              "entities",
-              "documents",
-              "views",
-              "projects",
-              "chat_threads",
-              "agents",
-            ])
+            z.enum(["entities", "documents", "views", "chat_threads", "agents"])
           )
           .optional(),
         limit: z.number().min(1).max(100).default(20),
@@ -58,7 +51,6 @@ export const typesenseRouter = router({
           "entities",
           "documents",
           "views",
-          "projects",
           "chat_threads",
           "agents",
         ]),

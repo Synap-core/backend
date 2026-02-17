@@ -11,8 +11,8 @@ export const bulkIndexer = inngest.createFunction(
     id: "bulk-indexer",
     name: "Bulk Indexer - Queue Flusher",
   },
-  // Run every 10 seconds
-  { cron: "*/10 * * * * *" },
+  // Run every minute (Inngest minimum; was every 10s but seconds not supported)
+  { cron: "* * * * *" },
   async ({ step }) => {
     return await step.run("flush-indexing-queue", async () => {
       // Get queue status before flushing

@@ -7,6 +7,12 @@ dist/
 build/
 *.tsbuildinfo
 
+# Emitted JS/declarations in src (build must output to dist only; prevent accidental commit)
+**/src/**/*.js
+**/src/**/*.d.ts
+**/src/**/*.js.map
+**/src/**/*.d.ts.map
+
 # Environment
 .env
 .env.local

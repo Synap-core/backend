@@ -194,17 +194,19 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
       body,
     });
 
-    // Get all response headers
-    const responseHeaders = new Headers();
+    // Get all response headers as plain object
+    const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
-      responseHeaders.set(key, value);
+      responseHeaders[key] = value;
     });
 
-    // Return Response object (Hono accepts Response directly)
-    return new Response(response.body, {
-      status: response.status,
-      headers: responseHeaders,
-    });
+    // Return Response using Hono's newResponse for proper type compatibility
+    // c.newResponse(body, status, headers) signature
+    return c.newResponse(
+      response.body,
+      response.status as any,
+      responseHeaders
+    );
   } catch (error) {
     apiLogger.error(
       { err: error, path: kratosPath },
@@ -306,15 +308,14 @@ app.get("/api/events/stream", (c) => {
 
   const allowOrigin = getAllowedOrigin();
 
-  // Return Response object (Hono accepts Response directly)
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": allowOrigin,
-      "Access-Control-Allow-Credentials": "true",
-    },
+  // Return SSE stream using Hono's newResponse
+  // c.newResponse(body, status, headers) signature
+  return c.newResponse(stream, 200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Credentials": "true",
   });
 });
 

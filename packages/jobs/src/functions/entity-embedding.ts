@@ -10,19 +10,20 @@ import { sql } from "@synap/database";
 // Intelligence Hub client configuration
 const INTELLIGENCE_HUB_URL =
   process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
+const INTELLIGENCE_HUB_API_KEY = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
 /**
  * Generate embedding using Intelligence Hub
  */
 async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(
-    `${INTELLIGENCE_HUB_URL}/api/embeddings/generate`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    }
-  );
+  const response = await fetch(`${INTELLIGENCE_HUB_URL}/api/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": INTELLIGENCE_HUB_API_KEY,
+    },
+    body: JSON.stringify({ text }),
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to generate embedding: ${response.statusText}`);
@@ -68,10 +69,7 @@ export const entityEmbeddingWorker = inngest.createFunction(
     name: "Generate Entity Embeddings",
     retries: 3,
   },
-  [
-    { event: "entity.create.completed" },
-    { event: "entity.update.completed" },
-  ],
+  [{ event: "entity.create.completed" }, { event: "entity.update.completed" }],
   async ({ event, step }) => {
     const { entityId, userId, entityType, title, preview } = event.data;
 

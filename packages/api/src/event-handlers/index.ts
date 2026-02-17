@@ -119,14 +119,17 @@ export async function processEvents() {
         if (eventInfo) {
           const { phase } = eventInfo;
 
-          // Forward requested/validated/completed events to Inngest for background processing
-          // This is the bridge between the Event Store and Inngest
-          // "completed" is needed for workspaces.create.completed (default whiteboard, views, commands)
-          if (
-            phase === "requested" ||
-            phase === "validated" ||
-            phase === "completed"
-          ) {
+          // Forward requested and completed events to Inngest for background processing.
+          // This is the bridge between the Event Store and Inngest.
+          //
+          // "requested" → emitted by API routers; only in DB, so must be forwarded here.
+          // "completed" → emitted by BaseRepository (DB-only); must be forwarded here.
+          //               Needed e.g. for workspaces.create.completed (default whiteboard setup).
+          //
+          // "validated" is intentionally EXCLUDED: globalValidator writes it to DB AND
+          // sends it directly to Inngest (inngest.send()). Forwarding it here would cause
+          // the executor to fire twice, creating duplicate entities/documents.
+          if (phase === "requested" || phase === "completed") {
             logger.info(
               { eventId: event.id, eventType: event.type, phase },
               "Forwarding event to Inngest"
@@ -140,10 +143,9 @@ export async function processEvents() {
             });
           }
         } else {
-          // Legacy event format - try to forward if it looks like a unified event
+          // Legacy event format - forward requested/completed only (not validated, same reason above)
           if (
             event.type.includes(".requested") ||
-            event.type.includes(".validated") ||
             event.type.includes(".completed")
           ) {
             logger.info(

@@ -1,16 +1,45 @@
 /**
- * Create UnifiedEvent for BaseRepository to emit completed events.
+ * Create UnifiedEvent (local copy to avoid circular dependency with @synap-core/types)
  *
- * Types are imported from @synap-core/types (single source of truth).
+ * @synap-core/types → @synap/database (relative imports) → @synap-core/core
+ * Adding @synap-core/types as a dep of @synap/database would be circular.
+ *
+ * Keep these type definitions in sync with @synap-core/types/src/events/unified.ts.
  * The full Inngest-specific implementation is in @synap/jobs/types/unified-events.ts
  */
 
 import { randomUUID } from "crypto";
 import type { EnhancedEventMetadata } from "@synap-core/core";
-import type { EventPhase, EventAction, SubjectType } from "@synap-core/types";
 
-// Re-export for consumers of this file (e.g. BaseRepository)
-export type { EventPhase, EventAction, SubjectType };
+export type EventPhase = "requested" | "validated" | "completed" | "denied";
+export type EventAction =
+  | "create"
+  | "update"
+  | "delete"
+  | "archive"
+  | "restore";
+export type SubjectType =
+  | "entity"
+  | "document"
+  | "workspace"
+  | "view"
+  | "relation"
+  | "tag"
+  | "project"
+  | "proposal"
+  | "message"
+  | "user"
+  | "role"
+  | "apiKey"
+  | "skill"
+  | "backgroundTask"
+  | "agent"
+  | "chatThread"
+  | "template"
+  | "inboxItem"
+  | "sharing"
+  | "workspaceMember"
+  | "projectMember";
 
 export type GenericEventType<
   TSubjectType extends string,

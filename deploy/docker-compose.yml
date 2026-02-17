@@ -41,9 +41,11 @@ services:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
       INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_SERVE_HOST: ${INNGEST_SERVE_HOST:-http://backend:4000}
       # Intelligence Service
       INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
       INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
+      HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
       # AI Providers
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -58,6 +60,8 @@ services:
         condition: service_healthy
       backend-migrate:
         condition: service_completed_successfully
+      # backend-init:
+      #   condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -155,6 +159,34 @@ services:
     # Mark as a one-shot service (runs once, then stops)
     # Removed profile - migrations should run automatically on startup
 
+  # ============================================================================
+  # DATABASE INITIALIZATION (Seed API Keys)
+  # ============================================================================
+  backend-init:
+    # Use same image as backend service
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
+      HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
+      NODE_ENV: production
+    # Run database initialization script (seeds API keys)
+    command: node node_modules/@synap/database/dist/scripts/init-hub-keys.js
+    # One-shot service - runs once after migrations
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
+    networks:
+      - synap-net
+
     # ============================================================================
     # POSTGRESQL
     # ============================================================================
@@ -226,7 +258,11 @@ services:
   typesense:
     image: typesense/typesense:0.25.2
     restart: always
-    command: "--data-dir /data --api-key=${TYPESENSE_API_KEY} --enable-cors"
+    command: >
+      --data-dir /data
+      --api-key=${TYPESENSE_ADMIN_API_KEY}
+      --search-only-api-key=${TYPESENSE_API_KEY}
+      --enable-cors
     volumes:
       - typesense_data:/data
     networks:
@@ -234,9 +270,13 @@ services:
     ports:
       - "8108:8108"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
-      interval: 30s
-      timeout: 10s
+      test:
+        [
+          "CMD-SHELL",
+          "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/localhost/8108' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
       retries: 3
 
   # ============================================================================
