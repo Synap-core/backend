@@ -247,9 +247,10 @@ export function setupYjsServer(
     // Note: persistInterval not in YSocketIOConfiguration, using event-based persistence
   });
 
-  // Hook into document lifecycle for custom persistence
+  // Hook into document lifecycle for custom persistence.
+  // bindState is async; the library may answer sync-step-1 before it completes (see ENTITY_PANEL_LAG_AND_REALTIME_AUDIT.md).
   yServer.on("document-loaded", (docName: string, doc: Y.Doc) => {
-    persistence.bindState(docName, doc);
+    void persistence.bindState(docName, doc);
   });
 
   // Debounced auto-save using interval
