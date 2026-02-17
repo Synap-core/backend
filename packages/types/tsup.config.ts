@@ -16,9 +16,7 @@ export default defineConfig({
     "src/proposals/index.ts",
   ],
   format: ["esm"],
-  dts: {
-    resolve: true,
-  },
+  dts: false,
   clean: true,
   external: ["yjs"],
 });
