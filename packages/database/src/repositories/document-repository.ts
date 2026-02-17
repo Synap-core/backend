@@ -18,7 +18,6 @@ export interface CreateDocumentInput {
   storageKey: string;
   size: number;
   mimeType: string;
-  workspaceId?: string;
   projectId?: string;
   metadata?: Record<string, unknown>;
   userId: string;
