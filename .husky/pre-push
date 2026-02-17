@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
-pnpm typecheck && pnpm build
+# Only typecheck on push (path mappings resolve @synap-core/types from source).
+# Full build stays for CI or manual: pnpm build
+pnpm typecheck
