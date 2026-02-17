@@ -33,6 +33,7 @@ export const entitiesRouter = router({
         description: z.string().optional(),
         properties: z.record(z.string(), z.unknown()).optional(), // Properties validated against profile
         documentId: z.string().uuid().optional(),
+        content: z.string().optional(), // Optional markdown/HTML content; when set, backend creates document + entity in one go
       })
     )
     .output(
@@ -111,6 +112,7 @@ export const entitiesRouter = router({
           workspaceId: ctx.workspaceId,
           documentId: input.documentId,
           userId: ctx.userId,
+          content: input.content,
         },
         userId: ctx.userId,
       });
@@ -255,17 +257,22 @@ export const entitiesRouter = router({
     }),
 
   /**
-   * Get entity by ID
+   * Get entity by ID.
+   * When includeProfile is true, also returns profile and effectiveProperties (same shape as profiles.get)
+   * so the client can render icon/color and property definitions without a separate profiles.get call.
    */
   get: workspaceProcedure
     .input(
       z.object({
         id: z.string().uuid(),
+        includeProfile: z.boolean().optional().default(false),
       })
     )
     .output(
       z.object({
         entity: z.any(), // Use z.any() since entity can have dynamic profile slug
+        profile: z.any().optional(),
+        effectiveProperties: z.array(z.any()).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -294,7 +301,30 @@ export const entitiesRouter = router({
         checksum: null,
       } as Entity;
 
-      return { entity: typedEntity };
+      if (!input.includeProfile) {
+        return { entity: typedEntity };
+      }
+
+      const database = await getDb();
+      const resolutionService = new ProfileResolutionService(database);
+      const profile = await resolutionService.resolveProfile(
+        entity.type,
+        ctx.userId,
+        ctx.workspaceId
+      );
+
+      if (!profile) {
+        return { entity: typedEntity };
+      }
+
+      const effectiveProperties =
+        await resolutionService.getEffectiveProperties(profile.id);
+
+      return {
+        entity: typedEntity,
+        profile,
+        effectiveProperties,
+      };
     }),
 
   /**
@@ -306,6 +336,7 @@ export const entitiesRouter = router({
         id: z.string().uuid(),
         title: z.string().optional(),
         description: z.string().optional(),
+        documentId: z.string().uuid().nullable().optional(), // Link entity to document (for content)
         properties: z.record(z.string(), z.unknown()).optional(), // Properties validated against profile
       })
     )
@@ -318,6 +349,7 @@ export const entitiesRouter = router({
           id: input.id,
           title: input.title,
           preview: input.description,
+          documentId: input.documentId,
           properties: input.properties,
           workspaceId: ctx.workspaceId,
           userId: ctx.userId,

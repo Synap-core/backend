@@ -47,7 +47,6 @@ export const entitiesHandler = async ({
     // Check if content is provided for atomic creation
     if (data.content) {
       // Atomic entity + document creation
-      const docId = randomUUID();
 
       // Step 1: Upload content to storage
       const uploadResult = await step.run("upload-content", async () => {
@@ -67,9 +66,14 @@ export const entitiesHandler = async ({
         };
       });
 
-      // Step 2: Create document
-      await step.run("create-document", async () => {
-        await docRepo.create(
+      const workspaceId = (data.workspaceId as string) || "";
+      if (!workspaceId) {
+        throw new Error("workspaceId is required for entity creation");
+      }
+
+      // Step 2: Create document (with workspaceId for schema)
+      const createdDocument = await step.run("create-document", async () => {
+        return docRepo.create(
           {
             title: (data.title as string) || "Untitled",
             type: "markdown",
@@ -78,35 +82,28 @@ export const entitiesHandler = async ({
             size: uploadResult.size,
             mimeType: "text/markdown",
             userId,
+            workspaceId,
           },
           userId
         );
       });
 
-      // Step 3: Create entity with documentId
-      await step.run("create-entity", async () => {
-        const workspaceId = (data.workspaceId as string) || "";
-        if (!workspaceId) {
-          throw new Error("workspaceId is required for entity creation");
-        }
-
-        // Prepare entity input (profile-based)
+      // Step 3: Create entity with documentId, then set document.entity_id (Option B)
+      const createdEntity = await step.run("create-entity", async () => {
         const entityInput: Parameters<typeof entityRepo.create>[0] = {
           workspaceId,
           userId,
           title: (data.title as string) || undefined,
           preview: (data.preview as string) || undefined,
-          documentId: docId,
+          documentId: createdDocument.id,
           properties: (data.properties as Record<string, unknown>) || undefined,
         };
 
-        // Prefer profile-based, fallback to legacy type
         if (data.profileId) {
           entityInput.profileId = data.profileId as string;
         } else if (data.profileSlug) {
           entityInput.profileSlug = data.profileSlug as string;
         } else if (data.type) {
-          // Legacy: use type as profileSlug
           entityInput.profileSlug = data.type as string;
         } else {
           throw new Error(
@@ -114,7 +111,19 @@ export const entitiesHandler = async ({
           );
         }
 
-        await entityRepo.create(entityInput, userId);
+        const entity = await entityRepo.create(entityInput, userId);
+        return entity;
+      });
+
+      // Step 4: Link document to entity (Option B symmetric link)
+      await step.run("link-document-to-entity", async () => {
+        await docRepo.update(
+          createdDocument.id,
+          {
+            entityId: createdEntity.id,
+          },
+          userId
+        );
       });
     } else {
       // Simple entity creation without document
@@ -152,18 +161,41 @@ export const entitiesHandler = async ({
       });
     }
   } else if (action === "update") {
+    const entityId = data.id as string;
+    const newDocumentId = data.documentId as string | null | undefined;
+
+    const previousEntity = await step.run("get-entity-for-update", async () => {
+      return db.query.entities.findFirst({
+        where: and(eq(entities.id, entityId), eq(entities.userId, userId)),
+        columns: { documentId: true },
+      });
+    });
+
     await step.run("update-entity", async () => {
       await entityRepo.update(
-        data.id as string,
+        entityId,
         {
           title: (data.title as string) || undefined,
           preview: (data.preview as string) || undefined,
-          content: (data.content as string) || undefined,
+          documentId: newDocumentId,
           properties: (data.properties as Record<string, unknown>) || undefined,
         },
         userId
       );
     });
+
+    // Option B: sync document.entity_id when entity.documentId changes
+    const oldDocumentId = previousEntity?.documentId ?? null;
+    if (oldDocumentId !== (newDocumentId ?? null)) {
+      await step.run("sync-document-entity-link", async () => {
+        if (oldDocumentId) {
+          await docRepo.update(oldDocumentId, { entityId: null }, userId);
+        }
+        if (newDocumentId) {
+          await docRepo.update(newDocumentId, { entityId: entityId }, userId);
+        }
+      });
+    }
   } else if (action === "delete") {
     // Get user's preference for cascading document deletion
     const { getUserPreference } = await import("@synap/database");

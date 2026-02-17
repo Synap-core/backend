@@ -68,11 +68,15 @@ export const documentsHandler = async ({
     });
 
     // Step 2: Create document
+    const workspaceId = (data.workspaceId as string) || "";
+    if (!workspaceId) {
+      throw new Error("workspaceId is required for document creation");
+    }
     await step.run("create-document", async () => {
       await docRepo.create(
         {
           title: (data.title as string) || "Untitled",
-          type: docType as "text" | "markdown" | "code" | "pdf" | "docx", // DocumentRepository doesn't support whiteboard yet
+          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
           language: (data.language as string) || undefined,
           storageUrl: uploadResult.url,
           storageKey: uploadResult.key,
@@ -81,6 +85,7 @@ export const documentsHandler = async ({
           projectId: (data.projectId as string) || undefined,
           metadata: (data.metadata as Record<string, unknown>) || {},
           userId,
+          workspaceId,
         },
         userId
       );

@@ -58,6 +58,7 @@ describe("DocumentRepository", () => {
           size: 1024,
           mimeType: "text/plain",
           userId: "user-1",
+          workspaceId: "ws-1",
         },
         "user-1"
       );

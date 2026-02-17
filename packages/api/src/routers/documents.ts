@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { storage } from "@synap/storage";
 import {
@@ -38,6 +38,8 @@ const UploadDocumentSchema = z.object({
   language: z.string().optional(),
   mimeType: z.string().optional(),
   projectId: z.string().uuid().optional(),
+  /** Optional: when omitted, uses X-Workspace-Id header (workspaceLink). */
+  workspaceId: z.string().uuid().optional(),
 });
 
 const UpdateDocumentSchema = z.object({
@@ -59,6 +61,8 @@ const CreateDocumentSchema = z.object({
   content: z.string().default(""),
   type: DocumentTypeSchema.default("markdown"),
   projectId: z.string().uuid().optional(),
+  /** Optional: when omitted, uses X-Workspace-Id header (workspaceLink). */
+  workspaceId: z.string().uuid().optional(),
 });
 
 // ============================================================================
@@ -67,12 +71,21 @@ const CreateDocumentSchema = z.object({
 
 export const documentsRouter = router({
   /**
-   * Create a new empty document
+   * Create a new empty document.
+   * workspaceId: from input or from X-Workspace-Id header (workspaceLink).
    */
-  create: protectedProcedure
+  create: workspaceProcedure
     .input(CreateDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Pass workspaceId or set active workspace (X-Workspace-Id).",
+        });
+      }
       const documentId = randomUUID();
 
       await emitRequestEvent({
@@ -85,6 +98,7 @@ export const documentsRouter = router({
           type: input.type,
           content: input.content,
           projectId: input.projectId,
+          workspaceId,
           userId,
         },
         userId,
@@ -101,12 +115,21 @@ export const documentsRouter = router({
     }),
 
   /**
-   * Upload a new document
+   * Upload a new document.
+   * workspaceId: from input or from X-Workspace-Id header (workspaceLink).
    */
-  upload: protectedProcedure
+  upload: workspaceProcedure
     .input(UploadDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Pass workspaceId or set active workspace (X-Workspace-Id).",
+        });
+      }
       const documentId = randomUUID();
 
       await emitRequestEvent({
@@ -121,6 +144,7 @@ export const documentsRouter = router({
           content: input.content,
           mimeType: input.mimeType || undefined,
           projectId: input.projectId || undefined,
+          workspaceId,
           userId,
         },
         userId,

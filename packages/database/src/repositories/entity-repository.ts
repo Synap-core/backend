@@ -42,6 +42,8 @@ export interface UpdateEntityInput {
   title?: string;
   preview?: string;
   content?: string;
+  /** Link entity to a document (for content). */
+  documentId?: string | null;
 
   // Properties (validated against profile)
   properties?: Record<string, unknown>;
@@ -221,9 +223,9 @@ export class EntityRepository extends BaseRepository<
     const [entity] = await this.db
       .update(entities)
       .set({
-        title: data.title,
-        preview: data.preview,
-        content: data.content,
+        ...(data.title !== undefined && { title: data.title }),
+        ...(data.preview !== undefined && { preview: data.preview }),
+        ...(data.documentId !== undefined && { documentId: data.documentId }),
         properties: updatedProperties,
         updatedAt: new Date(),
       } as Partial<NewEntity>)

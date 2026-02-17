@@ -53,6 +53,8 @@ export const documents = pgTable(
     }),
 
     // Relationships
+    // Option B: symmetric document–entity link (entity has documentId; document can reference entity)
+    entityId: uuid("entity_id"), // FK added in migration to avoid circular import with entities
 
     // Metadata
     metadata: jsonb("metadata"), // Custom metadata
