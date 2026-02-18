@@ -108,6 +108,8 @@ import {
   createDefaultWhiteboard,
   createDefaultViews,
   createDefaultCommands,
+  crossThreadEntityNotifier,
+  crossThreadDocumentNotifier,
 } from "./executors/index.js";
 
 /**
@@ -157,4 +159,6 @@ export const functions = [
   createDefaultWhiteboard,
   createDefaultViews,
   createDefaultCommands,
+  crossThreadEntityNotifier,
+  crossThreadDocumentNotifier,
 ];

@@ -24,11 +24,11 @@ export interface SearchResponse {
 
 export class SearchService {
   private queryFieldsMap: Record<string, string> = {
-    entities: "title,content,description",
-    documents: "title,content",
-    views: "name,description",
-    chat_threads: "title,summary",
-    agents: "name,description,systemPrompt",
+    entities: "title",
+    documents: "title",
+    views: "name",
+    chat_threads: "title",
+    agents: "title",
   };
 
   /**

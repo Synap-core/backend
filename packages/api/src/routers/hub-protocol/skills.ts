@@ -28,8 +28,9 @@ export const skillsRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
-        ctx.scopes || []
+        input.userId,
+        ctx.scopes || [],
+        input.workspaceId
       );
       const caller = regularSkillsRouter.createCaller(callerContext);
 
@@ -56,7 +57,7 @@ export const skillsRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
+        input.userId,
         ctx.scopes || []
       );
       const caller = regularSkillsRouter.createCaller(callerContext);

@@ -28,3 +28,4 @@ export * from "./background-tasks-executor.js";
 export * from "./default-whiteboard-executor.js";
 export * from "./default-views-executor.js";
 export * from "./default-commands-executor.js";
+export * from "./cross-thread-notifier.js";

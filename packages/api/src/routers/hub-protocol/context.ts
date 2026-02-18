@@ -13,8 +13,8 @@ import { infiniteChatRouter } from "../infinite-chat.js";
 import { entitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { db } from "@synap/database";
-import { entities, documents } from "@synap/database/schema";
-import { inArray } from "@synap/database";
+import { entities, documents, workspaceMembers, chatThreads } from "@synap/database/schema";
+import { inArray, eq } from "@synap/database";
 
 export const contextRouter = router({
   /**
@@ -31,9 +31,20 @@ export const contextRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Look up the thread's userId and workspaceId for inner caller context
+      const thread = await db
+        .select({ userId: chatThreads.userId, workspaceId: chatThreads.workspaceId })
+        .from(chatThreads)
+        .where(eq(chatThreads.id, input.threadId))
+        .limit(1)
+        .then((r) => r[0]);
+      const workspaceId = thread?.workspaceId ?? (ctx as any).workspaceId ?? null;
+      const threadUserId = thread?.userId ?? ctx.userId!;
+      // Use the thread's actual userId (not API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
-        ctx.scopes || []
+        threadUserId,
+        ctx.scopes || [],
+        workspaceId
       );
       const chatCaller = infiniteChatRouter.createCaller(callerContext);
       const entitiesCaller = entitiesRouter.createCaller(callerContext);
@@ -132,9 +143,19 @@ export const contextRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Look up user's primary workspace (by input.userId — the real user, not the API key owner)
+      const membership = await db
+        .select({ workspaceId: workspaceMembers.workspaceId })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.userId, input.userId))
+        .limit(1)
+        .then((r) => r[0]);
+      const workspaceId = membership?.workspaceId ?? (ctx as any).workspaceId ?? null;
+      // Use input.userId (the real user) not ctx.userId (the API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
-        ctx.scopes || []
+        input.userId,
+        ctx.scopes || [],
+        workspaceId
       );
       const chatCaller = infiniteChatRouter.createCaller(callerContext);
       const entitiesCaller = entitiesRouter.createCaller(callerContext);

@@ -33,6 +33,27 @@ function hasScope(keyScopes: string[], requiredScope: string): boolean {
  * Validates Bearer token and enriches context with authentication data.
  */
 export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
+  // Short-circuit: if context is already authenticated with scopes (hub protocol server-side call),
+  // skip Bearer token extraction — auth already done at the Hono middleware layer.
+  if (
+    ctx.authenticated &&
+    "scopes" in ctx &&
+    Array.isArray((ctx as any).scopes) &&
+    (ctx as any).scopes.length > 0 &&
+    "apiKeyId" in ctx &&
+    (ctx as any).apiKeyId
+  ) {
+    return next({
+      ctx: {
+        ...ctx,
+        scopes: (ctx as any).scopes as string[],
+        apiKeyId: (ctx as any).apiKeyId as string,
+        apiKeyName: ((ctx as any).apiKeyName ?? "hub-protocol") as string,
+        authenticated: true as const,
+      },
+    });
+  }
+
   // Extract Authorization header
   const authHeader = ctx.req?.headers?.get?.("authorization") || null;
   const apiKey = extractApiKey(authHeader);

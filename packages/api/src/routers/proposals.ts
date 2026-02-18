@@ -166,7 +166,7 @@ export const proposalsRouter = router({
 
       if (targetType && changeType) {
         const { inngest } = await import("@synap/jobs");
-        const eventName = `${targetType}s.${changeType}.validated`;
+        const eventName = `${targetType}.${changeType}.validated`;
         const payload =
           typeof request?.data === "object" && request.data !== null
             ? (request.data as Record<string, unknown>)
@@ -266,29 +266,30 @@ export const proposalsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { inngest } = await import("@synap/jobs");
       const { randomUUID } = await import("crypto");
+      const { emitRequestEvent } = await import("../utils/emit-event.js");
       const requestId = randomUUID();
 
-      // Construct event name
-      // e.g. documents.create.requested
-      const subject = `${input.targetType}s`;
-      const eventName = `${subject}.${input.changeType}.requested`;
-
-      await inngest.send({
-        name: eventName,
+      // Route through the canonical event pipeline:
+      // DB write → event processor → Inngest → GlobalValidator → validated/proposal/denied
+      await emitRequestEvent({
+        subjectType: input.targetType,
+        action: input.changeType,
+        subjectId: input.targetId,
         data: {
           ...input.data,
-          targetId: input.targetId,
+          id: input.targetId,
           requestId,
           reasoning: input.reasoning,
-          // Metadata for the validator
-          metadata: {
-            source: "user_proposal", // Explicit proposal
-            submittedBy: userId,
-          },
-        },
-        user: { id: userId },
+        } as any,
+        userId,
+        workspaceId: (input.data.workspaceId as string) || undefined,
+        source: "api",
+        metadata: {
+          // Tag as explicit user proposal so downstream (validator, UI) can identify it
+          source: "user_proposal",
+          submittedBy: userId,
+        } as any,
       });
 
       return {

@@ -24,14 +24,18 @@ export const entitiesRouter = router({
     .input(
       z.object({
         userId: z.string(),
+        workspaceId: z.string().uuid().optional(),
         type: z.string().optional(),
         limit: z.number().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
+      const workspaceId = input.workspaceId ?? (ctx as any).workspaceId ?? null;
+      // Use input.userId (the real user) not ctx.userId (the API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
-        ctx.scopes || []
+        input.userId,
+        ctx.scopes || [],
+        workspaceId
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
