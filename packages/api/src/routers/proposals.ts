@@ -10,6 +10,11 @@ import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, proposals, documents, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import {
+  type StoredProposalData,
+  isDocumentContentProposalData,
+  isRequestShapedProposalData,
+} from "@synap-core/types";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 
@@ -97,13 +102,12 @@ export const proposalsRouter = router({
         });
       }
 
-      const request = proposal.data as Record<string, unknown>;
+      const payload = proposal.data as StoredProposalData | null | undefined;
 
-      // B3: Hub-created document proposal (AI edit) – apply content directly
+      // B3: Document content proposal (hub/chat/user_edit) – apply content directly
       if (
         proposal.targetType === "document" &&
-        request &&
-        typeof request.proposedContent === "string"
+        isDocumentContentProposalData(payload)
       ) {
         const { storage } = await import("@synap/storage");
         const { documents, documentVersions } =
@@ -121,7 +125,7 @@ export const proposalsRouter = router({
         }
 
         const newVersion = (document.currentVersion ?? 1) + 1;
-        const content = request.proposedContent as string;
+        const content = payload.proposedContent;
 
         await storage.upload(
           document.storageKey,
@@ -160,43 +164,46 @@ export const proposalsRouter = router({
         return { success: true };
       }
 
-      // Generic flow: emit validated event (requires request.targetType and request.changeType)
-      const targetType = request?.targetType as string | undefined;
-      const changeType = request?.changeType as string | undefined;
-
-      if (targetType && changeType) {
+      // Generic flow: emit validated event (request-shaped data from global-validator / chat)
+      if (isRequestShapedProposalData(payload)) {
+        const {
+          targetType,
+          changeType,
+          data: requestData,
+          requestId,
+        } = payload;
         const { inngest } = await import("@synap/jobs");
         const eventName = `${targetType}.${changeType}.validated`;
-        const payload =
-          typeof request?.data === "object" && request.data !== null
-            ? (request.data as Record<string, unknown>)
+        const eventPayload =
+          typeof requestData === "object" && requestData !== null
+            ? { ...requestData }
             : {};
         if (targetType === "entity") {
           if (
             changeType === "update" &&
-            payload.entityId != null &&
-            payload.id == null
+            eventPayload.entityId != null &&
+            eventPayload.id == null
           ) {
-            payload.id = payload.entityId;
+            eventPayload.id = eventPayload.entityId;
           }
           if (
             changeType === "create" &&
-            payload.description != null &&
-            payload.preview == null
+            eventPayload.description != null &&
+            eventPayload.preview == null
           ) {
-            payload.preview = payload.description;
+            eventPayload.preview = eventPayload.description;
           }
         }
 
         await inngest.send({
           name: eventName,
           data: {
-            ...payload,
+            ...eventPayload,
             workspaceId: proposal.workspaceId,
             approvedBy: userId,
             approvedAt: new Date().toISOString(),
             approvalComment: input.comment,
-            requestId: (request as any).requestId,
+            requestId,
           },
           user: { id: userId },
         });

@@ -16,6 +16,7 @@ import { EventRepository } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
+import type { RequestShapedProposalData } from "@synap-core/types";
 import {
   createUnifiedEvent,
   extractEventInfo,
@@ -300,6 +301,19 @@ async function globalValidatorHandler({
       ? subjectType.slice(0, -1)
       : subjectType;
 
+    const proposalData: RequestShapedProposalData = {
+      requestId: randomUUID(),
+      source: source as RequestShapedProposalData["source"],
+      sourceId: userId,
+      workspaceId: workspaceId || "personal",
+      targetType: singularType as RequestShapedProposalData["targetType"],
+      targetId,
+      changeType: action,
+      data: data as Record<string, unknown>,
+      reasoning: policyResult.reason,
+      aiMetadata: metadata?.ai as Record<string, unknown> | undefined,
+    };
+
     const [proposal] = await db
       .insert(proposals)
       .values({
@@ -307,18 +321,7 @@ async function globalValidatorHandler({
         targetType: singularType,
         targetId,
         proposalType: action,
-        data: {
-          requestId: randomUUID(),
-          source: source,
-          sourceId: userId,
-          targetType: singularType,
-          targetId,
-          changeType: action,
-          data: data as Record<string, unknown>,
-          reasoning: policyResult.reason,
-          // Pass through AI metadata for frontend display
-          aiMetadata: metadata?.ai,
-        } as Record<string, unknown>,
+        data: proposalData,
         status: ProposalStatus.PENDING,
       })
       .returning();
