@@ -1498,7 +1498,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					threadId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
+					role: "user" | "system" | "assistant";
 					previousHash: string | null;
 					hash: string;
 				}[];

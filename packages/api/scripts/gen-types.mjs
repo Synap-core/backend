@@ -15,7 +15,7 @@ try {
   // --project: Use api's tsconfig
   // --export-referenced-types: Ensure all used types are exported
   execSync(
-    `npx dts-bundle-generator -o "${OUTPUT_FILE}" --project tsconfig.json --no-check "${ENTRY_FILE}"`,
+    `npx dts-bundle-generator -o "${OUTPUT_FILE}" --project tsconfig.gen-types.json --no-check "${ENTRY_FILE}"`,
     {
       stdio: "inherit",
       cwd: ROOT_DIR,

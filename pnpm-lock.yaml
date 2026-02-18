@@ -426,6 +426,9 @@ importers:
       '@types/jsonwebtoken':
         specifier: ^9.0.10
         version: 9.0.10
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.28
       '@types/react':
         specifier: ^19.2.8
         version: 19.2.8
@@ -437,7 +440,7 @@ importers:
         version: 19.2.3
       tsup:
         specifier: ^8.0.0
-        version: 8.5.1(@microsoft/api-extractor@7.55.2(@types/node@25.0.7))(jiti@2.6.1)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+        version: 8.5.1(@microsoft/api-extractor@7.55.2(@types/node@20.19.28))(jiti@2.6.1)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -777,9 +780,6 @@ importers:
       '@synap/database':
         specifier: workspace:*
         version: link:../database
-      drizzle-orm:
-        specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       typesense:
         specifier: ^1.8.2
         version: 1.8.2(@babel/runtime@7.28.6)
@@ -864,12 +864,6 @@ importers:
 
   packages/types:
     dependencies:
-      '@synap-core/core':
-        specifier: workspace:*
-        version: link:../core
-      '@synap/database':
-        specifier: workspace:*
-        version: link:../database
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
@@ -883,6 +877,12 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
+      '@synap-core/core':
+        specifier: workspace:*
+        version: link:../core
+      '@synap/database':
+        specifier: workspace:*
+        version: link:../database
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.28
@@ -14493,35 +14493,6 @@ snapshots:
       tree-kill: 1.2.2
     optionalDependencies:
       '@microsoft/api-extractor': 7.55.2(@types/node@24.10.7)
-      postcss: 8.5.6
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - jiti
-      - supports-color
-      - tsx
-      - yaml
-
-  tsup@8.5.1(@microsoft/api-extractor@7.55.2(@types/node@25.0.7))(jiti@2.6.1)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2):
-    dependencies:
-      bundle-require: 5.1.0(esbuild@0.27.2)
-      cac: 6.7.14
-      chokidar: 4.0.3
-      consola: 3.4.2
-      debug: 4.4.3
-      esbuild: 0.27.2
-      fix-dts-default-cjs-exports: 1.0.1
-      joycon: 3.1.1
-      picocolors: 1.1.1
-      postcss-load-config: 6.0.1(jiti@2.6.1)(postcss@8.5.6)(tsx@4.21.0)(yaml@2.8.2)
-      resolve-from: 5.0.0
-      rollup: 4.55.1
-      source-map: 0.7.6
-      sucrase: 3.35.1
-      tinyexec: 0.3.2
-      tinyglobby: 0.2.15
-      tree-kill: 1.2.2
-    optionalDependencies:
-      '@microsoft/api-extractor': 7.55.2(@types/node@25.0.7)
       postcss: 8.5.6
       typescript: 5.9.3
     transitivePeerDependencies:
