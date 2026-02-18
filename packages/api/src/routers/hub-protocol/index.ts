@@ -22,6 +22,7 @@ import { branchesRouter } from "./branches.js";
 import { linkingRouter } from "./linking.js";
 import { skillsRouter } from "./skills.js";
 import { backgroundTasksRouter } from "./background-tasks.js";
+import { proposalsRouter } from "./proposals.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -40,4 +41,5 @@ export const hubProtocolRouter = router({
   linking: linkingRouter,
   skills: skillsRouter,
   backgroundTasks: backgroundTasksRouter,
+  proposals: proposalsRouter,
 });

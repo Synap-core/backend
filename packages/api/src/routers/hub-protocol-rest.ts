@@ -162,10 +162,12 @@ app.get("/users/:userId/entities", async (c) => {
   const userId = c.req.param("userId");
   const type = c.req.query("type");
   const limit = c.req.query("limit");
+  const workspaceId = c.req.query("workspaceId") || null;
   try {
-    const caller = await getCaller(c);
+    const caller = await getCaller(c, { workspaceId });
     const result = await (caller as any).entities.getEntities({
       userId,
+      workspaceId: workspaceId || undefined,
       type: type || undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
@@ -261,6 +263,48 @@ app.patch("/entities/:entityId", async (c) => {
 });
 
 /**
+ * GET /search/collection?userId=...&collection=entities&query=...&workspaceId=...
+ */
+app.get("/search/collection", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const collection = c.req.query("collection");
+  const query = c.req.query("query");
+  const workspaceId = c.req.query("workspaceId");
+  const limit = c.req.query("limit");
+  const page = c.req.query("page");
+  if (!userId || !query || !collection) {
+    return c.json({ error: "userId, collection and query are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).search.searchCollection({
+      userId,
+      collection: collection as
+        | "entities"
+        | "documents"
+        | "views"
+        | "projects"
+        | "chat_threads"
+        | "agents",
+      query,
+      workspaceId: workspaceId || undefined,
+      limit: limit ? parseInt(limit, 10) : 20,
+      page: page ? parseInt(page, 10) : 1,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "searchCollection failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
  * GET /search
  */
 app.get("/search", async (c) => {
@@ -298,6 +342,76 @@ app.get("/search", async (c) => {
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "search failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /search/documents?userId=...&query=...&type=...&limit=...
+ */
+app.get("/search/documents", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const query = c.req.query("query");
+  const type = c.req.query("type");
+  const limit = c.req.query("limit");
+  if (!userId || !query) {
+    return c.json({ error: "userId and query are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).search.searchDocuments({
+      userId,
+      query,
+      type: type as
+        | "text"
+        | "markdown"
+        | "code"
+        | "pdf"
+        | "docx"
+        | undefined,
+      limit: limit ? parseInt(limit, 10) : 20,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "searchDocuments failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /vector-search?userId=...&query=...&types=...&limit=...
+ */
+app.get("/vector-search", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const query = c.req.query("query");
+  const types = c.req.query("types"); // comma-separated
+  const limit = c.req.query("limit");
+  if (!userId || !query) {
+    return c.json({ error: "userId and query are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).search.vectorSearch({
+      userId,
+      query,
+      types: types ? types.split(",") : undefined,
+      limit: limit ? parseInt(limit, 10) : 10,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "vectorSearch failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500
@@ -400,6 +514,219 @@ app.post("/documents/proposals", async (c) => {
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500
+    );
+  }
+});
+
+/**
+ * GET /proposals?userId=...&workspaceId=...&status=...
+ */
+app.get("/proposals", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope" }, 403);
+  }
+  const userId = c.req.query("userId") || (c.get("userId") as string);
+  const workspaceId = c.req.query("workspaceId");
+  const status = (c.req.query("status") as "pending" | "approved" | "rejected" | "all") || "pending";
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).proposals.listProposals({
+      userId,
+      workspaceId,
+      status,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "listProposals failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * PATCH /proposals/:id
+ * AI revises a pending proposal (no event pipeline re-run)
+ * Body: { data: {...}, summary?: string }
+ */
+app.patch("/proposals/:id", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const proposalId = c.req.param("id");
+  const body = (await c.req.json()) as {
+    data: Record<string, unknown>;
+    summary?: string;
+  };
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).proposals.updateProposal({
+      proposalId,
+      data: body.data,
+      summary: body.summary,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, proposalId }, "updateProposal failed");
+    const code = (err as any)?.code === "NOT_FOUND" ? 404 :
+                 (err as any)?.code === "BAD_REQUEST" ? 400 : 500;
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      code
+    );
+  }
+});
+
+/**
+ * GET /skills/getSkills?userId=...&workspaceId=...&status=...
+ */
+app.get("/skills/getSkills", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope" }, 403);
+  }
+  const userId = c.req.query("userId") || (c.get("userId") as string);
+  const workspaceId = c.req.query("workspaceId");
+  const status = c.req.query("status");
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).skills.getSkills({
+      userId,
+      workspaceId: workspaceId || undefined,
+      status: (status as "active" | "inactive" | "error" | "all") || "all",
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "getSkills failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /skills/getSkill?userId=...&skillId=...
+ */
+app.get("/skills/getSkill", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope" }, 403);
+  }
+  const userId = c.req.query("userId") || (c.get("userId") as string);
+  const skillId = c.req.query("skillId");
+  if (!skillId) {
+    return c.json({ error: "skillId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).skills.getSkill({ userId, skillId });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "getSkill failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /skills/createSkill
+ */
+app.post("/skills/createSkill", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope" }, 403);
+  }
+  const body = await c.req.json<{
+    userId: string;
+    name: string;
+    description?: string;
+    code: string;
+    parameters?: Record<string, unknown>;
+    category?: "action" | "context" | "utility" | "custom";
+    workspaceId?: string;
+  }>();
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).skills.createSkill(body);
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "createSkill failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /threads/:threadId/link-entity
+ * Links an entity to a thread (context tracking, fast-path, idempotent)
+ * Body: { userId, entityId, relationshipType?, sourceMessageId? }
+ */
+app.post("/threads/:threadId/link-entity", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const threadId = c.req.param("threadId");
+  const body = (await c.req.json()) as {
+    userId: string;
+    entityId: string;
+    relationshipType?: string;
+    sourceMessageId?: string;
+  };
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).linking.linkEntity({
+      userId: body.userId,
+      threadId,
+      entityId: body.entityId,
+      relationshipType: body.relationshipType ?? "referenced",
+      sourceMessageId: body.sourceMessageId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, threadId }, "linkEntity failed");
+    const code = (err as any)?.message?.includes("not found") ? 404 : 500;
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      code
+    );
+  }
+});
+
+/**
+ * POST /threads/:threadId/link-document
+ * Links a document to a thread (context tracking, fast-path, idempotent)
+ * Body: { userId, documentId, relationshipType?, sourceMessageId? }
+ */
+app.post("/threads/:threadId/link-document", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const threadId = c.req.param("threadId");
+  const body = (await c.req.json()) as {
+    userId: string;
+    documentId: string;
+    relationshipType?: string;
+    sourceMessageId?: string;
+  };
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).linking.linkDocument({
+      userId: body.userId,
+      threadId,
+      documentId: body.documentId,
+      relationshipType: body.relationshipType ?? "referenced",
+      sourceMessageId: body.sourceMessageId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, threadId }, "linkDocument failed");
+    const code = (err as any)?.message?.includes("not found") ? 404 : 500;
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      code
     );
   }
 });

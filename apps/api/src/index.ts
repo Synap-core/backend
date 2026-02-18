@@ -351,6 +351,8 @@ app.route("/webhooks", webhookRouter);
 
 // Hub Protocol REST adapter (for Intelligence Service; API key auth)
 app.route("/api/hub", hubProtocolRestApp);
+// Alias: some hub clients use /api/hub-protocol prefix
+app.route("/api/hub-protocol", hubProtocolRestApp);
 
 // tRPC endpoint
 app.use(

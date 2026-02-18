@@ -132,6 +132,8 @@ export async function emitRequestEvent(input: EmitEventInput): Promise<void> {
     });
 
     // 2. Log to event repository
+    // The event processor polls the DB and forwards requested events to Inngest.
+    // Do NOT also call inngest.send() here — that would cause double processing.
     await eventRepo.append({
       id: requestedEvent.id,
       version: requestedEvent.version,
@@ -149,13 +151,6 @@ export async function emitRequestEvent(input: EmitEventInput): Promise<void> {
         | "system"
         | "intelligence",
       timestamp: requestedEvent.timestamp,
-    });
-
-    // 3. Send to GlobalValidator
-    await inngest.send({
-      name: requestedEvent.type,
-      data: requestedEvent.data,
-      user: { id: input.userId },
     });
   } else {
     // FAST PATH: Skip validation, go directly to executor
