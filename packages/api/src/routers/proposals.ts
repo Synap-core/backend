@@ -10,11 +10,11 @@ import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, proposals, documents, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import type { StoredProposalData } from "@synap-core/types";
 import {
-  type StoredProposalData,
   isDocumentContentProposalData,
   isRequestShapedProposalData,
-} from "@synap-core/types";
+} from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 
