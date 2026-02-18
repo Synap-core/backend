@@ -7,7 +7,7 @@
  * automated with an event bus/dispatcher system.
  */
 
-import { db, events, asc, gt } from "@synap/database";
+import { db, sql as pgSql, events, asc, gt } from "@synap/database";
 import { handleInboxItemReceived } from "./inbox-storage.js";
 import { handleInboxItemIntelligence } from "./inbox-intelligence.js";
 import { handleInboxItemAnalyzed } from "./inbox-analysis.js";
@@ -16,12 +16,61 @@ import { extractEventInfo, type UnifiedEventData } from "@synap/jobs";
 
 const logger = createLogger({ module: "event-handlers" });
 
+const WATERMARK_KEY = "event_processor_watermark";
+
 /**
  * Watermark: only forward events newer than this timestamp to Inngest.
- * Initialized to epoch so existing unprocessed events are forwarded once on startup.
- * Updated after each poll to the newest event's timestamp.
+ * Persisted in system_settings so restarts don't replay old events.
+ * Initialized to epoch until loadWatermark() runs on startup.
  */
 let lastForwardedTimestamp: Date = new Date(0);
+
+/**
+ * Load the persisted watermark from the database.
+ * On first run (no persisted value), initializes to the current latest event
+ * so we don't replay the entire event history on startup.
+ */
+async function loadWatermark(): Promise<void> {
+  try {
+    const rows = await pgSql<{ value: string }[]>`
+      SELECT value FROM system_settings WHERE key = ${WATERMARK_KEY}
+    `;
+    if (rows.length > 0) {
+      lastForwardedTimestamp = new Date(rows[0].value);
+      logger.info({ watermark: lastForwardedTimestamp }, "Loaded event watermark from DB");
+    } else {
+      // First run — skip historical events by starting at the latest known event.
+      // Events that were already processed before this deployment are already
+      // reflected in DB tables; re-replaying them would cause duplicates.
+      const latest = await pgSql<{ max_ts: string | null }[]>`
+        SELECT MAX(timestamp)::text AS max_ts FROM events
+      `;
+      const startAt = latest[0]?.max_ts ? new Date(latest[0].max_ts) : new Date();
+      lastForwardedTimestamp = startAt;
+      await saveWatermark(startAt);
+      logger.info({ watermark: startAt }, "First run — initialized watermark to latest event");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Could not load watermark from DB — starting from epoch");
+  }
+}
+
+/**
+ * Persist the current watermark to the database.
+ */
+async function saveWatermark(ts: Date): Promise<void> {
+  try {
+    await pgSql`
+      INSERT INTO system_settings (key, value, updated_at)
+      VALUES (${WATERMARK_KEY}, ${ts.toISOString()}, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value,
+            updated_at = EXCLUDED.updated_at
+    `;
+  } catch (err) {
+    logger.warn({ err }, "Could not persist watermark to DB");
+  }
+}
 
 /**
  * Process all unprocessed events
@@ -183,6 +232,8 @@ export async function processEvents() {
           { watermark: lastForwardedTimestamp, count: latestEvents.length },
           "Advanced event watermark"
         );
+        // Persist watermark so restarts don't replay old events
+        await saveWatermark(lastForwardedTimestamp);
       }
     }
 
@@ -199,6 +250,9 @@ export async function processEvents() {
  */
 export async function startEventProcessor() {
   logger.info("Starting event processor...");
+
+  // Load persisted watermark before first poll so we don't replay old events
+  await loadWatermark();
 
   const poll = async () => {
     const start = Date.now();

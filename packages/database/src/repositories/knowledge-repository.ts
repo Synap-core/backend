@@ -33,6 +33,12 @@ export interface SearchKnowledgeFactsInput {
   limit?: number;
 }
 
+export interface SearchSemanticInput {
+  userId: string;
+  embedding: number[];
+  limit?: number;
+}
+
 type MemoryStore = Map<string, KnowledgeFactRecord[]>;
 
 export class KnowledgeRepository {
@@ -93,6 +99,25 @@ export class KnowledgeRepository {
     this.memoryStore.set(input.userId, store);
 
     return factRecord;
+  }
+
+  async searchFactsSemantic(
+    input: SearchSemanticInput
+  ): Promise<KnowledgeFactRecord[]> {
+    const { userId, embedding, limit = 10 } = input;
+    this.ensureEmbeddingDimensions(embedding);
+    const vec = this.embedToPgVector(embedding);
+
+    const result = await sql<Record<string, unknown>[]>`
+      SELECT *,
+        (1 - (embedding <=> ${vec}::vector)) AS relevance_score
+      FROM knowledge_facts
+      WHERE user_id = ${userId}
+      ORDER BY embedding <=> ${vec}::vector
+      LIMIT ${limit}
+    `;
+
+    return result.map((row) => this.mapRow(row));
   }
 
   async searchFacts(

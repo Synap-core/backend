@@ -31,9 +31,14 @@ export const contextRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Look up the thread's userId and workspaceId for inner caller context
+      // Look up the thread's userId, workspaceId, contextSummary and metadata
       const thread = await db
-        .select({ userId: chatThreads.userId, workspaceId: chatThreads.workspaceId })
+        .select({
+          userId: chatThreads.userId,
+          workspaceId: chatThreads.workspaceId,
+          contextSummary: chatThreads.contextSummary,
+          metadata: chatThreads.metadata,
+        })
         .from(chatThreads)
         .where(eq(chatThreads.id, input.threadId))
         .limit(1)
@@ -112,6 +117,8 @@ export const contextRouter = router({
           projectId: undefined,
           agentId: threadResult.thread.agentId || undefined,
         },
+        contextSummary: thread?.contextSummary ?? null,
+        metadata: thread?.metadata ?? null,
         messages: messagesResult.messages.map((m) => ({
           id: m.id,
           role: m.role,

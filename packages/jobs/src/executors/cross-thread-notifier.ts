@@ -76,30 +76,19 @@ export const crossThreadEntityNotifier = inngest.createFunction(
       const entityType = entity?.type || "entity";
 
       // Insert a system notification message in each linked thread
-      const notifications = linkedRows.map((row) => {
-        const content = `📝 The ${entityType} "${entityLabel}" was updated in another conversation. You may want to review the latest changes.`;
-        return {
+      for (const row of linkedRows) {
+        const content = `[Cross-thread update] The ${entityType} "${entityLabel}" was updated in another conversation.`;
+        await db.insert(conversationMessages).values({
           id: randomUUID(),
           threadId: row.threadId,
-          role: "system" as const,
+          role: "system",
           content,
           userId: row.userId || "system",
           hash: computeMessageHash(row.threadId, content, "system"),
-          metadata: {
-            type: "cross_thread_notification",
-            entityId,
-            entityLabel,
-            entityType,
-            updatedAt: new Date().toISOString(),
-          },
-        };
-      });
-
-      for (const msg of notifications) {
-        await db.insert(conversationMessages).values(msg);
+        });
       }
 
-      return { notified: notifications.length, entityId, entityLabel };
+      return { notified: linkedRows.length, entityId, entityLabel };
     });
   }
 );
@@ -155,29 +144,19 @@ export const crossThreadDocumentNotifier = inngest.createFunction(
 
       const docLabel = doc?.title || documentId;
 
-      const notifications = linkedRows.map((row) => {
-        const content = `📄 The document "${docLabel}" was updated in another conversation. You may want to review the latest changes.`;
-        return {
+      for (const row of linkedRows) {
+        const content = `[Cross-thread update] The document "${docLabel}" was updated in another conversation.`;
+        await db.insert(conversationMessages).values({
           id: randomUUID(),
           threadId: row.threadId,
-          role: "system" as const,
+          role: "system",
           content,
           userId: row.userId || "system",
           hash: computeMessageHash(row.threadId, content, "system"),
-          metadata: {
-            type: "cross_thread_notification",
-            documentId,
-            documentLabel: docLabel,
-            updatedAt: new Date().toISOString(),
-          },
-        };
-      });
-
-      for (const msg of notifications) {
-        await db.insert(conversationMessages).values(msg);
+        });
       }
 
-      return { notified: notifications.length, documentId, docLabel };
+      return { notified: linkedRows.length, documentId, docLabel };
     });
   }
 );
