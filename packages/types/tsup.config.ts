@@ -18,5 +18,13 @@ export default defineConfig({
   format: ["esm"],
   dts: false,
   clean: true,
-  external: ["yjs"],
+  external: [
+    "yjs",
+    "@synap/database",
+    "@synap-core/core",
+    "pino",
+    "pino-pretty",
+    "os",
+    /^node:/,
+  ],
 });
