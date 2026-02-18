@@ -171,6 +171,18 @@ presenceNamespace.on("connection", (socket) => {
     socket.emit("presence:update", activeUsers);
   });
 
+  // Event: Dynamic room join/leave (so clients can subscribe to extra rooms after connection)
+  socket.on("join-room", (roomId: string) => {
+    if (typeof roomId === "string" && roomId.length > 0) {
+      socket.join(roomId);
+    }
+  });
+  socket.on("leave-room", (roomId: string) => {
+    if (typeof roomId === "string") {
+      socket.leave(roomId);
+    }
+  });
+
   // Event: Disconnect
   socket.on("disconnect", () => {
     console.log(`[Presence] Client disconnected: ${socket.id}`);

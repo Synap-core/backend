@@ -3780,7 +3780,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				name: string;
-				type: "calendar" | "list" | "table" | "whiteboard" | "graph" | "grid" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento";
+				type: "calendar" | "list" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento";
 				workspaceId?: string | undefined;
 				description?: string | undefined;
 				scopeProfileIds?: string[] | undefined;
@@ -3803,7 +3803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: `${string}-${string}-${string}-${string}-${string}`;
 					workspaceId: string | undefined;
 					userId: string;
-					type: "calendar" | "list" | "table" | "whiteboard" | "graph" | "grid" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento";
+					type: "calendar" | "list" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento";
 					category: ViewCategory;
 					name: string;
 					description: string | undefined;
@@ -3823,7 +3823,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "grid" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
 			};
 			output: {
 				name: string;
@@ -4049,7 +4049,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				embeddedViewIds?: string[] | undefined;
 				schemaSnapshot?: Record<string, any> | undefined;
 				snapshotUpdatedAt?: Date | undefined;
-				type?: "calendar" | "list" | "table" | "whiteboard" | "graph" | "grid" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento" | undefined;
+				type?: "calendar" | "list" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento" | undefined;
 			};
 			output: {
 				status: string;
@@ -4124,7 +4124,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					animations?: {
 						enabled?: boolean | undefined;
-						speed?: "slow" | "normal" | "fast" | undefined;
+						speed?: "normal" | "slow" | "fast" | undefined;
 					} | undefined;
 				} | undefined;
 				defaultTemplates?: Record<string, string> | undefined;
@@ -4140,7 +4140,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					compactMode?: boolean | undefined;
 					fontSize?: string | undefined;
 					animations?: boolean | undefined;
-					defaultView?: "list" | "grid" | "timeline" | undefined;
+					defaultView?: "list" | "timeline" | "grid" | undefined;
 					entityOpenMode?: "floating" | "side" | "modal" | undefined;
 				} | undefined;
 				graphPreferences?: {
@@ -4190,7 +4190,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					animations?: {
 						enabled?: boolean | undefined;
-						speed?: "slow" | "normal" | "fast" | undefined;
+						speed?: "normal" | "slow" | "fast" | undefined;
 					} | undefined;
 				} | undefined;
 			};

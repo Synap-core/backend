@@ -153,9 +153,13 @@ export interface DomainServerToClientEvents {
 
 /**
  * Events clients can send to server.
+ * Presence namespace: join/leave-room for dynamic room subscription; join/leave-workspace and join/leave-document are semantic aliases (server may map to same rooms).
  */
 export interface DomainClientToServerEvents {
-  // Room management
+  // Room management (generic; server joins/leaves Socket.IO rooms by id)
+  "join-room": (roomId: string) => void;
+  "leave-room": (roomId: string) => void;
+  // Semantic room management (optional; server can map to join-room)
   "join-workspace": (workspaceId: string) => void;
   "leave-workspace": (workspaceId: string) => void;
   "join-document": (documentId: string) => void;

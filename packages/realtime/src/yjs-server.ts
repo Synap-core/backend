@@ -236,7 +236,7 @@ class DatabasePersistence {
 export function setupYjsServer(
   config: YjsServerConfig
 ): YSocketIO & { documents: Map<string, Y.Doc> } {
-  const { io, persistenceInterval = 30000 } = config;
+  const { io, persistenceInterval = 5000 } = config;
   const persistence = new DatabasePersistence();
 
   console.log("[Yjs] Initializing y-socket.io server...");
