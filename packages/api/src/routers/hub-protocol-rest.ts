@@ -10,6 +10,7 @@ import { createLogger } from "@synap-core/core";
 import { apiKeyService } from "../services/api-keys.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
+import { db, conversationMessages, chatThreads, knowledgeFacts, eq, asc, knowledgeRepository, drizzleSql, traverseEntityGraph } from "@synap/database";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -73,9 +74,11 @@ app.use("/*", async (c, next) => {
  */
 async function getCaller(
   c: { get: (key: string) => unknown },
-  options?: { workspaceId?: string | null }
+  options?: { workspaceId?: string | null; userId?: string }
 ) {
-  const userId = c.get("userId") as string;
+  // For workspace-scoped calls the body userId (real user) must be used,
+  // not the API key's userId ("system"), so the membership check passes.
+  const userId = options?.userId ?? (c.get("userId") as string);
   const scopes = c.get("scopes") as string[];
   const ctx = await createHubProtocolCallerContext(
     userId,
@@ -108,19 +111,32 @@ app.get("/threads/:threadId/context", async (c) => {
 
 /**
  * PATCH /threads/:threadId/context
+ * Accepts: { contextSummary?: string; personalityFingerprint?: string }
  */
 app.patch("/threads/:threadId/context", async (c) => {
   if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
   const threadId = c.req.param("threadId");
-  const body = (await c.req.json()) as { contextSummary?: string };
+  const body = (await c.req.json()) as { contextSummary?: string; personalityFingerprint?: string };
   try {
-    const caller = await getCaller(c);
-    await (caller as any).context.updateThreadContext({
-      threadId,
-      contextSummary: body.contextSummary ?? "",
-    });
+    if (body.contextSummary !== undefined) {
+      const caller = await getCaller(c);
+      await (caller as any).context.updateThreadContext({
+        threadId,
+        contextSummary: body.contextSummary ?? "",
+      });
+    }
+    if (body.personalityFingerprint !== undefined) {
+      await db.update(chatThreads)
+        .set({
+          metadata: drizzleSql`COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+            'personalityFingerprint', ${body.personalityFingerprint},
+            'personalityFingerprintAt', ${new Date().toISOString()}
+          )`,
+        })
+        .where(eq(chatThreads.id, threadId));
+    }
     return c.json({ success: true });
   } catch (err) {
     logger.error({ err, threadId }, "updateThreadContext failed");
@@ -204,7 +220,7 @@ app.post("/entities", async (c) => {
     );
   }
   try {
-    const caller = await getCaller(c, { workspaceId: body.workspaceId });
+    const caller = await getCaller(c, { workspaceId: body.workspaceId, userId: body.userId });
     const result = await (caller as any).entities.createEntity({
       userId: body.userId,
       type: body.type,
@@ -244,7 +260,7 @@ app.patch("/entities/:entityId", async (c) => {
     );
   }
   try {
-    const caller = await getCaller(c, { workspaceId: body.workspaceId });
+    const caller = await getCaller(c, { workspaceId: body.workspaceId, userId: body.userId });
     await (caller as any).entities.updateEntity({
       entityId,
       userId: body.userId,
@@ -728,6 +744,258 @@ app.post("/threads/:threadId/link-document", async (c) => {
       { error: err instanceof Error ? err.message : "Unknown error" },
       code
     );
+  }
+});
+
+/**
+ * POST /threads
+ * Creates a new chat thread.
+ * Body: { userId, workspaceId, title?, parentThreadId?, agentType?, branchPurpose? }
+ */
+app.post("/threads", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId: string;
+    title?: string;
+    parentThreadId?: string;
+    agentType?: string;
+    branchPurpose?: string;
+  };
+  // Map agent type to valid DB enum (research maps to default — not in schema enum)
+  const VALID_AGENT_TYPES = new Set(["default", "meta", "prompting", "knowledge-search", "code", "writing", "action"]);
+  const resolvedAgentType = body.agentType && VALID_AGENT_TYPES.has(body.agentType)
+    ? (body.agentType as any)
+    : "default";
+  try {
+    const { randomUUID } = await import("crypto");
+    const threadId = randomUUID();
+    const [thread] = await db
+      .insert(chatThreads)
+      .values({
+        id: threadId,
+        userId: body.userId,
+        workspaceId: body.workspaceId,
+        title: body.title ?? "New Thread",
+        parentThreadId: body.parentThreadId ?? null,
+        agentType: resolvedAgentType,
+        branchPurpose: body.branchPurpose ?? null,
+      })
+      .returning();
+    return c.json({ id: thread.id, title: thread.title });
+  } catch (err) {
+    logger.error({ err }, "createThread failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * GET /threads/:threadId/messages
+ * Returns conversation messages for a thread (system + assistant + user roles).
+ */
+app.get("/threads/:threadId/messages", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const threadId = c.req.param("threadId");
+  try {
+    const msgs = await db
+      .select({
+        id: conversationMessages.id,
+        role: conversationMessages.role,
+        content: conversationMessages.content,
+        userId: conversationMessages.userId,
+        timestamp: conversationMessages.timestamp,
+      })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.threadId, threadId))
+      .orderBy(asc(conversationMessages.timestamp));
+    return c.json(msgs);
+  } catch (err) {
+    logger.error({ err, threadId }, "getThreadMessages failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * POST /threads/:threadId/messages
+ * Inject a system or assistant message into a thread (used by sub-agents to report back).
+ * Body: { role: "system" | "assistant", content: string, userId: string }
+ */
+app.post("/threads/:threadId/messages", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const threadId = c.req.param("threadId");
+  const body = (await c.req.json()) as {
+    role: "system" | "assistant";
+    content: string;
+    userId: string;
+  };
+  if (!body.role || !body.content || !body.userId) {
+    return c.json({ error: "role, content, and userId are required" }, 400);
+  }
+  try {
+    const { randomUUID, createHash } = await import("crypto");
+    const hash = createHash("sha256")
+      .update(JSON.stringify({ threadId, content: body.content, role: body.role }))
+      .digest("hex");
+    await db.insert(conversationMessages).values({
+      id: randomUUID(),
+      threadId,
+      role: body.role,
+      content: body.content,
+      userId: body.userId,
+      hash,
+    });
+    return c.json({ success: true });
+  } catch (err) {
+    logger.error({ err, threadId }, "postMessage failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * POST /memory
+ * Store a knowledge fact (embedding generated by caller)
+ * Body: { userId, fact, confidence?, embedding: number[], sourceEntityId?, sourceMessageId? }
+ */
+app.post("/memory", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    fact: string;
+    confidence?: number;
+    embedding: number[];
+    sourceEntityId?: string;
+    sourceMessageId?: string;
+  };
+  if (!body.userId || !body.fact || !Array.isArray(body.embedding)) {
+    return c.json({ error: "userId, fact, and embedding are required" }, 400);
+  }
+  try {
+    const record = await knowledgeRepository.saveFact({
+      userId: body.userId,
+      fact: body.fact,
+      confidence: body.confidence ?? 0.8,
+      embedding: body.embedding,
+      sourceEntityId: body.sourceEntityId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    return c.json(record);
+  } catch (err) {
+    logger.error({ err }, "saveFact failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * GET /memory?userId=...&query=...&limit=...
+ * Search knowledge facts by keyword relevance
+ */
+app.get("/memory", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const query = c.req.query("query") ?? "";
+  const limit = parseInt(c.req.query("limit") ?? "10", 10);
+  if (!userId) {
+    return c.json({ error: "userId is required" }, 400);
+  }
+  try {
+    const facts = await knowledgeRepository.searchFacts({ userId, query, limit });
+    return c.json(facts);
+  } catch (err) {
+    logger.error({ err }, "searchFacts failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * POST /memory/search
+ * Semantic (cosine distance) search for knowledge facts using a pre-computed embedding.
+ * Body: { userId: string; embedding: number[]; limit?: number }
+ */
+app.post("/memory/search", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const body = await c.req.json<{ userId: string; embedding: number[]; limit?: number }>();
+  if (!body.userId || !Array.isArray(body.embedding)) {
+    return c.json({ error: "userId and embedding are required" }, 400);
+  }
+  try {
+    const facts = await knowledgeRepository.searchFactsSemantic({
+      userId: body.userId,
+      embedding: body.embedding,
+      limit: body.limit,
+    });
+    return c.json(facts);
+  } catch (err) {
+    logger.error({ err }, "searchFactsSemantic failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * DELETE /memory/:id?userId=...
+ * Delete a knowledge fact (userId guard for safety)
+ */
+app.delete("/memory/:id", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+  }
+  const id = c.req.param("id");
+  const userId = c.req.query("userId");
+  if (!userId) {
+    return c.json({ error: "userId query is required" }, 400);
+  }
+  try {
+    await db
+      .delete(knowledgeFacts)
+      .where(eq(knowledgeFacts.id, id));
+    return c.json({ success: true });
+  } catch (err) {
+    logger.error({ err, id }, "deleteFact failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * GET /graph/traverse?userId=...&startEntityId=...&maxDepth=2&relationshipTypes=...
+ * Traverse the entity relation graph via BFS from a starting entity.
+ * Returns all reachable entities within maxDepth hops.
+ */
+app.get("/graph/traverse", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const startEntityId = c.req.query("startEntityId");
+  const maxDepth = parseInt(c.req.query("maxDepth") ?? "2", 10);
+  const relTypesParam = c.req.query("relationshipTypes");
+  const relationshipTypes = relTypesParam ? relTypesParam.split(",").filter(Boolean) : undefined;
+
+  if (!userId || !startEntityId) {
+    return c.json({ error: "userId and startEntityId are required" }, 400);
+  }
+
+  try {
+    const results = await traverseEntityGraph({
+      userId,
+      startEntityId,
+      maxDepth: Math.min(maxDepth, 3),
+      relationshipTypes,
+    });
+    return c.json(results);
+  } catch (err) {
+    logger.error({ err }, "traverseGraph failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }
 });
 
