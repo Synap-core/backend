@@ -4,6 +4,7 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 
@@ -39,8 +40,13 @@ export function useAuth(): AuthState {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const didCheck = useRef(false);
 
   useEffect(() => {
+    // Guard against StrictMode double-fire
+    if (didCheck.current) return;
+    didCheck.current = true;
+
     // In dev mode with test user, skip Kratos check
     if (IS_DEV) {
       setUser({
@@ -72,13 +78,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             name: identity.traits?.name,
           });
         }
+        setIsLoading(false);
       })
       .catch(() => {
         // Kratos unreachable — redirect to login
         const returnTo = encodeURIComponent(window.location.href);
         window.location.href = `${API_URL}/.ory/kratos/public/self-service/login/browser?return_to=${returnTo}`;
-      })
-      .finally(() => setIsLoading(false));
+      });
+    // Don't setIsLoading(false) on redirect paths — page is navigating away
   }, []);
 
   const logout = useCallback(() => {
@@ -93,7 +100,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
         }
-        // Fallback: clear state and redirect to login
         setUser(null);
         window.location.href = `${API_URL}/.ory/kratos/public/self-service/login/browser`;
       })
@@ -112,7 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
       }}
     >
-      {children}
+      {/* Don't render children until auth check completes — prevents premature queries */}
+      {isLoading ? null : children}
     </AuthContext.Provider>
   );
 }

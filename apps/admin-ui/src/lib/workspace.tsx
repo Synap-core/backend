@@ -4,10 +4,10 @@ import {
   useEffect,
   useState,
   useCallback,
+  useMemo,
   type ReactNode,
 } from "react";
 import { trpc } from "./trpc";
-import { useAuth } from "./auth";
 
 const STORAGE_KEY = "synap_workspace_id";
 
@@ -39,33 +39,33 @@ export function useWorkspace(): WorkspaceState {
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
   const [workspaceId, setWorkspaceIdState] = useState<string | null>(
     () => localStorage.getItem(STORAGE_KEY)
   );
 
-  const { data: workspacesRaw, isLoading } = trpc.workspaces.list.useQuery(
-    undefined,
-    { enabled: isAuthenticated }
-  );
+  // Auth is guaranteed by AuthProvider gating children — always enabled here
+  const { data: workspacesRaw, isLoading } = trpc.workspaces.list.useQuery();
 
-  const workspaces: Workspace[] = (workspacesRaw ?? []).map((w) => ({
-    id: w.id,
-    name: w.name,
-    type: w.type,
-    role: w.role,
-  }));
+  const workspaces: Workspace[] = useMemo(
+    () =>
+      (workspacesRaw ?? []).map((w) => ({
+        id: w.id,
+        name: w.name,
+        type: w.type,
+        role: w.role,
+      })),
+    [workspacesRaw]
+  );
 
   // Auto-select first workspace if none stored or stored one is invalid
   useEffect(() => {
-    if (!isLoading && workspaces.length > 0) {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      const valid = workspaces.some((w) => w.id === stored);
-      if (!stored || !valid) {
-        const first = workspaces[0].id;
-        localStorage.setItem(STORAGE_KEY, first);
-        setWorkspaceIdState(first);
-      }
+    if (isLoading || workspaces.length === 0) return;
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const valid = workspaces.some((w) => w.id === stored);
+    if (!stored || !valid) {
+      const first = workspaces[0].id;
+      localStorage.setItem(STORAGE_KEY, first);
+      setWorkspaceIdState(first);
     }
   }, [isLoading, workspaces]);
 
@@ -76,16 +76,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const currentWorkspace = workspaces.find((w) => w.id === workspaceId);
 
+  const value = useMemo(
+    () => ({
+      workspaceId,
+      workspaceRole: currentWorkspace?.role ?? null,
+      workspaces,
+      isLoading,
+      setWorkspace,
+    }),
+    [workspaceId, currentWorkspace?.role, workspaces, isLoading, setWorkspace]
+  );
+
   return (
-    <WorkspaceContext.Provider
-      value={{
-        workspaceId,
-        workspaceRole: currentWorkspace?.role ?? null,
-        workspaces,
-        isLoading,
-        setWorkspace,
-      }}
-    >
+    <WorkspaceContext.Provider value={value}>
       {children}
     </WorkspaceContext.Provider>
   );

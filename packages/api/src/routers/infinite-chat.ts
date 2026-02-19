@@ -361,6 +361,17 @@ export const infiniteChatRouter = router({
             hubResponse.entities = chunk.entities;
           } else if (chunk.type === "branch_decision" && chunk.decision) {
             hubResponse.branchDecision = chunk.decision;
+
+            emitChatEvent({
+              event: "branch_decision",
+              data: {
+                threadId,
+                messageId: userMessageId,
+                decision: chunk.decision,
+              },
+              workspaceId: workspaceId ?? null,
+              userId: ctx.userId,
+            });
           } else if (chunk.type === "complete") {
             if (chunk.data) {
               const data = chunk.data as Partial<HubResponse>;
@@ -557,6 +568,7 @@ export const infiniteChatRouter = router({
               title: entity.title,
               preview: entity.description,
               userId: ctx.userId,
+              workspaceId: workspaceId ?? ctx.workspaceId,
               source: "chat-extraction",
             },
             user: { id: ctx.userId },
