@@ -1,0 +1,362 @@
+/**
+ * Secrets Vault Schema - Drizzle ORM
+ *
+ * Secure storage for passwords, API keys, and sensitive credentials.
+ * Based on industry best practices from 1Password, Bitwarden, and AWS Secrets Manager.
+ *
+ * Security Model:
+ * - Client-side encryption (AES-256-GCM)
+ * - Server never sees plaintext secrets
+ * - Zero-knowledge architecture
+ * - Complete audit trail
+ */
+
+import {
+  pgTable,
+  pgEnum,
+  uuid,
+  text,
+  boolean,
+  timestamp,
+  integer,
+  jsonb,
+  unique,
+  index,
+} from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
+import { users } from "./users.js";
+import { workspaces } from "./workspaces.js";
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+export const secretTypeEnum = pgEnum("secret_type", [
+  "password", // Website/app passwords
+  "api_key", // API keys & tokens
+  "credential", // Username/password pairs
+  "note", // Secure notes
+  "card", // Payment cards
+  "identity", // Personal identity info
+  "ssh_key", // SSH keys
+  "certificate", // SSL/TLS certificates
+  "env_variable", // Environment variables
+  "database", // Database connection strings
+  "oauth", // OAuth tokens
+]);
+
+export const SECRET_TYPES = [
+  "password",
+  "api_key",
+  "credential",
+  "note",
+  "card",
+  "identity",
+  "ssh_key",
+  "certificate",
+  "env_variable",
+  "database",
+  "oauth",
+] as const;
+
+export type SecretType = (typeof SECRET_TYPES)[number];
+
+// ============================================================================
+// Secrets Table
+// ============================================================================
+
+/**
+ * Main secrets table
+ *
+ * Stores encrypted secrets with metadata for organization and search.
+ * The encryptedData field contains a client-encrypted JSON blob.
+ */
+export const secrets = pgTable(
+  "secrets",
+  {
+    // Primary Key
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    // Ownership
+    userId: text("user_id").notNull(),
+    workspaceId: uuid("workspace_id"),
+
+    // Secret Metadata (searchable, not encrypted)
+    name: text("name").notNull(),
+    type: secretTypeEnum("type").notNull().default("password"),
+    url: text("url"), // For autofill matching (domain-based)
+    category: text("category"), // User-defined category
+    description: text("description"), // Optional description
+    iconUrl: text("icon_url"), // Favicon or custom icon
+
+    // Encrypted Payload (AES-256-GCM)
+    // Contains: { username, password, notes, customFields, ... }
+    encryptedData: text("encrypted_data").notNull(),
+    encryptionVersion: integer("encryption_version").notNull().default(1),
+    iv: text("iv").notNull(), // Initialization vector (base64)
+    authTag: text("auth_tag").notNull(), // GCM authentication tag (base64)
+
+    // Organization
+    isFavorite: boolean("is_favorite").notNull().default(false),
+    sortOrder: integer("sort_order").default(0),
+
+    // State
+    lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
+    accessCount: integer("access_count").notNull().default(0),
+
+    // Password-specific metadata (unencrypted for breach monitoring)
+    passwordStrength: integer("password_strength"), // 0-4 scale
+    passwordLastChanged: timestamp("password_last_changed", {
+      withTimezone: true,
+    }),
+    isCompromised: boolean("is_compromised").default(false),
+    compromisedAt: timestamp("compromised_at", { withTimezone: true }),
+
+    // Sharing
+    isShared: boolean("is_shared").notNull().default(false),
+
+    // Soft delete
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: text("deleted_by"),
+
+    // Audit Trail
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    // Indexes for common queries
+    userIdIdx: index("idx_secrets_user_id").on(table.userId),
+    workspaceIdIdx: index("idx_secrets_workspace_id").on(table.workspaceId),
+    typeIdx: index("idx_secrets_type").on(table.type),
+    categoryIdx: index("idx_secrets_category").on(table.category),
+    urlIdx: index("idx_secrets_url").on(table.url),
+    deletedAtIdx: index("idx_secrets_deleted_at").on(table.deletedAt),
+    // Compound index for common list query
+    userTypeIdx: index("idx_secrets_user_type").on(table.userId, table.type),
+  })
+);
+
+// ============================================================================
+// Secret Tags (Many-to-Many)
+// ============================================================================
+
+export const secretTags = pgTable(
+  "secret_tags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    secretId: uuid("secret_id")
+      .notNull()
+      .references(() => secrets.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    // Unique tag per secret
+    uniqueSecretTag: unique("secret_tags_unique").on(table.secretId, table.tag),
+    // Index for tag-based queries
+    tagIdx: index("idx_secret_tags_tag").on(table.tag),
+  })
+);
+
+// ============================================================================
+// Secret Shares (Workspace/User Sharing)
+// ============================================================================
+
+export const secretShares = pgTable(
+  "secret_shares",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    secretId: uuid("secret_id")
+      .notNull()
+      .references(() => secrets.id, { onDelete: "cascade" }),
+
+    // Share target (one must be set)
+    sharedWithUserId: text("shared_with_user_id"),
+    sharedWithWorkspaceId: uuid("shared_with_workspace_id"),
+
+    // Permission level
+    permission: text("permission").notNull().default("read"), // read, write
+
+    // Share metadata
+    sharedBy: text("shared_by").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by"),
+
+    // Audit
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    secretIdIdx: index("idx_secret_shares_secret_id").on(table.secretId),
+    sharedWithUserIdx: index("idx_secret_shares_shared_with_user").on(
+      table.sharedWithUserId
+    ),
+    sharedWithWorkspaceIdx: index("idx_secret_shares_shared_with_workspace").on(
+      table.sharedWithWorkspaceId
+    ),
+  })
+);
+
+// ============================================================================
+// Secret Audit Log
+// ============================================================================
+
+export const secretAuditLog = pgTable(
+  "secret_audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    secretId: uuid("secret_id")
+      .notNull()
+      .references(() => secrets.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+
+    // Action details
+    action: text("action").notNull(), // created, read, updated, deleted, shared, revoked, copied
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    metadata: jsonb("metadata"), // Additional context
+
+    // Timestamp
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    secretIdIdx: index("idx_secret_audit_log_secret_id").on(table.secretId),
+    userIdIdx: index("idx_secret_audit_log_user_id").on(table.userId),
+    createdAtIdx: index("idx_secret_audit_log_created_at").on(table.createdAt),
+  })
+);
+
+// ============================================================================
+// Master Key Metadata (for key derivation verification)
+// ============================================================================
+
+/**
+ * Stores metadata for verifying master password without storing it.
+ * Used to validate the master password before attempting decryption.
+ */
+export const secretVaultKeys = pgTable("secret_vault_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().unique(),
+
+  // Key derivation parameters
+  salt: text("salt").notNull(), // Random salt for key derivation
+  keyDerivationAlgorithm: text("key_derivation_algorithm")
+    .notNull()
+    .default("argon2id"),
+  keyDerivationParams: jsonb("key_derivation_params").notNull(), // { memory, iterations, parallelism }
+
+  // Verification (encrypted known value to verify correct password)
+  verificationCipher: text("verification_cipher").notNull(),
+  verificationIv: text("verification_iv").notNull(),
+  verificationTag: text("verification_tag").notNull(),
+
+  // Recovery
+  recoveryKeyHash: text("recovery_key_hash"), // Bcrypt hash of recovery key
+  recoveryKeyCreatedAt: timestamp("recovery_key_created_at", {
+    withTimezone: true,
+  }),
+
+  // Audit
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  lastUnlockedAt: timestamp("last_unlocked_at", { withTimezone: true }),
+});
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type Secret = typeof secrets.$inferSelect;
+export type NewSecret = typeof secrets.$inferInsert;
+export type SecretTag = typeof secretTags.$inferSelect;
+export type NewSecretTag = typeof secretTags.$inferInsert;
+export type SecretShare = typeof secretShares.$inferSelect;
+export type NewSecretShare = typeof secretShares.$inferInsert;
+export type SecretAuditLogEntry = typeof secretAuditLog.$inferSelect;
+export type NewSecretAuditLogEntry = typeof secretAuditLog.$inferInsert;
+export type SecretVaultKey = typeof secretVaultKeys.$inferSelect;
+export type NewSecretVaultKey = typeof secretVaultKeys.$inferInsert;
+
+// ============================================================================
+// Relations
+// ============================================================================
+
+export const secretsRelations = relations(secrets, ({ one, many }) => ({
+  user: one(users, {
+    fields: [secrets.userId],
+    references: [users.id],
+  }),
+  workspace: one(workspaces, {
+    fields: [secrets.workspaceId],
+    references: [workspaces.id],
+  }),
+  tags: many(secretTags),
+  shares: many(secretShares),
+  auditLog: many(secretAuditLog),
+}));
+
+export const secretTagsRelations = relations(secretTags, ({ one }) => ({
+  secret: one(secrets, {
+    fields: [secretTags.secretId],
+    references: [secrets.id],
+  }),
+}));
+
+export const secretSharesRelations = relations(secretShares, ({ one }) => ({
+  secret: one(secrets, {
+    fields: [secretShares.secretId],
+    references: [secrets.id],
+  }),
+}));
+
+export const secretAuditLogRelations = relations(secretAuditLog, ({ one }) => ({
+  secret: one(secrets, {
+    fields: [secretAuditLog.secretId],
+    references: [secrets.id],
+  }),
+}));
+
+export const secretVaultKeysRelations = relations(
+  secretVaultKeys,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [secretVaultKeys.userId],
+      references: [users.id],
+    }),
+  })
+);
+
+// ============================================================================
+// Audit Actions
+// ============================================================================
+
+export const SECRET_AUDIT_ACTIONS = [
+  "created",
+  "read",
+  "updated",
+  "deleted",
+  "shared",
+  "revoked",
+  "copied",
+  "exported",
+  "imported",
+  "password_changed",
+  "vault_unlocked",
+  "vault_locked",
+] as const;
+
+export type SecretAuditAction = (typeof SECRET_AUDIT_ACTIONS)[number];

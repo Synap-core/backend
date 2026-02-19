@@ -35,3 +35,4 @@ export * from "./api-key-repository.js";
 export * from "./chat-thread-repository.js";
 export * from "./user-entity-state-repository.js";
 export * from "./agent-repository.js";
+export * from "./secrets-vault-repository.js";

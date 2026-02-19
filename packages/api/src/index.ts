@@ -88,6 +88,7 @@ import { backgroundTasksRouter } from "./routers/background-tasks.js";
 import { messageLinksRouter } from "./routers/message-links.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
+import { secretsVaultRouter } from "./routers/secrets-vault.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -283,6 +284,11 @@ registerRouter("n8nActions", n8nActionsRouter, {
   version: "1.0.0",
   source: "core",
   description: "n8n workflow actions integration",
+});
+registerRouter("secretsVault", secretsVaultRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Encrypted secrets vault for passwords and API keys",
 });
 
 import { coreRouter } from "./root.js";
