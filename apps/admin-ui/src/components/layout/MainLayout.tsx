@@ -1,18 +1,41 @@
 import { useState, useEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import { Drawer } from "@mantine/core";
+import { Drawer, Loader } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import TopNav from "./TopNav";
 import MainNav from "./MainNav";
 import CommandPalette from "../CommandPalette";
+import { useAuth } from "../../lib/auth";
 import { colors, breakpoints, layout } from "../../theme/tokens";
 
 export default function MainLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const location = useLocation();
+  const { isLoading, isAuthenticated } = useAuth();
 
   const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`);
+
+  // Auth guard: show spinner while loading, nothing if not authenticated (AuthProvider redirects)
+  if (isLoading) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: colors.background.secondary,
+        }}
+      >
+        <Loader size="lg" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return null;
+  }
 
   // Auto-close drawer on mobile when route changes
   useEffect(() => {

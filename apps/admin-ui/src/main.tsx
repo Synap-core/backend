@@ -7,6 +7,8 @@ import { BrowserRouter } from "react-router-dom";
 import { trpc, trpcClient } from "./lib/trpc";
 import App from "./App";
 import GlobalErrorBoundary from "./components/error/GlobalErrorBoundary";
+import { AuthProvider } from "./lib/auth";
+import { WorkspaceProvider } from "./lib/workspace";
 
 // Import Mantine styles
 import "@mantine/core/styles.css";
@@ -33,8 +35,12 @@ createRoot(document.getElementById("root")!).render(
         <MantineProvider>
           <GlobalErrorBoundary>
             <Notifications position="top-right" zIndex={1000} />
-            <BrowserRouter>
-              <App />
+            <BrowserRouter basename="/admin">
+              <AuthProvider>
+                <WorkspaceProvider>
+                  <App />
+                </WorkspaceProvider>
+              </AuthProvider>
             </BrowserRouter>
           </GlobalErrorBoundary>
         </MantineProvider>
