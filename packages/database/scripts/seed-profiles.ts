@@ -128,6 +128,154 @@ async function seedProfiles() {
           inputType: "text",
         },
       },
+      // CRM properties
+      {
+        slug: "role",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 100 },
+        uiHints: {
+          label: "Role",
+          inputType: "text",
+          placeholder: "e.g., CEO, Developer",
+        },
+      },
+      {
+        slug: "website",
+        valueType: PropertyValueType.STRING,
+        constraints: { format: "url", maxLength: 500 },
+        uiHints: {
+          label: "Website",
+          inputType: "url",
+          placeholder: "https://example.com",
+        },
+      },
+      {
+        slug: "industry",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 100 },
+        uiHints: {
+          label: "Industry",
+          inputType: "text",
+          placeholder: "e.g., Technology, Healthcare",
+        },
+      },
+      {
+        slug: "size",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"],
+        },
+        uiHints: { label: "Company Size", inputType: "select" },
+      },
+      {
+        slug: "stage",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["lead", "qualified", "proposal", "negotiation", "won", "lost"],
+        },
+        uiHints: { label: "Deal Stage", inputType: "select" },
+      },
+      {
+        slug: "value",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: {
+          label: "Deal Value",
+          inputType: "number",
+          prefix: "$",
+        },
+      },
+      {
+        slug: "closeDate",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Expected Close Date", inputType: "date" },
+      },
+      {
+        slug: "owner",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Owner", inputType: "entity-select" },
+      },
+      // Capture/Bookmark properties
+      {
+        slug: "url",
+        valueType: PropertyValueType.STRING,
+        constraints: { format: "url", maxLength: 2000 },
+        uiHints: {
+          label: "URL",
+          inputType: "url",
+          placeholder: "https://...",
+        },
+      },
+      {
+        slug: "domain",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 255 },
+        uiHints: {
+          label: "Domain",
+          inputType: "text",
+          readonly: true,
+        },
+      },
+      {
+        slug: "source",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["browser", "extension", "manual", "import", "api"],
+        },
+        uiHints: { label: "Capture Source", inputType: "select" },
+      },
+      {
+        slug: "capturedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Captured At", inputType: "datetime-local" },
+      },
+      {
+        slug: "favicon",
+        valueType: PropertyValueType.STRING,
+        constraints: { format: "url", maxLength: 500 },
+        uiHints: {
+          label: "Favicon",
+          inputType: "url",
+        },
+      },
+      {
+        slug: "description",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: {
+          label: "Description",
+          inputType: "textarea",
+          placeholder: "Page description...",
+        },
+      },
+      {
+        slug: "author",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: {
+          label: "Author",
+          inputType: "text",
+        },
+      },
+      {
+        slug: "publishedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Published Date", inputType: "date" },
+      },
+      {
+        slug: "readTime",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: {
+          label: "Read Time",
+          inputType: "number",
+          suffix: "min",
+        },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -173,21 +321,86 @@ async function seedProfiles() {
         displayName: "Person",
         uiHints: { icon: "user", color: "#F59E0B" },
       },
+      // CRM profiles
+      {
+        slug: "contact",
+        displayName: "Contact",
+        parentProfileSlug: "person", // Extends person
+        uiHints: { icon: "user-check", color: "#06B6D4" }, // Cyan
+      },
+      {
+        slug: "company",
+        displayName: "Company",
+        uiHints: { icon: "building-2", color: "#6366F1" }, // Indigo
+      },
+      {
+        slug: "deal",
+        displayName: "Deal",
+        uiHints: { icon: "trending-up", color: "#EC4899" }, // Pink
+      },
+      // Capture profiles
+      {
+        slug: "bookmark",
+        displayName: "Bookmark",
+        uiHints: { icon: "bookmark", color: "#F97316" }, // Orange
+      },
+      {
+        slug: "capture",
+        displayName: "Capture",
+        parentProfileSlug: "bookmark", // Extends bookmark
+        uiHints: { icon: "camera", color: "#84CC16" }, // Lime
+      },
+      {
+        slug: "website",
+        displayName: "Website",
+        parentProfileSlug: "bookmark", // Extends bookmark
+        uiHints: { icon: "globe", color: "#14B8A6" }, // Teal
+      },
+      {
+        slug: "article",
+        displayName: "Article",
+        parentProfileSlug: "bookmark", // Extends bookmark
+        uiHints: { icon: "newspaper", color: "#A855F7" }, // Purple
+      },
     ];
 
     const createdProfiles = new Map<string, string>();
 
+    // First pass: create profiles without parents (or resolve parent IDs)
     for (const profile of profiles) {
       const existing = await profileRepo.getBySlug(profile.slug);
       if (existing) {
         console.log(`  ✓ Profile '${profile.slug}' already exists`);
         createdProfiles.set(profile.slug, existing.id);
       } else {
+        // Resolve parent profile ID if specified
+        let parentProfileId: string | undefined;
+        if ((profile as any).parentProfileSlug) {
+          const parentSlug = (profile as any).parentProfileSlug;
+          parentProfileId = createdProfiles.get(parentSlug);
+          if (!parentProfileId) {
+            // Parent not yet created, try to fetch from DB
+            const parent = await profileRepo.getBySlug(parentSlug);
+            if (parent) {
+              parentProfileId = parent.id;
+              createdProfiles.set(parentSlug, parent.id);
+            } else {
+              console.warn(
+                `  ⚠ Parent profile '${parentSlug}' not found for '${profile.slug}'`
+              );
+            }
+          }
+        }
+
+        const { parentProfileSlug: _ignored, ...profileData } = profile as any;
         const created = await profileRepo.create({
-          ...profile,
+          ...profileData,
+          parentProfileId,
           scope: ProfileScope.SYSTEM,
         });
-        console.log(`  ✓ Created profile '${profile.slug}'`);
+        console.log(
+          `  ✓ Created profile '${profile.slug}'${parentProfileId ? ` (extends ${(profile as any).parentProfileSlug})` : ""}`
+        );
         createdProfiles.set(profile.slug, created.id);
       }
     }
@@ -347,6 +560,223 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'person'`);
+        }
+      }
+    }
+
+    // Contact profile properties (extends person - adds role)
+    const contactProfileId = createdProfiles.get("contact");
+    if (contactProfileId) {
+      const contactProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "role", required: false, displayOrder: 5 }, // After inherited person fields
+      ];
+
+      for (const prop of contactProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: contactProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'contact'`);
+        }
+      }
+    }
+
+    // Company profile properties
+    const companyProfileId = createdProfiles.get("company");
+    if (companyProfileId) {
+      const companyProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: true, displayOrder: 0 }, // Company name
+        { slug: "website", required: false, displayOrder: 1 },
+        { slug: "industry", required: false, displayOrder: 2 },
+        { slug: "size", required: false, displayOrder: 3 },
+        { slug: "tags", required: false, displayOrder: 4 },
+      ];
+
+      for (const prop of companyProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: companyProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'company'`);
+        }
+      }
+    }
+
+    // Deal profile properties
+    const dealProfileId = createdProfiles.get("deal");
+    if (dealProfileId) {
+      const dealProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: true, displayOrder: 0 }, // Deal name
+        {
+          slug: "stage",
+          required: false,
+          displayOrder: 1,
+          defaultValue: "lead",
+        },
+        { slug: "value", required: false, displayOrder: 2 },
+        { slug: "closeDate", required: false, displayOrder: 3 },
+        { slug: "owner", required: false, displayOrder: 4 },
+        { slug: "tags", required: false, displayOrder: 5 },
+      ];
+
+      for (const prop of dealProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: dealProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'deal'`);
+        }
+      }
+    }
+
+    // Bookmark profile properties (base for captures)
+    const bookmarkProfileId = createdProfiles.get("bookmark");
+    if (bookmarkProfileId) {
+      const bookmarkProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: false, displayOrder: 0 },
+        { slug: "url", required: true, displayOrder: 1 },
+        { slug: "domain", required: false, displayOrder: 2 },
+        { slug: "tags", required: false, displayOrder: 3 },
+      ];
+
+      for (const prop of bookmarkProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: bookmarkProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'bookmark'`);
+        }
+      }
+    }
+
+    // Capture profile properties (extends bookmark)
+    const captureProfileId = createdProfiles.get("capture");
+    if (captureProfileId) {
+      const captureProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        {
+          slug: "source",
+          required: false,
+          displayOrder: 4,
+          defaultValue: "browser",
+        },
+        { slug: "capturedAt", required: false, displayOrder: 5 },
+        { slug: "content", required: false, displayOrder: 6 }, // Captured content/selection
+      ];
+
+      for (const prop of captureProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: captureProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'capture'`);
+        }
+      }
+    }
+
+    // Website profile properties (extends bookmark)
+    const websiteProfileId = createdProfiles.get("website");
+    if (websiteProfileId) {
+      const websiteProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "favicon", required: false, displayOrder: 4 },
+        { slug: "description", required: false, displayOrder: 5 },
+      ];
+
+      for (const prop of websiteProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: websiteProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'website'`);
+        }
+      }
+    }
+
+    // Article profile properties (extends bookmark)
+    const articleProfileId = createdProfiles.get("article");
+    if (articleProfileId) {
+      const articleProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "author", required: false, displayOrder: 4 },
+        { slug: "publishedAt", required: false, displayOrder: 5 },
+        { slug: "readTime", required: false, displayOrder: 6 },
+        { slug: "content", required: false, displayOrder: 7 }, // Article body
+      ];
+
+      for (const prop of articleProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: articleProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'article'`);
         }
       }
     }
