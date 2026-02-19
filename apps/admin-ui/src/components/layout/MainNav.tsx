@@ -15,6 +15,7 @@ import {
   IconCheckbox,
   IconMap,
 } from "@tabler/icons-react";
+import { useWorkspace } from "../../lib/workspace";
 import { colors, layout, spacing, typography } from "../../theme/tokens";
 
 interface MainNavProps {
@@ -64,6 +65,13 @@ const sections: NavSection[] = [
 
 export default function MainNav({ onNavigate }: MainNavProps) {
   const location = useLocation();
+  const { workspaceRole } = useWorkspace();
+
+  // Only show Management section for owner/admin roles
+  const isAdmin = workspaceRole === "owner" || workspaceRole === "admin";
+  const visibleSections = isAdmin
+    ? sections
+    : sections.filter((s) => s.label !== "Management");
 
   const isActive = (path: string) => {
     if (path === "/") {
@@ -87,7 +95,7 @@ export default function MainNav({ onNavigate }: MainNavProps) {
       }}
       aria-label="Main navigation"
     >
-      {sections.map((section, sectionIndex) => (
+      {visibleSections.map((section, sectionIndex) => (
         <div key={section.label} style={{ marginBottom: spacing[4] }}>
           {/* Section label */}
           <div
@@ -135,7 +143,7 @@ export default function MainNav({ onNavigate }: MainNavProps) {
           </div>
 
           {/* Divider between sections */}
-          {sectionIndex < sections.length - 1 && (
+          {sectionIndex < visibleSections.length - 1 && (
             <div
               style={{
                 height: "1px",

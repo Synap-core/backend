@@ -413,6 +413,37 @@ app.use(
 );
 apiLogger.info("Inngest handler registered at /api/inngest");
 
+// Admin UI — static SPA (served from /admin/)
+import { serveStatic } from "@hono/node-server/serve-static";
+import path from "path";
+import fs from "fs";
+
+// Redirect /admin to /admin/
+app.get("/admin", (c) => c.redirect("/admin/"));
+
+// Serve static files from the admin-ui build
+app.use(
+  "/admin/*",
+  serveStatic({
+    root: "./admin-ui/",
+    rewriteRequestPath: (p: string) => p.replace("/admin/", "/"),
+    onNotFound: () => {
+      // Let it fall through to the SPA fallback below
+    },
+  })
+);
+
+// SPA fallback — any /admin/* path that didn't match a static file returns index.html
+app.get("/admin/*", (c) => {
+  try {
+    const indexPath = path.resolve("./admin-ui/index.html");
+    const html = fs.readFileSync(indexPath, "utf-8");
+    return c.html(html);
+  } catch {
+    return c.json({ error: "Admin UI not built" }, 404);
+  }
+});
+
 // 404 handler
 app.notFound((c) => {
   return c.json({ error: "Not found" }, 404);

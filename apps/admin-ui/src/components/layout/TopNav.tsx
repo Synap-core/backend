@@ -4,11 +4,15 @@ import {
   Badge,
   ActionIcon,
   Tooltip,
+  Menu,
 } from "@mantine/core";
 import {
   IconCommand,
   IconMenu2,
+  IconUser,
+  IconLogout,
 } from "@tabler/icons-react";
+import { useAuth } from "../../lib/auth";
 import { colors } from "../../theme/tokens";
 
 interface TopNavProps {
@@ -16,6 +20,8 @@ interface TopNavProps {
 }
 
 export default function TopNav({ onMenuOpen }: TopNavProps) {
+  const { user, logout } = useAuth();
+
   return (
     <Group
       h={56}
@@ -65,6 +71,34 @@ export default function TopNav({ onMenuOpen }: TopNavProps) {
             <IconCommand size={20} />
           </ActionIcon>
         </Tooltip>
+
+        {/* User menu */}
+        {user && (
+          <Menu shadow="md" width={200} position="bottom-end">
+            <Menu.Target>
+              <ActionIcon variant="subtle" size="lg" color="gray" aria-label="User menu">
+                <IconUser size={20} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Label>{user.email}</Menu.Label>
+              {user.name && (
+                <Menu.Label style={{ fontWeight: 400, paddingTop: 0 }}>
+                  {user.name}
+                </Menu.Label>
+              )}
+              <Menu.Divider />
+              <Menu.Item
+                leftSection={<IconLogout size={14} />}
+                color="red"
+                onClick={logout}
+              >
+                Logout
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        )}
+
         {onMenuOpen && (
           <Tooltip label="Navigation" position="bottom">
             <ActionIcon

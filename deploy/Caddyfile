@@ -78,6 +78,11 @@
         reverse_proxy intelligence-service:3001
     }
 
+    # Admin UI (static SPA served from backend)
+    handle /admin* {
+        reverse_proxy backend:4000
+    }
+
     # Default: Return API info
     handle {
         respond "Synap Backend API - https://docs.synap.live" 200

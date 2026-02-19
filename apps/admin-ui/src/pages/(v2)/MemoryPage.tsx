@@ -24,7 +24,7 @@ import {
 } from "../../lib/notifications";
 import { colors, spacing } from "../../theme/tokens";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const API_URL = import.meta.env.VITE_API_URL || "";
 
 interface MemoryFact {
   id: string;
@@ -35,21 +35,19 @@ interface MemoryFact {
 }
 
 async function fetchFacts(userId: string, query: string, limit = 50): Promise<MemoryFact[]> {
-  const token = localStorage.getItem("synap_token");
   const params = new URLSearchParams({ userId, limit: String(limit) });
   if (query.trim()) params.append("query", query.trim());
   const res = await fetch(`${API_URL}/api/hub/memory?${params}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`Memory API error: ${res.statusText}`);
   return res.json();
 }
 
 async function deleteFact(factId: string): Promise<void> {
-  const token = localStorage.getItem("synap_token");
   const res = await fetch(`${API_URL}/api/hub/memory/${factId}`, {
     method: "DELETE",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`Delete error: ${res.statusText}`);
 }
@@ -59,13 +57,10 @@ async function createFact(
   fact: string,
   confidence: number
 ): Promise<void> {
-  const token = localStorage.getItem("synap_token");
   const res = await fetch(`${API_URL}/api/hub/memory`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ userId, fact, confidence }),
   });
   if (!res.ok) throw new Error(`Create error: ${res.statusText}`);

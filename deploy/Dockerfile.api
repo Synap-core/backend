@@ -16,6 +16,9 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 # Build the API package (sequential to avoid worker OOM on constrained hosts)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build --filter=api --concurrency=1
 
+# Build admin-ui SPA
+RUN cd apps/admin-ui && npx vite build
+
 # Deploy API package (pnpm deploy works perfectly for single package)
 RUN rm -rf /app/deploy && \
   pnpm deploy --filter=api --prod --legacy /app/deploy
@@ -51,6 +54,9 @@ COPY --chown=nodejs:nodejs hydra ./hydra
 # Copy migrations (SQL files not included in pnpm deploy)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
+
+# Copy admin-ui static build
+COPY --from=builder --chown=nodejs:nodejs /app/apps/admin-ui/dist ./admin-ui/
 
 # Expose port
 EXPOSE 4000

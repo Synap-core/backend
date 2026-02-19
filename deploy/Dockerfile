@@ -25,6 +25,9 @@ RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile
 # Build the project using Turborepo
 RUN pnpm turbo build --filter=api --filter=@synap/realtime
 
+# Build admin-ui SPA
+RUN cd apps/admin-ui && npx vite build
+
 # Build migration script independently
 RUN cd packages/database && pnpm build:migrate
 
@@ -95,6 +98,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/dist/scripts ./
 # Copy migrations to primary location (checked first by migration script)
 # Exclude .bak files (backup files should not be migrated)
 COPY --chown=nodejs:nodejs packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
+
+# Copy admin-ui static build
+COPY --from=builder --chown=nodejs:nodejs /app/apps/admin-ui/dist ./admin-ui/
 
 # Copy custom migrations (optional - prepared in builder stage)
 # The migration script (scripts/migrate.ts) gracefully handles:
