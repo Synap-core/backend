@@ -83,6 +83,10 @@
     "yjs": "^13.6.11",
     "zod": "^4.3.6"
   },
+  "peerDependencies": {
+    "@synap-core/core": "workspace:*",
+    "@synap/database": "workspace:*"
+  },
   "devDependencies": {
     "@synap-core/core": "workspace:*",
     "@synap/database": "workspace:*",
