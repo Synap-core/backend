@@ -1724,7 +1724,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getThreadContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				threadId: string;
-				relationshipTypes?: ("used_as_context" | "created" | "updated" | "referenced" | "inherited_from_parent")[] | undefined;
+				relationshipTypes?: ("created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent")[] | undefined;
 			};
 			output: {
 				entities: {
@@ -2630,7 +2630,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		createFromText: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				content: string;
-				targetType: "task" | "note";
+				targetType: "note" | "task";
 				metadata?: {
 					title?: string | undefined;
 					tags?: string[] | undefined;
@@ -2649,7 +2649,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				file: string;
 				filename: string;
 				contentType: string;
-				targetType: "document" | "note";
+				targetType: "note" | "document";
 				metadata?: {
 					title?: string | undefined;
 					description?: string | undefined;
@@ -2836,7 +2836,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		updateStatus: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				status: "archived" | "snoozed" | "read";
+				status: "read" | "archived" | "snoozed";
 				snoozedUntil?: unknown;
 			};
 			output: {
@@ -3269,7 +3269,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		entities: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				query: string;
-				type?: "task" | "document" | "project" | "note" | undefined;
+				type?: "note" | "task" | "document" | "project" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -3280,7 +3280,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		semantic: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				query: string;
-				type?: "task" | "document" | "project" | "note" | undefined;
+				type?: "note" | "task" | "document" | "project" | undefined;
 				limit?: number | undefined;
 				threshold?: number | undefined;
 			};

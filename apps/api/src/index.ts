@@ -127,7 +127,7 @@ app.use(
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "Cookie"],
+    allowHeaders: ["Content-Type", "Authorization", "Cookie", "X-Workspace-Id"],
     exposeHeaders: ["Content-Length", "X-Request-Id", "Set-Cookie"],
     maxAge: 86400, // 24 hours
   })
