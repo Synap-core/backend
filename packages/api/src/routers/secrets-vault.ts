@@ -16,16 +16,12 @@ import { z } from "zod";
 import {
   db,
   eq,
-  secrets,
   secretVaultKeys,
   SECRET_TYPES,
-} from "@synap/database";
-import { SecretsVaultRepository } from "@synap/database/repositories/secrets-vault-repository";
-import { EventRepository } from "@synap/database/repositories/event-repository";
-import {
+  SecretsVaultRepository,
+  EventRepository,
   encryptionService,
-  type VaultKeySetup,
-} from "@synap/database/services/encryption-service";
+} from "@synap/database";
 
 // ============================================================================
 // Validation Schemas
@@ -534,7 +530,7 @@ export const secretsVaultRouter = router({
         repo.getCompromisedCount(ctx.userId),
         repo.getWeakPasswordsCount(ctx.userId),
         repo.getOldPasswordsCount(ctx.userId, 90),
-        repo.list(ctx.userId, { limit: 1 }).then((r) => r.length),
+        repo.list(ctx.userId, { limit: 1 }).then((r: unknown[]) => r.length),
       ]
     );
 

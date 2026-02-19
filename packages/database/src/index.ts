@@ -26,6 +26,7 @@ export * from "./services/property-index-service.js";
 export * from "./services/view-filter-compiler.js";
 export * from "./services/property-merging-service.js";
 export * from "./services/view-default-columns-service.js";
+export * from "./services/encryption-service.js";
 
 // Export errors
 export * from "./errors/index.js";
