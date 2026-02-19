@@ -15,6 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   db,
+  sql,
   eq,
   secretVaultKeys,
   SECRET_TYPES,
@@ -91,7 +92,7 @@ const setupVaultSchema = z.object({
 // ============================================================================
 
 function getRepository(): SecretsVaultRepository {
-  const eventRepo = new EventRepository(db);
+  const eventRepo = new EventRepository(sql);
   return new SecretsVaultRepository(db, eventRepo);
 }
 
