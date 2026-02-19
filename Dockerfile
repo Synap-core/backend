@@ -14,7 +14,8 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 
 # Build the project using Turborepo
-RUN pnpm turbo build --filter=api
+# --force ensures turbo ignores any stale cache (important for build-config-only changes)
+RUN pnpm turbo build --filter=api --force
 
 # Deploy to self-contained directory with hard-linked dependencies
 # This creates a portable, production-ready package

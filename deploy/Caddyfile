@@ -72,6 +72,12 @@
         reverse_proxy intelligence-service:3001
     }
 
+    # Monitor SPA — clean URL, no prefix stripping needed
+    # intelligence-service serves /monitor/* directly as a Vite SPA
+    handle /monitor* {
+        reverse_proxy intelligence-service:3001
+    }
+
     # Default: Return API info
     handle {
         respond "Synap Backend API - https://docs.synap.live" 200

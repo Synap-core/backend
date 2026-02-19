@@ -10,7 +10,7 @@ import { createLogger } from "@synap-core/core";
 import { apiKeyService } from "../services/api-keys.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
-import { db, conversationMessages, chatThreads, knowledgeFacts, eq, asc, knowledgeRepository, drizzleSql, traverseEntityGraph } from "@synap/database";
+import { db, conversationMessages, chatThreads, knowledgeFacts, eq, asc, knowledgeRepository, drizzleSql, traverseEntityGraph, intelligenceCommands } from "@synap/database";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -995,6 +995,51 @@ app.get("/graph/traverse", async (c) => {
     return c.json(results);
   } catch (err) {
     logger.error({ err }, "traverseGraph failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * GET /commands?workspaceId=...
+ * List all intelligence commands for a workspace.
+ */
+app.get("/commands", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  try {
+    const commands = await db.query.intelligenceCommands.findMany({
+      where: eq(intelligenceCommands.workspaceId, workspaceId),
+      orderBy: [asc(intelligenceCommands.createdAt)],
+    });
+    return c.json(commands);
+  } catch (err) {
+    logger.error({ err }, "listCommands failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * GET /commands/:id
+ * Get a single intelligence command by ID.
+ */
+app.get("/commands/:id", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const id = c.req.param("id");
+  try {
+    const command = await db.query.intelligenceCommands.findFirst({
+      where: eq(intelligenceCommands.id, id),
+    });
+    if (!command) return c.json({ error: "Not found" }, 404);
+    return c.json(command);
+  } catch (err) {
+    logger.error({ err, id }, "getCommand failed");
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }
 });
