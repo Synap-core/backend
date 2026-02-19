@@ -4,46 +4,18 @@ import {
   Badge,
   ActionIcon,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
-import { Link, useLocation } from "react-router-dom";
 import {
-  IconHeart,
-  IconBolt,
-  IconDatabase,
-  IconFolder,
-  IconRobot,
-  IconHierarchy,
   IconCommand,
-  IconFlask,
+  IconMenu2,
 } from "@tabler/icons-react";
-import { colors, spacing } from "../../theme/tokens";
+import { colors } from "../../theme/tokens";
 
-interface NavItem {
-  path: string;
-  label: string;
-  icon: React.ReactNode;
-  badge?: string;
+interface TopNavProps {
+  onMenuOpen?: () => void;
 }
 
-export default function TopNav() {
-  const location = useLocation();
-
-  const navItems: NavItem[] = [
-    { path: "/", label: "Health", icon: <IconHeart size={18} /> },
-    { path: "/events", label: "Events", icon: <IconBolt size={18} /> },
-    { path: "/data", label: "Data", icon: <IconDatabase size={18} /> },
-    { path: "/files", label: "Files", icon: <IconFolder size={18} /> },
-    { path: "/automation", label: "Automation", icon: <IconRobot size={18} /> },
-    { path: "/flow", label: "Architecture", icon: <IconHierarchy size={18} /> },
-  ];
-
-  const isActive = (path: string) => {
-    if (path === "/")
-      return location.pathname === "/" || location.pathname === "/health";
-    return location.pathname.startsWith(path);
-  };
-
+export default function TopNav({ onMenuOpen }: TopNavProps) {
   return (
     <Group
       h={56}
@@ -52,10 +24,24 @@ export default function TopNav() {
       style={{
         borderBottom: `1px solid ${colors.border.default}`,
         background: colors.background.primary,
+        position: "sticky",
+        top: 0,
+        zIndex: 100,
+        flexShrink: 0,
       }}
     >
       {/* Logo */}
       <Group gap="sm">
+        {/* Hamburger for mobile */}
+        <ActionIcon
+          variant="subtle"
+          size="lg"
+          color="gray"
+          onClick={onMenuOpen}
+          style={{ display: "none" }}
+          className="mobile-menu-btn"
+          aria-label="Open navigation"
+        />
         <Text
           fw={700}
           size="lg"
@@ -72,59 +58,26 @@ export default function TopNav() {
         </Badge>
       </Group>
 
-      {/* Navigation Items */}
-      <Group gap={spacing[1]}>
-        {navItems.map((item) => (
-          <UnstyledButton
-            key={item.path}
-            component={Link}
-            to={item.path}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "8px 16px",
-              borderRadius: 8,
-              background: isActive(item.path)
-                ? `${colors.eventTypes.created}15`
-                : "transparent",
-              color: isActive(item.path)
-                ? colors.eventTypes.created
-                : colors.text.secondary,
-              transition: "all 0.15s ease",
-            }}
-          >
-            {item.icon}
-            <Text size="sm" fw={isActive(item.path) ? 600 : 400}>
-              {item.label}
-            </Text>
-            {item.badge && (
-              <Badge size="xs" variant="filled" color="gray">
-                {item.badge}
-              </Badge>
-            )}
-          </UnstyledButton>
-        ))}
-      </Group>
-
       {/* Actions */}
       <Group gap="xs">
-        <Tooltip label="Testing Lab" position="bottom">
-          <ActionIcon
-            component={Link}
-            to="/testing"
-            variant="subtle"
-            size="lg"
-            color={location.pathname === "/testing" ? "violet" : "gray"}
-          >
-            <IconFlask size={20} />
-          </ActionIcon>
-        </Tooltip>
         <Tooltip label="Command Menu (⌘K)" position="bottom">
-          <ActionIcon variant="subtle" size="lg" color="gray">
+          <ActionIcon variant="subtle" size="lg" color="gray" aria-label="Open command palette">
             <IconCommand size={20} />
           </ActionIcon>
         </Tooltip>
+        {onMenuOpen && (
+          <Tooltip label="Navigation" position="bottom">
+            <ActionIcon
+              variant="subtle"
+              size="lg"
+              color="gray"
+              onClick={onMenuOpen}
+              aria-label="Toggle navigation"
+            >
+              <IconMenu2 size={20} />
+            </ActionIcon>
+          </Tooltip>
+        )}
       </Group>
     </Group>
   );

@@ -5,14 +5,13 @@ import { useMediaQuery } from "@mantine/hooks";
 import TopNav from "./TopNav";
 import MainNav from "./MainNav";
 import CommandPalette from "../CommandPalette";
-import { colors, breakpoints } from "../../theme/tokens";
+import { colors, breakpoints, layout } from "../../theme/tokens";
 
 export default function MainLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const location = useLocation();
 
-  // Media queries for responsive behavior
   const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`);
 
   // Auto-close drawer on mobile when route changes
@@ -44,33 +43,61 @@ export default function MainLayout() {
         flexDirection: "column",
       }}
     >
-      {/* Top Navigation */}
-      <TopNav />
+      {/* Top Bar — full width, sticky */}
+      <TopNav onMenuOpen={() => setNavDrawerOpen(true)} />
 
-      {/* Main Content Area */}
-      <main
+      {/* Body — flex row: sidebar + content */}
+      <div
         style={{
+          display: "flex",
           flex: 1,
-          width: "100%",
-          overflowY: "auto",
+          overflow: "hidden",
         }}
       >
-        <Outlet />
-      </main>
+        {/* Sidebar — desktop only */}
+        {!isMobile && (
+          <MainNav />
+        )}
 
-      {/* Mobile Navigation Drawer (fallback) */}
+        {/* Main Content */}
+        <main
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            minWidth: 0,
+          }}
+        >
+          <Outlet />
+        </main>
+      </div>
+
+      {/* Mobile Navigation Drawer */}
       <Drawer
         opened={navDrawerOpen}
         onClose={() => setNavDrawerOpen(false)}
         position="left"
-        size="280px"
-        title="Navigation"
+        size={layout.navWidth}
+        withCloseButton={false}
         styles={{
-          header: {
-            borderBottom: `1px solid ${colors.border.default}`,
-          },
+          body: { padding: 0 },
         }}
       >
+        <div
+          style={{
+            height: "56px",
+            borderBottom: `1px solid ${colors.border.default}`,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 16px",
+            fontWeight: 700,
+            fontSize: "16px",
+            background: `linear-gradient(135deg, ${colors.eventTypes.created} 0%, ${colors.eventTypes.ai} 100%)`,
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+          }}
+        >
+          SYNAP Admin
+        </div>
         <MainNav onNavigate={() => setNavDrawerOpen(false)} />
       </Drawer>
 

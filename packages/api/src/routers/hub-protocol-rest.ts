@@ -10,7 +10,7 @@ import { createLogger } from "@synap-core/core";
 import { apiKeyService } from "../services/api-keys.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
-import { db, conversationMessages, chatThreads, knowledgeFacts, eq, asc, knowledgeRepository, drizzleSql, traverseEntityGraph, intelligenceCommands } from "@synap/database";
+import { db, conversationMessages, chatThreads, knowledgeFacts, eq, and, asc, desc, knowledgeRepository, drizzleSql, traverseEntityGraph, intelligenceCommands } from "@synap/database";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -87,6 +87,44 @@ async function getCaller(
   );
   return hubProtocolRouter.createCaller(ctx as any);
 }
+
+/**
+ * GET /threads?userId=...&workspaceId=...&limit=...
+ * List chat threads for a user (with parentThreadId for tree construction).
+ */
+app.get("/threads", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  const limit = parseInt(c.req.query("limit") ?? "50", 10);
+  if (!userId) return c.json({ error: "userId is required" }, 400);
+  try {
+    const whereClause = workspaceId
+      ? and(eq(chatThreads.userId, userId), eq(chatThreads.workspaceId, workspaceId))
+      : eq(chatThreads.userId, userId);
+    const threads = await db
+      .select({
+        id: chatThreads.id,
+        title: chatThreads.title,
+        agentType: chatThreads.agentType,
+        parentThreadId: chatThreads.parentThreadId,
+        branchPurpose: chatThreads.branchPurpose,
+        contextSummary: chatThreads.contextSummary,
+        createdAt: chatThreads.createdAt,
+        updatedAt: chatThreads.updatedAt,
+      })
+      .from(chatThreads)
+      .where(whereClause)
+      .orderBy(desc(chatThreads.updatedAt))
+      .limit(Math.min(limit, 200));
+    return c.json(threads);
+  } catch (err) {
+    logger.error({ err, userId }, "listThreads failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
 
 /**
  * GET /threads/:threadId/context
