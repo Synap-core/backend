@@ -8,11 +8,22 @@
  * - Server-side operations that don't expose secrets
  */
 
-import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
+import {
+  randomBytes,
+  createCipheriv,
+  createDecipheriv,
+  scrypt,
+  ScryptOptions,
+} from "crypto";
 import { promisify } from "util";
-import { scrypt } from "crypto";
 
-const scryptAsync = promisify(scrypt);
+const scryptAsync = promisify<
+  string | Buffer,
+  string | Buffer,
+  number,
+  ScryptOptions,
+  Buffer
+>(scrypt);
 
 // ============================================================================
 // Configuration

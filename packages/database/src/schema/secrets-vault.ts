@@ -23,7 +23,7 @@ import {
   unique,
   index,
 } from "drizzle-orm/pg-core";
-import { relations, sql } from "drizzle-orm";
+import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 import { workspaces } from "./workspaces.js";
 

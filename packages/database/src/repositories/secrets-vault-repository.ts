@@ -13,7 +13,6 @@ import {
   secretAuditLog,
   secretVaultKeys,
   type Secret,
-  type NewSecret,
   type SecretTag,
   type SecretShare,
   type SecretAuditAction,
