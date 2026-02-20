@@ -1,16 +1,21 @@
 /**
  * Background Tasks Router
  *
- * Handles CRUD operations for background tasks.
+ * Synchronous CRUD operations for background tasks.
+ * Direct DB operations with inline permission checks.
  * Task definitions are stored in the backend, executed in the Intelligence Service.
  */
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { backgroundTasks, eq, and, desc } from "@synap/database";
+import { db, eq, and, desc } from "@synap/database";
+import { backgroundTasks } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
+import { randomUUID } from "crypto";
 
 export const backgroundTasksRouter = router({
   /**
@@ -84,7 +89,6 @@ export const backgroundTasksRouter = router({
 
   /**
    * Create a new background task
-   * Event-driven: emits background_tasks.create.requested
    */
   create: protectedProcedure
     .input(
@@ -100,15 +104,28 @@ export const backgroundTasksRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { randomUUID } = await import("crypto");
       const taskId = randomUUID();
 
-      // Emit event for task creation
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: input.workspaceId,
         subjectType: "backgroundTask",
         action: "create",
-        subjectId: taskId,
-        data: {
+        data: { id: taskId, name: input.name },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { id: taskId, status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const [task] = await db
+        .insert(backgroundTasks)
+        .values({
           id: taskId,
           userId,
           workspaceId: input.workspaceId,
@@ -118,21 +135,38 @@ export const backgroundTasksRouter = router({
           schedule: input.schedule,
           action: input.action,
           context: input.context || {},
-        },
+          status: "active",
+        })
+        .returning();
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "backgroundTask",
+        action: "create",
+        phase: "completed",
+        subjectId: task.id,
+        userId,
+        workspaceId: input.workspaceId,
+        data: { name: input.name, type: input.type },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "backgroundTask",
+        action: "create",
+        subjectId: task.id,
         userId,
         workspaceId: input.workspaceId,
       });
 
       return {
-        id: taskId,
-        success: true,
-        message: "Background task creation requested",
+        id: task.id,
+        status: "created" as const,
       };
     }),
 
   /**
    * Update a background task
-   * Event-driven: emits background_tasks.update.requested
    */
   update: protectedProcedure
     .input(
@@ -165,28 +199,59 @@ export const backgroundTasksRouter = router({
         });
       }
 
-      // Emit event for task update
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existingTask.workspaceId || undefined,
+        subjectType: "backgroundTask",
+        action: "update",
+        data: { id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const [_updated] = await db
+        .update(backgroundTasks)
+        .set({
+          ...updateData,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(backgroundTasks.id, id), eq(backgroundTasks.userId, userId)))
+        .returning();
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "backgroundTask",
+        action: "update",
+        phase: "completed",
+        subjectId: id,
+        userId,
+        workspaceId: existingTask.workspaceId || undefined,
+        data: updateData,
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "backgroundTask",
         action: "update",
         subjectId: id,
-        data: {
-          id,
-          ...updateData,
-        },
         userId,
         workspaceId: existingTask.workspaceId || undefined,
       });
 
       return {
-        success: true,
-        message: "Background task update requested",
+        status: "updated" as const,
       };
     }),
 
   /**
    * Delete a background task
-   * Event-driven: emits background_tasks.delete.requested
    */
   delete: protectedProcedure
     .input(
@@ -212,21 +277,49 @@ export const backgroundTasksRouter = router({
         });
       }
 
-      // Emit event for task deletion
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existingTask.workspaceId || undefined,
+        subjectType: "backgroundTask",
+        action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      await db
+        .delete(backgroundTasks)
+        .where(and(eq(backgroundTasks.id, input.id), eq(backgroundTasks.userId, userId)));
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "backgroundTask",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: existingTask.workspaceId || undefined,
+        data: { id: input.id },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "backgroundTask",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-        },
         userId,
         workspaceId: existingTask.workspaceId || undefined,
       });
 
       return {
-        success: true,
-        message: "Background task deletion requested",
+        status: "deleted" as const,
       };
     }),
 });

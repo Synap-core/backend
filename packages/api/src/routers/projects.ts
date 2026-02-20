@@ -2,8 +2,7 @@
  * Projects Router - Project Management (Now Using Entities)
  *
  * Projects are now entities with profileSlug="project".
- * This router provides a convenient API for project operations.
- * All write operations use event-driven architecture.
+ * Synchronous CRUD with direct DB operations.
  */
 
 import { z } from "zod";
@@ -15,14 +14,18 @@ import {
   and,
   getDb,
   ProfileResolutionService,
+  EventRepository,
+  EntityRepository,
+  sql,
 } from "@synap/database";
-import { emitRequestEvent } from "../utils/emit-event.js";
 import { TRPCError } from "@trpc/server";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 
 export const projectsRouter = router({
   /**
    * List all projects for the current user
-   * Projects are entities with type="project"
    */
   list: workspaceProcedure
     .input(
@@ -38,7 +41,6 @@ export const projectsRouter = router({
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
 
-      // Get project profile
       const projectProfile = await resolutionService.resolveProfile(
         "project",
         ctx.userId,
@@ -48,8 +50,7 @@ export const projectsRouter = router({
       if (!projectProfile) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Project profile not found. Please run seed-profiles script.",
+          message: "Project profile not found. Please run seed-profiles script.",
         });
       }
 
@@ -66,7 +67,6 @@ export const projectsRouter = router({
         offset: input?.offset || 0,
       });
 
-      // Filter by status if provided (from properties)
       let filtered = results;
       if (input?.status) {
         filtered = results.filter((entity) => {
@@ -75,7 +75,6 @@ export const projectsRouter = router({
         });
       }
 
-      // Transform to project-like format for backward compatibility
       const projects = filtered.map((entity) => ({
         id: entity.id,
         name: entity.title || "Untitled",
@@ -106,16 +105,11 @@ export const projectsRouter = router({
    * Get a single project by ID
    */
   get: workspaceProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-      })
-    )
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
 
-      // Get project profile
       const projectProfile = await resolutionService.resolveProfile(
         "project",
         ctx.userId,
@@ -125,8 +119,7 @@ export const projectsRouter = router({
       if (!projectProfile) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Project profile not found. Please run seed-profiles script.",
+          message: "Project profile not found. Please run seed-profiles script.",
         });
       }
 
@@ -140,13 +133,9 @@ export const projectsRouter = router({
       });
 
       if (!entity) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
 
-      // Transform to project-like format
       const project = {
         id: entity.id,
         name: entity.title || "Untitled",
@@ -175,7 +164,6 @@ export const projectsRouter = router({
 
   /**
    * Create a new project
-   * Event-driven: emits entities.create.requested (with profileSlug="project")
    */
   create: workspaceProcedure
     .input(
@@ -188,45 +176,65 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const { randomUUID } = await import("crypto");
-      const projectId = randomUUID();
-
-      // Build properties object
-      const properties: Record<string, unknown> = {
-        status: input.status,
-      };
-      if (input.description) {
-        properties.description = input.description;
-      }
-      if (input.settings) {
-        properties.settings = input.settings;
-      }
-      if (input.metadata) {
-        properties.metadata = input.metadata;
-      }
-
-      await emitRequestEvent({
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
         subjectType: "entity",
         action: "create",
-        subjectId: projectId,
-        data: {
-          id: projectId,
-          profileSlug: "project",
-          title: input.name,
-          preview: input.description,
-          properties,
-          workspaceId: ctx.workspaceId,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
+        data: { profileSlug: "project", title: input.name },
       });
 
-      return { status: "requested", projectId };
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed", projectId: "", proposalId: perm.proposalId };
+      }
+
+      const properties: Record<string, unknown> = { status: input.status };
+      if (input.description) properties.description = input.description;
+      if (input.settings) properties.settings = input.settings;
+      if (input.metadata) properties.metadata = input.metadata;
+
+      const db = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(db, eventRepo);
+
+      const created = await entityRepo.create(
+        {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          title: input.name,
+          preview: input.description || undefined,
+          properties,
+          profileSlug: "project",
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "entity",
+        action: "create",
+        phase: "completed",
+        subjectId: created.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { profileSlug: "project" },
+      });
+
+      emitSideEffects({
+        subjectType: "entity",
+        action: "create",
+        subjectId: created.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      return { status: "created", projectId: created.id };
     }),
 
   /**
    * Update an existing project
-   * Event-driven: emits entities.update.requested
    */
   update: workspaceProcedure
     .input(
@@ -240,7 +248,21 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Get current entity to merge properties
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "entity",
+        action: "update",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed", proposalId: perm.proposalId };
+      }
+
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
 
@@ -267,68 +289,94 @@ export const projectsRouter = router({
       });
 
       if (!current) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
 
-      // Merge properties
       const currentProperties =
         (current.properties as Record<string, unknown>) || {};
-      const updatedProperties: Record<string, unknown> = {
-        ...currentProperties,
-      };
+      const updatedProperties: Record<string, unknown> = { ...currentProperties };
 
-      if (input.status !== undefined) {
-        updatedProperties.status = input.status;
-      }
-      if (input.settings !== undefined) {
-        updatedProperties.settings = input.settings;
-      }
-      if (input.metadata !== undefined) {
-        updatedProperties.metadata = input.metadata;
-      }
+      if (input.status !== undefined) updatedProperties.status = input.status;
+      if (input.settings !== undefined) updatedProperties.settings = input.settings;
+      if (input.metadata !== undefined) updatedProperties.metadata = input.metadata;
 
-      await emitRequestEvent({
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(db, eventRepo);
+
+      await entityRepo.update(
+        input.id,
+        {
+          title: input.name || undefined,
+          preview: input.description || undefined,
+          properties: updatedProperties,
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "entity",
+        action: "update",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      emitSideEffects({
         subjectType: "entity",
         action: "update",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          title: input.name,
-          preview: input.description,
-          properties: updatedProperties,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
       });
 
-      return { status: "requested" };
+      return { status: "updated" };
     }),
 
   /**
    * Delete a project
-   * Event-driven: emits entities.delete.requested
    */
   delete: workspaceProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-      })
-    )
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "entity",
+        action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed", proposalId: perm.proposalId };
+      }
+
+      const db = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(db, eventRepo);
+
+      await entityRepo.delete(input.id, ctx.userId);
+
+      auditLog({
+        subjectType: "entity",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      emitSideEffects({
         subjectType: "entity",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
       });
 
-      return { status: "requested" };
+      return { status: "deleted" };
     }),
 });

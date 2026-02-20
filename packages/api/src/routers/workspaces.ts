@@ -2,8 +2,8 @@
  * Workspaces Router - Multi-user workspace management
  *
  * Handles:
- * - Workspace CRUD
- * - Member management
+ * - Workspace CRUD (synchronous)
+ * - Member management (synchronous)
  * - Invitation system
  */
 
@@ -18,11 +18,18 @@ import {
   workspaceMembers,
   workspaceInvites,
   intelligenceServices,
+  getDb,
+  EventRepository,
+  WorkspaceRepository,
+  WorkspaceMemberRepository,
+  sql,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects, getBoss } from "@synap/jobs";
 
 /**
  * Workspace CRUD operations
@@ -44,25 +51,86 @@ export const workspacesRouter = router({
       const { randomUUID } = await import("crypto");
       const workspaceId = randomUUID();
 
-      await emitRequestEvent({
+      // 1. Permission check (no workspaceId yet → auto-granted for personal)
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
         subjectType: "workspaces",
         action: "create",
-        subjectId: workspaceId,
         data: {
           id: workspaceId,
           name: input.name,
           description: input.description,
           type: input.type,
-          userId: ctx.userId,
-          settings: input.settings,
         },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Workspace creation requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+      const created = await workspaceRepo.create(
+        {
+          id: workspaceId,
+          name: input.name,
+          ownerId: ctx.userId,
+          settings: input.settings || {},
+        },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaces",
+        action: "create",
+        phase: "completed",
+        subjectId: workspaceId,
+        userId: ctx.userId,
+        data: {
+          id: workspaceId,
+          name: input.name,
+          description: input.description,
+          type: input.type,
+        },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "workspace",
+        action: "create",
+        subjectId: workspaceId,
         userId: ctx.userId,
       });
 
+      // 5. Enqueue workspace-init for default whiteboard/views/commands
+      try {
+        const boss = getBoss();
+        await boss.send("workspace-init", {
+          workspaceId,
+          userId: ctx.userId,
+        });
+      } catch (err) {
+        console.warn(
+          "[workspaces.create] Failed to enqueue workspace-init (non-fatal):",
+          err
+        );
+      }
+
       return {
-        status: "requested",
-        message: "Workspace creation requested. It will be created shortly.",
-        workspaceId,
+        status: "created" as const,
+        workspaceId: created.id,
+        message: "Workspace created successfully.",
       };
     }),
 
@@ -201,23 +269,73 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.id,
         subjectType: "workspaces",
         action: "update",
-        subjectId: input.id,
         data: {
           id: input.id,
           name: input.name,
           description: input.description,
           settings: input.settings,
-          userId: ctx.userId,
         },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Workspace update requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+      await workspaceRepo.update(
+        input.id,
+        {
+          name: input.name || undefined,
+          settings: input.settings || undefined,
+        },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaces",
+        action: "update",
+        phase: "completed",
+        subjectId: input.id,
         userId: ctx.userId,
+        workspaceId: input.id,
+        data: {
+          id: input.id,
+          name: input.name,
+          description: input.description,
+          settings: input.settings,
+        },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "workspace",
+        action: "update",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: input.id,
       });
 
       return {
-        status: "requested",
-        message: "Workspace update requested",
+        status: "updated" as const,
+        message: "Workspace updated successfully.",
       };
     }),
 
@@ -289,22 +407,69 @@ export const workspacesRouter = router({
         intelligenceServiceId: input.serviceId ?? undefined,
       };
 
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "workspaces",
         action: "update",
-        subjectId: input.workspaceId,
         data: {
           id: input.workspaceId,
+          settings: mergedSettings,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Intelligence service update requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+      await workspaceRepo.update(
+        input.workspaceId,
+        {
           name: workspace.name,
           settings: mergedSettings,
-          userId: ctx.userId,
         },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaces",
+        action: "update",
+        phase: "completed",
+        subjectId: input.workspaceId,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: {
+          id: input.workspaceId,
+          settings: mergedSettings,
+        },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "workspace",
+        action: "update",
+        subjectId: input.workspaceId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        status: "requested",
-        message: "Intelligence service update requested",
+        status: "updated" as const,
+        message: "Intelligence service updated successfully.",
       };
     }),
 
@@ -314,27 +479,61 @@ export const workspacesRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.id,
         subjectType: "workspaces",
         action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Workspace deletion requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+      await workspaceRepo.delete(input.id, ctx.userId);
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaces",
+        action: "delete",
+        phase: "completed",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: input.id,
+        data: { id: input.id },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "workspace",
+        action: "delete",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: input.id,
       });
 
       return {
-        status: "requested",
-        message:
-          "Workspace deletion requested. Only the owner can approve this.",
+        status: "deleted" as const,
+        message: "Workspace deleted successfully.",
       };
     }),
 
   /**
    * Add member to workspace
-   * Event-driven: emits workspaceMembers.add.requested
    */
   addMember: protectedProcedure
     .input(
@@ -345,23 +544,64 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "workspaceMember",
         action: "add",
-        subjectId: `${input.workspaceId}-${input.userId}`,
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
           role: input.role,
-          invitedBy: ctx.userId,
         },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Member addition requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+
+      const member = await memberRepo.add(
+        {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          role: input.role,
+        },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaceMember",
+        action: "add",
+        phase: "completed",
+        subjectId: member.id,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        data: {
+          workspaceId: input.workspaceId,
+          targetUserId: input.userId,
+          role: input.role,
+          memberId: member.id,
+        },
       });
 
       return {
-        status: "requested",
-        message: "Member addition requested",
+        status: "added" as const,
+        memberId: member.id,
+        message: "Member added successfully.",
       };
     }),
 
@@ -401,21 +641,59 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "workspaceMember",
         action: "remove",
-        subjectId: `${input.workspaceId}-${input.userId}`,
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
         },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Member removal requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+
+      await memberRepo.remove(
+        {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+        },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaceMember",
+        action: "remove",
+        phase: "completed",
+        subjectId: `${input.workspaceId}-${input.userId}`,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        data: {
+          workspaceId: input.workspaceId,
+          targetUserId: input.userId,
+        },
       });
 
       return {
-        status: "requested",
-        message: "Member removal requested",
+        status: "removed" as const,
+        message: "Member removed successfully.",
       };
     }),
 
@@ -431,22 +709,63 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "workspaceMember",
         action: "updateRole",
-        subjectId: `${input.workspaceId}-${input.userId}`,
         data: {
           workspaceId: input.workspaceId,
           targetUserId: input.userId,
           newRole: input.role,
         },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Role update requires approval.",
+        };
+      }
+
+      // 2. Direct DB operation
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+
+      const member = await memberRepo.updateRole(
+        {
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          newRole: input.role as "owner" | "editor" | "viewer",
+        },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "workspaceMember",
+        action: "updateRole",
+        phase: "completed",
+        subjectId: member.id,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        data: {
+          workspaceId: input.workspaceId,
+          targetUserId: input.userId,
+          newRole: input.role,
+          memberId: member.id,
+        },
       });
 
       return {
-        status: "requested",
-        message: "Role update requested",
+        status: "updated" as const,
+        message: "Member role updated successfully.",
       };
     }),
 
@@ -507,8 +826,8 @@ export const workspacesRouter = router({
         role: invite.role,
       });
 
-      // TODO: Send email via Inngest job
-      // await inngest.send({ name: 'workspace/invite', data: { inviteId: invite.id } });
+      // TODO: Send email via pg-boss job
+      // await getBoss().send('workspace-invite-email', { inviteId: invite.id });
 
       return invite;
     }),
@@ -556,24 +875,43 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
       }
 
-      await emitRequestEvent({
+      // Direct DB operation — add member and delete invite
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+
+      const member = await memberRepo.add(
+        {
+          workspaceId: invite.workspaceId,
+          userId: ctx.userId,
+          role: invite.role as "owner" | "editor" | "viewer",
+          inviteId: invite.id,
+        },
+        ctx.userId
+      );
+
+      // Audit log
+      auditLog({
         subjectType: "workspaceMember",
         action: "add",
-        subjectId: `${invite.workspaceId}-${ctx.userId}`,
+        phase: "completed",
+        subjectId: member.id,
+        userId: ctx.userId,
+        workspaceId: invite.workspaceId,
         data: {
           workspaceId: invite.workspaceId,
           userId: ctx.userId,
           role: invite.role,
           invitedBy: invite.invitedBy,
           inviteId: invite.id,
+          memberId: member.id,
         },
-        userId: ctx.userId,
       });
 
       return {
-        status: "requested",
+        status: "accepted" as const,
         workspaceId: invite.workspaceId,
-        message: "Invite acceptance requested",
+        message: "Invite accepted successfully.",
       };
     }),
 

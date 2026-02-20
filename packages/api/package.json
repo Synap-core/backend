@@ -48,7 +48,6 @@
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "hono": "^4.11.4",
-    "inngest": "3.22.12",
     "jsonwebtoken": "^9.0.2",
     "postgres": "^3.4.8",
     "superjson": "^2.2.6",

@@ -1,8 +1,8 @@
 /**
  * Entities Router - Profile-Based Entity Management
  *
- * Handles entity CRUD with dynamic profiles (types).
- * No longer uses hardcoded EntityType enums.
+ * Synchronous CRUD with inline permission checks.
+ * No longer uses event pipeline — direct DB operations.
  */
 
 import { z } from "zod";
@@ -14,11 +14,17 @@ import {
   and,
   getDb,
   ProfileResolutionService,
+  EventRepository,
+  EntityRepository,
+  DocumentRepository,
+  sql,
 } from "@synap/database";
-import { entities } from "@synap/database/schema";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { entities, documents } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 
 export const entitiesRouter = router({
   /**
@@ -27,34 +33,26 @@ export const entitiesRouter = router({
   create: workspaceProcedure
     .input(
       z.object({
-        profileSlug: z.string().optional(), // Preferred: use profile slug
-        profileId: z.string().uuid().optional(), // Alternative: use profile ID
+        profileSlug: z.string().optional(),
+        profileId: z.string().uuid().optional(),
         title: z.string().optional(),
         description: z.string().optional(),
-        properties: z.record(z.string(), z.unknown()).optional(), // Properties validated against profile
+        properties: z.record(z.string(), z.unknown()).optional(),
         documentId: z.string().uuid().optional(),
-        content: z.string().optional(), // Optional markdown/HTML content; when set, backend creates document + entity in one go
-      })
-    )
-    .output(
-      z.object({
-        status: z.string(),
-        message: z.string(),
-        id: z.string().uuid(),
-        entity: z.any(), // Use z.any() since we're using dynamic profile slugs (BaseEntity)
+        content: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
       const entityId = randomUUID();
 
-      // Resolve profile if provided
+      // Resolve profile
       let profileSlug: string | undefined;
       if (input.profileSlug) {
         profileSlug = input.profileSlug;
       } else if (input.profileId) {
-        const db = await getDb();
-        const resolutionService = new ProfileResolutionService(db);
+        const database = await getDb();
+        const resolutionService = new ProfileResolutionService(database);
         const profile = await resolutionService.resolveProfile(
           input.profileId,
           ctx.userId,
@@ -74,54 +72,127 @@ export const entitiesRouter = router({
         });
       }
 
-      // Use BaseEntity type since we're using dynamic profile slugs
-      // EntitySchema is a discriminated union that requires specific type literals
-      const optimisticEntity = {
-        id: entityId,
-        type: profileSlug, // Use profile slug as type (dynamic, not in EntitySchema union)
-        title: input.title ?? null,
-        preview: input.description ?? null,
+      // Permission check
+      const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        documentId: input.documentId ?? null,
-        properties: input.properties || {},
-        metadata: {}, // Legacy field, kept for compatibility
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        deletedAt: null,
-        version: 1,
-        fileUrl: null,
-        filePath: null,
-        fileSize: null,
-        fileType: null,
-        checksum: null,
-      };
-
-      // Emit request event (stores in event log + publishes to Inngest)
-      await emitRequestEvent({
         subjectType: "entity",
         action: "create",
-        subjectId: entityId,
-        data: {
+        data: { id: entityId, profileSlug, title: input.title },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed",
+          message: "Entity creation proposed for review",
           id: entityId,
-          profileSlug: input.profileSlug,
-          profileId: input.profileId,
-          title: input.title,
-          preview: input.description,
-          properties: input.properties,
-          workspaceId: ctx.workspaceId,
-          documentId: input.documentId,
-          userId: ctx.userId,
-          content: input.content,
-        },
+          entity: null as any,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(database, eventRepo);
+      const docRepo = new DocumentRepository(database, eventRepo);
+
+      let createdEntity: any;
+
+      if (input.content) {
+        // Atomic entity + document creation
+        const { storage } = await import("@synap/storage");
+
+        const content = input.content || "";
+        const key = storage.buildPath(ctx.userId, "entity", entityId, "md");
+        const metadata = await storage.upload(key, content, {
+          contentType: "text/markdown",
+        });
+
+        const createdDocument = await docRepo.create(
+          {
+            title: input.title || "Untitled",
+            type: "markdown",
+            storageUrl: metadata.url,
+            storageKey: metadata.path,
+            size: metadata.size,
+            mimeType: "text/markdown",
+            userId: ctx.userId,
+            workspaceId: ctx.workspaceId,
+          },
+          ctx.userId
+        );
+
+        createdEntity = await entityRepo.create(
+          {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+            title: input.title || undefined,
+            preview: input.description || undefined,
+            documentId: createdDocument.id,
+            properties: input.properties || undefined,
+            profileSlug,
+          },
+          ctx.userId
+        );
+
+        await docRepo.update(
+          createdDocument.id,
+          { entityId: createdEntity.id },
+          ctx.userId
+        );
+      } else {
+        // Simple entity creation
+        createdEntity = await entityRepo.create(
+          {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+            title: input.title || undefined,
+            preview: input.description || undefined,
+            documentId: input.documentId || undefined,
+            properties: input.properties || undefined,
+            profileSlug,
+          },
+          ctx.userId
+        );
+      }
+
+      // Audit + side-effects (fire-and-forget)
+      auditLog({
+        subjectType: "entity",
+        action: "create",
+        phase: "completed",
+        subjectId: createdEntity.id,
         userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { profileSlug, title: input.title },
+      });
+
+      emitSideEffects({
+        subjectType: "entity",
+        action: "create",
+        subjectId: createdEntity.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { profileSlug, title: input.title },
       });
 
       return {
-        status: "requested",
-        message: "Entity creation requested",
-        id: entityId,
-        entity: optimisticEntity,
+        status: "created",
+        message: "Entity created",
+        id: createdEntity.id,
+        entity: {
+          ...createdEntity,
+          properties: createdEntity.properties || {},
+          fileUrl: null,
+          filePath: null,
+          fileSize: null,
+          fileType: null,
+          checksum: null,
+        },
       };
     }),
 
@@ -131,7 +202,7 @@ export const entitiesRouter = router({
   list: workspaceProcedure
     .input(
       z.object({
-        profileSlug: z.string().optional(), // Filter by profile slug
+        profileSlug: z.string().optional(),
         limit: z.number().min(1).max(100).default(50),
       })
     )
@@ -156,7 +227,6 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      // Map to Entity type (properties field is already in entities table)
       const typedEntities = results.map((entity) => ({
         ...entity,
         properties: entity.properties || {},
@@ -217,19 +287,10 @@ export const entitiesRouter = router({
 
   /**
    * Get entity by document ID (reverse lookup)
-   * Returns the entity that owns this document, or null if the document is standalone.
    */
   getByDocumentId: workspaceProcedure
-    .input(
-      z.object({
-        documentId: z.string().uuid(),
-      })
-    )
-    .output(
-      z.object({
-        entity: z.any().nullable(),
-      })
-    )
+    .input(z.object({ documentId: z.string().uuid() }))
+    .output(z.object({ entity: z.any().nullable() }))
     .query(async ({ input, ctx }) => {
       const entity = await db.query.entities.findFirst({
         where: and(
@@ -239,27 +300,23 @@ export const entitiesRouter = router({
         ),
       });
 
-      if (!entity) {
-        return { entity: null };
-      }
+      if (!entity) return { entity: null };
 
-      const typedEntity = {
-        ...entity,
-        properties: entity.properties || {},
-        fileUrl: null,
-        filePath: null,
-        fileSize: null,
-        fileType: null,
-        checksum: null,
-      } as Entity;
-
-      return { entity: typedEntity };
+      return {
+        entity: {
+          ...entity,
+          properties: entity.properties || {},
+          fileUrl: null,
+          filePath: null,
+          fileSize: null,
+          fileType: null,
+          checksum: null,
+        } as Entity,
+      };
     }),
 
   /**
-   * Get entity by ID.
-   * When includeProfile is true, also returns profile and effectiveProperties (same shape as profiles.get)
-   * so the client can render icon/color and property definitions without a separate profiles.get call.
+   * Get entity by ID
    */
   get: workspaceProcedure
     .input(
@@ -270,7 +327,7 @@ export const entitiesRouter = router({
     )
     .output(
       z.object({
-        entity: z.any(), // Use z.any() since entity can have dynamic profile slug
+        entity: z.any(),
         profile: z.any().optional(),
         effectiveProperties: z.array(z.any()).optional(),
       })
@@ -285,10 +342,7 @@ export const entitiesRouter = router({
       });
 
       if (!entity) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Entity not found",
-        });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
 
       const typedEntity = {
@@ -313,18 +367,12 @@ export const entitiesRouter = router({
         ctx.workspaceId
       );
 
-      if (!profile) {
-        return { entity: typedEntity };
-      }
+      if (!profile) return { entity: typedEntity };
 
       const effectiveProperties =
         await resolutionService.getEffectiveProperties(profile.id);
 
-      return {
-        entity: typedEntity,
-        profile,
-        effectiveProperties,
-      };
+      return { entity: typedEntity, profile, effectiveProperties };
     }),
 
   /**
@@ -336,58 +384,157 @@ export const entitiesRouter = router({
         id: z.string().uuid(),
         title: z.string().optional(),
         description: z.string().optional(),
-        documentId: z.string().uuid().nullable().optional(), // Link entity to document (for content)
-        properties: z.record(z.string(), z.unknown()).optional(), // Properties validated against profile
+        documentId: z.string().uuid().nullable().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "entity",
+        action: "update",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed", message: "Update proposed for review", proposalId: perm.proposalId };
+      }
+
+      // Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(database, eventRepo);
+      const docRepo = new DocumentRepository(database, eventRepo);
+
+      // Check for document link changes
+      const previousEntity = await db.query.entities.findFirst({
+        where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
+        columns: { documentId: true },
+      });
+
+      await entityRepo.update(
+        input.id,
+        {
+          title: input.title || undefined,
+          preview: input.description || undefined,
+          documentId: input.documentId,
+          properties: input.properties || undefined,
+        },
+        ctx.userId
+      );
+
+      // Sync document.entityId when entity.documentId changes
+      const oldDocumentId = previousEntity?.documentId ?? null;
+      const newDocumentId = input.documentId ?? null;
+      if (oldDocumentId !== newDocumentId) {
+        if (oldDocumentId) {
+          await docRepo.update(oldDocumentId, { entityId: null }, ctx.userId);
+        }
+        if (newDocumentId) {
+          await docRepo.update(newDocumentId, { entityId: input.id }, ctx.userId);
+        }
+      }
+
+      // Audit + side-effects
+      auditLog({
+        subjectType: "entity",
+        action: "update",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      emitSideEffects({
         subjectType: "entity",
         action: "update",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          title: input.title,
-          preview: input.description,
-          documentId: input.documentId,
-          properties: input.properties,
-          workspaceId: ctx.workspaceId,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
       });
 
-      return {
-        status: "requested",
-        message: "Entity update requested",
-      };
+      return { status: "updated", message: "Entity updated" };
     }),
 
   /**
    * Delete entity (soft delete)
    */
   delete: workspaceProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-      })
-    )
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "entity",
+        action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed", message: "Deletion proposed for review", proposalId: perm.proposalId };
+      }
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(database, eventRepo);
+      const docRepo = new DocumentRepository(database, eventRepo);
+
+      // Check for cascading document deletion
+      const { getUserPreference } = await import("@synap/database");
+      const userPref = await getUserPreference(ctx.userId, "entity.deleteDocument");
+
+      if (userPref) {
+        const entity = await db.query.entities.findFirst({
+          where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
+        });
+
+        if (entity?.documentId) {
+          const document = await db.query.documents.findFirst({
+            where: and(
+              eq(documents.id, entity.documentId),
+              eq(documents.userId, ctx.userId)
+            ),
+          });
+
+          if (document) {
+            const { storage } = await import("@synap/storage");
+            try {
+              if (document.storageKey) await storage.delete(document.storageKey);
+            } catch {}
+            await docRepo.delete(entity.documentId, ctx.userId);
+          }
+        }
+      }
+
+      await entityRepo.delete(input.id, ctx.userId, { deleteDocument: userPref });
+
+      // Audit + side-effects
+      auditLog({
+        subjectType: "entity",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      emitSideEffects({
         subjectType: "entity",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          workspaceId: ctx.workspaceId,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
       });
 
-      return {
-        status: "requested",
-        message: "Entity deletion requested",
-      };
+      return { status: "deleted", message: "Entity deleted" };
     }),
 });

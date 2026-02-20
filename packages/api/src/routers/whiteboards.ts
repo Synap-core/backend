@@ -45,19 +45,15 @@ export const whiteboardsRouter = router({
 
       const yjsRoomId = view.yjsRoomId ?? `whiteboard-${view.documentId}`;
 
-      // Publish snapshot event (async processing)
-      const { inngest } = await import("@synap/jobs");
+      // Publish snapshot job via pg-boss
+      const { getBoss } = await import("@synap/jobs");
 
-      await inngest.send({
-        name: "whiteboard.snapshot.requested",
-        data: {
-          viewId: input.viewId,
-          documentId: view.documentId,
-          yjsRoomId,
-          message: input.message || "Manual snapshot",
-          userId: ctx.userId,
-        },
-        user: { id: ctx.userId },
+      await getBoss().send("whiteboard-snapshot", {
+        viewId: input.viewId,
+        documentId: view.documentId,
+        yjsRoomId,
+        message: input.message || "Manual snapshot",
+        userId: ctx.userId,
       });
 
       return {
@@ -149,19 +145,15 @@ export const whiteboardsRouter = router({
         });
       }
 
-      // Publish restore event
-      const { inngest } = await import("@synap/jobs");
+      // Publish restore job via pg-boss
+      const { getBoss } = await import("@synap/jobs");
 
-      await inngest.send({
-        name: "whiteboard.restore.requested",
-        data: {
-          viewId: input.viewId,
-          versionId: input.versionId,
-          yjsRoomId,
-          content: version.content,
-          userId: ctx.userId,
-        },
-        user: { id: ctx.userId },
+      await getBoss().send("whiteboard-restore", {
+        viewId: input.viewId,
+        versionId: input.versionId,
+        yjsRoomId,
+        content: version.content,
+        userId: ctx.userId,
       });
 
       return {

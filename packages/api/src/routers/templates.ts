@@ -24,7 +24,8 @@ import {
   verifyPermission,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 
 export const templatesRouter = router({
   // List templates (user's + workspace's)
@@ -152,17 +153,15 @@ export const templatesRouter = router({
       const { randomUUID } = await import("crypto");
       const templateId = randomUUID();
 
-      await emitRequestEvent({
-        subjectType: "template",
-        action: "create",
-        subjectId: templateId,
-        data: {
+      const [_template] = await db
+        .insert(entityTemplates)
+        .values({
           id: templateId,
           userId: input.workspaceId ? undefined : ctx.userId,
           workspaceId: input.workspaceId || undefined,
           name: input.name,
           description: input.description || undefined,
-          targetType: input.targetType,
+          targetType: input.targetType as string,
           entityType: input.entityType || undefined,
           inboxItemType: input.inboxItemType || undefined,
           config: input.config,
@@ -170,12 +169,27 @@ export const templatesRouter = router({
           isDefault: input.isDefault,
           isPublic: input.isPublic,
           version: 1,
-          requestingUserId: ctx.userId,
-        },
+        })
+        .returning();
+
+      auditLog({
+        subjectType: "template",
+        action: "create",
+        phase: "completed",
+        subjectId: templateId,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
-      return { status: "requested", templateId };
+      emitSideEffects({
+        subjectType: "template",
+        action: "create",
+        subjectId: templateId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+      });
+
+      return { status: "created", templateId };
     }),
 
   // Update template
@@ -224,19 +238,32 @@ export const templatesRouter = router({
         }
       }
 
-      await emitRequestEvent({
+      await db
+        .update(entityTemplates)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(eq(entityTemplates.id, id as string));
+
+      auditLog({
+        subjectType: "template",
+        action: "update",
+        phase: "completed",
+        subjectId: id,
+        userId: ctx.userId,
+        workspaceId: existing.workspaceId || undefined,
+      });
+
+      emitSideEffects({
         subjectType: "template",
         action: "update",
         subjectId: id,
-        data: {
-          id,
-          ...updates,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: existing.workspaceId || undefined,
       });
 
-      return { status: "requested" };
+      return { status: "updated" };
     }),
 
   // Delete template
@@ -271,18 +298,28 @@ export const templatesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Unauthorized" });
       }
 
-      await emitRequestEvent({
+      await db
+        .delete(entityTemplates)
+        .where(eq(entityTemplates.id, input.id as string));
+
+      auditLog({
+        subjectType: "template",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: template.workspaceId || undefined,
+      });
+
+      emitSideEffects({
         subjectType: "template",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: template.workspaceId || undefined,
       });
 
-      return { status: "requested" };
+      return { status: "deleted" };
     }),
 
   // Duplicate template

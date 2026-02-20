@@ -2,9 +2,10 @@
  * Documents Router
  * Handles document upload, retrieval, updates, and collaborative sessions
  *
- * Architecture: Hybrid approach
- * - AI operations (create via chat): Full events
- * - User edits (typing): Direct updates + session tracking
+ * Architecture: Synchronous CRUD
+ * - All operations are direct DB + storage calls
+ * - Audit logging via events table (fire-and-forget)
+ * - Side-effects (search indexing, webhooks) via pg-boss queue
  */
 
 import { z } from "zod";
@@ -24,7 +25,8 @@ import {
 
 import { requireUserId } from "../utils/user-scoped.js";
 import { randomUUID } from "crypto";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects, getBoss } from "@synap/jobs";
 
 // ============================================================================
 // SCHEMAS
@@ -213,14 +215,14 @@ export const documentsRouter = router({
     }),
 
   /**
-   * Update document (Hybrid: Storage sync + Event for Metadata/Governor)
+   * Update document (Synchronous: Direct DB + Storage)
    */
   update: protectedProcedure
     .input(UpdateDocumentSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // 1. Verify existence & authorization ownership (Optimistic check)
+      // 1. Verify existence & authorization ownership
       const [document] = await db
         .select()
         .from(documents)
@@ -230,6 +232,9 @@ export const documentsRouter = router({
         .limit(1);
 
       if (!document) {
+        console.warn(
+          `[documents.update] 404 — documentId=${input.documentId} userId=${userId}`
+        );
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Document not found",
@@ -248,29 +253,54 @@ export const documentsRouter = router({
         );
       }
 
-      // 3. Emit Event for Metadata/DB Update
+      // 3. Direct DB update for metadata (title)
       // Version is NOT incremented here — versioning is handled by the snapshot system
       // (manual save, auto-save cron, session close). This prevents version inflation
       // from per-keystroke or frequent metadata updates.
-      await emitRequestEvent({
+      const updateFields: Record<string, unknown> = {
+        updatedAt: new Date(),
+      };
+      if (input.title) {
+        updateFields.title = input.title;
+      }
+
+      await db
+        .update(documents)
+        .set(updateFields)
+        .where(eq(documents.id, input.documentId));
+
+      // 4. Audit log (fire-and-forget)
+      auditLog({
         subjectType: "document",
         action: "update",
+        phase: "completed",
         subjectId: input.documentId,
+        userId,
         data: {
           id: input.documentId,
           title: input.title || document.title,
           message: input.message,
-          userId,
         },
-        userId,
       });
 
-      // 4. Response
+      // 5. Side-effects (search indexing, webhooks — fire-and-forget)
+      emitSideEffects({
+        subjectType: "document",
+        action: "update",
+        subjectId: input.documentId,
+        userId,
+        data: {
+          id: input.documentId,
+          title: input.title || document.title,
+        },
+      });
+
+      // 6. Response
       return { version: document.currentVersion, success: true };
     }),
 
   /**
-   * Delete document
+   * Delete document (Synchronous: Direct DB + Storage delete)
    */
   delete: protectedProcedure
     .input(
@@ -296,19 +326,30 @@ export const documentsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not authorized" });
       }
 
-      await emitRequestEvent({
+      // 1. Delete from DB
+      await db.delete(documents).where(eq(documents.id, input.documentId));
+
+      // 2. Delete from storage
+      await storage.delete(document.storageKey!);
+
+      // 3. Audit log (fire-and-forget)
+      auditLog({
+        subjectType: "document",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.documentId,
+        userId,
+        data: { id: input.documentId },
+      });
+
+      // 4. Side-effects (search de-index, webhooks — fire-and-forget)
+      emitSideEffects({
         subjectType: "document",
         action: "delete",
         subjectId: input.documentId,
-        data: {
-          id: input.documentId,
-          userId,
-        },
         userId,
+        data: { id: input.documentId },
       });
-
-      // All documents use MinIO storage (unified approach)
-      await storage.delete(document.storageKey!);
 
       return { success: true };
     }),
@@ -330,16 +371,11 @@ export const documentsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Publish event for worker to process
-      const { inngest } = await import("@synap/jobs");
-      await inngest.send({
-        name: "document.snapshot.requested",
-        data: {
-          documentId: input.documentId,
-          message: input.message,
-          userId,
-        },
-        user: { id: userId },
+      // Enqueue snapshot job via pg-boss
+      await getBoss().send("document-snapshot", {
+        documentId: input.documentId,
+        message: input.message,
+        userId,
       });
 
       return {
@@ -413,16 +449,11 @@ export const documentsRouter = router({
         });
       }
 
-      // Publish event for worker
-      const { inngest } = await import("@synap/jobs");
-      await inngest.send({
-        name: "document.restore.requested",
-        data: {
-          documentId: input.documentId,
-          versionId: input.versionId,
-          userId,
-        },
-        user: { id: userId },
+      // Enqueue restore job via pg-boss
+      await getBoss().send("document-restore", {
+        documentId: input.documentId,
+        versionId: input.versionId,
+        userId,
       });
 
       return {
@@ -472,6 +503,9 @@ export const documentsRouter = router({
         .limit(1);
 
       if (!document) {
+        console.warn(
+          `[documents.startSession] 404 — documentId=${input.documentId} userId=${userId}`
+        );
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Document not found",

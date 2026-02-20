@@ -211,7 +211,7 @@ export const systemRouter = router({
    * Publish an event to the system
    *
    * This procedure allows manual event publishing for testing and debugging.
-   * The event is validated, stored in the event store, and broadcast to Inngest workers.
+   * The event is validated, stored in the event store, and dispatched to pg-boss workers.
    */
   publishEvent: publicProcedure
     .input(
@@ -242,13 +242,12 @@ export const systemRouter = router({
       // Store in event repository (this will also broadcast via SSE hook)
       const storedEvent = await eventRepository.append(event);
 
-      // Publish to Inngest using the ACTUAL event type
-      // This allows the event to flow through the proper executor pipeline
-      const { inngest } = await import("@synap/jobs");
-      await inngest.send({
-        name: input.type, // Use the actual event type, not "api/event.logged"
-        data: input.data,
-        user: { id: input.userId },
+      // Dispatch to pg-boss side-effects queue for async processing
+      const { getBoss } = await import("@synap/jobs");
+      await getBoss().send("side-effects", {
+        eventType: input.type,
+        ...input.data,
+        userId: input.userId,
       });
 
       return {

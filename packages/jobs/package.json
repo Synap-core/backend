@@ -19,7 +19,7 @@
     "build": "tsc --build",
     "test": "vitest run",
     "test:unit": "vitest run -c vitest.unit.config.ts",
-    "dev": "npx inngest-cli@latest dev",
+    "dev": "tsx src/dev.ts",
     "index-entities": "tsx src/scripts/index-existing-entities.ts"
   },
   "dependencies": {
@@ -34,7 +34,7 @@
     "ai": "^4.0.0",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
-    "inngest": "3.22.12",
+    "pg-boss": "^10.1.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

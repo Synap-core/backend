@@ -10,7 +10,7 @@ import {
   collectionService,
   indexingService,
 } from "@synap/search";
-import { inngest } from "@synap/jobs";
+import { getBoss } from "@synap/jobs";
 
 export const typesenseRouter = router({
   /**
@@ -100,14 +100,12 @@ export const typesenseRouter = router({
     .mutation(async ({ input, ctx }) => {
       // TODO: Check if user has admin permission for workspace
 
-      // Trigger reindex job
-      await inngest.send({
-        name: "search.reindex.requested",
-        data: {
-          workspaceId: input.workspaceId,
-          collections: input.collections,
-          userId: ctx.userId,
-        },
+      // Trigger reindex job via pg-boss
+      const boss = getBoss();
+      await boss.send("search-reindex", {
+        workspaceId: input.workspaceId,
+        collections: input.collections,
+        userId: ctx.userId,
       });
 
       return {

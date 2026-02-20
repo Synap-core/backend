@@ -3,24 +3,15 @@
  *
  * Dual-Write Pattern:
  * 1. Saves event to TimescaleDB (audit trail, source of truth)
- * 2. Sends to Inngest (triggers workers for processing)
+ * 2. Sends to pg-boss (triggers workers for side-effect processing)
  *
  * This ensures both persistence AND real-time processing.
  */
 
-import { db, events, sql } from "@synap/database";
+import { db, events } from "@synap/database";
 import type { DomainEvent, EventDataFor } from "./domain-events.js";
 import { createLogger } from "@synap-core/core";
-import { Inngest } from "inngest";
-
 const logger = createLogger({ module: "event-publisher" });
-
-// Create Inngest client for event publishing
-// Note: This is separate from @synap/jobs client to avoid circular dependencies
-const inngest = new Inngest({
-  id: "synap-events-publisher",
-  name: "Synap Event Publisher",
-});
 
 // ============================================================================
 // PUBLISH OPTIONS
@@ -93,49 +84,8 @@ export async function publishEvent<T extends DomainEvent>(
 
   logger.debug({ eventId: result.id }, "Event saved to TimescaleDB");
 
-  // STEP 2: Send to Inngest (trigger workers)
-  try {
-    await inngest.send({
-      name: event.type,
-      data: {
-        eventId: result.id, // Reference to DB record
-        subjectId: event.subjectId,
-        subjectType: event.subjectType,
-        ...event.data,
-      },
-      user: {
-        id: options.userId,
-      },
-    });
-
-    logger.debug(
-      { eventId: result.id, type: event.type },
-      "Event sent to Inngest"
-    );
-  } catch (error) {
-    logger.error(
-      { err: error, eventId: result.id, type: event.type },
-      "Failed to send event to Inngest - marking for retry"
-    );
-
-    // Mark event for retry (background job will pick this up)
-    await sql`
-      UPDATE events 
-      SET metadata = ${JSON.stringify({
-        ...options.metadata,
-        inngest_pending: true,
-        inngest_retry_count: 0,
-        inngest_last_error: String(error),
-      })}::jsonb 
-      WHERE id = ${result.id}
-    `;
-
-    // Don't throw - event is saved, retry will handle Inngest
-    logger.warn(
-      { eventId: result.id },
-      "Event will be retried by background job"
-    );
-  }
+  // Side-effects (search indexing, embedding, etc.) are handled by routers
+  // via emitSideEffects() from @synap/jobs — no need to duplicate here.
 
   return { eventId: result.id };
 }

@@ -38,10 +38,6 @@ services:
       TYPESENSE_PROTOCOL: http
       TYPESENSE_API_KEY: ${TYPESENSE_API_KEY}
       TYPESENSE_ADMIN_API_KEY: ${TYPESENSE_ADMIN_API_KEY}
-      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
-      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
-      INNGEST_BASE_URL: http://inngest:8288
-      INNGEST_SERVE_HOST: ${INNGEST_SERVE_HOST:-http://backend:4000}
       # Intelligence Service
       INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
       INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
@@ -55,8 +51,6 @@ services:
       ORY_HYDRA_SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       minio:
         condition: service_healthy
@@ -386,24 +380,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ============================================================================
-  # INNGEST (Background Jobs)
-  # ============================================================================
-  inngest:
-    image: inngest/inngest:latest
-    restart: always
-    command: inngest dev -u http://backend:4000/api/inngest
-    environment:
-      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
-      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - synap-net
-    ports:
-      - "8288:8288" # Expose for debugging
 
   # ============================================================================
   # CADDY (Reverse Proxy + SSL)

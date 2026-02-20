@@ -5,7 +5,7 @@
  *
  * Flow (Flow 2):
  * 1. Try plugins first (if any enabled)
- * 2. Fallback to local simple processing (Inngest event)
+ * 2. Fallback to local simple processing (pg-boss job)
  *
  * This allows power users to connect their own Intelligence Hub via plugins,
  * while keeping a simple fallback for basic usage.
@@ -14,15 +14,12 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { Inngest } from "inngest";
+import { getBoss } from "@synap/jobs";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { pluginManager } from "../plugins/index.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "capture-router" });
-
-// Create Inngest client (avoid circular dependency with @synap/jobs)
-const inngest = new Inngest({ id: "synap-api" });
 
 export const captureRouter = router({
   /**
@@ -30,7 +27,7 @@ export const captureRouter = router({
    *
    * Flow:
    * 1. Try plugins first (if any enabled and can process thoughts)
-   * 2. Fallback to local simple processing (Inngest event)
+   * 2. Fallback to local simple processing (pg-boss job)
    *
    * This allows extensibility while keeping a simple default.
    */
@@ -84,15 +81,12 @@ export const captureRouter = router({
       // Step 2: Fallback to local simple processing
       logger.debug({ userId }, "Using local simple processing (fallback)");
 
-      await inngest.send({
-        name: "api/thought.captured",
-        data: {
-          content: input.content,
-          context: input.context || {},
-          capturedAt: new Date().toISOString(),
-          userId,
-          inputType: "text", // MVP: text only, will support voice/image later
-        },
+      await getBoss().send("ai-analyze-thought", {
+        content: input.content,
+        context: input.context || {},
+        capturedAt: new Date().toISOString(),
+        userId,
+        inputType: "text", // MVP: text only, will support voice/image later
       });
 
       return {

@@ -1,0 +1,41 @@
+/**
+ * Cron Scheduler
+ *
+ * Registers pg-boss cron schedules for periodic tasks.
+ * Replaces Inngest cron functions.
+ */
+
+import { getBoss } from "./boss.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "cron-scheduler" });
+
+/**
+ * Register all cron schedules with pg-boss.
+ * Call once after boss.start().
+ */
+export async function registerCronSchedules(): Promise<void> {
+  const boss = getBoss();
+
+  // Document auto-save (every 30 minutes)
+  await boss.schedule("doc-autosave", "*/30 * * * *", {});
+  logger.info("Registered cron: doc-autosave (every 30min)");
+
+  // Whiteboard auto-save (every 30 minutes)
+  await boss.schedule("whiteboard-autosave", "*/30 * * * *", {});
+  logger.info("Registered cron: whiteboard-autosave (every 30min)");
+
+  // Document persistence (every 10 minutes)
+  await boss.schedule("doc-persistence", "*/10 * * * *", {});
+  logger.info("Registered cron: doc-persistence (every 10min)");
+
+  // Background task scheduler (every 1 minute)
+  await boss.schedule("background-task-scheduler", "* * * * *", {});
+  logger.info("Registered cron: background-task-scheduler (every 1min)");
+
+  // Search reindex (every 30 minutes)
+  await boss.schedule("search-bulk-index", "*/30 * * * *", {});
+  logger.info("Registered cron: search-bulk-index (every 30min)");
+
+  logger.info("All cron schedules registered");
+}

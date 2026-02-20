@@ -18,7 +18,8 @@ import {
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { verifyPermission } from "@synap/database";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 import {
   generateShareToken,
   hashToken,
@@ -110,29 +111,40 @@ export const sharingRouter = router({
         : null;
       const passwordHash = input.password ? hashPassword(input.password) : null;
 
-      await emitRequestEvent({
-        subjectType: "sharing",
-        action: "create",
-        subjectId: shareId,
-        data: {
+      const [_share] = await db
+        .insert(resourceShares)
+        .values({
           id: shareId,
           resourceType: input.resourceType,
           resourceId: input.resourceId,
           visibility: "public",
           publicToken: token,
           tokenHash,
-          permission: "view",
+          permissions: { read: true },
           expiresAt,
           access: input.access ?? "anyone_with_link",
           passwordHash,
-          sharedByUserId: ctx.userId,
-          userId: ctx.userId,
-        },
+          createdBy: ctx.userId,
+        })
+        .returning();
+
+      auditLog({
+        subjectType: "sharing",
+        action: "create",
+        phase: "completed",
+        subjectId: shareId,
+        userId: ctx.userId,
+      });
+
+      emitSideEffects({
+        subjectType: "sharing",
+        action: "create",
+        subjectId: shareId,
         userId: ctx.userId,
       });
 
       return {
-        status: "requested",
+        status: "created",
         shareId,
         url: `${process.env.APP_URL}/s/${token}`,
       };
@@ -153,24 +165,35 @@ export const sharingRouter = router({
       const { randomUUID } = await import("crypto");
       const inviteId = randomUUID();
 
-      // Emit event for invitation
-      await emitRequestEvent({
-        subjectType: "sharing",
-        action: "create",
-        subjectId: inviteId,
-        data: {
+      const [_invite] = await db
+        .insert(resourceShares)
+        .values({
           id: inviteId,
           resourceType: input.resourceType,
           resourceId: input.resourceId,
-          sharedWithEmail: input.userEmail,
-          permission: "view",
-          sharedByUserId: ctx.userId,
-          userId: ctx.userId,
-        },
+          visibility: "invite_only",
+          invitedUsers: [input.userEmail],
+          permissions: { read: true },
+          createdBy: ctx.userId,
+        })
+        .returning();
+
+      auditLog({
+        subjectType: "sharing",
+        action: "create",
+        phase: "completed",
+        subjectId: inviteId,
         userId: ctx.userId,
       });
 
-      return { status: "requested", inviteId };
+      emitSideEffects({
+        subjectType: "sharing",
+        action: "create",
+        subjectId: inviteId,
+        userId: ctx.userId,
+      });
+
+      return { status: "created", inviteId };
     }),
 
   /**

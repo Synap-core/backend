@@ -20,7 +20,7 @@ FROM base AS builder
 COPY . .
 
 # Install all dependencies (including dev deps for building)
-RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
+RUN pnpm install --no-frozen-lockfile
 
 # Build the project using Turborepo
 RUN pnpm turbo build --filter=api --filter=@synap/realtime

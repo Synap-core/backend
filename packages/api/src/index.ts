@@ -43,9 +43,6 @@ export {
 // Re-export ensureDefaultWhiteboard from @synap/database for convenience
 export { ensureDefaultWhiteboard } from "@synap/database";
 
-// Export event handlers
-export { startEventProcessor, processEvents } from "./event-handlers/index.js";
-
 // ✅ ADDED: Export entity embedding helper for jobs package (Issue #5)
 export { generateAndStoreEmbedding } from "./routers/entities-data.js";
 

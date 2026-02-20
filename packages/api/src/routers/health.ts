@@ -21,25 +21,25 @@ export const healthRouter = router({
    * Checks all critical dependencies
    */
   ready: publicProcedure.query(async () => {
-    const checks = await Promise.allSettled([checkDatabase(), checkInngest()]);
+    const checks = await Promise.allSettled([checkDatabase(), checkJobQueue()]);
 
     const databaseOk = checks[0].status === "fulfilled";
-    const inngestOk = checks[1].status === "fulfilled";
+    const jobQueueOk = checks[1].status === "fulfilled";
 
-    const allReady = databaseOk && inngestOk;
+    const allReady = databaseOk && jobQueueOk;
 
     return {
       status: allReady ? "ready" : "degraded",
       timestamp: new Date().toISOString(),
       checks: {
         database: databaseOk ? "healthy" : "unhealthy",
-        inngest: inngestOk ? "healthy" : "unhealthy",
+        jobQueue: jobQueueOk ? "healthy" : "unhealthy",
       },
       details: {
         database: databaseOk
           ? undefined
           : (checks[0] as PromiseRejectedResult).reason?.message,
-        inngest: inngestOk
+        jobQueue: jobQueueOk
           ? undefined
           : (checks[1] as PromiseRejectedResult).reason?.message,
       },
@@ -110,17 +110,16 @@ async function checkDatabase(): Promise<void> {
 }
 
 /**
- * Check Inngest connectivity
+ * Check job queue (pg-boss) connectivity
  */
-async function checkInngest(): Promise<void> {
-  // Simple check - if we can import inngest, it's configured
-  // For deeper checks, you could ping the Inngest dev server
+async function checkJobQueue(): Promise<void> {
   try {
-    const { inngest } = await import("../utils/inngest-client.js");
-    if (!inngest) {
-      throw new Error("Inngest client not initialized");
+    const { getBoss } = await import("@synap/jobs");
+    const boss = getBoss();
+    if (!boss) {
+      throw new Error("pg-boss not initialized");
     }
   } catch (error) {
-    throw new Error(`Inngest check failed: ${error}`);
+    throw new Error(`Job queue check failed: ${error}`);
   }
 }

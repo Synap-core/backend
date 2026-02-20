@@ -1,16 +1,21 @@
 /**
  * Skills Router
  *
- * Handles CRUD operations for user-created skills.
+ * Synchronous CRUD operations for user-created skills.
+ * Direct DB operations with inline permission checks.
  * Skills are stored in the backend, executed in the Intelligence Service.
  */
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { skills, eq, and, desc } from "@synap/database";
+import { db, eq, and, desc } from "@synap/database";
+import { skills } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
+import { randomUUID } from "crypto";
 
 export const skillsRouter = router({
   /**
@@ -76,7 +81,6 @@ export const skillsRouter = router({
 
   /**
    * Create a new skill
-   * Event-driven: emits skills.create.requested
    */
   create: protectedProcedure
     .input(
@@ -93,40 +97,70 @@ export const skillsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { randomUUID } = await import("crypto");
       const skillId = randomUUID();
 
-      // Emit event for skill creation
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: input.workspaceId,
         subjectType: "skill",
         action: "create",
-        subjectId: skillId,
-        data: {
+        data: { id: skillId, name: input.name },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { id: skillId, status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const [skill] = await db
+        .insert(skills)
+        .values({
           id: skillId,
           userId,
           workspaceId: input.workspaceId,
           name: input.name,
           description: input.description,
           code: input.code,
-          parameters: input.parameters,
+          parameters: input.parameters || {},
           category: input.category,
           executionMode: input.executionMode,
           timeoutSeconds: input.timeoutSeconds,
-        },
+          status: "active",
+        })
+        .returning();
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "skill",
+        action: "create",
+        phase: "completed",
+        subjectId: skill.id,
+        userId,
+        workspaceId: input.workspaceId,
+        data: { name: input.name },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "skill",
+        action: "create",
+        subjectId: skill.id,
         userId,
         workspaceId: input.workspaceId,
       });
 
       return {
-        id: skillId,
-        success: true,
-        message: "Skill creation requested",
+        id: skill.id,
+        status: "created" as const,
       };
     }),
 
   /**
    * Update a skill
-   * Event-driven: emits skills.update.requested
    */
   update: protectedProcedure
     .input(
@@ -157,28 +191,59 @@ export const skillsRouter = router({
         });
       }
 
-      // Emit event for skill update
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existingSkill.workspaceId || undefined,
+        subjectType: "skill",
+        action: "update",
+        data: { id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const [_updated] = await db
+        .update(skills)
+        .set({
+          ...updateData,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(skills.id, id), eq(skills.userId, userId)))
+        .returning();
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "skill",
+        action: "update",
+        phase: "completed",
+        subjectId: id,
+        userId,
+        workspaceId: existingSkill.workspaceId || undefined,
+        data: updateData,
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "skill",
         action: "update",
         subjectId: id,
-        data: {
-          id,
-          ...updateData,
-        },
         userId,
         workspaceId: existingSkill.workspaceId || undefined,
       });
 
       return {
-        success: true,
-        message: "Skill update requested",
+        status: "updated" as const,
       };
     }),
 
   /**
    * Delete a skill
-   * Event-driven: emits skills.delete.requested
    */
   delete: protectedProcedure
     .input(
@@ -201,21 +266,49 @@ export const skillsRouter = router({
         });
       }
 
-      // Emit event for skill deletion
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existingSkill.workspaceId || undefined,
+        subjectType: "skill",
+        action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      await db
+        .delete(skills)
+        .where(and(eq(skills.id, input.id), eq(skills.userId, userId)));
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "skill",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: existingSkill.workspaceId || undefined,
+        data: { id: input.id },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "skill",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-        },
         userId,
         workspaceId: existingSkill.workspaceId || undefined,
       });
 
       return {
-        success: true,
-        message: "Skill deletion requested",
+        status: "deleted" as const,
       };
     }),
 });

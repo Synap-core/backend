@@ -11,7 +11,7 @@ FROM base AS builder
 COPY . .
 
 # Install all dependencies (including dev deps for building)
-RUN pnpm install --frozen-lockfile || (sleep 5 && pnpm install --frozen-lockfile) || (sleep 10 && pnpm install --frozen-lockfile)
+RUN pnpm install --no-frozen-lockfile
 
 # Build the API package (sequential to avoid worker OOM on constrained hosts)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build --filter=api --concurrency=1

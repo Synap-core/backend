@@ -1,14 +1,26 @@
 /**
  * Roles Router - Custom Role Management (RBAC + ABAC)
  *
- * Handles custom role CRUD with event-driven architecture.
+ * Synchronous CRUD with inline permission checks.
  * Supports workspace-scoped and global roles.
  */
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, eq, isNull, roles } from "@synap/database";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { TRPCError } from "@trpc/server";
+import {
+  db,
+  eq,
+  isNull,
+  getDb,
+  EventRepository,
+  RoleRepository,
+  sql,
+} from "@synap/database";
+import { roles } from "@synap/database/schema";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
 
 export const rolesRouter = router({
@@ -48,7 +60,10 @@ export const rolesRouter = router({
       });
 
       if (!role) {
-        throw new Error("Role not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Role not found",
+        });
       }
 
       return role;
@@ -56,7 +71,6 @@ export const rolesRouter = router({
 
   /**
    * Create a new role
-   * Event-driven: emits roles.create.requested
    */
   create: protectedProcedure
     .input(
@@ -71,12 +85,29 @@ export const rolesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
 
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "role",
         action: "create",
-        subjectId: id,
-        data: {
-          id,
+        data: { id, name: input.name },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const roleRepo = new RoleRepository(database, eventRepo);
+
+      const role = await roleRepo.create(
+        {
           name: input.name,
           description: input.description,
           workspaceId: input.workspaceId,
@@ -84,19 +115,37 @@ export const rolesRouter = router({
           filters: input.filters,
           createdBy: ctx.userId,
         },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "role",
+        action: "create",
+        phase: "completed",
+        subjectId: role.id,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { name: input.name },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "role",
+        action: "create",
+        subjectId: role.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        id,
-        status: "requested",
-        message: "Role creation requested",
+        id: role.id,
+        status: "created" as const,
       };
     }),
 
   /**
    * Update a role
-   * Event-driven: emits roles.update.requested
    */
   update: protectedProcedure
     .input(
@@ -106,49 +155,123 @@ export const rolesRouter = router({
         description: z.string().optional(),
         permissions: z.record(z.string(), z.any()).optional(),
         filters: z.record(z.string(), z.any()).optional(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "role",
         action: "update",
-        subjectId: input.id,
-        data: {
-          id: input.id,
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const roleRepo = new RoleRepository(database, eventRepo);
+
+      await roleRepo.update(
+        input.id,
+        {
           name: input.name,
           description: input.description,
           permissions: input.permissions,
           filters: input.filters,
         },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "role",
+        action: "update",
+        phase: "completed",
+        subjectId: input.id,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { name: input.name },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "role",
+        action: "update",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        status: "requested",
-        message: "Role update requested",
+        status: "updated" as const,
       };
     }),
 
   /**
    * Delete a role
-   * Event-driven: emits roles.delete.requested
    */
   delete: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        subjectType: "role",
+        action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const roleRepo = new RoleRepository(database, eventRepo);
+
+      await roleRepo.delete(input.id, ctx.userId);
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "role",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { id: input.id },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "role",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-        },
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        status: "requested",
-        message: "Role deletion requested",
+        status: "deleted" as const,
       };
     }),
 });

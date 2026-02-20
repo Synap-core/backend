@@ -11,7 +11,6 @@ import { router, protectedProcedure } from "../trpc.js";
 import { randomUUID } from "crypto";
 import { createSynapEvent } from "@synap-core/core";
 import { getEventRepository } from "@synap/database";
-import { publishEvent } from "../utils/inngest-client.js";
 import { storage } from "@synap/storage";
 import { createLogger } from "@synap-core/core";
 
@@ -84,29 +83,9 @@ export const contentRouter = router({
         requestId,
       });
 
-      // Append to event store
+      // Append to event store (audit trail only, no forwarding needed)
       const eventRepo = getEventRepository();
       await eventRepo.append(event);
-
-      // Publish for async processing
-      await publishEvent(
-        "api/event.logged",
-        {
-          id: event.id,
-          type: event.type,
-          subjectId: event.subjectId,
-          userId: event.userId,
-          version: 1,
-          timestamp: event.timestamp.toISOString(),
-          data: event.data,
-          metadata: { version: event.version, requestId: event.requestId },
-          source: event.source,
-          causationId: event.causationId,
-          correlationId: event.correlationId,
-          requestId: event.requestId,
-        },
-        userId
-      );
 
       return {
         success: true,
@@ -179,25 +158,6 @@ export const contentRouter = router({
 
         const eventRepo = getEventRepository();
         await eventRepo.append(event);
-
-        await publishEvent(
-          "api/event.logged",
-          {
-            id: event.id,
-            type: event.type,
-            subjectId: event.subjectId,
-            userId: event.userId,
-            version: 1,
-            timestamp: event.timestamp.toISOString(),
-            data: event.data,
-            metadata: { version: event.version, requestId: event.requestId },
-            source: event.source,
-            causationId: event.causationId,
-            correlationId: event.correlationId,
-            requestId: event.requestId,
-          },
-          userId
-        );
 
         const result: any = {
           success: true,

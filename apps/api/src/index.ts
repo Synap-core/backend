@@ -5,7 +5,7 @@
  * - tRPC API endpoints
  * - Ory Kratos routes (session-based authentication)
  * - Token Exchange endpoint
- * - Inngest handler
+ * - pg-boss job queue (background jobs)
  */
 
 // Load environment variables from .env
@@ -35,8 +35,7 @@ import {
   hubProtocolRestApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
-import { serve as inngestServe } from "inngest/hono";
-import { inngest, functions } from "@synap/jobs";
+import { startBoss, stopBoss, registerAllWorkers, registerCronSchedules } from "@synap/jobs";
 import crypto from "crypto";
 import { getCorsOrigins } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
@@ -403,15 +402,7 @@ app.use(
   })
 );
 
-// Inngest handler (for background jobs)
-app.use(
-  "/api/inngest",
-  inngestServe({
-    client: inngest,
-    functions,
-  })
-);
-apiLogger.info("Inngest handler registered at /api/inngest");
+// pg-boss is initialized in the server startup callback below
 
 // Admin UI — static SPA (served from /admin/)
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -504,8 +495,6 @@ app.onError((err, c) => {
 });
 
 // Start server
-const EVENT_PROCESSOR_START_DELAY_MS = 5000; // Delay to allow server to bind port first
-
 try {
   serve(
     {
@@ -523,12 +512,15 @@ try {
         "API server started"
       );
 
-      // Start event processor (delayed to allow server to bind port first)
-      const { startEventProcessor } = await import("@synap/api");
-      setTimeout(() => {
-        startEventProcessor();
-        apiLogger.info("Event processor started");
-      }, EVENT_PROCESSOR_START_DELAY_MS);
+      // Start pg-boss job queue
+      try {
+        await startBoss();
+        await registerAllWorkers();
+        await registerCronSchedules();
+        apiLogger.info("pg-boss job queue started with all workers registered");
+      } catch (err) {
+        apiLogger.error({ err }, "Failed to start pg-boss (non-fatal, side-effects will be unavailable)");
+      }
     }
   );
 } catch (err) {
@@ -542,8 +534,14 @@ runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
 
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
   apiLogger.info("SIGTERM received, shutting down gracefully");
+  try {
+    await stopBoss();
+    apiLogger.info("pg-boss stopped");
+  } catch (err) {
+    apiLogger.error({ err }, "Error stopping pg-boss");
+  }
   process.exit(0);
 });
 

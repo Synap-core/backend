@@ -7,6 +7,11 @@
  * - Integration with documents table
  * - Query execution with filters and sorts
  * - Manual entity ordering
+ *
+ * Architecture: Synchronous CRUD
+ * - All write operations are direct DB calls
+ * - Audit logging via events table (fire-and-forget)
+ * - Side-effects (search indexing, webhooks) via pg-boss queue
  */
 
 import { z } from "zod";
@@ -17,6 +22,7 @@ import {
   eq,
   and,
   desc,
+  sql as pgSql,
   sqlTemplate as sql,
   inArray,
   or,
@@ -32,10 +38,13 @@ import {
   PropertyMergingService,
   ViewDefaultColumnsService,
   getDb,
+  EventRepository,
+  ViewRepository,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 
 // Proper package imports
@@ -53,7 +62,7 @@ import {
 
 export const viewsRouter = router({
   /**
-   * Create a new view
+   * Create a new view (Synchronous: Direct DB insert)
    */
   create: protectedProcedure
     .input(
@@ -148,6 +157,7 @@ export const viewsRouter = router({
         }
       }
 
+      // Audit: log the requested event
       await ViewEvents.createRequested(ctx.userId, {
         type: input.type as ViewType,
         name: input.name as string,
@@ -198,51 +208,68 @@ export const viewsRouter = router({
         message: "Initial version",
       });
 
-      // Create view (Event-Driven)
+      // Create view directly via ViewRepository
       const viewId = genId();
-
       const baseMetadata = {
         entityCount: 0,
         createdBy: ctx.userId,
         ...input.metadata,
       };
-      const optimisticView = {
-        id: viewId,
-        workspaceId: input.workspaceId,
-        userId: ctx.userId,
-        type: input.type,
-        category,
-        name: input.name,
-        description: input.description,
-        documentId: doc.id,
-        metadata: baseMetadata,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
 
-      await emitRequestEvent({
+      const dbInstance = await getDb();
+      const eventRepo = new EventRepository(pgSql);
+      const viewRepo = new ViewRepository(dbInstance, eventRepo);
+
+      const createdView = await viewRepo.create(
+        {
+          id: viewId,
+          type: input.type as ViewType,
+          name: input.name,
+          description: input.description,
+          documentId: doc.id,
+          workspaceId: input.workspaceId || "",
+          userId: ctx.userId,
+          scopeProfileIds: input.scopeProfileIds,
+          scopeMode: input.scopeMode || "explicit",
+          query: (input.query || {}) as Record<string, unknown>,
+          config: (input.config || {}) as Record<string, unknown>,
+          embeddedViewIds: input.embeddedViewIds || [],
+          metadata: baseMetadata,
+        },
+        ctx.userId
+      );
+
+      // Audit log (fire-and-forget)
+      auditLog({
         subjectType: "view",
         action: "create",
+        phase: "completed",
         subjectId: viewId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         data: {
           id: viewId,
           type: input.type,
           name: input.name,
-          description: input.description,
           documentId: doc.id,
-          workspaceId: input.workspaceId,
-          scopeProfileIds: input.scopeProfileIds,
-          scopeMode: input.scopeMode || "explicit",
-          query: input.query || {},
-          config: input.config || {},
-          embeddedViewIds: input.embeddedViewIds || [],
-          metadata: baseMetadata,
-          userId: ctx.userId,
         },
-        userId: ctx.userId,
       });
 
-      return { view: optimisticView, documentId: doc.id, status: "requested" };
+      // Side-effects (search indexing, webhooks — fire-and-forget)
+      emitSideEffects({
+        subjectType: "view",
+        action: "create",
+        subjectId: viewId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: {
+          id: viewId,
+          type: input.type,
+          name: input.name,
+        },
+      });
+
+      return { view: createdView, documentId: doc.id, status: "created" };
     }),
 
   /**
@@ -524,7 +551,6 @@ export const viewsRouter = router({
             conditions.push(compiledFilters);
           }
         } catch (error) {
-          // ✅ FIX: Error on unknown properties (don't silently skip)
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: error instanceof Error ? error.message : "Invalid filter",
@@ -544,7 +570,7 @@ export const viewsRouter = router({
       const orderByClause: any[] = [];
       if (sorts && sorts.length > 0) {
         for (const sort of sorts as SortRule[]) {
-          // ✅ STRICT POLICY: Validate sort field
+          // STRICT POLICY: Validate sort field
           if (sort.field.startsWith("properties.")) {
             const propertySlug = sort.field.split(".")[1];
             const property = mergedProperties.get(propertySlug);
@@ -556,7 +582,7 @@ export const viewsRouter = router({
               });
             }
 
-            // ✅ STRICT: Must be indexed
+            // STRICT: Must be indexed
             if (!property.indexed) {
               throw new TRPCError({
                 code: "BAD_REQUEST",
@@ -564,7 +590,7 @@ export const viewsRouter = router({
               });
             }
 
-            // ✅ STRICT: Must exist in all profiles
+            // STRICT: Must exist in all profiles
             if (property.profiles.length !== view.scopeProfileIds.length) {
               throw new TRPCError({
                 code: "BAD_REQUEST",
@@ -757,7 +783,7 @@ export const viewsRouter = router({
       return { success: true };
     }),
   /**
-   * Update view metadata (name, description)
+   * Update view metadata (Synchronous: Direct DB update)
    */
   update: protectedProcedure
     .input(
@@ -848,35 +874,64 @@ export const viewsRouter = router({
         }
       }
 
-      await emitRequestEvent({
-        subjectType: "view",
-        action: "update",
-        subjectId: input.id,
-        data: {
-          id: input.id,
+      // Direct DB update via ViewRepository
+      const dbInstance = await getDb();
+      const eventRepo = new EventRepository(pgSql);
+      const viewRepo = new ViewRepository(dbInstance, eventRepo);
+
+      const updatedView = await viewRepo.update(
+        input.id,
+        {
           name: input.name,
           description: input.description,
           scopeProfileIds: input.scopeProfileIds,
           scopeMode: input.scopeMode,
-          query: input.query,
-          config: input.config,
+          query: input.query as Record<string, unknown> | undefined,
+          config: input.config as Record<string, unknown> | undefined,
           embeddedViewIds: input.embeddedViewIds,
-          schemaSnapshot: input.schemaSnapshot,
+          schemaSnapshot: input.schemaSnapshot as Record<string, unknown> | undefined,
           snapshotUpdatedAt: input.snapshotUpdatedAt,
-          type: input.type,
-          userId: ctx.userId,
         },
+        ctx.userId
+      );
+
+      // Audit log (fire-and-forget)
+      auditLog({
+        subjectType: "view",
+        action: "update",
+        phase: "completed",
+        subjectId: input.id,
         userId: ctx.userId,
+        workspaceId: view.workspaceId,
+        data: {
+          id: input.id,
+          name: input.name,
+          type: input.type,
+        },
+      });
+
+      // Side-effects (search indexing, webhooks — fire-and-forget)
+      emitSideEffects({
+        subjectType: "view",
+        action: "update",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: view.workspaceId,
+        data: {
+          id: input.id,
+          name: input.name || view.name,
+        },
       });
 
       return {
-        status: "requested",
-        message: "View update requested",
+        status: "updated",
+        message: "View updated",
+        view: updatedView,
       };
     }),
 
   /**
-   * Delete view
+   * Delete view (Synchronous: Direct DB delete)
    */
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
@@ -908,23 +963,40 @@ export const viewsRouter = router({
           message: permResult.reason || "Insufficient permissions",
         });
 
-      await emitRequestEvent({
-        subjectType: "view",
-        action: "delete",
-        subjectId: input.id,
-        data: {
-          id: input.id,
-          userId: ctx.userId,
-        },
-        userId: ctx.userId,
-      });
+      // Delete view via ViewRepository
+      const dbInstance = await getDb();
+      const eventRepo = new EventRepository(pgSql);
+      const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
-      // Optionally delete document (keeping this synchronous for safety/cleanup as discussed)
+      await viewRepo.delete(input.id, ctx.userId);
+
+      // Also delete the associated document
       if (view.documentId) {
         await db.delete(documents).where(eq(documents.id, view.documentId));
       }
 
-      return { success: true, status: "requested" };
+      // Audit log (fire-and-forget)
+      auditLog({
+        subjectType: "view",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: view.workspaceId,
+        data: { id: input.id },
+      });
+
+      // Side-effects (search de-index, webhooks — fire-and-forget)
+      emitSideEffects({
+        subjectType: "view",
+        action: "delete",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: view.workspaceId,
+        data: { id: input.id },
+      });
+
+      return { success: true, status: "deleted" };
     }),
 
   /**

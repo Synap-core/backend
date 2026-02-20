@@ -1,25 +1,40 @@
 /**
  * Relations Router - Relationship Querying
  *
- * Full CRUD operations for entity relationships.
- * CREATE and DELETE operations go through event flow (requested → validated → completed)
- * READ operations query the database directly
+ * Synchronous CRUD operations for entity relationships.
+ * Direct DB operations with inline permission checks.
  *
  * This router provides:
  * - get() - Get relations for an entity
  * - getRelated() - Get related entities
+ * - getStats() - Get relation statistics
+ * - create() - Create a new relation
+ * - delete() - Delete a relation
  */
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, eq, and, or, desc } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  desc,
+  getDb,
+  EventRepository,
+  RelationRepository,
+  sql,
+} from "@synap/database";
 import {
   relations,
   entities,
   RelationTypeSchema,
   type RelationType,
 } from "@synap/database/schema";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import { TRPCError } from "@trpc/server";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
 
 /**
@@ -272,7 +287,7 @@ export const relationsRouter = router({
 
       return { entities: relatedEntities };
     }),
-  /**
+
   /**
    * Get relation statistics for an entity
    */
@@ -327,26 +342,68 @@ export const relationsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
 
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "relation",
         action: "create",
-        subjectId: id,
         data: {
           id,
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,
-          workspaceId: input.workspaceId,
-          metadata: input.metadata,
-          userId: ctx.userId,
         },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const relationRepo = new RelationRepository(database, eventRepo);
+
+      const relation = await relationRepo.create(
+        {
+          id,
+          sourceEntityId: input.sourceEntityId,
+          targetEntityId: input.targetEntityId,
+          type: input.type,
+          workspaceId: input.workspaceId,
+          userId: ctx.userId,
+          metadata: input.metadata,
+        },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "relation",
+        action: "create",
+        phase: "completed",
+        subjectId: relation.id,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { sourceEntityId: input.sourceEntityId, targetEntityId: input.targetEntityId, type: input.type },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "relation",
+        action: "create",
+        subjectId: relation.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        id,
-        status: "requested",
-        message: "Relation creation requested",
+        id: relation.id,
+        status: "created" as const,
       };
     }),
 
@@ -357,23 +414,55 @@ export const relationsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        subjectType: "relation",
+        action: "delete",
+        data: { id: input.id },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const relationRepo = new RelationRepository(database, eventRepo);
+
+      await relationRepo.delete(input.id, ctx.userId);
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "relation",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { id: input.id },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "relation",
         action: "delete",
         subjectId: input.id,
-        data: {
-          id: input.id,
-          userId: ctx.userId,
-        },
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        status: "requested",
-        message: "Relation deletion requested",
+        status: "deleted" as const,
       };
     }),
 });

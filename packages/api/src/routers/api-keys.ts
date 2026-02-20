@@ -1,18 +1,26 @@
 /**
  * API Keys Router
  *
- * Hub Protocol V1.0 - Phase 2
- *
- * Event-driven API key management with bcrypt hashing.
- * ⚠️ SECURITY: Keys are displayed ONCE and never stored in plaintext.
+ * Synchronous CRUD with inline permission checks and bcrypt hashing.
+ * SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { API_KEY_SCOPES } from "@synap/database/schema";
-import { db, eq, apiKeys, workspaceMembers } from "@synap/database";
-import { emitRequestEvent } from "../utils/emit-event.js";
+import {
+  db,
+  eq,
+  getDb,
+  EventRepository,
+  ApiKeyRepository,
+  sql,
+} from "@synap/database";
+import { apiKeys, workspaceMembers } from "@synap/database/schema";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 import { randomUUID, randomBytes } from "crypto";
 
 /**
@@ -52,9 +60,8 @@ export const apiKeysRouter = router({
 
   /**
    * Create a new API key
-   * Event-driven: emits api_keys.create.requested
    *
-   * ⚠️ SECURITY: The key is displayed ONCE and cannot be retrieved later.
+   * SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
   create: protectedProcedure
     .input(
@@ -65,10 +72,33 @@ export const apiKeysRouter = router({
           .min(1),
         hubId: z.string().optional(),
         expiresInDays: z.number().int().min(1).max(365).optional(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
+
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        subjectType: "apiKey",
+        action: "create",
+        data: { id, keyName: input.keyName },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          id,
+          key: null as unknown as string,
+          keyPrefix: "",
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
 
       // Determine key prefix
       const keyPrefix = input.hubId
@@ -77,7 +107,7 @@ export const apiKeysRouter = router({
           : "synap_hub_test_"
         : "synap_user_";
 
-      // Generate key (plaintext - will be hashed in executor)
+      // Generate key (plaintext - will be hashed in repository)
       const key = generateApiKey(keyPrefix);
 
       // Calculate expiration
@@ -85,42 +115,63 @@ export const apiKeysRouter = router({
         ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
         : undefined;
 
-      await emitRequestEvent({
-        subjectType: "apiKey",
-        action: "create",
-        subjectId: id,
-        data: {
-          id,
+      // 2. Direct DB operation via repository (handles bcrypt hashing)
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      const apiKey = await apiKeyRepo.create(
+        {
           keyName: input.keyName,
           keyPrefix,
-          key, // Will be hashed in executor
+          key,
           hubId: input.hubId,
           scope: input.scope,
           expiresAt,
           userId: ctx.userId,
         },
+        ctx.userId
+      );
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "apiKey",
+        action: "create",
+        phase: "completed",
+        subjectId: apiKey.id,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { keyName: input.keyName, keyPrefix },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "create",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       // Return key ONLY once (never stored in plaintext)
       return {
-        id,
-        key, // ⚠️ Displayed ONCE
+        id: apiKey.id,
+        key, // Displayed ONCE
         keyPrefix,
-        status: "requested",
-        message: "⚠️ Save this key securely. It will not be displayed again.",
+        status: "created" as const,
+        message: "Save this key securely. It will not be displayed again.",
       };
     }),
 
   /**
    * Revoke an API key
-   * Event-driven: emits api_keys.revoke.requested
    */
   revoke: protectedProcedure
     .input(
       z.object({
         keyId: z.string().uuid(),
         reason: z.string().optional(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -130,34 +181,68 @@ export const apiKeysRouter = router({
       });
 
       if (!key || key.userId !== ctx.userId) {
-        throw new Error("API key not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "API key not found",
+        });
       }
 
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        subjectType: "apiKey",
+        action: "delete",
+        data: { id: input.keyId },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Direct DB operation via repository
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      await apiKeyRepo.revoke(input.keyId, ctx.userId, input.reason);
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "apiKey",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.keyId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { reason: input.reason },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
         subjectType: "apiKey",
         action: "delete",
         subjectId: input.keyId,
-        data: {
-          id: input.keyId,
-          reason: input.reason,
-        },
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        status: "requested",
-        message: "API key revocation requested",
+        status: "revoked" as const,
       };
     }),
 
   /**
    * Rotate an API key (create new, revoke old)
-   * Event-driven: emits api_keys.rotate.requested
    */
   rotate: protectedProcedure
     .input(
       z.object({
         keyId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -167,23 +252,70 @@ export const apiKeysRouter = router({
       });
 
       if (!oldKey || oldKey.userId !== ctx.userId) {
-        throw new Error("API key not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "API key not found",
+        });
       }
 
-      await emitRequestEvent({
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
         subjectType: "apiKey",
         action: "update",
-        subjectId: input.keyId,
-        data: {
-          id: input.keyId,
-          keyPrefix: oldKey.keyPrefix,
-        },
+        data: { id: input.keyId },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          id: null as unknown as string,
+          key: null as unknown as string,
+          keyPrefix: "",
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Generate new key
+      const newKey = generateApiKey(oldKey.keyPrefix);
+
+      // 2. Direct DB operation via repository (handles bcrypt + revoke old)
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      const newApiKey = await apiKeyRepo.rotate(input.keyId, newKey, ctx.userId);
+
+      // 3. Audit log
+      auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: newApiKey.id,
         userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { rotatedFromId: input.keyId },
+      });
+
+      // 4. Side-effects
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "update",
+        subjectId: newApiKey.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
       });
 
       return {
-        status: "requested",
-        message: "API key rotation requested. New key will be generated.",
+        id: newApiKey.id,
+        key: newKey, // Displayed ONCE
+        keyPrefix: oldKey.keyPrefix,
+        status: "rotated" as const,
+        message: "Save this new key securely. It will not be displayed again.",
       };
     }),
 

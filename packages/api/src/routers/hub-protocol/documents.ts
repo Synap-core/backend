@@ -12,7 +12,9 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { documentsRouter as regularDocumentsRouter } from "../documents.js";
 import { createHubProtocolCallerContext } from "./utils.js";
-import { emitRequestEvent } from "../../utils/emit-event.js";
+import { db, documents, normalizeDocumentType } from "@synap/database";
+import { auditLog } from "../../utils/audit-log.js";
+import { emitSideEffects } from "@synap/jobs";
 
 export const documentsRouter = router({
   /**
@@ -33,21 +35,54 @@ export const documentsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const documentId = randomUUID();
-      await emitRequestEvent({
-        subjectType: "document",
-        action: "create",
-        subjectId: documentId,
-        data: {
+      const userId = input.userId;
+      const docType = normalizeDocumentType(input.type, "markdown");
+      const extension = docType === "markdown" ? "md" : docType;
+
+      // Upload content to MinIO
+      const { storage } = await import("@synap/storage");
+      const content = input.content || "";
+      const storageKey = storage.buildPath(userId, "document", documentId, extension);
+      const metadata = await storage.upload(storageKey, content, {
+        contentType: "text/markdown",
+      });
+
+      // Insert document into DB
+      const [created] = await db
+        .insert(documents)
+        .values({
           id: documentId,
           title: input.title,
-          type: input.type,
-          content: input.content,
-          userId: input.userId,
-        },
+          type: docType,
+          storageUrl: metadata.url,
+          storageKey: metadata.path,
+          size: metadata.size,
+          mimeType: "text/markdown",
+          userId,
+          workspaceId: input.userId,
+          currentVersion: 1,
+          lastSavedVersion: 1,
+        })
+        .returning();
+
+      // Audit + side-effects (fire-and-forget)
+      auditLog({
+        subjectType: "document",
+        action: "create",
+        phase: "completed",
+        subjectId: documentId,
         userId: ctx.userId!,
         source: "intelligence",
       });
-      return { id: documentId, documentId };
+
+      emitSideEffects({
+        subjectType: "document",
+        action: "create",
+        subjectId: documentId,
+        userId: ctx.userId!,
+      });
+
+      return { id: created.id, documentId: created.id };
     }),
 
   /**

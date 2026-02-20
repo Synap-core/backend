@@ -16,7 +16,6 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { createSynapEvent } from "@synap-core/core";
 import { db, getEventRepository } from "@synap/database";
 import type { EventType, SubjectType } from "@synap/events";
-import { publishEvent } from "../utils/inngest-client.js";
 import { randomUUID } from "crypto";
 
 // Temporary schemas until we refactor
@@ -83,34 +82,9 @@ export const eventsRouter = router({
         metadata: input.metadata,
       });
 
-      // Append to Event Store
+      // Append to Event Store (events are audit trail, no need to forward to job queue)
       const eventRepo = getEventRepository();
       const eventRecord = await eventRepo.append(event);
-
-      // Publish to Inngest
-      await publishEvent(
-        "api/event.logged",
-        {
-          id: eventRecord.id,
-          type: eventRecord.eventType,
-          subjectId: eventRecord.subjectId,
-          subjectType: input.subjectType,
-          userId: eventRecord.userId,
-          version: input.version,
-          timestamp: eventRecord.timestamp.toISOString(),
-          data: eventRecord.data,
-          metadata: {
-            version: eventRecord.version,
-            requestId: eventRecord.metadata?.requestId,
-            ...input.metadata,
-          },
-          source: eventRecord.source,
-          causationId: eventRecord.causationId,
-          correlationId: eventRecord.correlationId,
-          requestId: eventRecord.metadata?.requestId,
-        },
-        userId
-      );
 
       return eventRecord;
     }),

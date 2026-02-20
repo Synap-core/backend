@@ -34,20 +34,17 @@ export const entitiesDataRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
+      // Publish entity embedding job via pg-boss
+      const { getBoss } = await import("@synap/jobs");
 
-      await inngest.send({
-        name: "entity.create.requested",
-        data: {
-          profileSlug: input.profileSlug || input.type,
-          type: input.type, // Legacy
-          title: input.title,
-          preview: input.description,
-          properties: input.properties,
-          userId: ctx.userId,
-        },
-        user: { id: ctx.userId },
+      await getBoss().send("entity-embedding", {
+        profileSlug: input.profileSlug || input.type,
+        type: input.type,
+        title: input.title,
+        preview: input.description,
+        properties: input.properties,
+        userId: ctx.userId,
+        action: "create",
       });
 
       return {
@@ -253,18 +250,15 @@ export const entitiesDataRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
+      // Publish entity embedding job via pg-boss
+      const { getBoss } = await import("@synap/jobs");
 
-      await inngest.send({
-        name: "entity.update.requested",
-        data: {
-          entityId: input.id,
-          title: input.title,
-          preview: input.description,
-          userId: ctx.userId,
-        },
-        user: { id: ctx.userId },
+      await getBoss().send("entity-embedding", {
+        entityId: input.id,
+        title: input.title,
+        preview: input.description,
+        userId: ctx.userId,
+        action: "update",
       });
 
       return {
@@ -283,16 +277,13 @@ export const entitiesDataRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // ✅ Publish .requested event
-      const { inngest } = await import("@synap/jobs");
+      // Publish entity embedding cleanup job via pg-boss
+      const { getBoss } = await import("@synap/jobs");
 
-      await inngest.send({
-        name: "entity.delete.requested",
-        data: {
-          entityId: input.id,
-          userId: ctx.userId,
-        },
-        user: { id: ctx.userId },
+      await getBoss().send("entity-embedding", {
+        entityId: input.id,
+        userId: ctx.userId,
+        action: "delete",
       });
 
       return {

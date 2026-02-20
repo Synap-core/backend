@@ -164,7 +164,7 @@ export const proposalsRouter = router({
         return { success: true };
       }
 
-      // Generic flow: emit validated event (request-shaped data from global-validator / chat)
+      // Generic flow: dispatch validated work via pg-boss
       if (isRequestShapedProposalData(payload)) {
         const {
           targetType,
@@ -172,8 +172,7 @@ export const proposalsRouter = router({
           data: requestData,
           requestId,
         } = payload;
-        const { inngest } = await import("@synap/jobs");
-        const eventName = `${targetType}.${changeType}.validated`;
+        const { getBoss } = await import("@synap/jobs");
         const eventPayload =
           typeof requestData === "object" && requestData !== null
             ? { ...requestData }
@@ -195,17 +194,17 @@ export const proposalsRouter = router({
           }
         }
 
-        await inngest.send({
-          name: eventName,
-          data: {
-            ...eventPayload,
-            workspaceId: proposal.workspaceId,
-            approvedBy: userId,
-            approvedAt: new Date().toISOString(),
-            approvalComment: input.comment,
-            requestId,
-          },
-          user: { id: userId },
+        // Dispatch to appropriate pg-boss queue based on target type
+        const queueName = targetType === "entity" ? "entity-embedding" : "side-effects";
+        await getBoss().send(queueName, {
+          ...eventPayload,
+          targetType,
+          changeType,
+          workspaceId: proposal.workspaceId,
+          approvedBy: userId,
+          approvedAt: new Date().toISOString(),
+          approvalComment: input.comment,
+          requestId,
         });
       }
 
@@ -273,37 +272,30 @@ export const proposalsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { randomUUID } = await import("crypto");
-      const { emitRequestEvent } = await import("../utils/emit-event.js");
-      const requestId = randomUUID();
 
-      // Route through the canonical event pipeline:
-      // DB write → event processor → Inngest → GlobalValidator → validated/proposal/denied
-      await emitRequestEvent({
-        subjectType: input.targetType,
-        action: input.changeType,
-        subjectId: input.targetId,
-        data: {
-          ...input.data,
-          id: input.targetId,
-          requestId,
-          reasoning: input.reasoning,
-        } as any,
-        userId,
-        workspaceId: (input.data.workspaceId as string) || undefined,
-        source: "api",
-        metadata: {
-          // Tag as explicit user proposal so downstream (validator, UI) can identify it
-          source: "user_proposal",
-          submittedBy: userId,
-        } as any,
-      });
+      // Insert proposal directly into DB
+      const [proposal] = await db
+        .insert(proposals)
+        .values({
+          workspaceId: (input.data.workspaceId as string) || "",
+          targetType: input.targetType,
+          targetId: input.targetId || "",
+          proposalType: "user_suggestion",
+          data: {
+            ...input.data,
+            changeType: input.changeType,
+            reasoning: input.reasoning,
+            submittedBy: userId,
+          },
+          status: ProposalStatus.PENDING,
+        })
+        .returning();
 
       return {
         success: true,
-        requestId,
-        status: "requested",
-        message: "Proposal submitted for validation",
+        requestId: proposal.id,
+        status: "proposed",
+        message: "Proposal submitted",
       };
     }),
 
