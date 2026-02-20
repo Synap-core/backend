@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, publicProcedure } from "../trpc.js";
 import {
   db,
   eq,
@@ -23,6 +23,7 @@ import {
   WorkspaceRepository,
   WorkspaceMemberRepository,
   sql,
+  users,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
@@ -30,6 +31,10 @@ import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
+import { config } from "@synap-core/core";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "workspaces" });
 
 /**
  * Workspace CRUD operations
@@ -826,8 +831,41 @@ export const workspacesRouter = router({
         role: invite.role,
       });
 
-      // TODO: Send email via pg-boss job
-      // await getBoss().send('workspace-invite-email', { inviteId: invite.id });
+      // Fire-and-forget email relay via Control Plane
+      const cpUrl = config.server.controlPlaneUrl;
+      const cpKey = config.server.controlPlaneInternalKey;
+      if (cpUrl && cpKey) {
+        const [workspace, inviter] = await Promise.all([
+          db.query.workspaces.findFirst({
+            where: eq(workspaces.id, input.workspaceId),
+            columns: { name: true },
+          }),
+          db.query.users.findFirst({
+            where: eq(users.id, ctx.userId),
+            columns: { name: true },
+          }),
+        ]);
+        const podSubdomain = (config.server as any).domain?.split(".")[0] ?? "";
+        fetch(`${cpUrl}/internal/workspace-invite-email`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": cpKey,
+          },
+          body: JSON.stringify({
+            podSubdomain,
+            email: input.email,
+            inviterName: inviter?.name ?? "A teammate",
+            workspaceName: workspace?.name ?? "Synap Workspace",
+            inviteToken: token,
+          }),
+        }).catch((err) =>
+          logger.warn(
+            { err },
+            "[createInvite] Failed to relay invite email to CP"
+          )
+        );
+      }
 
       return invite;
     }),
@@ -949,5 +987,26 @@ export const workspacesRouter = router({
         .where(eq(workspaceInvites.id, input.id));
 
       return { success: true };
+    }),
+
+  /**
+   * Preview invitation details (public — no auth required)
+   * Used by the accept-invite page before the user is logged in.
+   */
+  previewInvite: publicProcedure
+    .input(z.object({ token: z.string() }))
+    .query(async ({ input }) => {
+      const invite = await db.query.workspaceInvites.findFirst({
+        where: eq(workspaceInvites.token, input.token),
+        with: { workspace: { columns: { name: true } } },
+      });
+      if (!invite) return null;
+      if (invite.expiresAt < new Date()) return { expired: true as const };
+      return {
+        expired: false as const,
+        workspaceName: invite.workspace?.name ?? "Unknown Workspace",
+        role: invite.role,
+        expiresAt: invite.expiresAt,
+      };
     }),
 });

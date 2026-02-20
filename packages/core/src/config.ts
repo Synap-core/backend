@@ -103,6 +103,8 @@ const ServerConfigSchema = z.object({
   logLevel: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
+  controlPlaneUrl: z.string().url().optional(),
+  controlPlaneInternalKey: z.string().min(32).optional(),
 });
 
 const InngestConfigSchema = z.object({
@@ -252,6 +254,8 @@ function loadConfig(): Config {
         nodeEnv: process.env.NODE_ENV,
         corsOrigins: process.env.CORS_ORIGINS,
         logLevel: process.env.LOG_LEVEL,
+        controlPlaneUrl: process.env.CONTROL_PLANE_URL,
+        controlPlaneInternalKey: process.env.CONTROL_PLANE_INTERNAL_KEY,
       },
       inngest: {
         eventKey: process.env.INNGEST_EVENT_KEY,
