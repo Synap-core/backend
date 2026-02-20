@@ -19,6 +19,7 @@ import {
   documents,
   documentVersions,
   documentSessions,
+  normalizeDocumentType,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
@@ -72,7 +73,8 @@ const CreateDocumentSchema = z.object({
 export const documentsRouter = router({
   /**
    * Create a new empty document.
-   * workspaceId: from input or from X-Workspace-Id header (workspaceLink).
+   * Synchronous: inserts directly into DB + MinIO so the document ID is
+   * immediately usable by the frontend (no event-pipeline race condition).
    */
   create: workspaceProcedure
     .input(CreateDocumentSchema)
@@ -87,36 +89,46 @@ export const documentsRouter = router({
         });
       }
       const documentId = randomUUID();
+      const docType = normalizeDocumentType(input.type, "markdown");
+      const extension = docType === "markdown" ? "md" : docType;
+      const storageKey = storage.buildPath(userId, "document", documentId, extension);
 
-      await emitRequestEvent({
-        subjectType: "document",
-        action: "create",
-        subjectId: documentId,
-        data: {
-          id: documentId,
-          title: input.title,
-          type: input.type,
-          content: input.content,
-          projectId: input.projectId,
-          workspaceId: ctx.workspaceId || undefined,
-          userId,
-        },
-        userId,
+      // 1. Upload content to MinIO
+      const content = input.content || "";
+      const metadata = await storage.upload(storageKey, content, {
+        contentType: "text/markdown",
       });
 
-      return {
-        status: "requested",
-        message: "Document creation requested",
-        document: {
+      // 2. Insert document into DB
+      const [document] = await db
+        .insert(documents)
+        .values({
           id: documentId,
+          userId,
+          workspaceId,
           title: input.title,
+          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
+          storageUrl: metadata.url,
+          storageKey: metadata.path,
+          size: metadata.size,
+          mimeType: "text/markdown",
+          currentVersion: 1,
+        })
+        .returning();
+
+      return {
+        status: "created",
+        message: "Document created",
+        document: {
+          id: document.id,
+          title: document.title,
         },
       };
     }),
 
   /**
    * Upload a new document.
-   * workspaceId: from input or from X-Workspace-Id header (workspaceLink).
+   * Synchronous: inserts directly into DB + MinIO.
    */
   upload: workspaceProcedure
     .input(UploadDocumentSchema)
@@ -131,29 +143,38 @@ export const documentsRouter = router({
         });
       }
       const documentId = randomUUID();
+      const docType = normalizeDocumentType(input.type, "markdown");
+      const extension = docType === "markdown" ? "md" : docType;
+      const mimeType = input.mimeType || "text/plain";
+      const storageKey = storage.buildPath(userId, "document", documentId, extension);
 
-      await emitRequestEvent({
-        subjectType: "document",
-        action: "create",
-        subjectId: documentId,
-        data: {
-          id: documentId,
-          title: input.title,
-          type: input.type,
-          language: input.language || undefined,
-          content: input.content,
-          mimeType: input.mimeType || undefined,
-          projectId: input.projectId || undefined,
-          workspaceId: ctx.workspaceId || undefined,
-          userId,
-        },
-        userId,
+      // 1. Upload content to MinIO
+      const metadata = await storage.upload(storageKey, input.content, {
+        contentType: mimeType,
       });
 
+      // 2. Insert document into DB
+      const [document] = await db
+        .insert(documents)
+        .values({
+          id: documentId,
+          userId,
+          workspaceId,
+          title: input.title || "Untitled",
+          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
+          language: input.language || undefined,
+          storageUrl: metadata.url,
+          storageKey: metadata.path,
+          size: metadata.size,
+          mimeType,
+          currentVersion: 1,
+        })
+        .returning();
+
       return {
-        status: "requested",
-        message: "Document upload requested",
-        documentId,
+        status: "created",
+        message: "Document uploaded",
+        documentId: document.id,
       };
     }),
 
