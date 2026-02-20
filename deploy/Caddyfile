@@ -3,6 +3,13 @@
     email {$EMAIL}
 }
 
+# Intelligence Service — own domain for multi-backend access
+# Mirrors /opt/intelligence-hub/deploy/Caddyfile (standalone mode)
+# Needed here because backend's Caddy owns ports 80/443 in colocated mode
+{$INTELLIGENCE_DOMAIN:ai.synap.live} {
+    reverse_proxy intelligence-service:3001
+}
+
 {$DOMAIN} {
     # Automatic HTTPS with Let's Encrypt
 

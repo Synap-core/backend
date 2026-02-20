@@ -223,8 +223,7 @@ services:
       - redis_data:/data
     networks:
       - synap-net
-    ports:
-      - "6379:6379"
+    # No public port — Redis only accessible within Docker network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -436,7 +435,9 @@ services:
       realtime:
         condition: service_started # Changed from service_healthy to service_started (less strict)
     dns:
-      - 127.0.0.11 # Docker's internal DNS
+      - 127.0.0.11 # Docker's internal DNS (for container names)
+      - 1.1.1.1    # Cloudflare (for external domains like ACME CAs)
+      - 8.8.8.8    # Google (fallback)
 
   # ============================================================================
   # MONITORING (Dozzle)
