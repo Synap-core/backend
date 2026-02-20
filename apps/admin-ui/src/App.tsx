@@ -7,7 +7,6 @@ import InvestigatePage from "./pages/(v2)/InvestigatePage";
 import TestingPage from "./pages/(v2)/TestingPage";
 import DatabasePage from "./pages/(v2)/DatabasePage";
 import SubscribersPage from "./pages/(v2)/SubscribersPage";
-import FlowPageV3 from "./pages/(v2)/FlowPageV3";
 import FilesPage from "./pages/(v2)/FilesPage";
 
 // Management Pages
@@ -34,7 +33,6 @@ function App() {
         <Route path="data" element={<DatabasePage />} />
         <Route path="files" element={<FilesPage />} />
         <Route path="automation" element={<SubscribersPage />} />
-        <Route path="flow" element={<FlowPageV3 />} />
 
         {/* Management Routes */}
         <Route path="api-keys" element={<ApiKeysPage />} />

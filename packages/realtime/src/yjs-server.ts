@@ -13,7 +13,11 @@ import * as Y from "yjs";
 import { YSocketIO } from "y-socket.io/dist/server";
 import type { Server as SocketIOServer } from "socket.io";
 import { db, eq, and } from "@synap/database";
-import { documents, documentVersions } from "@synap/database/schema";
+import {
+  documents,
+  documentVersions,
+  documentSessions,
+} from "@synap/database/schema";
 import { storage } from "@synap/storage";
 
 export interface YjsServerConfig {
@@ -161,6 +165,7 @@ class DatabasePersistence {
 
       if (isWhiteboard && doc.storageKey) {
         // Whiteboard: save to MinIO (canonical source, no version)
+        // Try to extract Tldraw store from Yjs Map
         const yMap = ydoc.getMap(`tl_map_${documentId}`);
         const store: TldrawStoreSnapshot = {};
         yMap.forEach((val, key) => {
@@ -168,8 +173,23 @@ class DatabasePersistence {
             store[key] = val as unknown;
           }
         });
-        const tldrawJson = JSON.stringify({ store });
-        await storage.upload(doc.storageKey, Buffer.from(tldrawJson, "utf-8"), {
+
+        let content: string;
+        if (Object.keys(store).length > 0) {
+          // Tldraw store found — save as JSON
+          content = JSON.stringify({ store });
+        } else {
+          // No Tldraw map — save raw Yjs state as base64
+          // Frontend might use a different map name or direct Yjs updates
+          const state = Y.encodeStateAsUpdate(ydoc);
+          if (state.byteLength <= 2) {
+            // Empty doc, skip save
+            return;
+          }
+          content = `yjs:${Buffer.from(state).toString("base64")}`;
+        }
+
+        await storage.upload(doc.storageKey, Buffer.from(content, "utf-8"), {
           contentType: "application/json",
         });
         await db
@@ -177,7 +197,7 @@ class DatabasePersistence {
           .set({ updatedAt: new Date() })
           .where(eq(documents.id, documentId));
         console.log(
-          `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} records)`
+          `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} tldraw records, ${content.length} bytes)`
         );
         return;
       }
@@ -228,6 +248,92 @@ class DatabasePersistence {
       console.error(`[Yjs] Failed to save document ${roomName}:`, error);
     }
   }
+
+  /**
+   * Create a version snapshot when a room closes (all users disconnected).
+   * This is the primary versioning mechanism — content is persisted through
+   * Yjs realtime, and versions are created when editing sessions end.
+   */
+  async createSnapshot(roomName: string, ydoc: Y.Doc): Promise<void> {
+    try {
+      const documentId = parseRoomName(roomName);
+      if (!documentId) return;
+
+      const doc = await db.query.documents.findFirst({
+        where: eq(documents.id, documentId),
+      });
+
+      if (!doc) return;
+
+      const isWhiteboard = roomName.startsWith("whiteboard-");
+
+      if (isWhiteboard) {
+        // Whiteboards: just ensure MinIO is up-to-date (writeState already did this).
+        // No version row needed — whiteboards are always "latest state" in MinIO.
+        // Only persist to MinIO as final flush.
+        await this.writeState(roomName, ydoc);
+
+        await db
+          .update(documents)
+          .set({ updatedAt: new Date() })
+          .where(eq(documents.id, documentId));
+
+        console.log(
+          `[Yjs] Final save for whiteboard ${roomName} (session closed)`
+        );
+      } else {
+        // Documents: create an immutable version snapshot
+        const state = Y.encodeStateAsUpdate(ydoc);
+        const content = `yjs:${Buffer.from(state).toString("base64")}`;
+
+        // Skip empty snapshots
+        if (state.byteLength <= 2) return;
+
+        const newVersion = (doc.currentVersion || 0) + 1;
+
+        await db.insert(documentVersions).values({
+          documentId,
+          version: newVersion,
+          content,
+          author: "system",
+          authorId: "session-close",
+          message: "Auto-saved on session close",
+        });
+
+        await db
+          .update(documents)
+          .set({
+            currentVersion: newVersion,
+            lastSavedVersion: newVersion,
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, documentId));
+
+        console.log(
+          `[Yjs] Created version snapshot v${newVersion} for ${roomName} (session closed)`
+        );
+      }
+
+      // Mark all active sessions for this document as ended
+      await db
+        .update(documentSessions)
+        .set({
+          isActive: false,
+          endedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(documentSessions.documentId, documentId),
+            eq(documentSessions.isActive, true)
+          )
+        );
+    } catch (error) {
+      console.error(
+        `[Yjs] Failed to create snapshot for ${roomName}:`,
+        error
+      );
+    }
+  }
 }
 
 /**
@@ -269,6 +375,29 @@ export function setupYjsServer(
 
     saveIntervals.set(docName, timeout);
   });
+
+  // When last user disconnects from a room, create a version snapshot.
+  // The library already calls writeState + destroy — we add snapshot creation.
+  yServer.on(
+    "all-document-connections-closed",
+    (docOrArray: Y.Doc | Y.Doc[]) => {
+      // Library passes [doc] as array
+      const doc = Array.isArray(docOrArray) ? docOrArray[0] : docOrArray;
+      if (!doc) return;
+      const docName = (doc as any).name as string;
+      if (!docName) return;
+
+      // Flush any pending debounced save first
+      const pendingSave = saveIntervals.get(docName);
+      if (pendingSave) {
+        clearTimeout(pendingSave);
+        saveIntervals.delete(docName);
+      }
+
+      console.log(`[Yjs] Room closed: ${docName} — creating version snapshot`);
+      void persistence.createSnapshot(docName, doc);
+    }
+  );
 
   console.log("[Yjs] Server ready ✅");
   console.log(`  - Persistence interval: ${persistenceInterval}ms`);

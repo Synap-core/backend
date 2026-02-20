@@ -40,37 +40,49 @@ export default function MainLayout() {
       style={{
         minHeight: "100vh",
         backgroundColor: colors.background.secondary,
-        display: "flex",
-        flexDirection: "column",
       }}
     >
-      {/* Top Bar — full width, sticky */}
-      <TopNav onMenuOpen={() => setNavDrawerOpen(true)} />
-
-      {/* Body — flex row: sidebar + content */}
+      {/* Top Bar — fixed at top, full width */}
       <div
         style={{
-          display: "flex",
-          flex: 1,
-          overflow: "hidden",
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 100,
+          height: layout.topBarHeight,
         }}
       >
-        {/* Sidebar — desktop only */}
-        {!isMobile && (
-          <MainNav />
-        )}
+        <TopNav onMenuOpen={() => setNavDrawerOpen(true)} />
+      </div>
 
-        {/* Main Content */}
-        <main
+      {/* Sidebar — fixed left, below top bar (desktop only) */}
+      {!isMobile && (
+        <div
           style={{
-            flex: 1,
+            position: "fixed",
+            top: layout.topBarHeight,
+            left: 0,
+            bottom: 0,
+            width: layout.navWidth,
+            zIndex: 99,
             overflowY: "auto",
-            minWidth: 0,
           }}
         >
-          <Outlet />
-        </main>
-      </div>
+          <MainNav />
+        </div>
+      )}
+
+      {/* Main Content — offset by top bar height and sidebar width */}
+      <main
+        style={{
+          marginTop: layout.topBarHeight,
+          marginLeft: isMobile ? 0 : layout.navWidth,
+          minHeight: `calc(100vh - ${layout.topBarHeight})`,
+        }}
+      >
+        <Outlet />
+      </main>
 
       {/* Mobile Navigation Drawer */}
       <Drawer

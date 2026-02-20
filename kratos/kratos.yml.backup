@@ -32,7 +32,7 @@ serve:
   admin:
     base_url: http://localhost:4434
 selfservice:
-  default_browser_return_url: http://localhost:3000
+  default_browser_return_url: https://backend.synap.live/admin/
   allowed_return_urls:
     - http://localhost:3000
     - http://localhost:3000/*
@@ -46,25 +46,25 @@ selfservice:
       enabled: false
   flows:
     error:
-      ui_url: http://localhost:3000/error
+      ui_url: https://backend.synap.live/admin/error
     settings:
-      ui_url: http://localhost:3000/settings
+      ui_url: https://backend.synap.live/admin/settings
       privileged_session_max_age: 15m
     recovery:
       enabled: true
-      ui_url: http://localhost:3000/recovery
+      ui_url: https://backend.synap.live/admin/recovery
     verification:
       enabled: false # Disabled: mailslurper service not running
-      ui_url: http://localhost:3000/verification
+      ui_url: https://backend.synap.live/admin/verification
     logout:
       after:
-        default_browser_return_url: http://localhost:3000/auth
+        default_browser_return_url: https://backend.synap.live/admin/
     login:
-      ui_url: http://localhost:3000/auth
+      ui_url: https://backend.synap.live/admin/auth
       lifespan: 10m
     registration:
       lifespan: 10m
-      ui_url: http://localhost:3000/auth
+      ui_url: https://backend.synap.live/admin/auth
       after:
         password:
           hooks:

@@ -61,15 +61,15 @@ export const documentSnapshotWorker = inngest.createFunction(
       return v;
     });
 
-    // 4. Update document version metadata (The +1 Logic)
-    // - lastSavedVersion = newVersion (marking this snapshot as the latest save)
-    // - currentVersion = newVersion + 1 (starting the new "working" version)
+    // 4. Update document version metadata
+    // Both lastSavedVersion and currentVersion point to this snapshot.
+    // Version only advances when the next snapshot is created.
     await step.run("update-document-version", async () => {
       await db
         .update(documents)
         .set({
           lastSavedVersion: newVersion,
-          currentVersion: newVersion + 1,
+          currentVersion: newVersion,
           updatedAt: new Date(),
         })
         .where(eq(documents.id, documentId));
@@ -238,15 +238,20 @@ export const documentAutoSaveWorker = inngest.createFunction(
           await db.insert(documentVersions).values({
             documentId: session.documentId,
             version: newVersion,
-            content: content, // content is already a string
+            content: content,
             message: "Auto-save checkpoint",
             author: "system",
             authorId: "auto-save",
           });
 
+          // Update both currentVersion and lastSavedVersion to this snapshot
           await db
             .update(documents)
-            .set({ currentVersion: newVersion })
+            .set({
+              currentVersion: newVersion,
+              lastSavedVersion: newVersion,
+              updatedAt: new Date(),
+            })
             .where(eq(documents.id, session.documentId));
 
           return {

@@ -11,6 +11,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
+import { storage } from "@synap/storage";
 import {
   db,
   eq,
@@ -154,15 +155,35 @@ export const viewsRouter = router({
       });
 
       // Create document for content storage
+      const { randomUUID: genId } = await import("crypto");
+      const docId = genId();
+      const initialContent = input.initialContent || {};
+      const contentStr = JSON.stringify(initialContent);
+      const contentBuffer = Buffer.from(contentStr, "utf-8");
+
+      // Build proper storage path and upload to MinIO
+      const ext = input.type === "whiteboard" ? "json" : "json";
+      const storageKey = storage.buildPath(
+        ctx.userId,
+        input.type,
+        docId,
+        ext
+      );
+      const uploadResult = await storage.upload(storageKey, contentBuffer, {
+        contentType: "application/json",
+      });
+
       const [doc] = await db
         .insert(documents)
         .values({
+          id: docId,
           userId: ctx.userId,
           type: input.type,
           title: input.name,
-          storageUrl: "",
-          storageKey: `views/${input.type}/${Date.now()}`,
-          size: 0,
+          storageUrl: uploadResult.url,
+          storageKey: uploadResult.path,
+          size: uploadResult.size,
+          mimeType: "application/json",
           currentVersion: 1,
         } as any)
         .returning();
@@ -171,15 +192,14 @@ export const viewsRouter = router({
       await db.insert(documentVersions).values({
         documentId: doc.id,
         version: 1,
-        content: JSON.stringify(input.initialContent || {}),
+        content: contentStr,
         author: "user",
         authorId: ctx.userId,
         message: "Initial version",
       });
 
       // Create view (Event-Driven)
-      const { randomUUID } = await import("crypto");
-      const viewId = randomUUID();
+      const viewId = genId();
 
       const baseMetadata = {
         entityCount: 0,
@@ -356,18 +376,33 @@ export const viewsRouter = router({
           message: permResult.reason || "Insufficient permissions",
         });
 
-      // Load content from latest document version
+      // Load content: whiteboards from MinIO (canonical), others from document_versions
       let content = {};
       if (view.documentId) {
-        const latestVersion = await db.query.documentVersions.findFirst({
-          where: eq(documentVersions.documentId, view.documentId),
-          orderBy: [desc(documentVersions.version)],
+        const doc = await db.query.documents.findFirst({
+          where: eq(documents.id, view.documentId),
         });
-        if (latestVersion) {
+
+        if (doc?.storageKey && view.type === "whiteboard") {
+          // Whiteboard: MinIO is canonical source (Yjs writeState saves here)
           try {
-            content = JSON.parse(latestVersion.content);
-          } catch (e) {
+            const buffer = await storage.downloadBuffer(doc.storageKey);
+            content = JSON.parse(buffer.toString("utf-8"));
+          } catch {
             content = {};
+          }
+        } else {
+          // Other view types: load from document_versions
+          const latestVersion = await db.query.documentVersions.findFirst({
+            where: eq(documentVersions.documentId, view.documentId),
+            orderBy: [desc(documentVersions.version)],
+          });
+          if (latestVersion) {
+            try {
+              content = JSON.parse(latestVersion.content);
+            } catch {
+              content = {};
+            }
           }
         }
       }
@@ -670,27 +705,39 @@ export const viewsRouter = router({
         });
       }
 
-      // Create new version with updated content
+      // Save content to storage + create version snapshot
       if (view.documentId) {
         const doc = await db.query.documents.findFirst({
           where: eq(documents.id, view.documentId),
         });
+
+        const contentStr = JSON.stringify(input.content);
+
+        // Whiteboards: always push to MinIO (canonical source for Yjs)
+        if (doc?.storageKey && view.type === "whiteboard") {
+          await storage.upload(
+            doc.storageKey,
+            Buffer.from(contentStr, "utf-8"),
+            { contentType: "application/json" }
+          );
+        }
 
         const newVersion = (doc?.currentVersion || 0) + 1;
 
         await db.insert(documentVersions).values({
           documentId: view.documentId,
           version: newVersion,
-          content: JSON.stringify(input.content),
+          content: contentStr,
           author: "user",
           authorId: ctx.userId,
-          message: "Auto-save",
+          message: "Manual save",
         });
 
         await db
           .update(documents)
           .set({
             currentVersion: newVersion,
+            lastSavedVersion: newVersion,
             updatedAt: new Date(),
           })
           .where(eq(documents.id, view.documentId));

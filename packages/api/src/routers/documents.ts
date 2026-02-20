@@ -48,12 +48,12 @@ const UpdateDocumentSchema = z.object({
     .array(
       z.object({
         content: z.string(),
-        // Add other OT fields as needed
       })
     )
     .optional(),
-  version: z.number().int().positive(),
+  version: z.number().int().positive().optional(),
   message: z.string().optional(),
+  title: z.string().optional(),
 });
 
 const CreateDocumentSchema = z.object({
@@ -215,13 +215,11 @@ export const documentsRouter = router({
         });
       }
 
-      // 2. Direct storage update (to handle large content without blocking)
-      // Note: This bypasses strict governance for content, but governance will catch the metadata update
-      const newContent = input.delta?.[0]?.content || "";
-      const newVersion = document.currentVersion + 1;
-
+      // 2. Direct storage update for legacy content path
+      // NOTE: Primary content editing should go through Yjs realtime (WebSocket),
+      // not through this tRPC endpoint. This path exists for non-realtime updates only.
       if (input.delta) {
-        // All documents use MinIO storage (unified approach)
+        const newContent = input.delta[0]?.content || "";
         await storage.upload(
           document.storageKey!,
           Buffer.from(newContent, "utf-8"),
@@ -230,25 +228,24 @@ export const documentsRouter = router({
       }
 
       // 3. Emit Event for Metadata/DB Update
-      // This ensures the DB update goes through the unified flow (governance -> executor)
+      // Version is NOT incremented here — versioning is handled by the snapshot system
+      // (manual save, auto-save cron, session close). This prevents version inflation
+      // from per-keystroke or frequent metadata updates.
       await emitRequestEvent({
         subjectType: "document",
         action: "update",
         subjectId: input.documentId,
         data: {
           id: input.documentId,
-          currentVersion: newVersion,
-          title: document.title,
-          version: newVersion,
+          title: input.title || document.title,
           message: input.message,
           userId,
         },
         userId,
       });
 
-      // 4. Optimistic Response
-      // We assume storage succeeded and DB will follow.
-      return { version: newVersion, success: true };
+      // 4. Response
+      return { version: document.currentVersion, success: true };
     }),
 
   /**
@@ -460,38 +457,9 @@ export const documentsRouter = router({
         });
       }
 
-      // N+1 Versioning Pattern: Create working version when realtime session starts
-      // If currentVersion === lastSavedVersion, no working version exists yet - create it
-      if (document.currentVersion === document.lastSavedVersion) {
-        const newWorkingVersion = document.currentVersion + 1;
-
-        // Get current content from storage (all documents use MinIO)
-        const contentBuffer = await storage.downloadBuffer(
-          document.storageKey!
-        );
-        const content = contentBuffer.toString("utf-8");
-
-        // Create working version (N+1)
-        await db.insert(documentVersions).values({
-          documentId: input.documentId,
-          version: newWorkingVersion,
-          content,
-          author: "system",
-          authorId: userId,
-          message: "Realtime session started",
-        });
-
-        // Update document: currentVersion becomes N+1 (working), lastSavedVersion stays N (saved)
-        await db
-          .update(documents)
-          .set({
-            currentVersion: newWorkingVersion,
-            // lastSavedVersion stays the same (immutable)
-            updatedAt: new Date(),
-          })
-          .where(eq(documents.id, input.documentId));
-      }
-
+      // Session tracking only — no version bump on start.
+      // Versions are created when the editing session ends (room close)
+      // or on explicit save (Cmd+S / auto-save cron).
       const chatThreadId = randomUUID();
 
       const [session] = await db
@@ -506,6 +474,47 @@ export const documentsRouter = router({
         .returning();
 
       return { sessionId: session.id, chatThreadId };
+    }),
+
+  /**
+   * End editing session
+   *
+   * Marks the session as inactive. The Yjs server handles version snapshot
+   * creation when all users disconnect from the room (all-document-connections-closed).
+   * This endpoint is for explicit session cleanup from the client.
+   */
+  endSession: protectedProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const session = await db.query.documentSessions.findFirst({
+        where: and(
+          eq(documentSessions.id, input.sessionId),
+          eq(documentSessions.userId, userId)
+        ),
+      });
+
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Session not found",
+        });
+      }
+
+      if (!session.isActive) {
+        return { success: true, alreadyEnded: true };
+      }
+
+      await db
+        .update(documentSessions)
+        .set({
+          isActive: false,
+          endedAt: new Date(),
+        })
+        .where(eq(documentSessions.id, input.sessionId));
+
+      return { success: true };
     }),
 
   /**

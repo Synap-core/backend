@@ -4,7 +4,6 @@ import {
   IconHome,
   IconSearch,
   IconFlask,
-  IconHierarchy,
   IconDatabase,
   IconWebhook,
   IconFolder,
@@ -13,7 +12,6 @@ import {
   IconTerminal2,
   IconBrain,
   IconCheckbox,
-  IconMap,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
 import { colors, layout, spacing, typography } from "../../theme/tokens";
@@ -57,7 +55,6 @@ const sections: NavSection[] = [
       { path: "/data", label: "Database", icon: IconDatabase },
       { path: "/files", label: "Files", icon: IconFolder },
       { path: "/automation", label: "Webhooks", icon: IconWebhook },
-      { path: "/flow", label: "Architecture", icon: IconHierarchy },
       { path: "/testing", label: "Testing", icon: IconFlask },
     ],
   },
@@ -84,14 +81,10 @@ export default function MainNav({ onNavigate }: MainNavProps) {
     <nav
       style={{
         width: layout.navWidth,
-        height: `calc(100vh - ${layout.topBarHeight})`,
+        height: "100%",
         borderRight: `1px solid ${colors.border.default}`,
         backgroundColor: colors.background.primary,
         padding: `${spacing[3]} ${spacing[2]}`,
-        position: "sticky",
-        top: layout.topBarHeight,
-        overflowY: "auto",
-        flexShrink: 0,
       }}
       aria-label="Main navigation"
     >
