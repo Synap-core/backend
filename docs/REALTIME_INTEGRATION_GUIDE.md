@@ -724,6 +724,7 @@ const documentId = routeParams.documentId;   // From URL
 1. **Check room name**: Must be exactly `{documentId}` for documents or `whiteboard-{documentId}` for whiteboards. UUID format, no prefix/suffix mismatch.
 2. **Check WebSocket connection**: Open DevTools Network → WS tab. Look for connection to `/yjs|{roomName}`.
 3. **Check server logs**: `docker compose logs realtime --tail 50` — look for `[Yjs] Loaded...` or `[Yjs] Failed...` messages.
+4. **Persistence is synchronous**: The server awaits `bindState()` before sending sync-step-1 to clients. If you see empty content, the MinIO file itself may be empty (check with `mc cat`).
 
 ### Whiteboard loads empty after refresh
 

@@ -350,14 +350,32 @@ export function setupYjsServer(
   // Create YSocketIO server with database persistence
   const yServer = new YSocketIO(io, {
     gcEnabled: true,
-    // Note: persistInterval not in YSocketIOConfiguration, using event-based persistence
   });
 
-  // Hook into document lifecycle for custom persistence.
-  // bindState is async; the library may answer sync-step-1 before it completes (see ENTITY_PANEL_LAG_AND_REALTIME_AUDIT.md).
-  yServer.on("document-loaded", (docName: string, doc: Y.Doc) => {
-    void persistence.bindState(docName, doc);
-  });
+  // CRITICAL: Set persistence directly on the YSocketIO instance.
+  // The library awaits persistence.bindState() BEFORE starting sync with clients.
+  // If we used the "document-loaded" event instead, bindState would be fire-and-forget
+  // and clients would receive an empty doc before MinIO content is loaded (race condition).
+  //
+  // The library calls writeState on room close (all connections dropped) BEFORE destroying
+  // the doc, so we handle final snapshot creation inside writeState when the room is closing.
+  const closingRooms = new Set<string>();
+
+  (yServer as any).persistence = {
+    bindState: async (docName: string, ydoc: Y.Doc) => {
+      await persistence.bindState(docName, ydoc);
+    },
+    writeState: async (docName: string, ydoc: Y.Doc) => {
+      if (closingRooms.has(docName)) {
+        // Room is closing — do final snapshot instead of regular write
+        closingRooms.delete(docName);
+        await persistence.createSnapshot(docName, ydoc);
+      } else {
+        await persistence.writeState(docName, ydoc);
+      }
+    },
+    provider: null,
+  };
 
   // Debounced auto-save using interval
   const saveIntervals = new Map<string, NodeJS.Timeout>();
@@ -376,26 +394,27 @@ export function setupYjsServer(
     saveIntervals.set(docName, timeout);
   });
 
-  // When last user disconnects from a room, create a version snapshot.
-  // The library already calls writeState + destroy — we add snapshot creation.
+  // When last user disconnects, mark room as closing.
+  // The library then calls persistence.writeState() (which we intercept above
+  // to run createSnapshot instead) followed by doc.destroy().
   yServer.on(
     "all-document-connections-closed",
     (docOrArray: Y.Doc | Y.Doc[]) => {
-      // Library passes [doc] as array
       const doc = Array.isArray(docOrArray) ? docOrArray[0] : docOrArray;
       if (!doc) return;
       const docName = (doc as any).name as string;
       if (!docName) return;
 
-      // Flush any pending debounced save first
+      // Cancel any pending debounced save — the library's writeState will handle it
       const pendingSave = saveIntervals.get(docName);
       if (pendingSave) {
         clearTimeout(pendingSave);
         saveIntervals.delete(docName);
       }
 
-      console.log(`[Yjs] Room closed: ${docName} — creating version snapshot`);
-      void persistence.createSnapshot(docName, doc);
+      // Mark this room as closing so persistence.writeState triggers createSnapshot
+      closingRooms.add(docName);
+      console.log(`[Yjs] Room closing: ${docName}`);
     }
   );
 
