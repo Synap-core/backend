@@ -268,11 +268,9 @@ Event format: `{subjectType}.{action}.{phase}` -- always singular subject type.
 
 The single source of truth for `SubjectType`, `EventAction`, and `EventPhase` enums is `packages/types/src/events/unified.ts`.
 
-### Event Processor
+### Audit Trail Only
 
-`packages/api/src/event-handlers/index.ts` polls the events table and forwards `requested` and `completed` phase events to Inngest for background processing. The `validated` phase is NOT forwarded -- the global validator already sends those directly via `inngest.send()`.
-
-Watermark persistence: the processor stores its last-processed timestamp in the `system_settings` table (`event_processor_watermark` key) to avoid replaying old events on restart.
+Events are now purely an audit trail. They are written directly by `auditLog()` and `BaseRepository.emitCompleted()` -- there is no event processor or forwarding pipeline. The events table is append-only and never read by the application logic (only for debugging and compliance).
 
 ---
 
@@ -314,11 +312,10 @@ Background jobs are managed by pg-boss, a PostgreSQL-based job queue. Key worker
 | `packages/api/src/routers/entities.ts` | Entity tRPC router |
 | `packages/api/src/routers/documents.ts` | Document tRPC router |
 | `packages/api/src/routers/proposals.ts` | Proposal review/approve/reject |
-| `packages/api/src/event-handlers/index.ts` | Event processor (polls DB, forwards to Inngest) |
-| `packages/api/src/utils/emit-event.ts` | Event emission helper |
-| `packages/jobs/src/client.ts` | Inngest client configuration |
-| `packages/jobs/src/functions/global-validator.ts` | Global validator (Inngest functions, split into 2) |
-| `packages/jobs/src/executors/index.ts` | Executor registry for background event handling |
+| `packages/jobs/src/boss.ts` | pg-boss client (start/stop) |
+| `packages/jobs/src/emit-side-effects.ts` | Enqueue async side-effects after CRUD |
+| `packages/jobs/src/workers/index.ts` | Register all pg-boss queue handlers |
+| `packages/jobs/src/cron.ts` | Cron schedule registration |
 | `packages/hub-protocol/` | REST client for Intelligence Hub communication |
 | `packages/realtime/` | Yjs WebSocket server for document collaboration |
 | `packages/search/` | Typesense search integration |
@@ -389,7 +386,7 @@ The test suite covers health checks, entity CRUD, document operations, permissio
 | `DATABASE_URL` | PostgreSQL connection string |
 | `INTELLIGENCE_HUB_URL` | Intelligence Hub internal URL (`http://intelligence-service:3001`) |
 | `HUB_PROTOCOL_API_KEY` | API key for Hub Protocol authentication |
-| `INNGEST_SERVE_HOST` | Must be `http://backend:4000` in Docker |
+| `ADMIN_EMAIL` | Email address for admin user (bypasses invite requirement) |
 | `MINIO_ENDPOINT` | MinIO endpoint (`http://minio:9000` in Docker) |
 | `TYPESENSE_HOST` | Typesense hostname |
 
