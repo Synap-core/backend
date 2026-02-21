@@ -4,15 +4,19 @@
  * Synchronous replacement for the old globalValidator Inngest function.
  * Checks permissions and optionally creates proposals for AI-sourced actions.
  *
+ * Supports AI agent users: when agentUserId is provided, the agent's own
+ * workspace role determines permissions (not the triggering human's role).
+ *
  * Returns immediately — no async event pipeline.
  */
 
 import { db, proposals } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import { users, workspaces, ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
 import { broadcastNotification } from "@synap/jobs";
+import type { WorkspaceSettings } from "@synap/database/schema";
 
 const logger = createLogger({ module: "permission-check" });
 
@@ -23,6 +27,7 @@ export type PermissionResult =
 
 export interface PermissionCheckOpts {
   userId: string;
+  agentUserId?: string;
   workspaceId?: string;
   subjectType: string;
   action: string;
@@ -33,18 +38,21 @@ export interface PermissionCheckOpts {
 /**
  * Check permissions and optionally create a proposal.
  *
- * Logic (extracted from globalValidatorHandler):
+ * Logic:
  * 1. No workspaceId → auto-granted (personal resource)
  * 2. Map action → required permission
- * 3. Call verifyPermission()
- * 4. If denied → return { denied: true }
- * 5. If AI source + !aiAutoApprove → create proposal, return { granted: false, proposalId }
- * 6. Otherwise → return { granted: true }
+ * 3. Determine effective user: agentUserId (if provided) or userId
+ * 4. Call verifyPermission() with effective user
+ * 5. If denied → return { denied: true }
+ * 6. AI policy:
+ *    a. Agent user → check requireReviewFor list; if event listed, propose; else auto-approve
+ *    b. Non-agent AI source → use legacy aiAutoApprove toggle
+ * 7. Otherwise → return { granted: true }
  */
 export async function checkPermissionOrPropose(
   opts: PermissionCheckOpts
 ): Promise<PermissionResult> {
-  const { userId, workspaceId, subjectType, action, source, data } = opts;
+  const { userId, agentUserId, workspaceId, subjectType, action, source, data } = opts;
 
   // 1. Personal resources (no workspace) - implicit ownership
   if (!workspaceId) {
@@ -67,104 +75,152 @@ export async function checkPermissionOrPropose(
     requiredPermission = "write";
   }
 
-  // 3. Check workspace permission
+  // 3. Determine effective user for permission check
+  const effectiveUserId = agentUserId || userId;
+
+  // 4. Check workspace permission using the effective user's role
   try {
-    const { verifyPermission } = await import("@synap/database");
+    const { verifyPermission, eq } = await import("@synap/database");
 
     const result = await verifyPermission({
       db,
-      userId,
+      userId: effectiveUserId,
       workspace: { id: workspaceId },
       requiredPermission,
     });
 
     if (!result.allowed) {
       logger.warn(
-        { userId, workspaceId, requiredPermission, reason: result.reason },
+        { userId: effectiveUserId, workspaceId, requiredPermission, reason: result.reason },
         "Permission denied"
       );
       return { denied: true, reason: result.reason || "Permission denied" };
+    }
+
+    // 5. AI policy check
+    if (source === "ai" || source === "intelligence") {
+      // Check if the effective user is an AI agent
+      if (agentUserId) {
+        const [agentUser] = await db
+          .select({ userType: users.userType })
+          .from(users)
+          .where(eq(users.id, agentUserId))
+          .limit(1);
+
+        if (agentUser?.userType === "agent") {
+          // Agent user: permission already verified via role above.
+          // Check workspace requireReviewFor for per-event-type overrides.
+          const [ws] = await db
+            .select({ settings: workspaces.settings })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .limit(1);
+
+          const settings = ws?.settings as WorkspaceSettings | undefined;
+          const requireReview = settings?.aiGovernance?.requireReviewFor ?? [];
+          const eventKey = `${subjectType}.${action}`;
+
+          if (requireReview.includes(eventKey)) {
+            // Workspace explicitly requires review for this event type
+            return createProposal({ userId, workspaceId, subjectType, action, source, data });
+          }
+
+          // Agent has permission and no review required — auto-approve
+          return { granted: true };
+        }
+      }
+
+      // Non-agent AI source: use legacy aiAutoApprove toggle
+      const [ws] = await db
+        .select({ settings: workspaces.settings })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+
+      const settings = ws?.settings as WorkspaceSettings | undefined;
+      const aiAutoApprove =
+        settings?.aiGovernance?.autoApprove ??
+        (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
+        false;
+
+      if (!aiAutoApprove) {
+        return createProposal({ userId, workspaceId, subjectType, action, source, data });
+      }
     }
   } catch (error) {
     logger.error({ err: error }, "Permission check error");
     return { denied: true, reason: "Permission check error" };
   }
 
-  // 4. AI source policy check
-  if (source === "ai" || source === "intelligence") {
-    try {
-      const { workspaces, eq } = await import("@synap/database");
+  // 6. Permission granted
+  return { granted: true };
+}
 
-      const [ws] = await db
-        .select()
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId))
-        .limit(1);
+/**
+ * Create a proposal for an AI-sourced action that requires review.
+ */
+async function createProposal(opts: {
+  userId: string;
+  workspaceId: string;
+  subjectType: string;
+  action: string;
+  source?: string;
+  data: Record<string, unknown>;
+}): Promise<{ granted: false; proposalId: string }> {
+  const { userId, workspaceId, subjectType, action, source, data } = opts;
 
-      const aiAutoApprove = (ws?.settings as any)?.aiAutoApprove || false;
+  const targetId = (data.documentId || data.entityId || data.id || randomUUID()) as string;
+  const singularType = subjectType.endsWith("s")
+    ? subjectType.slice(0, -1)
+    : subjectType;
 
-      if (!aiAutoApprove) {
-        // Create proposal
-        const targetId = (data.documentId || data.entityId || data.id || randomUUID()) as string;
-        const singularType = subjectType.endsWith("s")
-          ? subjectType.slice(0, -1)
-          : subjectType;
+  const proposalData: RequestShapedProposalData = {
+    requestId: randomUUID(),
+    source: (source || "intelligence") as RequestShapedProposalData["source"],
+    sourceId: userId,
+    workspaceId,
+    targetType: singularType as RequestShapedProposalData["targetType"],
+    targetId,
+    changeType: action as RequestShapedProposalData["changeType"],
+    data,
+    reasoning: "AI proposal requires review",
+  };
 
-        const proposalData: RequestShapedProposalData = {
-          requestId: randomUUID(),
-          source: source as RequestShapedProposalData["source"],
-          sourceId: userId,
-          workspaceId,
-          targetType: singularType as RequestShapedProposalData["targetType"],
+  const [proposal] = await db
+    .insert(proposals)
+    .values({
+      workspaceId,
+      targetType: singularType,
+      targetId,
+      proposalType: action,
+      data: proposalData,
+      status: ProposalStatus.PENDING,
+    })
+    .returning();
+
+  // Broadcast proposal notification (non-critical)
+  try {
+    const requestId = (data.requestId as string) || randomUUID();
+    await broadcastNotification({
+      userId,
+      requestId,
+      message: {
+        type: "proposal:created",
+        data: {
+          proposalId: proposal.id,
+          targetType: singularType,
           targetId,
-          changeType: action as RequestShapedProposalData["changeType"],
-          data,
-          reasoning: "AI proposal requires review",
-        };
-
-        const [proposal] = await db
-          .insert(proposals)
-          .values({
-            workspaceId,
-            targetType: singularType,
-            targetId,
-            proposalType: action,
-            data: proposalData,
-            status: ProposalStatus.PENDING,
-          })
-          .returning();
-
-        // Broadcast proposal notification
-        try {
-          const requestId = (data.requestId as string) || randomUUID();
-          await broadcastNotification({
-            userId,
-            requestId,
-            message: {
-              type: "proposal:created",
-              data: {
-                proposalId: proposal.id,
-                targetType: singularType,
-                targetId,
-                changeType: action,
-                status: ProposalStatus.PENDING,
-              },
-              requestId,
-              status: "success",
-              timestamp: new Date().toISOString(),
-            },
-          });
-        } catch {
-          // Broadcast failure is non-critical
-        }
-
-        return { granted: false, proposalId: proposal.id };
-      }
-    } catch (error) {
-      logger.error({ err: error }, "AI policy check error — defaulting to grant");
-    }
+          changeType: action,
+          status: ProposalStatus.PENDING,
+        },
+        requestId,
+        status: "success",
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch {
+    // Broadcast failure is non-critical
   }
 
-  // 5. Permission granted
-  return { granted: true };
+  return { granted: false, proposalId: proposal.id };
 }

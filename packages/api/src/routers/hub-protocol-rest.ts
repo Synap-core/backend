@@ -245,6 +245,7 @@ app.post("/entities", async (c) => {
   }
   const body = (await c.req.json()) as {
     userId: string;
+    agentUserId?: string;
     workspaceId: string;
     type: string;
     title: string;
@@ -258,7 +259,9 @@ app.post("/entities", async (c) => {
     );
   }
   try {
-    const caller = await getCaller(c, { workspaceId: body.workspaceId, userId: body.userId });
+    // When agentUserId is provided, use the agent's identity for permission checks
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, { workspaceId: body.workspaceId, userId: actorId });
     const result = await (caller as any).entities.createEntity({
       userId: body.userId,
       type: body.type,
@@ -286,6 +289,7 @@ app.patch("/entities/:entityId", async (c) => {
   const entityId = c.req.param("entityId");
   const body = (await c.req.json()) as {
     userId: string;
+    agentUserId?: string;
     workspaceId: string;
     title?: string;
     preview?: string;
@@ -298,7 +302,8 @@ app.patch("/entities/:entityId", async (c) => {
     );
   }
   try {
-    const caller = await getCaller(c, { workspaceId: body.workspaceId, userId: body.userId });
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, { workspaceId: body.workspaceId, userId: actorId });
     await (caller as any).entities.updateEntity({
       entityId,
       userId: body.userId,
@@ -1078,6 +1083,43 @@ app.get("/commands/:id", async (c) => {
     return c.json(command);
   } catch (err) {
     logger.error({ err, id }, "getCommand failed");
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+/**
+ * GET /agent-users?workspaceId=...
+ * List AI agent users in a workspace (so the hub can discover available agents).
+ */
+app.get("/agent-users", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+  }
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  try {
+    const { users, workspaceMembers } = await import("@synap/database/schema");
+    const results = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        agentMetadata: users.agentMetadata,
+        role: workspaceMembers.role,
+      })
+      .from(users)
+      .innerJoin(
+        workspaceMembers,
+        and(
+          eq(workspaceMembers.userId, users.id),
+          eq(workspaceMembers.workspaceId, workspaceId)
+        )
+      )
+      .where(eq(users.userType, "agent"));
+    return c.json(results);
+  } catch (err) {
+    logger.error({ err }, "listAgentUsers failed");
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }
 });
