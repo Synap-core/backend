@@ -34,6 +34,7 @@ import { profilesRouter } from "./routers/profiles.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
+import { agentUsersRouter } from "./routers/agent-users.js";
 
 /**
  * Core API Router
@@ -75,6 +76,7 @@ export const coreRouter = router({
   profiles: profilesRouter,
   propertyDefs: propertyDefsRouter,
   profileProperties: profilePropertiesRouter,
+  agentUsers: agentUsersRouter,
 });
 
 export type AppRouter = typeof coreRouter;

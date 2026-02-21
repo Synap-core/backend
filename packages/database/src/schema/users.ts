@@ -7,12 +7,19 @@
  * - Kratos remains source of truth for authentication
  */
 
-import { pgTable, text, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { workspaces, workspaceMembers } from "./workspaces.js";
 import { entities } from "./entities.js";
 import { apiKeys } from "./api-keys.js";
 import { userPreferences } from "./user-preferences.js";
+
+export interface AgentMetadata {
+  agentType: string;
+  description?: string;
+  createdByUserId: string;
+  capabilities?: string[];
+}
 
 export const users = pgTable("users", {
   // Kratos identity ID (UUID as text)
@@ -28,8 +35,14 @@ export const users = pgTable("users", {
   timezone: text("timezone").default("UTC").notNull(),
   locale: text("locale").default("en").notNull(),
 
-  // Sync metadata
-  kratosIdentityId: text("kratos_identity_id").notNull(),
+  // User type: 'human' (Kratos-authenticated) or 'agent' (AI agent)
+  userType: text("user_type").notNull().default("human"),
+
+  // Agent-specific metadata (null for human users)
+  agentMetadata: jsonb("agent_metadata").$type<AgentMetadata | null>(),
+
+  // Sync metadata (nullable — agents have no Kratos identity)
+  kratosIdentityId: text("kratos_identity_id"),
   lastSyncedAt: timestamp("last_synced_at", {
     mode: "date",
     withTimezone: true,
