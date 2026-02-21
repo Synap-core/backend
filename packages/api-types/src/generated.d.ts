@@ -928,19 +928,6 @@ export interface EntityQuery {
 	/** Group by field (for kanban, timeline) */
 	groupBy?: string;
 }
-/**
- * View Content Types
- *
- * Defines the discriminated union for view content based on category.
- * Categories determine the structure and purpose of view content.
- */
-/**
- * View category determines content structure and rendering approach
- * - structured: Query-based views with interchangeable layouts (table, kanban, graph, etc.)
- * - canvas: Freeform drawing views (whiteboard, mindmap)
- * - composite: Views that compose other views (bento grid, dashboard)
- */
-export type ViewCategory = "structured" | "canvas" | "composite";
 declare enum AgentType {
 	DEFAULT = "default",
 	META = "meta",
@@ -1223,8 +1210,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				message: string;
-				id: string;
+				id: `${string}-${string}-${string}-${string}-${string}`;
 				entity: any;
+				proposalId: string;
+			} | {
+				status: string;
+				message: string;
+				id: any;
+				entity: any;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -1319,6 +1313,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				message: string;
+				proposalId: string;
+			} | {
+				status: string;
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -1329,6 +1328,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				message: string;
+				proposalId: string;
+			} | {
+				status: string;
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -1349,7 +1353,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inheritContext?: boolean | undefined;
 			};
 			output: {
-				threadId: undefined;
+				threadId: `${string}-${string}-${string}-${string}-${string}`;
 				status: string;
 				message: string;
 				thread?: undefined;
@@ -1498,7 +1502,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					threadId: string;
 					parentId: string | null;
-					role: "user" | "system" | "assistant";
+					role: "user" | "assistant" | "system";
 					previousHash: string | null;
 					hash: string;
 				}[];
@@ -1818,7 +1822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
-				requestId: `${string}-${string}-${string}-${string}-${string}`;
+				requestId: string;
 				status: string;
 				message: string;
 			};
@@ -2214,13 +2218,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				scope: string[];
 				hubId?: string | undefined;
 				expiresInDays?: number | undefined;
+				workspaceId?: string | undefined;
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
 				key: string;
 				keyPrefix: string;
-				status: string;
+				status: "proposed";
+				proposalId: string;
+				message?: undefined;
+			} | {
+				id: any;
+				key: string;
+				keyPrefix: string;
+				status: "created";
 				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -2228,20 +2241,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				keyId: string;
 				reason?: string | undefined;
+				workspaceId?: string | undefined;
 			};
 			output: {
-				status: string;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "revoked";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
 		rotate: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyId: string;
+				workspaceId?: string | undefined;
 			};
 			output: {
-				status: string;
+				id: string;
+				key: string;
+				keyPrefix: string;
+				status: "proposed";
+				proposalId: string;
+				message?: undefined;
+			} | {
+				id: any;
+				key: string;
+				keyPrefix: string;
+				status: "rotated";
 				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -2311,11 +2340,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				timestamp: string;
 				checks: {
 					database: string;
-					inngest: string;
+					jobQueue: string;
 				};
 				details: {
 					database: any;
-					inngest: any;
+					jobQueue: any;
 				};
 			};
 			meta: object;
@@ -2443,7 +2472,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				message: string;
 				document: {
-					id: `${string}-${string}-${string}-${string}-${string}`;
+					id: string;
 					title: string;
 				};
 			};
@@ -2462,7 +2491,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				message: string;
-				documentId: `${string}-${string}-${string}-${string}-${string}`;
+				documentId: string;
 			};
 			meta: object;
 		}>;
@@ -2499,11 +2528,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				documentId: string;
-				version: number;
 				delta?: {
 					content: string;
 				}[] | undefined;
+				version?: number | undefined;
 				message?: string | undefined;
+				title?: string | undefined;
 			};
 			output: {
 				version: number;
@@ -2585,6 +2615,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				sessionId: string;
 				chatThreadId: `${string}-${string}-${string}-${string}-${string}`;
+			};
+			meta: object;
+		}>;
+		endSession: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				success: boolean;
+				alreadyEnded: boolean;
+			} | {
+				success: boolean;
+				alreadyEnded?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3412,19 +3455,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata?: Record<string, any> | undefined;
 			};
 			output: {
-				id: `${string}-${string}-${string}-${string}-${string}`;
-				status: string;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+				id?: undefined;
+			} | {
+				id: string;
+				status: "created";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				workspaceId?: string | undefined;
 			};
 			output: {
-				status: string;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "deleted";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3575,9 +3626,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				type?: "enterprise" | "personal" | "team" | undefined;
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
-				workspaceId: `${string}-${string}-${string}-${string}-${string}`;
+				workspaceId?: undefined;
+			} | {
+				status: "created";
+				workspaceId: string;
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3628,8 +3685,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				settings?: Record<string, unknown> | undefined;
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
+			} | {
+				status: "updated";
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3639,8 +3701,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				serviceId: string | null;
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
+			} | {
+				status: "updated";
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3649,8 +3716,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
+			} | {
+				status: "deleted";
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3661,8 +3733,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				role: "owner" | "editor" | "viewer";
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
+				memberId?: undefined;
+			} | {
+				status: "added";
+				memberId: string;
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3699,8 +3778,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
+			} | {
+				status: "removed";
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3711,8 +3795,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				role: "admin" | "editor" | "viewer";
 			};
 			output: {
-				status: string;
+				status: "proposed";
+				proposalId: string;
 				message: string;
+			} | {
+				status: "updated";
+				message: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -3755,7 +3844,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				token: string;
 			};
 			output: {
-				status: string;
+				status: "accepted";
 				workspaceId: string;
 				message: string;
 			};
@@ -3768,6 +3857,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				success: boolean;
 			};
+			meta: object;
+		}>;
+		previewInvite: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				token: string;
+			};
+			output: {
+				expired: true;
+				workspaceName?: undefined;
+				role?: undefined;
+				expiresAt?: undefined;
+			} | {
+				expired: false;
+				workspaceName: string;
+				role: string;
+				expiresAt: Date;
+			} | null;
 			meta: object;
 		}>;
 	}>>;
@@ -3800,20 +3906,30 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				view: {
-					id: `${string}-${string}-${string}-${string}-${string}`;
-					workspaceId: string | undefined;
-					userId: string;
-					type: "calendar" | "list" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "bento";
-					category: ViewCategory;
 					name: string;
-					description: string | undefined;
-					documentId: string;
-					metadata: {
-						entityCount: number;
-						createdBy: string;
-					};
-					createdAt: Date;
+					workspaceId: string | null;
+					userId: string;
+					id: string;
+					query: unknown;
+					columns: unknown;
 					updatedAt: Date;
+					createdAt: Date;
+					type: string;
+					metadata: unknown;
+					documentId: string | null;
+					description: string | null;
+					category: string;
+					scopeProfileIds: string[] | null;
+					scopeMode: string | null;
+					config: unknown;
+					filter: unknown;
+					sort: unknown;
+					layoutConfig: unknown;
+					yjsRoomId: string | null;
+					thumbnailUrl: string | null;
+					schemaSnapshot: unknown;
+					snapshotUpdatedAt: Date | null;
+					embeddedViewIds: string[] | null;
 				};
 				documentId: string;
 				status: string;
@@ -4054,6 +4170,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				message: string;
+				view: {
+					name: string;
+					workspaceId: string | null;
+					userId: string;
+					id: string;
+					query: unknown;
+					columns: unknown;
+					updatedAt: Date;
+					createdAt: Date;
+					type: string;
+					metadata: unknown;
+					documentId: string | null;
+					description: string | null;
+					category: string;
+					scopeProfileIds: string[] | null;
+					scopeMode: string | null;
+					config: unknown;
+					filter: unknown;
+					sort: unknown;
+					layoutConfig: unknown;
+					yjsRoomId: string | null;
+					thumbnailUrl: string | null;
+					schemaSnapshot: unknown;
+					snapshotUpdatedAt: Date | null;
+					embeddedViewIds: string[] | null;
+				};
 			};
 			meta: object;
 		}>;
@@ -4306,9 +4448,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				filters?: Record<string, any> | undefined;
 			};
 			output: {
-				id: `${string}-${string}-${string}-${string}-${string}`;
-				status: string;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+				id?: undefined;
+			} | {
+				id: any;
+				status: "created";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -4319,20 +4465,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				permissions?: Record<string, any> | undefined;
 				filters?: Record<string, any> | undefined;
+				workspaceId?: string | undefined;
 			};
 			output: {
-				status: string;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "updated";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				workspaceId?: string | undefined;
 			};
 			output: {
-				status: string;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "deleted";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -4951,8 +5105,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
-				success: boolean;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				id: string;
+				status: "created";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -4968,8 +5126,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				timeoutSeconds?: number | undefined;
 			};
 			output: {
-				success: boolean;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "updated";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -4978,8 +5139,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				success: boolean;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "deleted";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5024,8 +5188,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				id: `${string}-${string}-${string}-${string}-${string}`;
-				success: boolean;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				id: string;
+				status: "created";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5040,8 +5208,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: "error" | "active" | "paused" | undefined;
 			};
 			output: {
-				success: boolean;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "updated";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5050,8 +5221,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				success: boolean;
-				message: string;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "deleted";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
