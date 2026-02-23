@@ -290,23 +290,25 @@ export const preferencesRouter = router({
   setIntelligenceService: protectedProcedure
     .input(
       z.object({
-        serviceId: z.string(),
+        serviceId: z.string().nullable(),
         capability: z.enum(["default", "chat", "analysis"]).default("default"),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const { intelligenceServices, and } = await import("@synap/database");
+      if (input.serviceId) {
+        const { intelligenceServices, and } = await import("@synap/database");
 
-      // Verify service exists and is active
-      const service = await ctx.db.query.intelligenceServices.findFirst({
-        where: and(
-          eq(intelligenceServices.serviceId, input.serviceId),
-          eq(intelligenceServices.status, "active")
-        ),
-      });
+        // Verify service exists and is active
+        const service = await ctx.db.query.intelligenceServices.findFirst({
+          where: and(
+            eq(intelligenceServices.serviceId, input.serviceId),
+            eq(intelligenceServices.status, "active")
+          ),
+        });
 
-      if (!service) {
-        throw new Error("Intelligence service not found or inactive");
+        if (!service) {
+          throw new Error("Intelligence service not found or inactive");
+        }
       }
 
       // Get current preferences
@@ -317,11 +319,13 @@ export const preferencesRouter = router({
       const currentPrefs = (current?.intelligenceServicePreferences ||
         {}) as any;
 
-      // Merge new preference
-      const newPrefs = {
-        ...currentPrefs,
-        [input.capability]: input.serviceId,
-      };
+      // Merge or clear preference
+      const newPrefs = { ...currentPrefs };
+      if (input.serviceId) {
+        newPrefs[input.capability] = input.serviceId;
+      } else {
+        delete newPrefs[input.capability];
+      }
 
       // Upsert
       await ctx.db
