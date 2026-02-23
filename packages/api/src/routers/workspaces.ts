@@ -999,7 +999,7 @@ export const workspacesRouter = router({
     .input(z.object({ pluginId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       // Authenticate via provisioning token
-      const providedToken = ctx.req.headers.get("X-Provisioning-Token");
+      const providedToken = ctx.req?.headers.get("X-Provisioning-Token");
       const expectedToken = process.env.PROVISIONING_TOKEN;
 
       if (!expectedToken || !providedToken || providedToken !== expectedToken) {
