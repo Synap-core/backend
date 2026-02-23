@@ -3972,6 +3972,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		seedPlugin: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				pluginId: string;
+			};
+			output: {
+				status: "created";
+				workspaceId: `${string}-${string}-${string}-${string}-${string}`;
+			};
+			meta: object;
+		}>;
 		previewInvite: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				token: string;
