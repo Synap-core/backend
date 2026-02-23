@@ -70,7 +70,14 @@ class DatabasePersistence {
 
       const isWhiteboard = roomName.startsWith("whiteboard-");
 
-      if (isWhiteboard && doc.storageKey) {
+      if (isWhiteboard) {
+        if (!doc.storageKey) {
+          // New whiteboard with no prior content — initialize empty
+          console.log(
+            `[Yjs] Whiteboard ${roomName} has no storageKey yet — starting fresh`
+          );
+          return;
+        }
         // Whiteboard: load from MinIO (canonical source)
         try {
           const contentBuffer = await storage.downloadBuffer(doc.storageKey);
@@ -163,9 +170,27 @@ class DatabasePersistence {
 
       const isWhiteboard = roomName.startsWith("whiteboard-");
 
-      if (isWhiteboard && doc.storageKey) {
+      if (isWhiteboard) {
         // Whiteboard: save to MinIO (canonical source, no version)
-        // Try to extract Tldraw store from Yjs Map
+        let storageKey = doc.storageKey;
+
+        // Safety net: derive storageKey if missing (legacy whiteboards or creation edge cases)
+        if (!storageKey) {
+          console.warn(
+            `[Yjs] Whiteboard ${roomName} missing storageKey — deriving fallback`
+          );
+          const userId = (doc as any).userId ?? "system";
+          storageKey = `whiteboards/${userId}/${documentId}.json`;
+          await db
+            .update(documents)
+            .set({ storageKey })
+            .where(eq(documents.id, documentId));
+          console.log(
+            `[Yjs] Persisted derived storageKey for ${roomName}: ${storageKey}`
+          );
+        }
+
+        // Extract Tldraw store from Yjs Map
         const yMap = ydoc.getMap(`tl_map_${documentId}`);
         const store: TldrawStoreSnapshot = {};
         yMap.forEach((val, key) => {
@@ -180,7 +205,6 @@ class DatabasePersistence {
           content = JSON.stringify({ store });
         } else {
           // No Tldraw map — save raw Yjs state as base64
-          // Frontend might use a different map name or direct Yjs updates
           const state = Y.encodeStateAsUpdate(ydoc);
           if (state.byteLength <= 2) {
             // Empty doc, skip save
@@ -189,7 +213,7 @@ class DatabasePersistence {
           content = `yjs:${Buffer.from(state).toString("base64")}`;
         }
 
-        await storage.upload(doc.storageKey, Buffer.from(content, "utf-8"), {
+        await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
           contentType: "application/json",
         });
         await db
@@ -328,10 +352,7 @@ class DatabasePersistence {
           )
         );
     } catch (error) {
-      console.error(
-        `[Yjs] Failed to create snapshot for ${roomName}:`,
-        error
-      );
+      console.error(`[Yjs] Failed to create snapshot for ${roomName}:`, error);
     }
   }
 }
@@ -369,9 +390,28 @@ export function setupYjsServer(
       if (closingRooms.has(docName)) {
         // Room is closing — do final snapshot instead of regular write
         closingRooms.delete(docName);
-        await persistence.createSnapshot(docName, ydoc);
+        try {
+          await persistence.createSnapshot(docName, ydoc);
+        } catch (err) {
+          console.error(
+            `[Yjs] createSnapshot failed for ${docName}, falling back to writeState:`,
+            err
+          );
+          try {
+            await persistence.writeState(docName, ydoc);
+          } catch (fallbackErr) {
+            console.error(
+              `[Yjs] writeState fallback also failed for ${docName}:`,
+              fallbackErr
+            );
+          }
+        }
       } else {
-        await persistence.writeState(docName, ydoc);
+        try {
+          await persistence.writeState(docName, ydoc);
+        } catch (err) {
+          console.error(`[Yjs] writeState failed for ${docName}:`, err);
+        }
       }
     },
     provider: null,
@@ -380,19 +420,27 @@ export function setupYjsServer(
   // Debounced auto-save using interval
   const saveIntervals = new Map<string, NodeJS.Timeout>();
 
-  yServer.on("document-update", (docName: string, doc: Y.Doc) => {
-    // Clear existing timeout for this document
-    const existing = saveIntervals.get(docName);
-    if (existing) clearTimeout(existing);
+  // y-socket.io emits "document-update" with (doc: Document, update: Uint8Array)
+  // where Document extends Y.Doc and has a .name property (the room name string).
+  yServer.on(
+    "document-update",
+    (doc: Y.Doc & { name?: string }, _update: Uint8Array) => {
+      const docName = (doc as any).name as string | undefined;
+      if (!docName) return;
 
-    // Set new timeout for debounced save
-    const timeout = setTimeout(() => {
-      persistence.writeState(docName, doc);
-      saveIntervals.delete(docName);
-    }, persistenceInterval);
+      // Clear existing timeout for this document
+      const existing = saveIntervals.get(docName);
+      if (existing) clearTimeout(existing);
 
-    saveIntervals.set(docName, timeout);
-  });
+      // Set new timeout for debounced save
+      const timeout = setTimeout(() => {
+        persistence.writeState(docName, doc);
+        saveIntervals.delete(docName);
+      }, persistenceInterval);
+
+      saveIntervals.set(docName, timeout);
+    }
+  );
 
   // When last user disconnects, mark room as closing.
   // The library then calls persistence.writeState() (which we intercept above
