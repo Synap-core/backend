@@ -95,7 +95,7 @@ export const workspaces = pgTable("workspaces", {
   // }
 
   // Billing (optional - for managed hosting)
-  subscriptionTier: text("subscription_tier"), // 'free', 'pro', 'team', 'enterprise'
+  subscriptionTier: text("subscription_tier"), // 'solo', 'pro', 'team', 'enterprise'
   subscriptionStatus: text("subscription_status"), // 'active', 'canceled', 'past_due', 'trialing'
   stripeCustomerId: text("stripe_customer_id"),
 
