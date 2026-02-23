@@ -7,11 +7,12 @@ import {
   IconDatabase,
   IconWebhook,
   IconFolder,
-  IconBuildingCommunity,
   IconKey,
   IconTerminal2,
-  IconBrain,
   IconCheckbox,
+  IconUsers,
+  IconBuildingCommunity,
+  IconTopologyStarRing3,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
 import { colors, layout, spacing, typography } from "../../theme/tokens";
@@ -33,29 +34,30 @@ interface NavSection {
 
 const sections: NavSection[] = [
   {
-    label: "Management",
+    label: "Data Pod",
     items: [
-      { path: "/workspaces", label: "Workspaces", icon: IconBuildingCommunity },
+      { path: "/", label: "Dashboard", icon: IconHome },
+      { path: "/users", label: "Users", icon: IconUsers },
+      { path: "/data", label: "Database", icon: IconDatabase },
+      { path: "/files", label: "Files", icon: IconFolder },
+      { path: "/events", label: "Events", icon: IconSearch },
       { path: "/api-keys", label: "API Keys", icon: IconKey },
     ],
   },
   {
-    label: "Intelligence",
+    label: "Workspace",
     items: [
-      { path: "/commands", label: "Commands", icon: IconTerminal2 },
-      { path: "/memory", label: "Memory", icon: IconBrain },
+      { path: "/workspace", label: "Overview", icon: IconBuildingCommunity },
       { path: "/proposals", label: "Proposals", icon: IconCheckbox },
+      { path: "/commands", label: "Intelligence", icon: IconTerminal2 },
     ],
   },
   {
-    label: "System",
+    label: "Developer",
     items: [
-      { path: "/", label: "Dashboard", icon: IconHome },
-      { path: "/events", label: "Events", icon: IconSearch },
-      { path: "/data", label: "Database", icon: IconDatabase },
-      { path: "/files", label: "Files", icon: IconFolder },
-      { path: "/automation", label: "Webhooks", icon: IconWebhook },
       { path: "/testing", label: "Testing", icon: IconFlask },
+      { path: "/automation", label: "Webhooks", icon: IconWebhook },
+      { path: "/flow", label: "Architecture", icon: IconTopologyStarRing3 },
     ],
   },
 ];
@@ -64,11 +66,11 @@ export default function MainNav({ onNavigate }: MainNavProps) {
   const location = useLocation();
   const { workspaceRole } = useWorkspace();
 
-  // Only show Management section for owner/admin roles
+  // Only show Data Pod section for owner/admin roles
   const isAdmin = workspaceRole === "owner" || workspaceRole === "admin";
   const visibleSections = isAdmin
     ? sections
-    : sections.filter((s) => s.label !== "Management");
+    : sections.filter((s) => s.label !== "Data Pod");
 
   const isActive = (path: string) => {
     if (path === "/") {

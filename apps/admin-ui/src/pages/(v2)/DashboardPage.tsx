@@ -8,6 +8,8 @@ import {
   Group,
   Button,
   ActionIcon,
+  Badge,
+  Loader,
 } from "@mantine/core";
 import SearchModal from "../../components/search/SearchModal";
 import {
@@ -22,6 +24,10 @@ import {
   IconPlayerPlay,
   IconRefresh,
   IconFolder,
+  IconBuildingCommunity,
+  IconFiles,
+  IconRobot,
+  IconDatabase,
 } from "@tabler/icons-react";
 import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 import { trpc } from "../../lib/trpc";
@@ -38,6 +44,14 @@ export default function DashboardPage() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchType, setSearchType] = useState<"user" | "event">("user");
+
+  // Fetch pod stats
+  const {
+    data: podStats,
+    isLoading: isLoadingPodStats,
+  } = trpc.system.getDataPodStats.useQuery(undefined, {
+    refetchInterval: isAutoRefreshEnabled ? 30000 : false,
+  });
 
   // Fetch dashboard metrics
   const {
@@ -115,7 +129,7 @@ export default function DashboardPage() {
               color: colors.text.primary,
             }}
           >
-            Dashboard
+            Data Pod
           </Title>
           <Text
             size="sm"
@@ -124,15 +138,166 @@ export default function DashboardPage() {
               fontFamily: typography.fontFamily.sans,
             }}
           >
-            Health Monitoring & Quick Access
+            Overview of your self-hosted Synap instance
           </Text>
         </div>
 
-        {/* Metric Cards */}
+        {/* Row 1 — Key Counts */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+            gap: spacing[4],
+          }}
+        >
+          {isLoadingPodStats ? (
+            <>
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+              <MetricCardSkeleton />
+            </>
+          ) : (
+            <>
+              {/* Users Card */}
+              <Card
+                padding={spacing[4]}
+                radius={borderRadius.lg}
+                style={{
+                  border: `1px solid ${colors.border.default}`,
+                  backgroundColor: colors.background.primary,
+                  cursor: "pointer",
+                }}
+                onClick={() => navigate("/users")}
+              >
+                <Group justify="space-between" mb={spacing[2]}>
+                  <Text
+                    size="sm"
+                    fw={typography.fontWeight.medium}
+                    c={colors.text.secondary}
+                  >
+                    Users
+                  </Text>
+                  <IconUsers size={20} color={colors.semantic.info} />
+                </Group>
+                <Text
+                  size="2rem"
+                  fw={typography.fontWeight.bold}
+                  c={colors.text.primary}
+                >
+                  {(podStats?.userCount ?? 0) + (podStats?.agentCount ?? 0)}
+                </Text>
+                <Group gap={spacing[2]} mt={spacing[1]}>
+                  <Badge size="xs" variant="light" color="blue">
+                    {podStats?.userCount ?? 0} human
+                  </Badge>
+                  <Badge size="xs" variant="light" color="orange">
+                    {podStats?.agentCount ?? 0} agent
+                  </Badge>
+                </Group>
+              </Card>
+
+              {/* Workspaces Card */}
+              <Card
+                padding={spacing[4]}
+                radius={borderRadius.lg}
+                style={{
+                  border: `1px solid ${colors.border.default}`,
+                  backgroundColor: colors.background.primary,
+                }}
+              >
+                <Group justify="space-between" mb={spacing[2]}>
+                  <Text
+                    size="sm"
+                    fw={typography.fontWeight.medium}
+                    c={colors.text.secondary}
+                  >
+                    Workspaces
+                  </Text>
+                  <IconBuildingCommunity size={20} color={colors.eventTypes.created} />
+                </Group>
+                <Text
+                  size="2rem"
+                  fw={typography.fontWeight.bold}
+                  c={colors.text.primary}
+                >
+                  {podStats?.workspaceCount ?? 0}
+                </Text>
+                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                  across the pod
+                </Text>
+              </Card>
+
+              {/* Entities Card */}
+              <Card
+                padding={spacing[4]}
+                radius={borderRadius.lg}
+                style={{
+                  border: `1px solid ${colors.border.default}`,
+                  backgroundColor: colors.background.primary,
+                }}
+              >
+                <Group justify="space-between" mb={spacing[2]}>
+                  <Text
+                    size="sm"
+                    fw={typography.fontWeight.medium}
+                    c={colors.text.secondary}
+                  >
+                    Entities
+                  </Text>
+                  <IconDatabase size={20} color={colors.semantic.success} />
+                </Group>
+                <Text
+                  size="2rem"
+                  fw={typography.fontWeight.bold}
+                  c={colors.text.primary}
+                >
+                  {podStats?.entityCount ?? 0}
+                </Text>
+                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                  people, companies, projects...
+                </Text>
+              </Card>
+
+              {/* Documents Card */}
+              <Card
+                padding={spacing[4]}
+                radius={borderRadius.lg}
+                style={{
+                  border: `1px solid ${colors.border.default}`,
+                  backgroundColor: colors.background.primary,
+                }}
+              >
+                <Group justify="space-between" mb={spacing[2]}>
+                  <Text
+                    size="sm"
+                    fw={typography.fontWeight.medium}
+                    c={colors.text.secondary}
+                  >
+                    Documents
+                  </Text>
+                  <IconFiles size={20} color={colors.semantic.warning} />
+                </Group>
+                <Text
+                  size="2rem"
+                  fw={typography.fontWeight.bold}
+                  c={colors.text.primary}
+                >
+                  {podStats?.documentCount ?? 0}
+                </Text>
+                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                  notes, docs, pages
+                </Text>
+              </Card>
+            </>
+          )}
+        </div>
+
+        {/* Row 2 — System Health (compact) */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
             gap: spacing[4],
           }}
         >
@@ -144,109 +309,101 @@ export default function DashboardPage() {
             </>
           ) : (
             <>
-              {/* Health Status Card */}
+              {/* Health Status */}
               <Card
-                padding={spacing[4]}
+                padding={spacing[3]}
                 radius={borderRadius.lg}
                 style={{
                   border: `1px solid ${colors.border.default}`,
                   backgroundColor: colors.background.primary,
                 }}
               >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
-                    System Health
-                  </Text>
+                <Group justify="space-between">
+                  <div>
+                    <Text size="xs" c={colors.text.tertiary} mb={2}>
+                      System Health
+                    </Text>
+                    <Group gap={spacing[2]}>
+                      <Badge
+                        size="lg"
+                        variant="light"
+                        color={
+                          healthStatus === "healthy"
+                            ? "green"
+                            : healthStatus === "degraded"
+                            ? "yellow"
+                            : "red"
+                        }
+                      >
+                        {healthStyle.label}
+                      </Badge>
+                      <Text size="xs" c={colors.text.tertiary}>
+                        {metrics?.health.errorRate.toFixed(1) || "0.0"}% errors
+                      </Text>
+                    </Group>
+                  </div>
                   <IconActivity size={20} color={healthStyle.color} />
                 </Group>
-                <div>
-                  <Text
-                    size="2rem"
-                    fw={typography.fontWeight.bold}
-                    style={{ color: healthStyle.color }}
-                  >
-                    {healthStyle.label}
-                  </Text>
-                  <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
-                    Error rate: {metrics?.health.errorRate.toFixed(1) || "0.0"}%
-                  </Text>
-                </div>
               </Card>
 
-              {/* Events/s Card */}
+              {/* Throughput */}
               <Card
-                padding={spacing[4]}
+                padding={spacing[3]}
                 radius={borderRadius.lg}
                 style={{
                   border: `1px solid ${colors.border.default}`,
                   backgroundColor: colors.background.primary,
                 }}
               >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
-                    Throughput
-                  </Text>
+                <Group justify="space-between">
+                  <div>
+                    <Text size="xs" c={colors.text.tertiary} mb={2}>
+                      Throughput
+                    </Text>
+                    <Group gap={spacing[2]} align="baseline">
+                      <Text size="xl" fw={typography.fontWeight.bold} c={colors.text.primary}>
+                        {metrics?.throughput.eventsPerSecond.toFixed(2) || "0.00"}
+                      </Text>
+                      <Text size="xs" c={colors.text.tertiary}>
+                        events/sec
+                      </Text>
+                    </Group>
+                  </div>
                   <IconBolt size={20} color={colors.semantic.info} />
                 </Group>
-                <div>
-                  <Text
-                    size="2rem"
-                    fw={typography.fontWeight.bold}
-                    c={colors.text.primary}
-                  >
-                    {metrics?.throughput.eventsPerSecond.toFixed(2) || "0.00"}
-                  </Text>
-                  <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
-                    events/sec (last 5 min)
-                  </Text>
-                </div>
               </Card>
 
-              {/* Total Events Card */}
+              {/* Connections */}
               <Card
-                padding={spacing[4]}
+                padding={spacing[3]}
                 radius={borderRadius.lg}
                 style={{
                   border: `1px solid ${colors.border.default}`,
                   backgroundColor: colors.background.primary,
                 }}
               >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
-                    Recent Activity
-                  </Text>
-                  <IconUsers size={20} color={colors.semantic.success} />
+                <Group justify="space-between">
+                  <div>
+                    <Text size="xs" c={colors.text.tertiary} mb={2}>
+                      Live Connections
+                    </Text>
+                    <Group gap={spacing[2]} align="baseline">
+                      <Text size="xl" fw={typography.fontWeight.bold} c={colors.text.primary}>
+                        {metrics?.connections.activeSSEClients ?? 0}
+                      </Text>
+                      <Text size="xs" c={colors.text.tertiary}>
+                        SSE clients
+                      </Text>
+                    </Group>
+                  </div>
+                  <IconRobot size={20} color={colors.eventTypes.ai} />
                 </Group>
-                <div>
-                  <Text
-                    size="2rem"
-                    fw={typography.fontWeight.bold}
-                    c={colors.text.primary}
-                  >
-                    {metrics?.throughput.totalEventsLast5Min || 0}
-                  </Text>
-                  <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
-                    events in last 5 min
-                  </Text>
-                </div>
               </Card>
             </>
           )}
         </div>
 
-        {/* Quick Actions */}
+        {/* Row 3 — Quick Actions */}
         <Card
           padding={spacing[4]}
           radius={borderRadius.lg}
@@ -277,7 +434,6 @@ export default function DashboardPage() {
                 setSearchType("user");
                 setSearchModalOpen(true);
               }}
-              aria-label="Investigate user events"
             >
               Investigate User
             </Button>
@@ -288,7 +444,6 @@ export default function DashboardPage() {
                 setSearchType("event");
                 setSearchModalOpen(true);
               }}
-              aria-label="View event trace"
             >
               View Event Trace
             </Button>
@@ -296,30 +451,34 @@ export default function DashboardPage() {
               variant="light"
               leftSection={<IconFlask size={18} />}
               onClick={() => navigate("/testing")}
-              aria-label="Test AI tools"
             >
               Test AI Tool
             </Button>
             <Button
               variant="light"
-              leftSection={<IconMap size={18} />}
-              onClick={() => navigate("/flow")}
-              aria-label="View system architecture"
+              leftSection={<IconUsers size={18} />}
+              onClick={() => navigate("/users")}
             >
-              View Architecture
+              Manage Users
             </Button>
             <Button
               variant="light"
               leftSection={<IconFolder size={18} />}
               onClick={() => navigate("/files")}
-              aria-label="Browse files"
             >
               Browse Files
+            </Button>
+            <Button
+              variant="light"
+              leftSection={<IconMap size={18} />}
+              onClick={() => navigate("/flow")}
+            >
+              View Architecture
             </Button>
           </div>
         </Card>
 
-        {/* Live Event Stream */}
+        {/* Row 4 — Live Event Stream */}
         <Card
           padding={spacing[4]}
           radius={borderRadius.lg}
@@ -334,7 +493,7 @@ export default function DashboardPage() {
               fw={typography.fontWeight.semibold}
               c={colors.text.primary}
             >
-              Live Event Stream
+              Recent Activity
             </Text>
             <Group gap={spacing[2]}>
               <Text size="xs" c={colors.text.tertiary}>
@@ -344,14 +503,6 @@ export default function DashboardPage() {
                 variant="subtle"
                 onClick={handleManualRefresh}
                 title="Refresh now"
-                aria-label="Refresh event stream"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleManualRefresh();
-                  }
-                }}
               >
                 <IconRefresh size={18} />
               </ActionIcon>
@@ -363,18 +514,6 @@ export default function DashboardPage() {
                     ? "Pause auto-refresh"
                     : "Resume auto-refresh"
                 }
-                aria-label={
-                  isAutoRefreshEnabled
-                    ? "Pause auto-refresh"
-                    : "Resume auto-refresh"
-                }
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setIsAutoRefreshEnabled(!isAutoRefreshEnabled);
-                  }
-                }}
               >
                 {isAutoRefreshEnabled ? (
                   <IconPlayerPause size={18} />
@@ -406,7 +545,6 @@ export default function DashboardPage() {
                 navigate(`/investigate?eventId=${encodeURIComponent(eventId)}`)
               }
               onPublishSimilar={(event) => {
-                // Navigate to event publisher with pre-filled data
                 const eventData = JSON.stringify(event.data || {}, null, 2);
                 navigate(
                   `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`
@@ -419,10 +557,10 @@ export default function DashboardPage() {
             <Group justify="center" mt={spacing[4]}>
               <Button
                 variant="subtle"
-                onClick={() => navigate("/investigate")}
+                onClick={() => navigate("/events")}
                 size="sm"
               >
-                View all events →
+                View all events
               </Button>
             </Group>
           )}

@@ -15,19 +15,25 @@ import {
   Loader,
   Switch,
   Anchor,
+  Textarea,
+  TagsInput,
+  Card,
 } from "@mantine/core";
 import {
   IconArrowLeft,
   IconPlus,
   IconTrash,
   IconBuildingCommunity,
+  IconRobot,
+  IconEdit,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
+import { useWorkspace } from "../../lib/workspace";
 import {
   showSuccessNotification,
   showErrorNotification,
 } from "../../lib/notifications";
-import { colors, spacing, typography } from "../../theme/tokens";
+import { colors, spacing, typography, borderRadius } from "../../theme/tokens";
 
 const ROLE_OPTIONS = [
   { value: "viewer", label: "Viewer" },
@@ -42,13 +48,30 @@ const ROLE_COLORS: Record<string, string> = {
   viewer: "gray",
 };
 
+const AGENT_TYPE_OPTIONS = [
+  { value: "assistant", label: "Assistant" },
+  { value: "researcher", label: "Researcher" },
+  { value: "writer", label: "Writer" },
+  { value: "analyst", label: "Analyst" },
+  { value: "custom", label: "Custom" },
+];
+
 export default function WorkspaceDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const workspaceId = id!;
+  const { workspaceId: contextWorkspaceId } = useWorkspace();
+  const workspaceId = id ?? contextWorkspaceId!;
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"viewer" | "editor" | "admin">("editor");
+
+  // Agent creation state
+  const [agentModalOpen, setAgentModalOpen] = useState(false);
+  const [agentName, setAgentName] = useState("");
+  const [agentType, setAgentType] = useState("assistant");
+  const [agentRole, setAgentRole] = useState<"viewer" | "editor" | "admin">("editor");
+  const [agentDescription, setAgentDescription] = useState("");
+  const [agentCapabilities, setAgentCapabilities] = useState<string[]>([]);
 
   const { data: workspace, isLoading: wsLoading, refetch: refetchWs } =
     trpc.workspaces.get.useQuery({ id: workspaceId });
@@ -58,6 +81,9 @@ export default function WorkspaceDetailPage() {
 
   const { data: invites, isLoading: invitesLoading, refetch: refetchInvites } =
     trpc.workspaces.listInvites.useQuery({ workspaceId });
+
+  const { data: agents, isLoading: agentsLoading, refetch: refetchAgents } =
+    trpc.agentUsers.list.useQuery({ workspaceId });
 
   const removeMemberMutation = trpc.workspaces.removeMember.useMutation({
     onSuccess: () => {
@@ -100,6 +126,32 @@ export default function WorkspaceDetailPage() {
     },
     onError: (err) => showErrorNotification({ message: err.message }),
   });
+
+  const createAgentMutation = trpc.agentUsers.create.useMutation({
+    onSuccess: () => {
+      refetchAgents();
+      setAgentModalOpen(false);
+      resetAgentForm();
+      showSuccessNotification({ message: "AI agent created" });
+    },
+    onError: (err) => showErrorNotification({ message: err.message }),
+  });
+
+  const removeAgentMutation = trpc.agentUsers.remove.useMutation({
+    onSuccess: () => {
+      refetchAgents();
+      showSuccessNotification({ message: "AI agent removed" });
+    },
+    onError: (err) => showErrorNotification({ message: err.message }),
+  });
+
+  function resetAgentForm() {
+    setAgentName("");
+    setAgentType("assistant");
+    setAgentRole("editor");
+    setAgentDescription("");
+    setAgentCapabilities([]);
+  }
 
   function handleSettingChange(key: string, value: unknown) {
     if (!workspace) return;
@@ -159,6 +211,12 @@ export default function WorkspaceDetailPage() {
       <Tabs defaultValue="members">
         <Tabs.List mb={spacing[4]}>
           <Tabs.Tab value="members">Members</Tabs.Tab>
+          <Tabs.Tab value="agents">
+            <Group gap={4}>
+              <IconRobot size={14} />
+              AI Agents
+            </Group>
+          </Tabs.Tab>
           <Tabs.Tab value="invitations">Invitations</Tabs.Tab>
           <Tabs.Tab value="settings">Settings</Tabs.Tab>
           <Tabs.Tab value="intelligence">Intelligence</Tabs.Tab>
@@ -234,6 +292,115 @@ export default function WorkspaceDetailPage() {
                           removeMemberMutation.mutate({
                             workspaceId,
                             userId: m.userId,
+                          })
+                        }
+                      >
+                        <IconTrash size={14} />
+                      </ActionIcon>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          )}
+        </Tabs.Panel>
+
+        {/* AI Agents Tab */}
+        <Tabs.Panel value="agents">
+          <Group justify="space-between" mb={spacing[4]}>
+            <Text fw={600}>AI Agents</Text>
+            <Button
+              leftSection={<IconPlus size={16} />}
+              size="sm"
+              onClick={() => setAgentModalOpen(true)}
+              color="orange"
+            >
+              Create Agent
+            </Button>
+          </Group>
+          {agentsLoading ? (
+            <Loader />
+          ) : !agents || agents.length === 0 ? (
+            <Card
+              padding={spacing[6]}
+              radius={borderRadius.lg}
+              style={{
+                border: `1px dashed ${colors.border.default}`,
+                backgroundColor: colors.background.secondary,
+                textAlign: "center",
+              }}
+            >
+              <IconRobot
+                size={40}
+                color={colors.text.tertiary}
+                style={{ marginBottom: spacing[2] }}
+              />
+              <Text size="sm" c={colors.text.secondary} mb={spacing[2]}>
+                No AI agents in this workspace yet.
+              </Text>
+              <Text size="xs" c={colors.text.tertiary}>
+                Create an agent to automate tasks with workspace-scoped permissions.
+              </Text>
+            </Card>
+          ) : (
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Name</Table.Th>
+                  <Table.Th>Type</Table.Th>
+                  <Table.Th>Role</Table.Th>
+                  <Table.Th>Capabilities</Table.Th>
+                  <Table.Th>Actions</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {agents.map((agent) => (
+                  <Table.Tr key={agent.id}>
+                    <Table.Td>
+                      <Group gap={spacing[2]}>
+                        <IconRobot size={16} color={colors.eventTypes.ai} />
+                        <Text size="sm" fw={500}>
+                          {agent.name}
+                        </Text>
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge size="sm" variant="light" color="orange">
+                        {agent.agentMetadata?.agentType || "—"}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge
+                        size="sm"
+                        variant="outline"
+                        color={ROLE_COLORS[agent.role] ?? "gray"}
+                      >
+                        {agent.role}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={4}>
+                        {agent.agentMetadata?.capabilities?.slice(0, 3).map((cap) => (
+                          <Badge key={cap} size="xs" variant="light" color="cyan">
+                            {cap}
+                          </Badge>
+                        ))}
+                        {(agent.agentMetadata?.capabilities?.length ?? 0) > 3 && (
+                          <Badge size="xs" variant="light" color="gray">
+                            +{(agent.agentMetadata?.capabilities?.length ?? 0) - 3}
+                          </Badge>
+                        )}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="red"
+                        onClick={() =>
+                          removeAgentMutation.mutate({
+                            workspaceId,
+                            agentUserId: agent.id,
                           })
                         }
                       >
@@ -405,6 +572,77 @@ export default function WorkspaceDetailPage() {
             fullWidth
           >
             Send Invitation
+          </Button>
+        </Stack>
+      </Modal>
+
+      {/* Create Agent Modal */}
+      <Modal
+        opened={agentModalOpen}
+        onClose={() => {
+          setAgentModalOpen(false);
+          resetAgentForm();
+        }}
+        title={
+          <Text fw={600} size="lg">
+            Create AI Agent
+          </Text>
+        }
+        size="md"
+      >
+        <Stack gap={spacing[4]}>
+          <TextInput
+            label="Agent Name"
+            placeholder="e.g. Research Assistant"
+            value={agentName}
+            onChange={(e) => setAgentName(e.currentTarget.value)}
+            required
+          />
+          <Select
+            label="Agent Type"
+            data={AGENT_TYPE_OPTIONS}
+            value={agentType}
+            onChange={(v) => setAgentType(v ?? "assistant")}
+          />
+          <Select
+            label="Workspace Role"
+            description="Determines what the agent can do in this workspace"
+            data={ROLE_OPTIONS}
+            value={agentRole}
+            onChange={(v) => setAgentRole((v as typeof agentRole) ?? "editor")}
+          />
+          <Textarea
+            label="Description"
+            placeholder="What does this agent do?"
+            value={agentDescription}
+            onChange={(e) => setAgentDescription(e.currentTarget.value)}
+            minRows={2}
+          />
+          <TagsInput
+            label="Capabilities"
+            placeholder="Type and press Enter"
+            value={agentCapabilities}
+            onChange={setAgentCapabilities}
+            description="e.g. read_entities, write_documents, search"
+          />
+          <Button
+            onClick={() =>
+              createAgentMutation.mutate({
+                workspaceId,
+                name: agentName,
+                agentType,
+                role: agentRole,
+                description: agentDescription || undefined,
+                capabilities: agentCapabilities.length > 0 ? agentCapabilities : undefined,
+              })
+            }
+            loading={createAgentMutation.isPending}
+            disabled={!agentName.trim()}
+            fullWidth
+            color="orange"
+            leftSection={<IconRobot size={18} />}
+          >
+            Create Agent
           </Button>
         </Stack>
       </Modal>

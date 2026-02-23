@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { publicProcedure, router } from "../trpc.js";
+import { publicProcedure, protectedProcedure, router } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
@@ -20,8 +20,9 @@ import { dynamicRouterRegistry } from "../router-registry.js";
 import { createSynapEvent } from "@synap-core/core";
 import { eventRepository } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
-import { sqlDrizzle } from "@synap/database";
-import { db } from "@synap/database";
+import { db, eq, sqlDrizzle } from "@synap/database";
+import { users, workspaces, entities, documents, workspaceMembers } from "@synap/database/schema";
+import { count } from "drizzle-orm";
 
 /**
  * System Router
@@ -769,4 +770,100 @@ export const systemRouter = router({
 
     return services;
   }),
+
+  /**
+   * Get Data Pod Stats
+   *
+   * Returns global counts for the Data Pod overview dashboard.
+   * Requires authentication.
+   */
+  getDataPodStats: protectedProcedure.query(async () => {
+    const [userResult] = await db
+      .select({ value: count() })
+      .from(users)
+      .where(eq(users.userType, "human"));
+    const [agentResult] = await db
+      .select({ value: count() })
+      .from(users)
+      .where(eq(users.userType, "agent"));
+    const [workspaceResult] = await db
+      .select({ value: count() })
+      .from(workspaces);
+    const [entityResult] = await db
+      .select({ value: count() })
+      .from(entities);
+    const [documentResult] = await db
+      .select({ value: count() })
+      .from(documents);
+
+    return {
+      userCount: userResult?.value ?? 0,
+      agentCount: agentResult?.value ?? 0,
+      workspaceCount: workspaceResult?.value ?? 0,
+      entityCount: entityResult?.value ?? 0,
+      documentCount: documentResult?.value ?? 0,
+    };
+  }),
+
+  /**
+   * List all users across the pod
+   *
+   * Admin-level query returning all users with optional type filter and pagination.
+   * Includes workspace membership count for each user.
+   */
+  listUsers: protectedProcedure
+    .input(
+      z.object({
+        type: z.enum(["all", "human", "agent"]).default("all"),
+        limit: z.number().min(1).max(200).default(50),
+        offset: z.number().min(0).default(0),
+      })
+    )
+    .query(async ({ input }) => {
+      // Build query with optional type filter
+      const conditions = input.type !== "all" ? eq(users.userType, input.type) : undefined;
+
+      const userList = await db.query.users.findMany({
+        where: conditions,
+        limit: input.limit,
+        offset: input.offset,
+        orderBy: (users, { desc }) => [desc(users.createdAt)],
+      });
+
+      // Get membership counts for each user
+      const usersWithMemberships = await Promise.all(
+        userList.map(async (user) => {
+          const [membershipCount] = await db
+            .select({ value: count() })
+            .from(workspaceMembers)
+            .where(eq(workspaceMembers.userId, user.id));
+
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            userType: user.userType,
+            agentMetadata: user.agentMetadata,
+            createdAt: user.createdAt?.toISOString() ?? null,
+            workspaceMembershipCount: membershipCount?.value ?? 0,
+          };
+        })
+      );
+
+      // Get total count for pagination
+      const [totalResult] = await db
+        .select({ value: count() })
+        .from(users)
+        .where(conditions);
+
+      return {
+        users: usersWithMemberships,
+        pagination: {
+          total: totalResult?.value ?? 0,
+          limit: input.limit,
+          offset: input.offset,
+          hasMore: input.offset + userList.length < (totalResult?.value ?? 0),
+        },
+      };
+    }),
 });
