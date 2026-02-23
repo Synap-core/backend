@@ -23,6 +23,7 @@ export const VIEW_TYPES: ViewType[] = [
   "timeline",
   "mindmap",
   "graph",
+  "flow",
   "bento",
 ];
 
@@ -42,6 +43,7 @@ export const ViewTypeEnum = z.enum([
   "timeline",
   "mindmap",
   "graph",
+  "flow",
   "bento",
 ]);
 

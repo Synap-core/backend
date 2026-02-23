@@ -62,6 +62,7 @@ export const infiniteChatRouter = router({
             "code",
             "writing",
             "action",
+            "onboarding",
           ])
           .optional(),
         agentConfig: z.record(z.string(), z.any()).optional(),
@@ -113,7 +114,11 @@ export const infiniteChatRouter = router({
 
         emitChatEvent({
           event: "thread:created",
-          data: { threadId: branchThreadId, userId: ctx.userId, parentThreadId: input.parentThreadId },
+          data: {
+            threadId: branchThreadId,
+            userId: ctx.userId,
+            parentThreadId: input.parentThreadId,
+          },
           workspaceId: workspaceId ?? null,
           userId: ctx.userId,
         });
@@ -234,24 +239,42 @@ export const infiniteChatRouter = router({
         /** When omitted, backend creates a new thread and returns its id in the response. */
         threadId: z.string().uuid().optional(),
         content: z.string().min(1),
-        /** Required when threadId is omitted; otherwise used for entity create/update – event chain. */
+        /** Required when threadId is omitted (unless agentType is "onboarding"); otherwise used for entity create/update – event chain. */
         workspaceId: z.string().uuid().optional(),
+        /** Agent type override for thread creation (e.g. "onboarding" for workspace setup). */
+        agentType: z
+          .enum([
+            "meta",
+            "default",
+            "prompting",
+            "knowledge-search",
+            "code",
+            "writing",
+            "action",
+            "onboarding",
+          ])
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       let threadId = input.threadId;
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      const requestedAgentType = input.agentType;
 
       // Create thread when not provided (single entry point: "send message" from anywhere)
       if (!threadId) {
-        if (!workspaceId) {
+        // Allow onboarding agent without workspace
+        if (!workspaceId && requestedAgentType !== "onboarding") {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message:
               "workspaceId is required when sending a message without a thread",
           });
         }
+        const threadAgentType = requestedAgentType
+          ? (requestedAgentType as ChatThreadAgentType)
+          : ChatThreadAgentType.DEFAULT;
         const [thread] = await db
           .insert(chatThreads)
           .values({
@@ -260,7 +283,7 @@ export const infiniteChatRouter = router({
             threadType: ChatThreadType.MAIN,
             status: ChatThreadStatus.ACTIVE,
             agentId: "orchestrator",
-            agentType: ChatThreadAgentType.DEFAULT,
+            agentType: threadAgentType,
           })
           .returning();
         threadId = thread.id;
@@ -905,6 +928,7 @@ export const infiniteChatRouter = router({
             "code",
             "writing",
             "action",
+            "onboarding",
           ])
           .optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
