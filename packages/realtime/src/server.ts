@@ -48,7 +48,9 @@ const io = new SocketIOServer(httpServer, {
 // ============================================================================
 // Allows workers to emit real-time events to connected clients via HTTP POST
 // Also handles Yjs state management endpoints
-setupBridge(io, httpServer);
+// Use lazy getter because yjsServer is created after bridge setup
+let yjsServerRef: ReturnType<typeof setupYjsServer> | null = null;
+setupBridge(io, httpServer, () => yjsServerRef);
 
 // Log all connection attempts (for debugging WebSocket routing)
 io.engine.on("connection_error", (err) => {
@@ -76,6 +78,7 @@ const yjsServer = setupYjsServer({
   io, // Pass full server, y-socket.io creates /yjs namespace
   persistenceInterval: 10000,
 });
+yjsServerRef = yjsServer; // Make available to bridge for /yjs/state and /yjs/restore endpoints
 
 /**
  * Generic Presence WebSocket Handler (/presence namespace)

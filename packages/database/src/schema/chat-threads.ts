@@ -42,6 +42,8 @@ export enum ChatThreadAgentType {
   CODE = "code",
   WRITING = "writing",
   ACTION = "action",
+  ONBOARDING = "onboarding",
+  WORKSPACE_CREATION = "workspace-creation",
 }
 
 export const chatThreads = pgTable(
@@ -90,6 +92,8 @@ export const chatThreads = pgTable(
         ChatThreadAgentType.CODE,
         ChatThreadAgentType.WRITING,
         ChatThreadAgentType.ACTION,
+        ChatThreadAgentType.ONBOARDING,
+        ChatThreadAgentType.WORKSPACE_CREATION,
       ],
     })
       .notNull()

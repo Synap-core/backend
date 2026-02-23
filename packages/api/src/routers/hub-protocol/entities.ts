@@ -86,10 +86,9 @@ export const entitiesRouter = router({
         profileSlug: input.type, // Map type to profileSlug
         title: input.title,
         description: input.description,
+        source: "intelligence",
+        agentUserId: ctx.userId ?? undefined,
       });
-
-      // If aiMetadata was provided, we could emit an additional event
-      // or store it separately. For now, the entity is created via regular API.
       return {
         status: result.status,
         message: result.message,

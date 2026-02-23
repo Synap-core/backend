@@ -36,6 +36,7 @@ export const VIEW_TYPE_CATEGORIES: Record<ViewType, ViewCategory> = {
   gantt: "structured",
   timeline: "structured",
   graph: "structured", // Graph is also query-based!
+  flow: "structured",
 
   // Composite (views that compose other views)
   bento: "composite",

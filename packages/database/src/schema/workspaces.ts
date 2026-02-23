@@ -11,12 +11,22 @@ import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
+export interface WorkspaceLayoutConfig {
+  pinnedApps?: string[]; // App IDs in order
+  sidebarApps?: string[]; // Which apps show in sidebar
+  defaultView?: string; // Default view when entering workspace
+  theme?: string; // Per-workspace theme override
+}
+
 export interface WorkspaceSettings {
   // Entity & UI Settings
   defaultEntityTypes?: string[];
   theme?: string;
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
+
+  // Per-workspace layout configuration
+  layout?: WorkspaceLayoutConfig;
 
   // Main whiteboard reference
   mainWhiteboardId?: string; // UUID of the main whiteboard view for this workspace
@@ -59,6 +69,8 @@ export interface WorkspaceSettings {
     requireReviewFor?: string[]; // Event types requiring review (e.g., ['agent.create'])
     maxAgentsPerUser?: number; // Limit AI agents per user
     allowAgentCreation?: boolean; // Allow users to create custom agents
+    /** Who can approve AI proposals. Default: "owner_and_admins" */
+    proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
   };
 }
 
@@ -83,7 +95,7 @@ export const workspaces = pgTable("workspaces", {
   // }
 
   // Billing (optional - for managed hosting)
-  subscriptionTier: text("subscription_tier"), // 'free', 'pro', 'team', 'enterprise'
+  subscriptionTier: text("subscription_tier"), // 'solo', 'pro', 'team', 'enterprise'
   subscriptionStatus: text("subscription_status"), // 'active', 'canceled', 'past_due', 'trialing'
   stripeCustomerId: text("stripe_customer_id"),
 

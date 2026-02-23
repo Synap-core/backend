@@ -206,3 +206,39 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+
+  notify-control-plane:
+    runs-on: ubuntu-latest
+    needs:
+      - build-and-push-backend-api
+      - build-and-push-backend-realtime
+      - build-and-push-intelligence
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Compute image tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="main-$(echo '${{ github.sha }}' | cut -c1-7)"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Notify Control Plane
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg tag "${{ steps.tag.outputs.tag }}" \
+            --arg gitSha "${{ github.sha }}" \
+            --arg gitRef "${{ github.ref }}" \
+            '{tag: $tag, gitSha: $gitSha, gitRef: $gitRef}')
+
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.GITHUB_WEBHOOK_SECRET }}" | awk '{print $2}')
+
+          curl -sf -X POST \
+            "${{ secrets.CONTROL_PLANE_API_URL }}/webhooks/github" \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: sha256=${SIGNATURE}" \
+            -d "$PAYLOAD" \
+            --max-time 30 || echo "Warning: Control Plane notification failed (non-fatal)"

@@ -1,7 +1,7 @@
 /**
  * Profiles Router - Profile Management API
  *
- * Handles CRUD operations for entity type profiles.
+ * Event-driven CRUD with 3-phase lifecycle for entity type profiles.
  * Profiles define entity types as configuration, not code.
  */
 
@@ -15,6 +15,9 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { auditLog } from "../utils/audit-log.js";
+import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "profiles-router" });
 
@@ -87,9 +90,15 @@ export const profilesRouter = router({
         parentProfileId: z.string().uuid().optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
         scope: ProfileScopeSchema.default("workspace"),
+        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const correlationId = randomUUID();
+      const profileId = randomUUID();
+
       const db = await getDb();
       const profileRepo = new ProfileRepository(db);
 
@@ -126,12 +135,60 @@ export const profilesRouter = router({
         }
       }
 
-      // Determine scope-based ownership
+      // 1. Emit .requested event
+      auditLog({
+        subjectType: "profile",
+        action: "create",
+        phase: "requested",
+        subjectId: profileId,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        correlationId,
+        data: {
+          slug: input.slug,
+          displayName: input.displayName,
+          parentProfileId: input.parentProfileId,
+          scope: input.scope,
+        },
+      });
+
+      // 2. Permission check (may create proposal)
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "profile",
+        action: "create",
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
+        data: {
+          id: profileId,
+          slug: input.slug,
+          displayName: input.displayName,
+          parentProfileId: input.parentProfileId,
+          uiHints: input.uiHints,
+          scope: input.scope,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          profile: null as any,
+          status: "proposed",
+          message: "Profile creation proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // 3. Materialize — inline DB write (auto-approved)
       let userId: string | undefined;
       let workspaceId: string | undefined;
 
       if (input.scope === "system") {
-        // System profiles have no owner
         userId = undefined;
         workspaceId = undefined;
       } else if (input.scope === "workspace") {
@@ -148,6 +205,22 @@ export const profilesRouter = router({
         scope: input.scope as ProfileScope,
         userId,
         workspaceId,
+      });
+
+      // 4. Emit .completed event + side-effects
+      auditLog({
+        subjectType: "profile",
+        action: "create",
+        phase: "completed",
+        subjectId: profile.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        correlationId,
+        data: {
+          slug: profile.slug,
+          displayName: profile.displayName,
+          scope: input.scope,
+        },
       });
 
       logger.info(

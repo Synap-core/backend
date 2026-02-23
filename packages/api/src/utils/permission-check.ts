@@ -33,6 +33,10 @@ export interface PermissionCheckOpts {
   action: string;
   source?: string;
   data: Record<string, unknown>;
+  /** Correlation ID linking this check to the .requested event */
+  correlationId?: string;
+  /** AI reasoning for why this action is proposed */
+  reasoning?: string;
 }
 
 /**
@@ -52,7 +56,16 @@ export interface PermissionCheckOpts {
 export async function checkPermissionOrPropose(
   opts: PermissionCheckOpts
 ): Promise<PermissionResult> {
-  const { userId, agentUserId, workspaceId, subjectType, action, source, data } = opts;
+  const {
+    userId,
+    agentUserId,
+    workspaceId,
+    subjectType,
+    action,
+    source,
+    data,
+    correlationId,
+  } = opts;
 
   // 1. Personal resources (no workspace) - implicit ownership
   if (!workspaceId) {
@@ -91,7 +104,12 @@ export async function checkPermissionOrPropose(
 
     if (!result.allowed) {
       logger.warn(
-        { userId: effectiveUserId, workspaceId, requiredPermission, reason: result.reason },
+        {
+          userId: effectiveUserId,
+          workspaceId,
+          requiredPermission,
+          reason: result.reason,
+        },
         "Permission denied"
       );
       return { denied: true, reason: result.reason || "Permission denied" };
@@ -122,7 +140,16 @@ export async function checkPermissionOrPropose(
 
           if (requireReview.includes(eventKey)) {
             // Workspace explicitly requires review for this event type
-            return createProposal({ userId, workspaceId, subjectType, action, source, data });
+            return createProposal({
+              userId,
+              workspaceId,
+              subjectType,
+              action,
+              source,
+              data,
+              correlationId,
+              reasoning: opts.reasoning,
+            });
           }
 
           // Agent has permission and no review required — auto-approve
@@ -144,7 +171,16 @@ export async function checkPermissionOrPropose(
         false;
 
       if (!aiAutoApprove) {
-        return createProposal({ userId, workspaceId, subjectType, action, source, data });
+        return createProposal({
+          userId,
+          workspaceId,
+          subjectType,
+          action,
+          source,
+          data,
+          correlationId,
+          reasoning: opts.reasoning,
+        });
       }
     }
   } catch (error) {
@@ -166,15 +202,29 @@ async function createProposal(opts: {
   action: string;
   source?: string;
   data: Record<string, unknown>;
+  correlationId?: string;
+  reasoning?: string;
 }): Promise<{ granted: false; proposalId: string }> {
-  const { userId, workspaceId, subjectType, action, source, data } = opts;
+  const {
+    userId,
+    workspaceId,
+    subjectType,
+    action,
+    source,
+    data,
+    correlationId,
+    reasoning,
+  } = opts;
 
-  const targetId = (data.documentId || data.entityId || data.id || randomUUID()) as string;
+  const targetId = (data.documentId ||
+    data.entityId ||
+    data.id ||
+    randomUUID()) as string;
   const singularType = subjectType.endsWith("s")
     ? subjectType.slice(0, -1)
     : subjectType;
 
-  const proposalData: RequestShapedProposalData = {
+  const proposalData: RequestShapedProposalData & { correlationId?: string } = {
     requestId: randomUUID(),
     source: (source || "intelligence") as RequestShapedProposalData["source"],
     sourceId: userId,
@@ -183,7 +233,8 @@ async function createProposal(opts: {
     targetId,
     changeType: action as RequestShapedProposalData["changeType"],
     data,
-    reasoning: "AI proposal requires review",
+    reasoning: reasoning || "AI proposal requires review",
+    ...(correlationId ? { correlationId } : {}),
   };
 
   const [proposal] = await db

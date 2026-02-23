@@ -9,6 +9,7 @@
 
 import type { Server as SocketIOServer } from "socket.io";
 import type { IncomingMessage, ServerResponse } from "http";
+import * as Y from "yjs";
 
 interface BridgeEmitRequest {
   event: string;
@@ -18,10 +19,22 @@ interface BridgeEmitRequest {
   data: any;
 }
 
+/** Lazy getter for the Yjs server — set after yjsServer is initialized in server.ts */
+type YjsServerAccessor = () => { documents: Map<string, Y.Doc> } | null;
+let getYjsServer: YjsServerAccessor = () => null;
+
 /**
  * Setup Socket.IO bridge HTTP endpoint
  */
-export function setupBridge(io: SocketIOServer, httpServer: any) {
+export function setupBridge(
+  io: SocketIOServer,
+  httpServer: any,
+  yjsServerGetter?: YjsServerAccessor
+) {
+  if (yjsServerGetter) {
+    getYjsServer = yjsServerGetter;
+  }
+
   console.log("[Bridge] Setting up HTTP endpoint...");
 
   // Intercept HTTP requests for bridge endpoints
@@ -35,6 +48,18 @@ export function setupBridge(io: SocketIOServer, httpServer: any) {
 
       // Handle bridge endpoints
       if (url.startsWith("/bridge/")) {
+        await handleBridgeRequest(io, req, res);
+        return;
+      }
+
+      // Handle Yjs endpoints
+      if (url.startsWith("/yjs/")) {
+        await handleBridgeRequest(io, req, res);
+        return;
+      }
+
+      // Handle health check at root
+      if (url === "/health" && req.method === "GET") {
         await handleBridgeRequest(io, req, res);
         return;
       }
@@ -59,7 +84,6 @@ async function handleBridgeRequest(
 ) {
   const url = req.url || "";
 
-  // Health check
   // Health check endpoint (for debugging connectivity)
   if ((url === "/bridge/health" || url === "/health") && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -79,7 +103,7 @@ async function handleBridgeRequest(
     url.includes("/state") &&
     req.method === "GET"
   ) {
-    await handleYjsGetState(io, req, res);
+    await handleYjsGetState(req, res);
     return;
   }
 
@@ -89,7 +113,7 @@ async function handleBridgeRequest(
     url.includes("/restore") &&
     req.method === "POST"
   ) {
-    await handleYjsRestore(io, req, res);
+    await handleYjsRestore(req, res);
     return;
   }
 
@@ -204,14 +228,12 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
 /**
  * Handle Yjs state fetch
  * GET /yjs/:roomId/state
+ *
+ * Returns the current Yjs document state as base64-encoded binary.
+ * Only works for rooms that are currently active (have connected clients).
  */
-async function handleYjsGetState(
-  io: SocketIOServer,
-  req: IncomingMessage,
-  res: ServerResponse
-) {
+async function handleYjsGetState(req: IncomingMessage, res: ServerResponse) {
   try {
-    // Extract roomId from URL
     const match = req.url?.match(/\/yjs\/([^/]+)\/state/);
     if (!match) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -219,35 +241,55 @@ async function handleYjsGetState(
       return;
     }
 
-    const roomId = match[1];
+    const roomId = decodeURIComponent(match[1]);
+    const yjsServer = getYjsServer();
 
-    // Note: Y.Doc access would require integration with y-socket.io internals
-    // For now, return placeholder - actual implementation requires y-socket.io access
-    res.writeHead(501, { "Content-Type": "application/json" });
+    if (!yjsServer) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Yjs server not yet initialized" }));
+      return;
+    }
+
+    const doc = yjsServer.documents.get(roomId);
+    if (!doc) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "Room not active — load from database instead",
+          roomId,
+        })
+      );
+      return;
+    }
+
+    const state = Y.encodeStateAsUpdate(doc);
+    const base64State = Buffer.from(state).toString("base64");
+
+    res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
-        error: "Not implemented - requires y-socket.io document access",
         roomId,
+        state: base64State,
+        encoding: "base64",
+        byteLength: state.byteLength,
       })
     );
   } catch (error) {
     console.error("[Bridge] Error getting Yjs state:", error);
     res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Internal server error" }));
+    res.end(JSON.stringify({ error: "Failed to encode state" }));
   }
 }
 
 /**
  * Handle Yjs state restore
  * POST /yjs/:roomId/restore
+ *
+ * Applies a Yjs state update to an active room. If the room is not active,
+ * returns success — the state will be applied via database on next room open.
  */
-async function handleYjsRestore(
-  io: SocketIOServer,
-  req: IncomingMessage,
-  res: ServerResponse
-) {
+async function handleYjsRestore(req: IncomingMessage, res: ServerResponse) {
   try {
-    // Extract roomId from URL
     const match = req.url?.match(/\/yjs\/([^/]+)\/restore/);
     if (!match) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -255,7 +297,7 @@ async function handleYjsRestore(
       return;
     }
 
-    const roomId = match[1];
+    const roomId = decodeURIComponent(match[1]);
     const body = await parseBody(req);
     const { state } = body as { state: string };
 
@@ -265,18 +307,37 @@ async function handleYjsRestore(
       return;
     }
 
-    //Note: Actual restore would require y-socket.io integration
-    // For now, return placeholder
-    res.writeHead(501, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        error: "Not implemented - requires y-socket.io document access",
-        roomId,
-      })
-    );
+    const yjsServer = getYjsServer();
+    if (!yjsServer) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Yjs server not yet initialized" }));
+      return;
+    }
+
+    const doc = yjsServer.documents.get(roomId);
+    if (!doc) {
+      // Room not active — state will be applied from DB on next open
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          success: true,
+          roomId,
+          applied: false,
+          message: "Room not active — state will apply on next open via DB",
+        })
+      );
+      return;
+    }
+
+    const stateBuffer = Buffer.from(state, "base64");
+    Y.applyUpdate(doc, new Uint8Array(stateBuffer));
+    console.log(`[Bridge] Restored Yjs state for room: ${roomId}`);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true, roomId, applied: true }));
   } catch (error) {
     console.error("[Bridge] Error restoring Yjs state:", error);
     res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Internal server error" }));
+    res.end(JSON.stringify({ error: "Failed to apply state update" }));
   }
 }

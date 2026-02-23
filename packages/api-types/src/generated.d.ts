@@ -57,6 +57,20 @@ export interface Context {
 	workspaceId?: string | null;
 	workspaceRole?: string | null;
 }
+/**
+ * Users Table - Cache for Kratos Identity Data
+ *
+ * Purpose: Store Kratos identity data in Synap DB for performance
+ * - Allows JOINs without calling Kratos API
+ * - Can add Synap-specific fields (avatar, timezone)
+ * - Kratos remains source of truth for authentication
+ */
+export interface AgentMetadata {
+	agentType: string;
+	description?: string;
+	createdByUserId: string;
+	capabilities?: string[];
+}
 declare enum ChatThreadType {
 	MAIN = "main",
 	BRANCH = "branch"
@@ -3765,7 +3779,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					avatarUrl: string | null;
 					timezone: string;
 					locale: string;
-					kratosIdentityId: string;
+					userType: string;
+					agentMetadata: AgentMetadata | null;
+					kratosIdentityId: string | null;
 					lastSyncedAt: Date | null;
 					createdAt: Date;
 				};
@@ -5652,6 +5668,69 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				properties: EffectiveProperty[];
+			};
+			meta: object;
+		}>;
+	}>>;
+	agentUsers: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				agentType: string;
+				name: string;
+				role: "admin" | "editor" | "viewer";
+				description?: string | undefined;
+				capabilities?: string[] | undefined;
+			};
+			output: {
+				id: `${string}-${string}-${string}-${string}-${string}`;
+				email: string;
+				name: string;
+				agentType: string;
+				role: "admin" | "editor" | "viewer";
+			};
+			meta: object;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: {
+				id: string;
+				name: string | null;
+				email: string;
+				agentMetadata: AgentMetadata | null;
+				role: string;
+				joinedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				agentUserId: string;
+				name?: string | undefined;
+				role?: "admin" | "editor" | "viewer" | undefined;
+				description?: string | undefined;
+				capabilities?: string[] | undefined;
+			};
+			output: {
+				status: "updated";
+			};
+			meta: object;
+		}>;
+		remove: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				agentUserId: string;
+			};
+			output: {
+				status: "removed";
 			};
 			meta: object;
 		}>;
