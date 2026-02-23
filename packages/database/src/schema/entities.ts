@@ -25,7 +25,7 @@ export const entities = pgTable("entities", {
 
   // Context
   userId: text("user_id").notNull(),
-  workspaceId: uuid("workspace_id").notNull(), // Every entity belongs to a workspace
+  workspaceId: uuid("workspace_id"), // Nullable — null means global (visible across all workspaces)
   // Projects: Use relations table with type "belongs_to_project"
 
   // Profile reference (NEW - for dynamic types)

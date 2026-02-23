@@ -1,14 +1,16 @@
 /**
- * Setup Event Broadcasting Hook
+ * Setup Event Broadcasting + Materialization Hooks
  *
- * This module registers a hook with the EventRepository to broadcast
- * all appended events to connected SSE clients in real-time.
+ * This module registers hooks with the EventRepository:
+ * 1. SSE broadcast hook — streams events to connected clients
+ * 2. Materialization hook — enqueues .validated events for DB writes via pg-boss
  *
  * Call setupEventBroadcasting() at application startup.
  */
 
 import { eventRepository, type EventHook } from "@synap/database";
 import { eventStreamManager } from "./event-stream-manager.js";
+import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "event-broadcasting" });
@@ -16,10 +18,10 @@ const logger = createLogger({ module: "event-broadcasting" });
 let isSetup = false;
 
 /**
- * Setup event broadcasting to SSE clients
+ * Setup event broadcasting and materialization hooks
  *
  * This function should be called once at application startup.
- * It registers a hook with the EventRepository to broadcast events.
+ * It registers hooks with the EventRepository.
  */
 export function setupEventBroadcasting(): void {
   if (isSetup) {
@@ -27,14 +29,53 @@ export function setupEventBroadcasting(): void {
     return;
   }
 
+  // Hook 1: SSE broadcast — stream all events to connected clients
   const broadcastHook: EventHook = (event) => {
-    // Broadcast to all connected SSE clients
     eventStreamManager.broadcast(event);
   };
 
-  // Register the hook
-  eventRepository.addEventHook(broadcastHook);
+  // Hook 2: Materialization — enqueue .validated events for async DB writes
+  // This is the bridge between the event pipeline and the materializer worker.
+  // When a proposal is approved, the approval flow emits a .validated event
+  // which this hook picks up and sends to the materializer via pg-boss.
+  const materializationHook: EventHook = async (event) => {
+    if (event.eventType.endsWith(".validated")) {
+      try {
+        // Parse event type: "entity.create.validated" → subjectType=entity, action=create
+        const parts = event.eventType.split(".");
+        if (parts.length < 3) return;
 
-  logger.info("Event broadcasting hook registered with EventRepository");
+        const [subjectType, action] = parts;
+
+        await getBoss().send("materialize", {
+          eventId: event.id,
+          eventType: event.eventType,
+          subjectType,
+          action,
+          subjectId: event.subjectId,
+          userId: event.userId,
+          workspaceId: event.data?.workspaceId,
+          correlationId: event.correlationId,
+          data: event.data,
+        });
+
+        logger.debug(
+          { eventType: event.eventType, subjectId: event.subjectId },
+          "Enqueued materialization job"
+        );
+      } catch (error) {
+        logger.warn(
+          { err: error, eventType: event.eventType },
+          "Failed to enqueue materialization (non-fatal)"
+        );
+      }
+    }
+  };
+
+  // Register both hooks
+  eventRepository.addEventHook(broadcastHook);
+  eventRepository.addEventHook(materializationHook);
+
+  logger.info("Event broadcasting + materialization hooks registered");
   isSetup = true;
 }

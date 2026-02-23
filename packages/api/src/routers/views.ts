@@ -46,6 +46,8 @@ import { ViewEvents } from "../lib/event-helpers.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { randomUUID } from "crypto";
 
 // Proper package imports
 import {
@@ -95,23 +97,57 @@ export const viewsRouter = router({
         metadata: z.record(z.string(), z.any()).optional(),
         // Legacy: initialContent (for canvas views)
         initialContent: z.any().optional(),
+        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // If workspace provided, check user has editor role
+      const correlationId = randomUUID();
+
+      // If workspace provided, check permissions (including AI proposal gate)
       if (input.workspaceId) {
-        const permResult = await verifyPermission({
-          db,
+        const perm = await checkPermissionOrPropose({
           userId: ctx.userId,
-          workspace: { id: input.workspaceId },
-          requiredPermission: "write", // or 'read' for requireViewer
+          agentUserId: input.agentUserId,
+          workspaceId: input.workspaceId,
+          subjectType: "view",
+          action: "create",
+          source: input.source,
+          reasoning: input.reasoning,
+          correlationId,
+          data: {
+            name: input.name,
+            type: input.type,
+            scopeProfileIds: input.scopeProfileIds,
+          },
         });
-        if (!permResult.allowed)
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: permResult.reason || "Insufficient permissions",
-          });
+
+        if ("denied" in perm && perm.denied) {
+          throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+        }
+        if ("proposalId" in perm) {
+          return {
+            view: null as any,
+            documentId: null as any,
+            status: "proposed",
+            message: "View creation proposed for review",
+            proposalId: perm.proposalId,
+          };
+        }
       }
+
+      // Emit .requested event
+      auditLog({
+        subjectType: "view",
+        action: "create",
+        phase: "requested",
+        subjectId: correlationId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        correlationId,
+        data: { name: input.name, type: input.type },
+      });
 
       // Compute category from view type
       const category = getViewCategory(input.type as ViewType);
@@ -173,12 +209,7 @@ export const viewsRouter = router({
 
       // Build proper storage path and upload to MinIO
       const ext = input.type === "whiteboard" ? "json" : "json";
-      const storageKey = storage.buildPath(
-        ctx.userId,
-        input.type,
-        docId,
-        ext
-      );
+      const storageKey = storage.buildPath(ctx.userId, input.type, docId, ext);
       const uploadResult = await storage.upload(storageKey, contentBuffer, {
         contentType: "application/json",
       });
@@ -223,7 +254,7 @@ export const viewsRouter = router({
       const createdView = await viewRepo.create(
         {
           id: viewId,
-          type: input.type as ViewType,
+          type: input.type as any,
           name: input.name,
           description: input.description,
           documentId: doc.id,
@@ -239,7 +270,7 @@ export const viewsRouter = router({
         ctx.userId
       );
 
-      // Audit log (fire-and-forget)
+      // Emit .completed event
       auditLog({
         subjectType: "view",
         action: "create",
@@ -247,6 +278,7 @@ export const viewsRouter = router({
         subjectId: viewId,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        correlationId,
         data: {
           id: viewId,
           type: input.type,
@@ -889,7 +921,9 @@ export const viewsRouter = router({
           query: input.query as Record<string, unknown> | undefined,
           config: input.config as Record<string, unknown> | undefined,
           embeddedViewIds: input.embeddedViewIds,
-          schemaSnapshot: input.schemaSnapshot as Record<string, unknown> | undefined,
+          schemaSnapshot: input.schemaSnapshot as
+            | Record<string, unknown>
+            | undefined,
           snapshotUpdatedAt: input.snapshotUpdatedAt,
         },
         ctx.userId

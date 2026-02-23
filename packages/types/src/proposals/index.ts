@@ -30,7 +30,7 @@ export interface UpdateRequest {
   workspaceId: string;
 
   /** Target Entity */
-  targetType: "document" | "entity" | "whiteboard" | "view";
+  targetType: "document" | "entity" | "whiteboard" | "view" | "profile";
   targetId: string;
 
   /** What kind of change? (aligns with EventAction) */

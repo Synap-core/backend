@@ -1,17 +1,22 @@
 /**
  * Entities Router - Profile-Based Entity Management
  *
- * Synchronous CRUD with inline permission checks.
- * No longer uses event pipeline — direct DB operations.
+ * Event-driven CRUD with audit trail:
+ *   .requested → permission check → inline materialization → .completed
+ * Proposal path (AI requiring review) defers to the materializer worker.
+ *
+ * Supports global entities (workspaceId = null) visible across all workspaces.
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
 import {
   db,
   eq,
   desc,
   and,
+  or,
+  isNull,
   getDb,
   ProfileResolutionService,
   EventRepository,
@@ -25,10 +30,27 @@ import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
+import { randomUUID } from "crypto";
+
+/** Standard entity shape for API responses */
+function toApiEntity(entity: any): Entity {
+  return {
+    ...entity,
+    properties: entity.properties || {},
+    fileUrl: null,
+    filePath: null,
+    fileSize: null,
+    fileType: null,
+    checksum: null,
+  } as Entity;
+}
 
 export const entitiesRouter = router({
   /**
    * Create entity with profile-based type system
+   *
+   * When `global: true`, the entity is created without a workspaceId
+   * and will be visible across all workspaces.
    */
   create: workspaceProcedure
     .input(
@@ -40,11 +62,19 @@ export const entitiesRouter = router({
         properties: z.record(z.string(), z.unknown()).optional(),
         documentId: z.string().uuid().optional(),
         content: z.string().optional(),
+        /** When true, entity has no workspace — visible everywhere */
+        global: z.boolean().optional().default(false),
+        /** Source of action for AI governance (e.g. "ai", "intelligence") */
+        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        /** AI reasoning for proposals */
+        reasoning: z.string().optional(),
+        /** Agent user ID when action is performed by an AI agent */
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const { randomUUID } = await import("crypto");
       const entityId = randomUUID();
+      const correlationId = randomUUID();
 
       // Resolve profile
       let profileSlug: string | undefined;
@@ -72,13 +102,46 @@ export const entitiesRouter = router({
         });
       }
 
-      // Permission check
+      // 1. Emit .requested event — records intent regardless of outcome
+      auditLog({
+        subjectType: "entity",
+        action: "create",
+        phase: "requested",
+        subjectId: entityId,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        correlationId,
+        data: {
+          profileSlug,
+          title: input.title,
+          description: input.description,
+          properties: input.properties,
+          documentId: input.documentId,
+          content: input.content ? "[content]" : undefined,
+          global: input.global,
+        },
+      });
+
+      // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
         subjectType: "entity",
         action: "create",
-        data: { id: entityId, profileSlug, title: input.title },
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
+        data: {
+          id: entityId,
+          profileSlug,
+          title: input.title,
+          description: input.description,
+          properties: input.properties,
+          documentId: input.documentId,
+          content: input.content,
+          global: input.global,
+        },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -94,7 +157,9 @@ export const entitiesRouter = router({
         };
       }
 
-      // Direct DB operation
+      // 3. Materialize — inline DB write (auto-approved)
+      const entityWorkspaceId = input.global ? null : ctx.workspaceId;
+
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
@@ -128,7 +193,7 @@ export const entitiesRouter = router({
 
         createdEntity = await entityRepo.create(
           {
-            workspaceId: ctx.workspaceId,
+            workspaceId: entityWorkspaceId!,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
@@ -148,7 +213,7 @@ export const entitiesRouter = router({
         // Simple entity creation
         createdEntity = await entityRepo.create(
           {
-            workspaceId: ctx.workspaceId,
+            workspaceId: entityWorkspaceId!,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
@@ -160,7 +225,7 @@ export const entitiesRouter = router({
         );
       }
 
-      // Audit + side-effects (fire-and-forget)
+      // 4. Emit .completed event + side-effects
       auditLog({
         subjectType: "entity",
         action: "create",
@@ -168,7 +233,8 @@ export const entitiesRouter = router({
         subjectId: createdEntity.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        data: { profileSlug, title: input.title },
+        correlationId,
+        data: { profileSlug, title: input.title, global: input.global },
       });
 
       emitSideEffects({
@@ -184,22 +250,62 @@ export const entitiesRouter = router({
         status: "created",
         message: "Entity created",
         id: createdEntity.id,
-        entity: {
-          ...createdEntity,
-          properties: createdEntity.properties || {},
-          fileUrl: null,
-          filePath: null,
-          fileSize: null,
-          fileType: null,
-          checksum: null,
-        },
+        entity: toApiEntity(createdEntity),
       };
     }),
 
   /**
-   * List entities (workspace-scoped)
+   * List entities (workspace-scoped + global)
+   *
+   * Returns entities belonging to the active workspace AND global entities (workspaceId IS NULL).
    */
   list: workspaceProcedure
+    .input(
+      z.object({
+        profileSlug: z.string().optional(),
+        limit: z.number().min(1).max(100).default(50),
+        /** When true, only return global entities */
+        globalOnly: z.boolean().optional().default(false),
+      })
+    )
+    .output(
+      z.object({
+        entities: z.array(EntitySchema),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const userCondition = eq(entities.userId, ctx.userId);
+
+      // Workspace filter: workspace-specific + global, or global-only
+      const workspaceCondition = input.globalOnly
+        ? isNull(entities.workspaceId)
+        : or(
+            eq(entities.workspaceId, ctx.workspaceId),
+            isNull(entities.workspaceId)
+          );
+
+      const conditions: any[] = [userCondition, workspaceCondition];
+
+      if (input.profileSlug) {
+        conditions.push(eq(entities.type, input.profileSlug));
+      }
+
+      const results = await db.query.entities.findMany({
+        where: and(...conditions),
+        orderBy: [desc(entities.createdAt)],
+        limit: input.limit,
+      });
+
+      return { entities: results.map(toApiEntity) };
+    }),
+
+  /**
+   * List global entities (no workspace required)
+   *
+   * Returns only entities where workspaceId IS NULL.
+   * Uses protectedProcedure — works even without an active workspace.
+   */
+  listGlobal: protectedProcedure
     .input(
       z.object({
         profileSlug: z.string().optional(),
@@ -213,8 +319,8 @@ export const entitiesRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const conditions: any[] = [
-        eq(entities.workspaceId, ctx.workspaceId),
         eq(entities.userId, ctx.userId),
+        isNull(entities.workspaceId),
       ];
 
       if (input.profileSlug) {
@@ -227,17 +333,7 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      const typedEntities = results.map((entity) => ({
-        ...entity,
-        properties: entity.properties || {},
-        fileUrl: null,
-        filePath: null,
-        fileSize: null,
-        fileType: null,
-        checksum: null,
-      })) as Entity[];
-
-      return { entities: typedEntities };
+      return { entities: results.map(toApiEntity) };
     }),
 
   /**
@@ -258,8 +354,11 @@ export const entitiesRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const conditions: any[] = [
-        eq(entities.workspaceId, ctx.workspaceId),
         eq(entities.userId, ctx.userId),
+        or(
+          eq(entities.workspaceId, ctx.workspaceId),
+          isNull(entities.workspaceId)
+        ),
       ];
 
       if (input.profileSlug) {
@@ -272,17 +371,7 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      const typedEntities = results.map((entity) => ({
-        ...entity,
-        properties: entity.properties || {},
-        fileUrl: null,
-        filePath: null,
-        fileSize: null,
-        fileType: null,
-        checksum: null,
-      })) as Entity[];
-
-      return { entities: typedEntities };
+      return { entities: results.map(toApiEntity) };
     }),
 
   /**
@@ -295,24 +384,17 @@ export const entitiesRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.documentId, input.documentId),
-          eq(entities.workspaceId, ctx.workspaceId),
-          eq(entities.userId, ctx.userId)
+          eq(entities.userId, ctx.userId),
+          or(
+            eq(entities.workspaceId, ctx.workspaceId),
+            isNull(entities.workspaceId)
+          )
         ),
       });
 
       if (!entity) return { entity: null };
 
-      return {
-        entity: {
-          ...entity,
-          properties: entity.properties || {},
-          fileUrl: null,
-          filePath: null,
-          fileSize: null,
-          fileType: null,
-          checksum: null,
-        } as Entity,
-      };
+      return { entity: toApiEntity(entity) };
     }),
 
   /**
@@ -336,8 +418,11 @@ export const entitiesRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.id),
-          eq(entities.workspaceId, ctx.workspaceId),
-          eq(entities.userId, ctx.userId)
+          eq(entities.userId, ctx.userId),
+          or(
+            eq(entities.workspaceId, ctx.workspaceId),
+            isNull(entities.workspaceId)
+          )
         ),
       });
 
@@ -345,15 +430,7 @@ export const entitiesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
 
-      const typedEntity = {
-        ...entity,
-        properties: entity.properties || {},
-        fileUrl: null,
-        filePath: null,
-        fileSize: null,
-        fileType: null,
-        checksum: null,
-      } as Entity;
+      const typedEntity = toApiEntity(entity);
 
       if (!input.includeProfile) {
         return { entity: typedEntity };
@@ -386,32 +463,67 @@ export const entitiesRouter = router({
         description: z.string().optional(),
         documentId: z.string().uuid().nullable().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
+        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Permission check
+      const correlationId = randomUUID();
+
+      // 1. Emit .requested event
+      auditLog({
+        subjectType: "entity",
+        action: "update",
+        phase: "requested",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        correlationId,
+        data: {
+          title: input.title,
+          description: input.description,
+          properties: input.properties,
+          documentId: input.documentId,
+        },
+      });
+
+      // 2. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
         subjectType: "entity",
         action: "update",
-        data: { id: input.id },
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
+        data: {
+          id: input.id,
+          title: input.title,
+          description: input.description,
+          properties: input.properties,
+          documentId: input.documentId,
+        },
       });
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed", message: "Update proposed for review", proposalId: perm.proposalId };
+        return {
+          status: "proposed",
+          message: "Update proposed for review",
+          proposalId: perm.proposalId,
+        };
       }
 
-      // Direct DB operation
+      // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
       const docRepo = new DocumentRepository(database, eventRepo);
 
-      // Check for document link changes
       const previousEntity = await db.query.entities.findFirst({
         where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
         columns: { documentId: true },
@@ -436,11 +548,15 @@ export const entitiesRouter = router({
           await docRepo.update(oldDocumentId, { entityId: null }, ctx.userId);
         }
         if (newDocumentId) {
-          await docRepo.update(newDocumentId, { entityId: input.id }, ctx.userId);
+          await docRepo.update(
+            newDocumentId,
+            { entityId: input.id },
+            ctx.userId
+          );
         }
       }
 
-      // Audit + side-effects
+      // 4. Emit .completed event + side-effects
       auditLog({
         subjectType: "entity",
         action: "update",
@@ -448,6 +564,7 @@ export const entitiesRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
+        correlationId,
       });
 
       emitSideEffects({
@@ -465,14 +582,39 @@ export const entitiesRouter = router({
    * Delete entity (soft delete)
    */
   delete: workspaceProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
-      // Permission check
+      const correlationId = randomUUID();
+
+      // 1. Emit .requested event
+      auditLog({
+        subjectType: "entity",
+        action: "delete",
+        phase: "requested",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        correlationId,
+        data: { id: input.id },
+      });
+
+      // 2. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
         subjectType: "entity",
         action: "delete",
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
         data: { id: input.id },
       });
 
@@ -480,21 +622,31 @@ export const entitiesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed", message: "Deletion proposed for review", proposalId: perm.proposalId };
+        return {
+          status: "proposed",
+          message: "Deletion proposed for review",
+          proposalId: perm.proposalId,
+        };
       }
 
+      // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
       const docRepo = new DocumentRepository(database, eventRepo);
 
-      // Check for cascading document deletion
       const { getUserPreference } = await import("@synap/database");
-      const userPref = await getUserPreference(ctx.userId, "entity.deleteDocument");
+      const userPref = await getUserPreference(
+        ctx.userId,
+        "entity.deleteDocument"
+      );
 
       if (userPref) {
         const entity = await db.query.entities.findFirst({
-          where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
+          where: and(
+            eq(entities.id, input.id),
+            eq(entities.userId, ctx.userId)
+          ),
         });
 
         if (entity?.documentId) {
@@ -508,16 +660,19 @@ export const entitiesRouter = router({
           if (document) {
             const { storage } = await import("@synap/storage");
             try {
-              if (document.storageKey) await storage.delete(document.storageKey);
+              if (document.storageKey)
+                await storage.delete(document.storageKey);
             } catch {}
             await docRepo.delete(entity.documentId, ctx.userId);
           }
         }
       }
 
-      await entityRepo.delete(input.id, ctx.userId, { deleteDocument: userPref });
+      await entityRepo.delete(input.id, ctx.userId, {
+        deleteDocument: userPref,
+      });
 
-      // Audit + side-effects
+      // 4. Emit .completed event + side-effects
       auditLog({
         subjectType: "entity",
         action: "delete",
@@ -525,6 +680,7 @@ export const entitiesRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
+        correlationId,
       });
 
       emitSideEffects({

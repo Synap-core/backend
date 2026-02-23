@@ -18,6 +18,7 @@ export interface AuditLogOpts {
   workspaceId?: string;
   data?: Record<string, unknown>;
   source?: string;
+  correlationId?: string;
 }
 
 /**
@@ -40,6 +41,7 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
       },
       userId: opts.userId,
       source: (opts.source || "api") as any,
+      correlationId: opts.correlationId,
     });
 
     await eventRepo.append({
@@ -53,6 +55,7 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
       userId: event.userId,
       source: event.source as any,
       timestamp: event.timestamp,
+      correlationId: event.correlationId,
     });
   } catch (error) {
     // Audit logging is non-critical — log and continue

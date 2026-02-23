@@ -8,8 +8,17 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, proposals, documents, eq, and, desc } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import {
+  db,
+  proposals,
+  documents,
+  eq,
+  and,
+  desc,
+  getWorkspaceMembership,
+} from "@synap/database";
+import { ProposalStatus, workspaces } from "@synap/database/schema";
+import type { WorkspaceSettings } from "@synap/database/schema";
 import type { StoredProposalData } from "@synap-core/types";
 import {
   isDocumentContentProposalData,
@@ -17,6 +26,7 @@ import {
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
+import { auditLog } from "../utils/audit-log.js";
 
 export const proposalsRouter = router({
   /**
@@ -28,7 +38,7 @@ export const proposalsRouter = router({
       z.object({
         workspaceId: z.string().optional(),
         targetType: z
-          .enum(["document", "entity", "whiteboard", "view"])
+          .enum(["document", "entity", "whiteboard", "view", "profile"])
           .optional(),
         targetId: z.string().optional(),
         status: z
@@ -102,6 +112,44 @@ export const proposalsRouter = router({
         });
       }
 
+      // Ownership check: who can approve this proposal?
+      if (proposal.workspaceId) {
+        const [ws] = await db
+          .select({ settings: workspaces.settings })
+          .from(workspaces)
+          .where(eq(workspaces.id, proposal.workspaceId))
+          .limit(1);
+
+        const settings = ws?.settings as WorkspaceSettings | undefined;
+        const policy =
+          settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
+
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId,
+          userId
+        );
+        const memberRole = membership?.role;
+        const isAdmin = memberRole === "admin";
+        const isEditor = memberRole === "editor" || isAdmin;
+        const proposalData = proposal.data as Record<string, unknown> | null;
+        const isOwner = proposalData?.sourceId === userId;
+
+        const canApprove =
+          policy === "admins_only"
+            ? isAdmin
+            : policy === "any_editor"
+              ? isEditor
+              : /* owner_and_admins */ isOwner || isAdmin;
+
+        if (!canApprove) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Not authorized to approve this proposal",
+          });
+        }
+      }
+
       const payload = proposal.data as StoredProposalData | null | undefined;
 
       // B3: Document content proposal (hub/chat/user_edit) – apply content directly
@@ -164,19 +212,21 @@ export const proposalsRouter = router({
         return { success: true };
       }
 
-      // Generic flow: dispatch validated work via pg-boss
+      // Generic flow: emit .validated event → materialization hook picks it up
       if (isRequestShapedProposalData(payload)) {
         const {
           targetType,
           changeType,
           data: requestData,
-          requestId,
-        } = payload;
-        const { getBoss } = await import("@synap/jobs");
+          correlationId: proposalCorrelationId,
+        } = payload as typeof payload & { correlationId?: string };
+
         const eventPayload =
           typeof requestData === "object" && requestData !== null
             ? { ...requestData }
             : {};
+
+        // Normalize entity payload fields
         if (targetType === "entity") {
           if (
             changeType === "update" &&
@@ -194,17 +244,27 @@ export const proposalsRouter = router({
           }
         }
 
-        // Dispatch to appropriate pg-boss queue based on target type
-        const queueName = targetType === "entity" ? "entity-embedding" : "side-effects";
-        await getBoss().send(queueName, {
-          ...eventPayload,
-          targetType,
-          changeType,
+        const subjectId = (eventPayload.id as string) || proposal.targetId;
+
+        // Emit .validated event with the same correlationId as the .requested event.
+        // The materialization hook (setup-event-broadcasting.ts) will pick this up
+        // and enqueue it to the materializer worker via pg-boss.
+        await auditLog({
+          subjectType: targetType,
+          action: changeType,
+          phase: "validated",
+          subjectId,
+          userId,
           workspaceId: proposal.workspaceId,
-          approvedBy: userId,
-          approvedAt: new Date().toISOString(),
-          approvalComment: input.comment,
-          requestId,
+          correlationId: proposalCorrelationId,
+          data: {
+            ...eventPayload,
+            workspaceId: proposal.workspaceId,
+            approvedBy: userId,
+            approvedAt: new Date().toISOString(),
+            approvalComment: input.comment,
+          },
+          source: "api",
         });
       }
 
@@ -249,6 +309,204 @@ export const proposalsRouter = router({
     }),
 
   /**
+   * Batch approve multiple proposals in a single call.
+   * The frontend handles selection; this processes the IDs.
+   * Each proposal goes through the same ownership + materialization flow.
+   */
+  batchApprove: protectedProcedure
+    .input(
+      z.object({
+        proposalIds: z.array(z.string()).min(1).max(50),
+        comment: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const results: Array<{
+        proposalId: string;
+        success: boolean;
+        error?: string;
+      }> = [];
+
+      for (const proposalId of input.proposalIds) {
+        try {
+          const proposal = await db.query.proposals.findFirst({
+            where: eq(proposals.id, proposalId),
+          });
+
+          if (!proposal) {
+            results.push({ proposalId, success: false, error: "Not found" });
+            continue;
+          }
+
+          if (proposal.status !== ProposalStatus.PENDING) {
+            results.push({
+              proposalId,
+              success: false,
+              error: `Already ${proposal.status}`,
+            });
+            continue;
+          }
+
+          // Ownership check
+          if (proposal.workspaceId) {
+            const [ws] = await db
+              .select({ settings: workspaces.settings })
+              .from(workspaces)
+              .where(eq(workspaces.id, proposal.workspaceId))
+              .limit(1);
+
+            const settings = ws?.settings as WorkspaceSettings | undefined;
+            const policy =
+              settings?.aiGovernance?.proposalApprovalPolicy ??
+              "owner_and_admins";
+
+            const membership = await getWorkspaceMembership(
+              db,
+              proposal.workspaceId,
+              userId
+            );
+            const memberRole = membership?.role;
+            const isAdmin = memberRole === "admin";
+            const isEditor = memberRole === "editor" || isAdmin;
+            const proposalData = proposal.data as Record<
+              string,
+              unknown
+            > | null;
+            const isOwner = proposalData?.sourceId === userId;
+
+            const canApprove =
+              policy === "admins_only"
+                ? isAdmin
+                : policy === "any_editor"
+                  ? isEditor
+                  : isOwner || isAdmin;
+
+            if (!canApprove) {
+              results.push({
+                proposalId,
+                success: false,
+                error: "Not authorized",
+              });
+              continue;
+            }
+          }
+
+          // Emit .validated event for generic proposals (same as single approve)
+          const payload = proposal.data as
+            | StoredProposalData
+            | null
+            | undefined;
+
+          if (payload && isRequestShapedProposalData(payload)) {
+            const {
+              targetType,
+              changeType,
+              data: requestData,
+              correlationId: proposalCorrelationId,
+            } = payload as typeof payload & { correlationId?: string };
+
+            const eventPayload =
+              typeof requestData === "object" && requestData !== null
+                ? { ...requestData }
+                : {};
+
+            if (targetType === "entity") {
+              if (
+                changeType === "update" &&
+                eventPayload.entityId != null &&
+                eventPayload.id == null
+              ) {
+                eventPayload.id = eventPayload.entityId;
+              }
+              if (
+                changeType === "create" &&
+                eventPayload.description != null &&
+                eventPayload.preview == null
+              ) {
+                eventPayload.preview = eventPayload.description;
+              }
+            }
+
+            const subjectId = (eventPayload.id as string) || proposal.targetId;
+
+            await auditLog({
+              subjectType: targetType,
+              action: changeType,
+              phase: "validated",
+              subjectId,
+              userId,
+              workspaceId: proposal.workspaceId,
+              correlationId: proposalCorrelationId,
+              data: {
+                ...eventPayload,
+                workspaceId: proposal.workspaceId,
+                approvedBy: userId,
+                approvedAt: new Date().toISOString(),
+                approvalComment: input.comment,
+              },
+              source: "api",
+            });
+          }
+
+          await db
+            .update(proposals)
+            .set({
+              status: ProposalStatus.APPROVED,
+              reviewedBy: userId,
+              reviewedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(proposals.id, proposalId));
+
+          results.push({ proposalId, success: true });
+        } catch (error) {
+          results.push({
+            proposalId,
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+      }
+
+      return { results };
+    }),
+
+  /**
+   * Batch reject multiple proposals in a single call.
+   */
+  batchReject: protectedProcedure
+    .input(
+      z.object({
+        proposalIds: z.array(z.string()).min(1).max(50),
+        reason: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      for (const proposalId of input.proposalIds) {
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.REJECTED,
+            rejectionReason: input.reason,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(proposals.id, proposalId),
+              eq(proposals.status, ProposalStatus.PENDING)
+            )
+          );
+      }
+
+      return { success: true };
+    }),
+
+  /**
    * Submit a proposal (Universal Request)
    * Emits *.requested event.
    * If user has permission + auto-approve enabled -> Validated.
@@ -263,6 +521,7 @@ export const proposalsRouter = router({
           "relation",
           "workspace",
           "view",
+          "profile",
         ]),
         targetId: z.string().optional(),
         changeType: z.enum(["create", "update", "delete"]),
