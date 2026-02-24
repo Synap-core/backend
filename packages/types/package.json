@@ -73,7 +73,7 @@
     }
   },
   "scripts": {
-    "build": "tsup && (tsc --emitDeclarationOnly || true)",
+    "build": "rm -rf dist && tsup && (tsc --emitDeclarationOnly || true)",
     "dev": "tsup --watch",
     "type-check": "tsc --noEmit"
   },
