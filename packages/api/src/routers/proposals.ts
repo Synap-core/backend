@@ -47,7 +47,7 @@ export const proposalsRouter = router({
         limit: z.number().default(50),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const conditions = [];
 
       // Filter by Workspace (Security Boundary)
@@ -74,8 +74,25 @@ export const proposalsRouter = router({
         conditions.push(eq(proposals.status, statusEnum));
       }
 
-      // TODO: Add stricter permission checks here (User must be Editor of workspace)
-      // For now, relying on workspaceId scope.
+      // Verify user has editor+ access to the workspace
+      if (input.workspaceId) {
+        const { workspaceMembers } = await import("@synap/database/schema");
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, input.workspaceId),
+            eq(workspaceMembers.userId, requireUserId(ctx.userId))
+          ),
+        });
+        if (
+          !membership ||
+          !["owner", "admin", "editor"].includes(membership.role)
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Editor or higher role required to view proposals",
+          });
+        }
+      }
 
       const items = await db.query.proposals.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,

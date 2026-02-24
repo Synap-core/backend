@@ -95,6 +95,17 @@ export const workspacesRouter = router({
         ctx.userId
       );
 
+      // 2b. Auto-add creator as owner member
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+      await memberRepo.add(
+        {
+          workspaceId,
+          userId: ctx.userId,
+          role: "owner",
+        },
+        ctx.userId
+      );
+
       // 3. Audit log
       auditLog({
         subjectType: "workspaces",
