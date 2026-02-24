@@ -57,6 +57,14 @@ export {
   type EnsureDefaultCommandsResult,
 } from "./utils/ensure-default-commands.js";
 
+// Export createWorkspaceFromDefinition utility
+export {
+  createWorkspaceFromDefinition,
+  type WorkspaceDefinitionInput,
+  type CreateFromDefinitionOptions,
+  type CreateFromDefinitionResult,
+} from "./utils/create-workspace-from-definition.js";
+
 // Export document types for type safety
 export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
 export {

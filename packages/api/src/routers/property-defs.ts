@@ -26,6 +26,7 @@ const PropertyValueTypeSchema = z.enum([
   "entity_id",
   "array",
   "object",
+  "secret",
 ]);
 
 export const propertyDefsRouter = router({

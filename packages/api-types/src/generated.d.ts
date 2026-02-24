@@ -505,6 +505,12 @@ export interface WorkspaceSettings {
 	packageSlug?: string;
 	/** Version of the package at time of creation. */
 	packageVersion?: string;
+	/** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
+	createdBy?: "user" | "provisioning" | "plugin";
+	/** ISO timestamp when provisioning created this workspace */
+	provisionedAt?: string;
+	/** Current provisioning status */
+	provisioningStatus?: "pending" | "active" | "failed";
 	aiGovernance?: {
 		autoApprove?: boolean;
 		requireReviewFor?: string[];
@@ -3365,7 +3371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					startedAt: Date;
 					threadId: string;
-					status: "completed" | "running" | "failed";
+					status: "completed" | "failed" | "running";
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
 					inputs: Record<string, unknown> | null;
@@ -3391,7 +3397,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				errorMessage: string | null;
 				startedAt: Date;
 				threadId: string;
-				status: "completed" | "running" | "failed";
+				status: "completed" | "failed" | "running";
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
 				inputs: Record<string, unknown> | null;
@@ -4016,13 +4022,30 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		seedPlugin: import("@trpc/server").TRPCMutationProcedure<{
+		createFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				pluginId: string;
+				definition: unknown;
+				packageSlug?: string | undefined;
+				packageVersion?: string | undefined;
+				workspaceName?: string | undefined;
 			};
 			output: {
 				status: "created";
-				workspaceId: `${string}-${string}-${string}-${string}-${string}`;
+				workspaceId: string;
+				profileIds: string[];
+				viewIds: string[];
+				entityIds: string[];
+			};
+			meta: object;
+		}>;
+		seedPlugin: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				pluginId: string;
+				definition?: unknown;
+			};
+			output: {
+				status: "created";
+				workspaceId: string;
 			};
 			meta: object;
 		}>;
@@ -5754,7 +5777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				slug: string;
-				valueType: "string" | "number" | "boolean" | "object" | "array" | "date" | "entity_id";
+				valueType: "string" | "number" | "boolean" | "object" | "array" | "date" | "secret" | "entity_id";
 				constraints?: Record<string, unknown> | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 			};
@@ -5787,7 +5810,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				slug?: string | undefined;
-				valueType?: "string" | "number" | "boolean" | "object" | "array" | "date" | "entity_id" | undefined;
+				valueType?: "string" | "number" | "boolean" | "object" | "array" | "date" | "secret" | "entity_id" | undefined;
 				constraints?: Record<string, unknown> | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 			};

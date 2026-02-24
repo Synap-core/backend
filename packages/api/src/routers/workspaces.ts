@@ -31,8 +31,8 @@ import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
-import { config } from "@synap-core/core";
-import { createLogger } from "@synap-core/core";
+import { config, createLogger } from "@synap-core/core";
+import { createWorkspaceFromDefinition } from "@synap/database";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -1009,13 +1009,88 @@ export const workspacesRouter = router({
     }),
 
   /**
+   * Create a complete workspace from a PackageDefinition in a single call.
+   *
+   * Server-side equivalent of the frontend's 9-step useCreateWorkspaceFromProposal.
+   * Preferred path for template-based workspace creation (packages from registry).
+   */
+  createFromDefinition: protectedProcedure
+    .input(
+      z.object({
+        definition: z.unknown(),
+        packageSlug: z.string().optional(),
+        packageVersion: z.string().optional(),
+        workspaceName: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const result = await createWorkspaceFromDefinition({
+        definition: input.definition as any,
+        userId: ctx.userId,
+        packageSlug: input.packageSlug,
+        packageVersion: input.packageVersion,
+        workspaceName: input.workspaceName,
+        createdBy: "user",
+      });
+
+      // Enqueue workspace-init for default whiteboard/commands
+      // (skips default views when packageSlug is set)
+      try {
+        const boss = getBoss();
+        await boss.send("workspace-init", {
+          workspaceId: result.workspaceId,
+          userId: ctx.userId,
+          packageSlug: input.packageSlug,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, workspaceId: result.workspaceId },
+          "Failed to enqueue workspace-init (non-fatal)"
+        );
+      }
+
+      auditLog({
+        subjectType: "workspaces",
+        action: "create",
+        phase: "completed",
+        subjectId: result.workspaceId,
+        userId: ctx.userId,
+        data: {
+          id: result.workspaceId,
+          packageSlug: input.packageSlug,
+          createdBy: "user",
+        },
+      });
+
+      emitSideEffects({
+        subjectType: "workspace",
+        action: "create",
+        subjectId: result.workspaceId,
+        userId: ctx.userId,
+      });
+
+      return {
+        status: "created" as const,
+        workspaceId: result.workspaceId,
+        profileIds: result.profileIds,
+        viewIds: result.viewIds,
+        entityIds: result.entityIds,
+      };
+    }),
+
+  /**
    * Seed a plugin workspace (provisioning-level auth via token header)
    *
    * Called by the control plane during pod provisioning to auto-create
    * a workspace for an enabled plugin (e.g., ZeroClaw).
    */
   seedPlugin: publicProcedure
-    .input(z.object({ pluginId: z.string() }))
+    .input(
+      z.object({
+        pluginId: z.string(),
+        definition: z.unknown().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       // Authenticate via provisioning token
       const providedToken = ctx.req?.headers.get("X-Provisioning-Token");
@@ -1028,231 +1103,81 @@ export const workspacesRouter = router({
         });
       }
 
-      // Plugin workspace configs (hardcoded — mirrors plugin-templates.ts)
-      const pluginConfigs: Record<
-        string,
-        {
-          name: string;
-          description: string;
-          profiles: Array<{
-            slug: string;
-            displayName: string;
-            icon: string;
-            color: string;
-            description: string;
-            properties: Array<{
-              slug: string;
-              label: string;
-              valueType: string;
-              inputType?: string;
-              enumValues?: string[];
-            }>;
-          }>;
-          views: Array<{
-            name: string;
-            type: string;
-            scopeProfileSlug: string;
-            config?: Record<string, unknown>;
-          }>;
-          bentoLayout: Array<{
-            widgetType: string;
-            pos: { x: number; y: number; w: number; h: number };
-            config?: Record<string, unknown>;
-          }>;
-          layoutConfig: {
-            pinnedApps: string[];
-            sidebarApps: string[];
-            defaultView: string;
-          };
-        }
-      > = {
-        zeroclaw: {
-          name: "ZeroClaw Agent",
-          description:
-            "Autonomous agent workspace for ZeroClaw security operations.",
-          profiles: [
-            {
-              slug: "agent-run",
-              displayName: "Agent Run",
-              icon: "play",
-              color: "#EF4444",
-              description: "A single execution run of the ZeroClaw agent.",
-              properties: [
-                {
-                  slug: "status",
-                  label: "Status",
-                  valueType: "string",
-                  inputType: "select",
-                  enumValues: ["Queued", "Running", "Completed", "Failed"],
-                },
-                {
-                  slug: "started-at",
-                  label: "Started At",
-                  valueType: "date",
-                },
-                {
-                  slug: "completed-at",
-                  label: "Completed At",
-                  valueType: "date",
-                },
-                { slug: "target", label: "Target", valueType: "string" },
-                {
-                  slug: "findings-count",
-                  label: "Findings",
-                  valueType: "number",
-                },
-              ],
-            },
-            {
-              slug: "agent-task",
-              displayName: "Agent Task",
-              icon: "list-checks",
-              color: "#F59E0B",
-              description: "An individual task within an agent run.",
-              properties: [
-                {
-                  slug: "status",
-                  label: "Status",
-                  valueType: "string",
-                  inputType: "select",
-                  enumValues: ["Pending", "In Progress", "Done", "Skipped"],
-                },
-                {
-                  slug: "task-type",
-                  label: "Type",
-                  valueType: "string",
-                  inputType: "select",
-                  enumValues: ["Scan", "Analyze", "Report", "Remediate"],
-                },
-                {
-                  slug: "severity",
-                  label: "Severity",
-                  valueType: "string",
-                  inputType: "select",
-                  enumValues: ["Info", "Low", "Medium", "High", "Critical"],
-                },
-                {
-                  slug: "description",
-                  label: "Description",
-                  valueType: "string",
-                },
-              ],
-            },
-            {
-              slug: "finding",
-              displayName: "Finding",
-              icon: "shield-alert",
-              color: "#DC2626",
-              description:
-                "A security finding or vulnerability detected by the agent.",
-              properties: [
-                {
-                  slug: "severity",
-                  label: "Severity",
-                  valueType: "string",
-                  inputType: "select",
-                  enumValues: ["Info", "Low", "Medium", "High", "Critical"],
-                },
-                {
-                  slug: "status",
-                  label: "Status",
-                  valueType: "string",
-                  inputType: "select",
-                  enumValues: [
-                    "Open",
-                    "In Review",
-                    "Resolved",
-                    "False Positive",
-                  ],
-                },
-                {
-                  slug: "category",
-                  label: "Category",
-                  valueType: "string",
-                },
-                {
-                  slug: "affected-asset",
-                  label: "Affected Asset",
-                  valueType: "string",
-                },
-              ],
-            },
-          ],
-          views: [
-            {
-              name: "Agent Runs",
-              type: "table",
-              scopeProfileSlug: "agent-run",
-            },
-            {
-              name: "Findings Board",
-              type: "kanban",
-              scopeProfileSlug: "finding",
-              config: { groupByField: "severity" },
-            },
-            {
-              name: "All Tasks",
-              type: "table",
-              scopeProfileSlug: "agent-task",
-            },
-          ],
-          bentoLayout: [
-            {
-              widgetType: "stats-overview",
-              pos: { x: 0, y: 0, w: 12, h: 2 },
-              config: { title: "ZeroClaw Overview" },
-            },
-            {
-              widgetType: "entity-list",
-              pos: { x: 0, y: 2, w: 6, h: 4 },
-              config: { profileSlug: "agent-run", title: "Recent Runs" },
-            },
-            {
-              widgetType: "entity-list",
-              pos: { x: 6, y: 2, w: 6, h: 4 },
-              config: { profileSlug: "finding", title: "Open Findings" },
-            },
-          ],
-          layoutConfig: {
-            pinnedApps: ["home", "data", "views", "intelligence"],
-            sidebarApps: ["home", "data", "views", "intelligence"],
-            defaultView: "home",
-          },
-        },
-      };
+      const systemUserId = "00000000-0000-0000-0000-000000000000";
 
-      const pluginConfig = pluginConfigs[input.pluginId];
-      if (!pluginConfig) {
+      // Generic path: use definition from control plane registry
+      if (input.definition) {
+        const result = await createWorkspaceFromDefinition({
+          definition: input.definition as any,
+          userId: systemUserId,
+          packageSlug: input.pluginId,
+          createdBy: "provisioning",
+        });
+
+        // Enqueue workspace-init (whiteboard + commands, skips default views)
+        try {
+          const boss = getBoss();
+          await boss.send("workspace-init", {
+            workspaceId: result.workspaceId,
+            userId: systemUserId,
+            packageSlug: input.pluginId,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId: result.workspaceId },
+            "Failed to enqueue workspace-init (non-fatal)"
+          );
+        }
+
+        logger.info(
+          { workspaceId: result.workspaceId, pluginId: input.pluginId },
+          "Plugin workspace seeded via definition"
+        );
+
+        return {
+          status: "created" as const,
+          workspaceId: result.workspaceId,
+        };
+      }
+
+      // Legacy fallback: hardcoded zeroclaw config (backward compat)
+      if (input.pluginId !== "zeroclaw") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Unknown plugin: ${input.pluginId}`,
+          message: `Unknown plugin: ${input.pluginId}. Pass a definition for generic plugins.`,
         });
       }
 
       const { randomUUID } = await import("crypto");
       const workspaceId = randomUUID();
 
-      // 1. Create workspace
       const dbConn = await getDb();
       const eventRepo = new EventRepository(sql);
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
-      // Use a system user ID for provisioning-created workspaces
-      const systemUserId = "00000000-0000-0000-0000-000000000000";
-
       await workspaceRepo.create(
         {
           id: workspaceId,
-          name: pluginConfig.name,
+          name: "ZeroClaw Agent",
           ownerId: systemUserId,
-          settings: { layout: pluginConfig.layoutConfig },
+          settings: {
+            layout: {
+              pinnedApps: ["home", "data", "views", "intelligence"],
+              sidebarApps: ["home", "data", "views", "intelligence"],
+              defaultView: "home",
+            },
+            createdBy: "provisioning",
+            provisionedAt: new Date().toISOString(),
+            provisioningStatus: "active",
+            packageSlug: "zeroclaw",
+          },
         },
         systemUserId
       );
 
       logger.info(
         { workspaceId, pluginId: input.pluginId },
-        "Plugin workspace seeded"
+        "Plugin workspace seeded (legacy)"
       );
 
       return {

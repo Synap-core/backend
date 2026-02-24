@@ -71,6 +71,14 @@ export interface WorkspaceSettings {
   /** Version of the package at time of creation. */
   packageVersion?: string;
 
+  // Provenance — how this workspace was created
+  /** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
+  createdBy?: "user" | "provisioning" | "plugin";
+  /** ISO timestamp when provisioning created this workspace */
+  provisionedAt?: string;
+  /** Current provisioning status */
+  provisioningStatus?: "pending" | "active" | "failed";
+
   // AI Governance Settings
   aiGovernance?: {
     autoApprove?: boolean; // Auto-approve AI-generated content
