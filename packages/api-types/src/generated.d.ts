@@ -5764,6 +5764,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					constraints: unknown;
 					uiHints: unknown;
 				};
+				existing: boolean;
+			} | {
+				propertyDef: {
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					slug: string;
+					valueType: PropertyValueType;
+					constraints: unknown;
+					uiHints: unknown;
+				};
+				existing?: undefined;
 			};
 			meta: object;
 		}>;
