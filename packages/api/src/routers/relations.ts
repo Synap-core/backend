@@ -336,16 +336,25 @@ export const relationsRouter = router({
         targetEntityId: z.string().uuid(),
         type: RelationTypeSchema,
         metadata: z.record(z.string(), z.any()).optional(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
+      // Resolve workspace ID: prefer explicit input, fall back to context header
+      const effectiveWorkspaceId = input.workspaceId || ctx.workspaceId;
+      if (!effectiveWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "workspaceId is required (pass in input or set X-Workspace-Id header)",
+        });
+      }
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
+        workspaceId: effectiveWorkspaceId,
         subjectType: "relation",
         action: "create",
         data: {
@@ -374,7 +383,7 @@ export const relationsRouter = router({
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,
-          workspaceId: input.workspaceId,
+          workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           metadata: input.metadata,
         },
@@ -388,8 +397,12 @@ export const relationsRouter = router({
         phase: "completed",
         subjectId: relation.id,
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        data: { sourceEntityId: input.sourceEntityId, targetEntityId: input.targetEntityId, type: input.type },
+        workspaceId: effectiveWorkspaceId,
+        data: {
+          sourceEntityId: input.sourceEntityId,
+          targetEntityId: input.targetEntityId,
+          type: input.type,
+        },
       });
 
       // 4. Side-effects
@@ -398,7 +411,7 @@ export const relationsRouter = router({
         action: "create",
         subjectId: relation.id,
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
+        workspaceId: effectiveWorkspaceId,
       });
 
       return {
@@ -418,10 +431,14 @@ export const relationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Resolve workspace ID: prefer explicit input, fall back to context header
+      const effectiveWorkspaceId =
+        input.workspaceId || ctx.workspaceId || undefined;
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
+        workspaceId: effectiveWorkspaceId,
         subjectType: "relation",
         action: "delete",
         data: { id: input.id },
@@ -448,7 +465,7 @@ export const relationsRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
+        workspaceId: effectiveWorkspaceId,
         data: { id: input.id },
       });
 
@@ -458,7 +475,7 @@ export const relationsRouter = router({
         action: "delete",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
+        workspaceId: effectiveWorkspaceId,
       });
 
       return {

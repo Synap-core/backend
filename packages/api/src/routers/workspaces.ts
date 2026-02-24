@@ -1017,7 +1017,119 @@ export const workspacesRouter = router({
   createFromDefinition: protectedProcedure
     .input(
       z.object({
-        definition: z.unknown(),
+        definition: z
+          .object({
+            workspaceName: z.string().optional(),
+            description: z.string().optional(),
+            profiles: z
+              .array(
+                z.object({
+                  slug: z.string(),
+                  displayName: z.string(),
+                  icon: z.string().optional(),
+                  color: z.string().optional(),
+                  description: z.string().optional(),
+                  scope: z.string().optional(),
+                  properties: z
+                    .array(
+                      z.object({
+                        slug: z.string(),
+                        label: z.string().optional(),
+                        valueType: z.string(),
+                        inputType: z.string().optional(),
+                        placeholder: z.string().optional(),
+                        enumValues: z.array(z.string()).optional(),
+                        constraints: z
+                          .record(z.string(), z.unknown())
+                          .optional(),
+                      })
+                    )
+                    .optional(),
+                })
+              )
+              .optional(),
+            views: z
+              .array(
+                z.object({
+                  name: z.string(),
+                  type: z.string(),
+                  scopeProfileSlug: z.string().optional(),
+                  scopeProfileSlugs: z.array(z.string()).optional(),
+                  config: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            bentoLayout: z
+              .array(
+                z.object({
+                  widgetType: z.string(),
+                  pos: z.object({
+                    x: z.number(),
+                    y: z.number(),
+                    w: z.number(),
+                    h: z.number(),
+                  }),
+                  config: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            bentoViewBlocks: z
+              .array(
+                z.object({
+                  kind: z.literal("view").default("view"),
+                  viewName: z.string(),
+                  pos: z.object({
+                    x: z.number(),
+                    y: z.number(),
+                    w: z.number(),
+                    h: z.number(),
+                  }),
+                  overrides: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            suggestedEntities: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  title: z.string(),
+                  properties: z.record(z.string(), z.unknown()).optional(),
+                  content: z.string().optional(),
+                })
+              )
+              .optional(),
+            suggestedRelations: z
+              .array(
+                z.object({
+                  sourceRef: z.string(),
+                  targetRef: z.string(),
+                  type: z.string(),
+                  metadata: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            displayTemplates: z
+              .array(
+                z.object({
+                  name: z.string(),
+                  description: z.string().optional(),
+                  entityType: z.string().optional(),
+                  targetType: z.string().optional(),
+                  isDefault: z.boolean().optional(),
+                  config: z.record(z.string(), z.unknown()),
+                })
+              )
+              .optional(),
+            layoutConfig: z
+              .object({
+                pinnedApps: z.array(z.string()).optional(),
+                sidebarApps: z.array(z.string()).optional(),
+                defaultView: z.string().optional(),
+                theme: z.string().optional(),
+              })
+              .optional(),
+          })
+          .passthrough(),
         packageSlug: z.string().optional(),
         packageVersion: z.string().optional(),
         workspaceName: z.string().optional(),
@@ -1025,7 +1137,7 @@ export const workspacesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const result = await createWorkspaceFromDefinition({
-        definition: input.definition as any,
+        definition: input.definition,
         userId: ctx.userId,
         packageSlug: input.packageSlug,
         packageVersion: input.packageVersion,

@@ -152,13 +152,15 @@ export const templatesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { randomUUID } = await import("crypto");
       const templateId = randomUUID();
+      const effectiveWorkspaceId =
+        input.workspaceId || ctx.workspaceId || undefined;
 
       const [_template] = await db
         .insert(entityTemplates)
         .values({
           id: templateId,
-          userId: input.workspaceId ? undefined : ctx.userId,
-          workspaceId: input.workspaceId || undefined,
+          userId: effectiveWorkspaceId ? undefined : ctx.userId,
+          workspaceId: effectiveWorkspaceId,
           name: input.name,
           description: input.description || undefined,
           targetType: input.targetType as string,

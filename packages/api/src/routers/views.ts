@@ -104,15 +104,16 @@ export const viewsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
-      // Fallback to X-Workspace-Id header if not in input
-      const workspaceId = input.workspaceId || (ctx as any).workspaceId || undefined;
 
-      // If workspace provided, check permissions (including AI proposal gate)
-      if (workspaceId) {
+      // Resolve workspace ID: prefer explicit input, fall back to context header
+      const effectiveWorkspaceId = input.workspaceId || ctx.workspaceId || "";
+
+      // If workspace available, check permissions (including AI proposal gate)
+      if (effectiveWorkspaceId) {
         const perm = await checkPermissionOrPropose({
           userId: ctx.userId,
           agentUserId: input.agentUserId,
-          workspaceId,
+          workspaceId: effectiveWorkspaceId,
           subjectType: "view",
           action: "create",
           source: input.source,
@@ -146,7 +147,7 @@ export const viewsRouter = router({
         phase: "requested",
         subjectId: correlationId,
         userId: ctx.userId,
-        workspaceId,
+        workspaceId: effectiveWorkspaceId,
         correlationId,
         data: { name: input.name, type: input.type },
       });
@@ -199,7 +200,7 @@ export const viewsRouter = router({
       await ViewEvents.createRequested(ctx.userId, {
         type: input.type as ViewType,
         name: input.name as string,
-        workspaceId: workspaceId || "",
+        workspaceId: effectiveWorkspaceId,
       });
 
       // Create document for content storage
@@ -221,7 +222,7 @@ export const viewsRouter = router({
         .values({
           id: docId,
           userId: ctx.userId,
-          workspaceId,
+          workspaceId: effectiveWorkspaceId,
           type: input.type,
           title: input.name,
           storageUrl: uploadResult.url,
@@ -261,7 +262,7 @@ export const viewsRouter = router({
           name: input.name,
           description: input.description,
           documentId: doc.id,
-          workspaceId: workspaceId || "",
+          workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           scopeProfileIds: input.scopeProfileIds,
           scopeMode: input.scopeMode || "explicit",
@@ -280,7 +281,7 @@ export const viewsRouter = router({
         phase: "completed",
         subjectId: viewId,
         userId: ctx.userId,
-        workspaceId,
+        workspaceId: effectiveWorkspaceId,
         correlationId,
         data: {
           id: viewId,
@@ -296,7 +297,7 @@ export const viewsRouter = router({
         action: "create",
         subjectId: viewId,
         userId: ctx.userId,
-        workspaceId,
+        workspaceId: effectiveWorkspaceId,
         data: {
           id: viewId,
           type: input.type,
