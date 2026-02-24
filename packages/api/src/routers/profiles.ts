@@ -103,7 +103,8 @@ export const profilesRouter = router({
       const profileRepo = new ProfileRepository(db);
 
       // Check for slug conflict — return existing profile gracefully
-      // (e.g., system profiles like "company" already exist and can be reused)
+      // Profiles have a global unique slug constraint, so reuse across workspaces
+      // (e.g., "company" template profile created by workspace A is reused by workspace B)
       const existing = await profileRepo.getBySlug(input.slug);
       if (existing) {
         logger.info(

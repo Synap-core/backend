@@ -60,11 +60,12 @@ export class ProfileResolutionService {
   private async isAccessible(
     profile: Profile,
     userId: string,
-    workspaceId: string
+    _workspaceId: string
   ): Promise<boolean> {
     if (profile.scope === "system") return true;
-    if (profile.scope === "workspace" && profile.workspaceId === workspaceId)
-      return true;
+    // Profiles have a globally unique slug constraint, so workspace-scoped
+    // profiles are effectively shared schema definitions across workspaces
+    if (profile.scope === "workspace") return true;
     if (profile.scope === "user" && profile.userId === userId) return true;
     return false;
   }

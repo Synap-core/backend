@@ -12,7 +12,7 @@ serve:
         - http://localhost:3000
         - http://localhost:5173
         - http://localhost:3001
-        - https://backend.synap.live
+        - https://internal.synap.live
       allowed_methods:
         - POST
         - GET
@@ -36,8 +36,8 @@ selfservice:
   allowed_return_urls:
     - http://localhost:3000
     - http://localhost:3000/*
-    - https://backend.synap.live
-    - https://backend.synap.live/*
+    - https://internal.synap.live
+    - https://internal.synap.live/*
   methods:
     password:
       enabled: true
@@ -95,7 +95,7 @@ identity:
 session:
   cookie:
     # Cookie domain: automatically set based on domain
-    domain: backend.synap.live
+    domain: internal.synap.live
     same_site: Lax
     # Note: secure flag is controlled by Kratos based on cookie domain
     # For production domains, Kratos automatically sets secure=true
