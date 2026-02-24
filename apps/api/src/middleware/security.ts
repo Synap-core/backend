@@ -17,7 +17,7 @@ import { rateLimiter } from "hono-rate-limiter";
  */
 export const rateLimitMiddleware = rateLimiter({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // Max 100 requests per window
+  limit: 500, // Max 500 requests per window
   standardHeaders: "draft-7", // Use standard RateLimit headers
   keyGenerator: (c) => {
     // Bypass for test user

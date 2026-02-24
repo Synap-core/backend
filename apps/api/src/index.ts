@@ -109,14 +109,7 @@ try {
 // Initialize Hono app
 const app = new Hono();
 
-// Security Middleware (Applied First)
-app.use("*", requestSizeLimit); // Max 10MB requests
-app.use("*", rateLimitMiddleware); // 100 req/15min per IP
-app.use("*", secureHeaders()); // Hono built-in security headers
-apiLogger.info("Security middleware registered");
-
-// Logging & CORS
-app.use("*", logger());
+// CORS must be first so even error responses (429, 413) include CORS headers
 app.use(
   "*",
   cors({
@@ -139,6 +132,15 @@ app.use(
     maxAge: 86400, // 24 hours
   })
 );
+
+// Security Middleware
+app.use("*", requestSizeLimit); // Max 10MB requests
+app.use("*", rateLimitMiddleware); // 500 req/15min per IP
+app.use("*", secureHeaders()); // Hono built-in security headers
+apiLogger.info("Security middleware registered");
+
+// Logging
+app.use("*", logger());
 
 // Health check (public, no auth)
 app.get("/health", (c) => {

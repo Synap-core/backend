@@ -369,6 +369,7 @@ async function materializeView(
       await sharedDb.insert(documents).values({
         id: docId,
         userId,
+        workspaceId,
         type: viewType,
         title: (data.name as string) || "Untitled",
         storageUrl: uploadResult.url,
