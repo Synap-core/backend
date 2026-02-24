@@ -159,8 +159,8 @@ importers:
         specifier: ^9.39.1
         version: 9.39.2
       '@synap-core/api-types':
-        specifier: ^1.0.45
-        version: 1.0.45(@trpc/server@11.8.1(typescript@5.9.3))
+        specifier: workspace:*
+        version: link:../../packages/api-types
       '@types/node':
         specifier: ^24.10.0
         version: 24.10.7
@@ -442,8 +442,8 @@ importers:
   packages/api-types:
     dependencies:
       '@synap-core/types':
-        specifier: ^1.5.0
-        version: 1.5.0(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
+        specifier: workspace:*
+        version: link:../types
       yjs:
         specifier: ^13.0.0
         version: 13.6.29
@@ -868,12 +868,6 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
-      '@synap-core/core':
-        specifier: workspace:*
-        version: link:../core
-      '@synap/database':
-        specifier: workspace:*
-        version: link:../database
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.28
@@ -3549,14 +3543,6 @@ packages:
 
   '@standard-schema/utils@0.3.0':
     resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
-
-  '@synap-core/api-types@1.0.45':
-    resolution: {integrity: sha512-nbhk0cSGNSWn0924zJOJ+6YvnT0PmTeGfW3OtN75FgIgqpFphGH2tx6pAAQKQ61dF6pEJ/soGX8EIT7X5PC3Lg==}
-    peerDependencies:
-      '@trpc/server': ^11.0.0
-
-  '@synap-core/types@1.5.0':
-    resolution: {integrity: sha512-HOWqUQUXqztdUJJFGolFaU7N9aLwrgeoJlQ+UGZKGNXlb6YiY1cj7N9UktZYauxyVlkiAJTBxMhhiS2Kq3KTNw==}
 
   '@tabler/icons-react@3.36.1':
     resolution: {integrity: sha512-/8nOXeNeMoze9xY/QyEKG65wuvRhkT3q9aytaur6Gj8bYU2A98YVJyLc9MRmc5nVvpy+bRlrrwK/Ykr8WGyUWg==}
@@ -10654,49 +10640,6 @@ snapshots:
   '@standard-schema/spec@1.1.0': {}
 
   '@standard-schema/utils@0.3.0': {}
-
-  '@synap-core/api-types@1.0.45(@trpc/server@11.8.1(typescript@5.9.3))':
-    dependencies:
-      '@synap-core/types': link:packages/types
-      '@trpc/server': 11.8.1(typescript@5.9.3)
-
-  '@synap-core/types@1.5.0(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)':
-    dependencies:
-      '@synap/database': link:packages/database
-      drizzle-orm: 0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
-      drizzle-zod: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
-      yjs: 13.6.29
-      zod: 4.3.6
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
 
   '@tabler/icons-react@3.36.1(react@19.2.3)':
     dependencies:
