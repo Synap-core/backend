@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.6.3",
+  "version": "1.7.0",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -70,10 +70,14 @@
     "./proposals": {
       "types": "./dist/proposals/index.d.ts",
       "import": "./dist/proposals/index.js"
+    },
+    "./vault": {
+      "types": "./dist/vault/index.d.ts",
+      "import": "./dist/vault/index.js"
     }
   },
   "scripts": {
-    "build": "rm -rf dist && tsup && (tsc --emitDeclarationOnly || true)",
+    "build": "rm -rf dist && tsup && tsc --emitDeclarationOnly",
     "dev": "tsup --watch",
     "type-check": "tsc --noEmit"
   },

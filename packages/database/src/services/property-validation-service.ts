@@ -9,7 +9,12 @@ import {
   type EffectiveProperty,
 } from "./profile-resolution-service.js";
 import { PropertyValueType } from "../schema/property-defs.js";
-import { isVaultReference } from "@synap-core/types";
+
+const VAULT_REF_RE =
+  /^vault:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function isVaultReference(value: unknown): value is string {
+  return typeof value === "string" && VAULT_REF_RE.test(value);
+}
 
 export interface ValidationResult {
   valid: boolean;

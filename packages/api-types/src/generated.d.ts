@@ -499,6 +499,8 @@ export interface WorkspaceSettings {
 			};
 		};
 	};
+	/** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
+	templateName?: string;
 	aiGovernance?: {
 		autoApprove?: boolean;
 		requireReviewFor?: string[];
@@ -707,7 +709,8 @@ declare enum PropertyValueType {
 	DATE = "date",
 	ENTITY_ID = "entity_id",
 	ARRAY = "array",
-	OBJECT = "object"
+	OBJECT = "object",
+	SECRET = "secret"
 }
 declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "property_defs";
@@ -769,7 +772,8 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				PropertyValueType.DATE,
 				PropertyValueType.ENTITY_ID,
 				PropertyValueType.ARRAY,
-				PropertyValueType.OBJECT
+				PropertyValueType.OBJECT,
+				PropertyValueType.SECRET
 			];
 			baseColumn: never;
 			identity: undefined;
@@ -1589,7 +1593,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					threadId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
+					role: "user" | "system" | "assistant";
 					previousHash: string | null;
 					hash: string;
 				}[];
@@ -5593,10 +5597,30 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 			};
 			output: {
+				profile: {
+					workspaceId: string | null;
+					userId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					version: number;
+					isActive: boolean;
+					scope: ProfileScope;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					parentProfileId: string | null;
+				};
+				existing: boolean;
+				status?: undefined;
+				message?: undefined;
+				proposalId?: undefined;
+			} | {
 				profile: any;
 				status: string;
 				message: string;
 				proposalId: string;
+				existing?: undefined;
 			} | {
 				profile: {
 					workspaceId: string | null;
@@ -5612,6 +5636,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 				};
+				existing?: undefined;
 				status?: undefined;
 				message?: undefined;
 				proposalId?: undefined;

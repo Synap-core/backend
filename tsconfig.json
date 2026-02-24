@@ -73,10 +73,10 @@
     },
     {
       "path": "./packages/storage"
-    },
-    {
-      "path": "./packages/types"
     }
+    // Note: packages/types is excluded from tsc -b references because it uses
+    // tsup for JS bundling + tsc --emitDeclarationOnly (via its own build script).
+    // Including it here causes TS5055 conflicts. It's built separately before tsc -b.
   ],
   "exclude": ["node_modules", "dist", "scripts", "tests"]
 }

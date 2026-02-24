@@ -45,8 +45,9 @@ export const secretTypeEnum = pgEnum("secret_type", [
   "oauth", // OAuth tokens
 ]);
 
-// Re-export from shared types package (single source of truth)
-export { SECRET_TYPES, type SecretType } from "@synap-core/types";
+// Local type derived from the pgEnum above (mirrors @synap-core/types SecretType)
+export const SECRET_TYPES = secretTypeEnum.enumValues;
+export type SecretType = (typeof SECRET_TYPES)[number];
 
 // ============================================================================
 // Secrets Table

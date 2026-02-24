@@ -17,6 +17,7 @@ export default defineConfig({
     "src/realtime/index.ts",
     "src/events/index.ts",
     "src/proposals/index.ts",
+    "src/vault/index.ts",
   ],
   format: ["esm"],
   dts: false,
