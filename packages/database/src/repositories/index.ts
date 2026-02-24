@@ -26,6 +26,8 @@ export * from "./inbox-repository.js";
 export * from "./sharing-repository.js";
 export * from "./template-repository.js";
 export * from "./relation-repository.js";
+export * from "./relation-def-repository.js";
+export * from "./profile-relation-repository.js";
 export * from "./message-repository.js";
 export * from "./workspace-member-repository.js";
 export * from "./project-member-repository.js";

@@ -45,6 +45,7 @@
     "@synap-core/core": "workspace:*",
     "@vitest/ui": "^4.0.7",
     "dotenv-cli": "^7.4.2",
+    "dts-bundle-generator": "9.5.1",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",

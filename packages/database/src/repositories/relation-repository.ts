@@ -5,11 +5,7 @@
  */
 
 import { eq, and } from "drizzle-orm";
-import {
-  relations,
-  RelationType,
-  RelationTypeSchema,
-} from "../schema/relations.js";
+import { relations, RelationType } from "../schema/relations.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Relation, NewRelation } from "../schema/relations.js";
@@ -19,7 +15,8 @@ export interface CreateRelationInput {
   id?: string;
   sourceEntityId: string;
   targetEntityId: string;
-  type: RelationType;
+  /** Built-in RelationType or workspace-defined relation_defs slug */
+  type: RelationType | string;
   workspaceId: string;
   userId: string;
   metadata?: Record<string, unknown>;
@@ -43,8 +40,8 @@ export class RelationRepository extends BaseRepository<
    * Emits: relations.create.completed
    */
   async create(data: CreateRelationInput, userId: string): Promise<Relation> {
-    // Validate relation type
-    RelationTypeSchema.parse(data.type);
+    // Type validation is handled by the caller (router validates against
+    // both built-in RelationTypeSchema and workspace-defined relation_defs)
 
     const [relation] = await this.db
       .insert(relations)
@@ -101,13 +98,15 @@ export class RelationRepository extends BaseRepository<
     startEntityId: string;
     maxDepth?: number;
     relationshipTypes?: string[];
-  }): Promise<Array<{
-    entityId: string;
-    depth: number;
-    relationshipType: string;
-    direction: "outbound" | "inbound";
-    path: string[];
-  }>> {
+  }): Promise<
+    Array<{
+      entityId: string;
+      depth: number;
+      relationshipType: string;
+      direction: "outbound" | "inbound";
+      path: string[];
+    }>
+  > {
     const { userId, startEntityId, maxDepth = 2, relationshipTypes } = params;
     const safeDepth = Math.min(maxDepth, 3);
 
@@ -119,13 +118,19 @@ export class RelationRepository extends BaseRepository<
       direction: "outbound" | "inbound";
       path: string[];
     }> = [];
-    let frontier = [{ entityId: startEntityId, depth: 0, path: [startEntityId] }];
+    let frontier = [
+      { entityId: startEntityId, depth: 0, path: [startEntityId] },
+    ];
 
     while (frontier.length > 0 && frontier[0].depth < safeDepth) {
       const next: typeof frontier = [];
 
       for (const node of frontier) {
-        let rows: Array<{ source_entity_id: string; target_entity_id: string; type: string }>;
+        let rows: Array<{
+          source_entity_id: string;
+          target_entity_id: string;
+          type: string;
+        }>;
 
         if (relationshipTypes && relationshipTypes.length > 0) {
           rows = await sql<typeof rows>`
@@ -148,7 +153,9 @@ export class RelationRepository extends BaseRepository<
 
         for (const row of rows) {
           const isOutbound = row.source_entity_id === node.entityId;
-          const neighborId = isOutbound ? row.target_entity_id : row.source_entity_id;
+          const neighborId = isOutbound
+            ? row.target_entity_id
+            : row.source_entity_id;
 
           if (!visited.has(neighborId)) {
             visited.add(neighborId);
@@ -160,7 +167,11 @@ export class RelationRepository extends BaseRepository<
               direction: isOutbound ? "outbound" : "inbound",
               path: newPath,
             });
-            next.push({ entityId: neighborId, depth: node.depth + 1, path: newPath });
+            next.push({
+              entityId: neighborId,
+              depth: node.depth + 1,
+              path: newPath,
+            });
           }
         }
       }
@@ -199,13 +210,15 @@ export async function traverseEntityGraph(params: {
   startEntityId: string;
   maxDepth?: number;
   relationshipTypes?: string[];
-}): Promise<Array<{
-  entityId: string;
-  depth: number;
-  relationshipType: string;
-  direction: "outbound" | "inbound";
-  path: string[];
-}>> {
+}): Promise<
+  Array<{
+    entityId: string;
+    depth: number;
+    relationshipType: string;
+    direction: "outbound" | "inbound";
+    path: string[];
+  }>
+> {
   const { userId, startEntityId, maxDepth = 2, relationshipTypes } = params;
   const safeDepth = Math.min(maxDepth, 3);
 
@@ -223,7 +236,11 @@ export async function traverseEntityGraph(params: {
     const next: typeof frontier = [];
 
     for (const node of frontier) {
-      let rows: Array<{ source_entity_id: string; target_entity_id: string; type: string }>;
+      let rows: Array<{
+        source_entity_id: string;
+        target_entity_id: string;
+        type: string;
+      }>;
 
       if (relationshipTypes && relationshipTypes.length > 0) {
         rows = await sql<typeof rows>`
@@ -246,7 +263,9 @@ export async function traverseEntityGraph(params: {
 
       for (const row of rows) {
         const isOutbound = row.source_entity_id === node.entityId;
-        const neighborId = isOutbound ? row.target_entity_id : row.source_entity_id;
+        const neighborId = isOutbound
+          ? row.target_entity_id
+          : row.source_entity_id;
 
         if (!visited.has(neighborId)) {
           visited.add(neighborId);
@@ -258,7 +277,11 @@ export async function traverseEntityGraph(params: {
             direction: isOutbound ? "outbound" : "inbound",
             path: newPath,
           });
-          next.push({ entityId: neighborId, depth: node.depth + 1, path: newPath });
+          next.push({
+            entityId: neighborId,
+            depth: node.depth + 1,
+            path: newPath,
+          });
         }
       }
     }

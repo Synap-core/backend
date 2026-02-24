@@ -37,6 +37,9 @@ importers:
       dotenv-cli:
         specifier: ^7.4.2
         version: 7.4.4
+      dts-bundle-generator:
+        specifier: 9.5.1
+        version: 9.5.1
       eslint:
         specifier: ^9.39.2
         version: 9.39.2(jiti@2.6.1)
@@ -868,6 +871,12 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
+      '@synap-core/core':
+        specifier: workspace:*
+        version: link:../core
+      '@synap/database':
+        specifier: workspace:*
+        version: link:../database
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.28

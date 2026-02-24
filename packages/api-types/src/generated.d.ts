@@ -2,23 +2,8 @@
 
 import { Column, SQL } from 'drizzle-orm';
 
-/**
- * Context Types
- *
- * Proper type definitions for tRPC context to avoid `any` types.
- */
-/**
- * Database client type
- *
- * Note: Using `any` here to preserve Drizzle's schema inference.
- * Attempting to use PostgresJsDatabase<any> loses the schema generic
- * and breaks db.query.tableName access patterns.
- */
-export type DatabaseClient = any;
-/**
- * Ory Kratos identity
- */
-export interface KratosIdentity {
+type DatabaseClient = any;
+interface KratosIdentity {
 	id: string;
 	traits: {
 		email: string;
@@ -26,27 +11,18 @@ export interface KratosIdentity {
 		[key: string]: unknown;
 	};
 }
-/**
- * Ory Kratos session
- */
-export interface KratosSession {
+interface KratosSession {
 	identity: KratosIdentity;
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
 }
-/**
- * User object (simplified from Kratos identity)
- */
-export interface User {
+interface User {
 	id: string;
 	email: string;
 	name?: string;
 }
-/**
- * Full tRPC context
- */
-export interface Context {
+interface Context {
 	db: DatabaseClient;
 	authenticated: boolean;
 	userId?: string | null;
@@ -57,15 +33,7 @@ export interface Context {
 	workspaceId?: string | null;
 	workspaceRole?: string | null;
 }
-/**
- * Users Table - Cache for Kratos Identity Data
- *
- * Purpose: Store Kratos identity data in Synap DB for performance
- * - Allows JOINs without calling Kratos API
- * - Can add Synap-specific fields (avatar, timezone)
- * - Kratos remains source of truth for authentication
- */
-export interface AgentMetadata {
+interface AgentMetadata {
 	agentType: string;
 	description?: string;
 	createdByUserId: string;
@@ -419,7 +387,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-export type ChatThread = typeof chatThreads.$inferSelect;
+type ChatThread = typeof chatThreads.$inferSelect;
 declare enum ThreadEntityRelationshipType {
 	USED_AS_CONTEXT = "used_as_context",
 	CREATED = "created",
@@ -444,33 +412,25 @@ declare enum ThreadDocumentConflictStatus {
 	PENDING = "pending",
 	RESOLVED = "resolved"
 }
-export interface DerivedInput {
+interface DerivedInput {
 	name: string;
 	label?: string;
 	type?: string;
 	options?: string[];
 	default?: string;
 }
-export interface InputOverride {
+interface InputOverride {
 	label?: string;
 	default?: string;
 	options?: string[];
 }
-/**
- * Workspaces Schema - Multi-user workspace support
- *
- * A workspace can be:
- * - Personal (single user)
- * - Team (multiple users with roles)
- * - Enterprise (advanced features)
- */
-export interface WorkspaceLayoutConfig {
+interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
 	sidebarApps?: string[];
 	defaultView?: string;
 	theme?: string;
 }
-export interface WorkspaceSettings {
+interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
 	aiEnabled?: boolean;
@@ -711,7 +671,7 @@ declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-export type MessageLink = typeof messageLinks.$inferSelect;
+type MessageLink = typeof messageLinks.$inferSelect;
 declare enum PropertyValueType {
 	STRING = "string",
 	NUMBER = "number",
@@ -860,19 +820,13 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-export type PropertyDef = typeof propertyDefs.$inferSelect;
+type PropertyDef = typeof propertyDefs.$inferSelect;
 declare enum ProfileScope {
 	SYSTEM = "system",// Available to all users
 	WORKSPACE = "workspace",// Shared within workspace
 	USER = "user"
 }
-/**
- * EventRecord - Database representation of an event
- *
- * This is the format returned from the database.
- * It maps directly to the events table structure.
- */
-export interface EventRecord {
+interface EventRecord {
 	id: string;
 	timestamp: Date;
 	subjectId: string;
@@ -886,8 +840,7 @@ export interface EventRecord {
 	correlationId?: string;
 	source: string;
 }
-/** Minimal message fields for list/preview */
-export interface LinkedMessagePreview {
+interface LinkedMessagePreview {
 	id: string;
 	threadId: string;
 	role: string;
@@ -895,19 +848,16 @@ export interface LinkedMessagePreview {
 	timestamp: Date;
 	userId: string;
 }
-export interface LinkedMessageItem {
+interface LinkedMessageItem {
 	link: MessageLink;
 	message: LinkedMessagePreview;
 }
-export interface EffectiveProperty extends PropertyDef {
+interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
 	displayOrder: number;
 }
-/**
- * Column definition for views
- */
-export interface ViewColumn {
+interface ViewColumn {
 	id: string;
 	field: string;
 	title?: string;
@@ -916,38 +866,17 @@ export interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
-/**
- * View Query Types
- *
- * Single source of truth for all view query and filter types.
- */
-/**
- * Filter operator types
- */
-export type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
-/**
- * Filter definition for entity queries
- */
-export interface EntityFilter {
+type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
+interface EntityFilter {
 	field: string;
 	operator: FilterOperator;
 	value?: unknown;
 }
-/**
- * Sort rule for entity queries
- */
-export interface SortRule {
+interface SortRule {
 	field: string;
 	direction: "asc" | "desc";
 }
-/**
- * Query definition for structured views
- * Defines which entities to show and how to filter them
- *
- * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
- * This query structure only contains filters, sorts, search, pagination, and groupBy
- */
-export interface EntityQuery {
+interface EntityQuery {
 	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
 	profileIds?: string[];
 	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
@@ -978,10 +907,7 @@ declare enum AgentType {
 	WRITING = "writing",
 	ACTION = "action"
 }
-/**
- * Agent type as string literal union (for flexibility)
- */
-export type AgentTypeString = `${AgentType}` | (string & {});
+type AgentTypeString = `${AgentType}` | (string & {});
 declare enum AIStepType {
 	THINKING = "thinking",
 	TOOL_CALL = "tool_call",
@@ -989,17 +915,7 @@ declare enum AIStepType {
 	DECISION = "decision",
 	ERROR = "error"
 }
-/**
- * AI step - shows what the AI is doing
- *
- * Represents any step in the AI's reasoning/execution process:
- * - thinking: General analysis and reasoning
- * - tool_call: When AI calls a tool
- * - tool_result: Result from tool execution
- * - decision: AI making a decision
- * - error: Error during processing
- */
-export interface AIStep {
+interface AIStep {
 	id: string;
 	type: AIStepType | string;
 	content: string;
@@ -1013,10 +929,7 @@ export interface AIStep {
 	description?: string;
 	status?: "pending" | "running" | "complete" | "error";
 }
-/**
- * Branch decision from meta-agent
- */
-export interface BranchDecision {
+interface BranchDecision {
 	shouldBranch: boolean;
 	reason: string;
 	suggestedAgentType?: AgentTypeString;
@@ -1056,35 +969,7 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
-/**
- * @synap/events - Schema-Driven Event Generator
- *
- * This module generates event types and payload schemas from Drizzle database tables.
- *
- * V2.0 CONSOLIDATED PATTERN: {table}.{action}.{modifier}
- *
- * Actions: create | update | delete
- * Modifiers: requested | validated
- *
- * Examples:
- *   entities.create.requested  ← Intent submitted (by user or AI)
- *   entities.create.validated  ← Change confirmed and applied
- *   entities.update.requested  ← Update intent
- *   entities.update.validated  ← Update confirmed
- *
- * No direct actions (e.g., entities.create) - all changes go through requested→validated flow.
- */
-/**
- * Standard CRUD actions with modifiers for table events
- *
- * V2.1: Added 'approved' modifier for 3-phase flow
- *
- * Flow:
- *  1. requested: Intent (user/AI wants to do something)
- *  2. approved: Validated (permissions checked, user approved if needed)
- *  3. validated: Completed (DB operation done, entity exists)
- */
-export type TableAction = "create.requested" | "create.approved" | "create.validated" | "update.requested" | "update.approved" | "update.validated" | "delete.requested" | "delete.approved" | "delete.validated";
+type TableAction = "create.requested" | "create.approved" | "create.validated" | "update.requested" | "update.approved" | "update.validated" | "delete.requested" | "delete.approved" | "delete.validated";
 declare const CORE_TABLES: readonly [
 	"entities",
 	"documents",
@@ -1100,22 +985,9 @@ declare const CORE_TABLES: readonly [
 	"views",
 	"userPreferences"
 ];
-export type CoreTable = (typeof CORE_TABLES)[number];
-/**
- * Flat list of all generated event types (for type checking)
- *
- * V2.1: Added .approved phase for 3-phase flow
- */
-export type GeneratedEventType = `${CoreTable}.create.requested` | `${CoreTable}.create.approved` | `${CoreTable}.create.validated` | `${CoreTable}.update.requested` | `${CoreTable}.update.approved` | `${CoreTable}.update.validated` | `${CoreTable}.delete.requested` | `${CoreTable}.delete.approved` | `${CoreTable}.delete.validated`;
-/**
- * Worker Registry - Static worker metadata for Admin UI
- *
- * V2.0: Simplified registry with only active workers
- *
- * Pattern: Table workers handle {table}.{crud}.requested events
- * and emit {table}.{crud}.completed events.
- */
-export interface WorkerMetadata {
+type CoreTable = (typeof CORE_TABLES)[number];
+type GeneratedEventType = `${CoreTable}.create.requested` | `${CoreTable}.create.approved` | `${CoreTable}.create.validated` | `${CoreTable}.update.requested` | `${CoreTable}.update.approved` | `${CoreTable}.update.validated` | `${CoreTable}.delete.requested` | `${CoreTable}.delete.approved` | `${CoreTable}.delete.validated`;
+interface WorkerMetadata {
 	id: string;
 	name: string;
 	description: string;
@@ -3611,9 +3483,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				sourceEntityId: string;
 				targetEntityId: string;
-				type: "created_by" | "depends_on" | "assigned_to" | "mentions" | "links_to" | "parent_of" | "relates_to" | "tagged_with" | "attended_by" | "blocks" | "belongs_to_project" | "embedded_in" | "visualized_in" | "references";
-				workspaceId: string;
+				type: string;
 				metadata?: Record<string, any> | undefined;
+				workspaceId?: string | undefined;
 			};
 			output: {
 				status: "proposed";
@@ -4024,7 +3896,88 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		createFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				definition: unknown;
+				definition: {
+					[x: string]: unknown;
+					workspaceName?: string | undefined;
+					description?: string | undefined;
+					profiles?: {
+						slug: string;
+						displayName: string;
+						icon?: string | undefined;
+						color?: string | undefined;
+						description?: string | undefined;
+						scope?: string | undefined;
+						properties?: {
+							slug: string;
+							valueType: string;
+							label?: string | undefined;
+							inputType?: string | undefined;
+							placeholder?: string | undefined;
+							enumValues?: string[] | undefined;
+							constraints?: Record<string, unknown> | undefined;
+						}[] | undefined;
+					}[] | undefined;
+					views?: {
+						name: string;
+						type: string;
+						scopeProfileSlug?: string | undefined;
+						scopeProfileSlugs?: string[] | undefined;
+						config?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					bentoLayout?: {
+						widgetType: string;
+						pos: {
+							x: number;
+							y: number;
+							w: number;
+							h: number;
+						};
+						config?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					bentoViewBlocks?: {
+						viewName: string;
+						pos: {
+							x: number;
+							y: number;
+							w: number;
+							h: number;
+						};
+						kind?: "view" | undefined;
+						overrides?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					suggestedEntities?: {
+						profileSlug: string;
+						title: string;
+						properties?: Record<string, unknown> | undefined;
+						content?: string | undefined;
+					}[] | undefined;
+					suggestedRelations?: {
+						sourceRef: string;
+						targetRef: string;
+						type: string;
+						metadata?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					displayTemplates?: {
+						name: string;
+						config: Record<string, unknown>;
+						description?: string | undefined;
+						entityType?: string | undefined;
+						targetType?: string | undefined;
+						isDefault?: boolean | undefined;
+					}[] | undefined;
+					layoutConfig?: {
+						pinnedApps?: string[] | undefined;
+						sidebarApps?: string[] | undefined;
+						defaultView?: string | undefined;
+						theme?: string | undefined;
+					} | undefined;
+					entityLinks?: {
+						sourceProfileSlug: string;
+						targetProfileSlug: string;
+						type: string;
+						label?: string | undefined;
+					}[] | undefined;
+				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
 				workspaceName?: string | undefined;
@@ -5897,6 +5850,116 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				properties: EffectiveProperty[];
+			};
+			meta: object;
+		}>;
+	}>>;
+	relationDefs: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				relationDefs: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					description: string | null;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					isDirectional: boolean;
+				}[];
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				slug: string;
+				displayName: string;
+				description?: string | undefined;
+				uiHints?: Record<string, unknown> | undefined;
+				isDirectional?: boolean | undefined;
+			};
+			output: {
+				relationDef: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					description: string | null;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					isDirectional: boolean;
+				};
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	profileRelations: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		link: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sourceProfileId: string;
+				targetProfileId: string;
+				relationDefId: string;
+				displayOrder?: number | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				link: {
+					metadata: unknown;
+					displayOrder: number;
+					sourceProfileId: string;
+					targetProfileId: string;
+					relationDefId: string;
+				};
+			};
+			meta: object;
+		}>;
+		unlink: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sourceProfileId: string;
+				targetProfileId: string;
+				relationDefId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		getByProfile: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileId: string;
+			};
+			output: {
+				relations: {
+					metadata: unknown;
+					displayOrder: number;
+					sourceProfileId: string;
+					targetProfileId: string;
+					relationDefId: string;
+				}[];
 			};
 			meta: object;
 		}>;

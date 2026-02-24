@@ -23,6 +23,7 @@ import {
   getDb,
   EventRepository,
   RelationRepository,
+  RelationDefRepository,
   sql,
 } from "@synap/database";
 import {
@@ -334,7 +335,8 @@ export const relationsRouter = router({
       z.object({
         sourceEntityId: z.string().uuid(),
         targetEntityId: z.string().uuid(),
-        type: RelationTypeSchema,
+        // Accept both built-in relation types and workspace-defined custom types
+        type: z.string().min(1),
         metadata: z.record(z.string(), z.any()).optional(),
         workspaceId: z.string().uuid().optional(),
       })
@@ -349,6 +351,23 @@ export const relationsRouter = router({
           message:
             "workspaceId is required (pass in input or set X-Workspace-Id header)",
         });
+      }
+
+      // Validate type: must be a built-in type OR a workspace-defined relation def
+      const isBuiltIn = RelationTypeSchema.safeParse(input.type).success;
+      if (!isBuiltIn) {
+        const database = await getDb();
+        const relDefRepo = new RelationDefRepository(database);
+        const customDef = await relDefRepo.getBySlug(
+          input.type,
+          effectiveWorkspaceId
+        );
+        if (!customDef) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Unknown relation type: "${input.type}". Must be a built-in type or a workspace-defined relation definition.`,
+          });
+        }
       }
 
       // 1. Permission check
@@ -382,7 +401,7 @@ export const relationsRouter = router({
           id,
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
-          type: input.type,
+          type: input.type as RelationType,
           workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           metadata: input.metadata,

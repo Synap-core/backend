@@ -33,6 +33,8 @@ import { messageLinksRouter } from "./routers/message-links.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
+import { relationDefsRouter } from "./routers/relation-defs.js";
+import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 
@@ -76,6 +78,8 @@ export const coreRouter = router({
   profiles: profilesRouter,
   propertyDefs: propertyDefsRouter,
   profileProperties: profilePropertiesRouter,
+  relationDefs: relationDefsRouter,
+  profileRelations: profileRelationsRouter,
   agentUsers: agentUsersRouter,
 });
 

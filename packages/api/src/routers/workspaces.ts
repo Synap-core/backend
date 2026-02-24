@@ -22,8 +22,11 @@ import {
   EventRepository,
   WorkspaceRepository,
   WorkspaceMemberRepository,
+  DocumentRepository,
+  EntityRepository,
   sql,
   users,
+  createWorkspaceFromDefinition,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
@@ -32,7 +35,6 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
-import { createWorkspaceFromDefinition } from "@synap/database";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -1128,6 +1130,16 @@ export const workspacesRouter = router({
                 theme: z.string().optional(),
               })
               .optional(),
+            entityLinks: z
+              .array(
+                z.object({
+                  sourceProfileSlug: z.string(),
+                  targetProfileSlug: z.string(),
+                  type: z.string(),
+                  label: z.string().optional(),
+                })
+              )
+              .optional(),
           })
           .passthrough(),
         packageSlug: z.string().optional(),
@@ -1144,6 +1156,56 @@ export const workspacesRouter = router({
         workspaceName: input.workspaceName,
         createdBy: "user",
       });
+
+      // Create documents for entities with content
+      // (storage lives in the API layer, not the database package)
+      const entitiesWithContent = (input.definition.suggestedEntities ?? [])
+        .map((entity, idx) => ({ entity, entityId: result.entityIds[idx] }))
+        .filter(
+          (e): e is typeof e & { entity: { content: string } } =>
+            !!e.entity.content && !!e.entityId
+        );
+
+      if (entitiesWithContent.length > 0) {
+        const { storage } = await import("@synap/storage");
+
+        const database = await getDb();
+        const evRepo = new EventRepository(sql);
+        const docRepo = new DocumentRepository(database, evRepo);
+        const entRepo = new EntityRepository(database, evRepo);
+
+        for (const { entity, entityId } of entitiesWithContent) {
+          try {
+            const key = storage.buildPath(ctx.userId, "entity", entityId, "md");
+            const metadata = await storage.upload(key, entity.content, {
+              contentType: "text/markdown",
+            });
+
+            const doc = await docRepo.create(
+              {
+                title: entity.title,
+                type: "markdown",
+                storageUrl: metadata.url,
+                storageKey: metadata.path,
+                size: metadata.size,
+                mimeType: "text/markdown",
+                userId: ctx.userId,
+                workspaceId: result.workspaceId,
+              },
+              ctx.userId
+            );
+
+            // Link entity → document and document → entity
+            await entRepo.update(entityId, { documentId: doc.id }, ctx.userId);
+            await docRepo.update(doc.id, { entityId }, ctx.userId);
+          } catch (err) {
+            logger.warn(
+              { err, entityId, title: entity.title },
+              "Failed to create document for seed entity (non-fatal)"
+            );
+          }
+        }
+      }
 
       // Enqueue workspace-init for default whiteboard/commands
       // (skips default views when packageSlug is set)

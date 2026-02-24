@@ -19,6 +19,8 @@ import { ProfilePropertyRepository } from "../repositories/profile-property-repo
 import { ViewRepository } from "../repositories/view-repository.js";
 import { EntityRepository } from "../repositories/entity-repository.js";
 import { RelationRepository } from "../repositories/relation-repository.js";
+import { RelationDefRepository } from "../repositories/relation-def-repository.js";
+import { ProfileRelationRepository } from "../repositories/profile-relation-repository.js";
 import { entityTemplates } from "../schema/entity-templates.js";
 import type { WorkspaceSettings } from "../schema/workspaces.js";
 import { createLogger } from "@synap-core/core";
@@ -94,6 +96,13 @@ export interface WorkspaceDefinitionInput {
     defaultView?: string;
     theme?: string;
   };
+  /** Schema-level links between entity types (profiles). Creates relation_defs + profile_relations. */
+  entityLinks?: Array<{
+    sourceProfileSlug: string;
+    targetProfileSlug: string;
+    type: string;
+    label?: string;
+  }>;
 }
 
 export interface CreateFromDefinitionOptions {
@@ -223,7 +232,32 @@ export async function createWorkspaceFromDefinition(
     }
   }
 
-  // 5. Create display templates
+  // 5. Create relation definitions and profile relations from entityLinks
+  const relDefRepo = new RelationDefRepository(dbConn);
+  const profileRelRepo = new ProfileRelationRepository(dbConn);
+
+  for (const link of definition.entityLinks ?? []) {
+    const sourceProfileId = profileMap[link.sourceProfileSlug];
+    const targetProfileId = profileMap[link.targetProfileSlug];
+    if (!sourceProfileId || !targetProfileId) continue;
+
+    // Upsert relation definition (deduplicates by slug + workspace)
+    const relDef = await relDefRepo.create({
+      slug: link.type,
+      displayName: link.label ?? link.type.replace(/_/g, " "),
+      workspaceId,
+      userId,
+    });
+
+    // Link profiles via the relation definition
+    await profileRelRepo.link({
+      sourceProfileId,
+      targetProfileId,
+      relationDefId: relDef.id,
+    });
+  }
+
+  // 6. Create display templates
   if (definition.displayTemplates?.length) {
     for (const tmpl of definition.displayTemplates) {
       await dbConn.insert(entityTemplates).values({
@@ -276,8 +310,9 @@ export async function createWorkspaceFromDefinition(
   // 7. Create bento home dashboard
   const widgetBlocks = (definition.bentoLayout ?? []).map((widget, idx) => ({
     id: `widget-${idx}`,
-    type: widget.widgetType,
-    position: widget.pos,
+    kind: "widget" as const,
+    widgetType: widget.widgetType,
+    pos: widget.pos,
     config: widget.config || {},
   }));
 
@@ -287,7 +322,7 @@ export async function createWorkspaceFromDefinition(
       id: `view-${idx}`,
       kind: "view" as const,
       viewId: viewMap[vb.viewName],
-      position: vb.pos,
+      pos: vb.pos,
       overrides: vb.overrides,
     }));
 
