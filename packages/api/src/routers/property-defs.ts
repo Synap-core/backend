@@ -86,13 +86,16 @@ export const propertyDefsRouter = router({
       const db = await getDb();
       const propertyDefRepo = new PropertyDefRepository(db);
 
-      // Check for slug conflict
+      // Return existing on slug conflict — property defs are global and reusable
+      // across workspaces, so a template reusing "status" or "due-date" should
+      // just get the existing def back.
       const existing = await propertyDefRepo.getBySlug(input.slug);
       if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `Property definition slug already exists: ${input.slug}`,
-        });
+        logger.info(
+          { slug: input.slug, existingId: existing.id },
+          "Property def slug exists, returning existing"
+        );
+        return { propertyDef: existing, existing: true };
       }
 
       const propertyDef = await propertyDefRepo.create({
