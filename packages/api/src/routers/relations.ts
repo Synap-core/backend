@@ -23,6 +23,7 @@ import {
   getDb,
   EventRepository,
   RelationRepository,
+  RelationDefRepository,
   sql,
 } from "@synap/database";
 import {
@@ -147,18 +148,44 @@ export const relationsRouter = router({
   /**
    * List all available relation types with metadata
    *
-   * Returns metadata for all 14 relation types including labels, descriptions,
-   * directionality, and categories for frontend consumption.
+   * Returns built-in types plus workspace-defined custom relation definitions.
+   * Custom types from relation_defs are categorized as "custom".
    */
-  listTypes: protectedProcedure.query(async () => {
-    const types = Object.entries(RELATION_TYPE_METADATA).map(
+  listTypes: protectedProcedure.query(async ({ ctx }) => {
+    // Built-in types
+    const builtInTypes = Object.entries(RELATION_TYPE_METADATA).map(
       ([type, meta]) => ({
         type,
         ...meta,
+        source: "built_in" as const,
       })
     );
 
-    return { types };
+    // Workspace-defined custom types (if workspace context is available)
+    let customTypes: Array<{
+      type: string;
+      label: string;
+      description: string;
+      directionality: "unidirectional" | "bidirectional";
+      category: "custom";
+      source: "workspace";
+    }> = [];
+
+    if (ctx.workspaceId) {
+      const database = await getDb();
+      const relDefRepo = new RelationDefRepository(database);
+      const defs = await relDefRepo.list(ctx.workspaceId);
+      customTypes = defs.map((def) => ({
+        type: def.slug,
+        label: def.displayName,
+        description: def.description ?? "",
+        directionality: def.isDirectional ? "unidirectional" : "bidirectional",
+        category: "custom" as const,
+        source: "workspace" as const,
+      }));
+    }
+
+    return { types: [...builtInTypes, ...customTypes] };
   }),
 
   /**
@@ -334,7 +361,8 @@ export const relationsRouter = router({
       z.object({
         sourceEntityId: z.string().uuid(),
         targetEntityId: z.string().uuid(),
-        type: RelationTypeSchema,
+        // Accept both built-in relation types and workspace-defined custom types
+        type: z.string().min(1),
         metadata: z.record(z.string(), z.any()).optional(),
         workspaceId: z.string().uuid().optional(),
       })
@@ -349,6 +377,23 @@ export const relationsRouter = router({
           message:
             "workspaceId is required (pass in input or set X-Workspace-Id header)",
         });
+      }
+
+      // Validate type: must be a built-in type OR a workspace-defined relation def
+      const isBuiltIn = RelationTypeSchema.safeParse(input.type).success;
+      if (!isBuiltIn) {
+        const database = await getDb();
+        const relDefRepo = new RelationDefRepository(database);
+        const customDef = await relDefRepo.getBySlug(
+          input.type,
+          effectiveWorkspaceId
+        );
+        if (!customDef) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Unknown relation type: "${input.type}". Must be a built-in type or a workspace-defined relation definition.`,
+          });
+        }
       }
 
       // 1. Permission check
@@ -382,7 +427,7 @@ export const relationsRouter = router({
           id,
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
-          type: input.type,
+          type: input.type as RelationType,
           workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           metadata: input.metadata,

@@ -9,14 +9,28 @@
 // Direct re-exports from database
 export type { Relation, NewRelation } from "@synap/database";
 
-// Relation type definitions
-export type RelationType =
-  | "related_to" // Generic relationship
-  | "parent_of" // Hierarchy (parent → child)
-  | "child_of" // Inverse hierarchy (child → parent)
-  | "blocks" // Dependencies (X blocks Y)
-  | "mentioned_in" // Content references
-  | "linked_to"; // User-created links
+/**
+ * Built-in relation types. Workspace-defined custom types (from relation_defs)
+ * are also valid — use `string` when accepting arbitrary relation types.
+ */
+export type BuiltInRelationType =
+  | "assigned_to"
+  | "mentions"
+  | "links_to"
+  | "parent_of"
+  | "relates_to"
+  | "tagged_with"
+  | "created_by"
+  | "attended_by"
+  | "depends_on"
+  | "blocks"
+  | "belongs_to_project"
+  | "embedded_in"
+  | "visualized_in"
+  | "references";
+
+/** Built-in or workspace-defined custom relation type */
+export type RelationType = BuiltInRelationType | (string & {});
 
 // Input types for API operations
 export interface CreateRelationInput {
@@ -30,7 +44,7 @@ export interface RelationWithEntities {
   id: string;
   sourceEntityId: string;
   targetEntityId: string;
-  type: RelationType;
+  type: string;
   createdAt: Date;
   // Populated fields
   sourceEntity?: {

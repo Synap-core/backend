@@ -3371,7 +3371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					startedAt: Date;
 					threadId: string;
-					status: "completed" | "failed" | "running";
+					status: "completed" | "running" | "failed";
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
 					inputs: Record<string, unknown> | null;
@@ -3397,7 +3397,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				errorMessage: string | null;
 				startedAt: Date;
 				threadId: string;
-				status: "completed" | "failed" | "running";
+				status: "completed" | "running" | "failed";
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
 				inputs: Record<string, unknown> | null;
@@ -3611,9 +3611,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				sourceEntityId: string;
 				targetEntityId: string;
-				type: "created_by" | "depends_on" | "assigned_to" | "mentions" | "links_to" | "parent_of" | "relates_to" | "tagged_with" | "attended_by" | "blocks" | "belongs_to_project" | "embedded_in" | "visualized_in" | "references";
-				workspaceId: string;
+				type: string;
 				metadata?: Record<string, any> | undefined;
+				workspaceId?: string | undefined;
 			};
 			output: {
 				status: "proposed";
@@ -4024,7 +4024,88 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		createFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				definition: unknown;
+				definition: {
+					[x: string]: unknown;
+					workspaceName?: string | undefined;
+					description?: string | undefined;
+					profiles?: {
+						slug: string;
+						displayName: string;
+						icon?: string | undefined;
+						color?: string | undefined;
+						description?: string | undefined;
+						scope?: string | undefined;
+						properties?: {
+							slug: string;
+							valueType: string;
+							label?: string | undefined;
+							inputType?: string | undefined;
+							placeholder?: string | undefined;
+							enumValues?: string[] | undefined;
+							constraints?: Record<string, unknown> | undefined;
+						}[] | undefined;
+					}[] | undefined;
+					views?: {
+						name: string;
+						type: string;
+						scopeProfileSlug?: string | undefined;
+						scopeProfileSlugs?: string[] | undefined;
+						config?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					bentoLayout?: {
+						widgetType: string;
+						pos: {
+							x: number;
+							y: number;
+							w: number;
+							h: number;
+						};
+						config?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					bentoViewBlocks?: {
+						viewName: string;
+						pos: {
+							x: number;
+							y: number;
+							w: number;
+							h: number;
+						};
+						kind?: "view" | undefined;
+						overrides?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					suggestedEntities?: {
+						profileSlug: string;
+						title: string;
+						properties?: Record<string, unknown> | undefined;
+						content?: string | undefined;
+					}[] | undefined;
+					suggestedRelations?: {
+						sourceRef: string;
+						targetRef: string;
+						type: string;
+						metadata?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					displayTemplates?: {
+						name: string;
+						config: Record<string, unknown>;
+						description?: string | undefined;
+						entityType?: string | undefined;
+						targetType?: string | undefined;
+						isDefault?: boolean | undefined;
+					}[] | undefined;
+					layoutConfig?: {
+						pinnedApps?: string[] | undefined;
+						sidebarApps?: string[] | undefined;
+						defaultView?: string | undefined;
+						theme?: string | undefined;
+					} | undefined;
+					entityLinks?: {
+						sourceProfileSlug: string;
+						targetProfileSlug: string;
+						type: string;
+						label?: string | undefined;
+					}[] | undefined;
+				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
 				workspaceName?: string | undefined;
@@ -5897,6 +5978,116 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				properties: EffectiveProperty[];
+			};
+			meta: object;
+		}>;
+	}>>;
+	relationDefs: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				relationDefs: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					description: string | null;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					isDirectional: boolean;
+				}[];
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				slug: string;
+				displayName: string;
+				description?: string | undefined;
+				uiHints?: Record<string, unknown> | undefined;
+				isDirectional?: boolean | undefined;
+			};
+			output: {
+				relationDef: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					description: string | null;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					isDirectional: boolean;
+				};
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	profileRelations: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		link: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sourceProfileId: string;
+				targetProfileId: string;
+				relationDefId: string;
+				displayOrder?: number | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				link: {
+					metadata: unknown;
+					displayOrder: number;
+					sourceProfileId: string;
+					targetProfileId: string;
+					relationDefId: string;
+				};
+			};
+			meta: object;
+		}>;
+		unlink: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sourceProfileId: string;
+				targetProfileId: string;
+				relationDefId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		getByProfile: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileId: string;
+			};
+			output: {
+				relations: {
+					metadata: unknown;
+					displayOrder: number;
+					sourceProfileId: string;
+					targetProfileId: string;
+					relationDefId: string;
+				}[];
 			};
 			meta: object;
 		}>;
