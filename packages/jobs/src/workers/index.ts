@@ -31,11 +31,42 @@ import { handleMaterialize } from "./materializer.js";
 const logger = createLogger({ module: "workers" });
 
 /**
+ * All queue names used by the system.
+ * pg-boss v10 requires queues to be created before work() or schedule().
+ */
+const ALL_QUEUES = [
+  "search-index",
+  "search-bulk-index",
+  "workspace-init",
+  "cross-thread-notify",
+  "document-snapshot",
+  "document-restore",
+  "doc-autosave",
+  "doc-persistence",
+  "whiteboard-snapshot",
+  "whiteboard-restore",
+  "whiteboard-autosave",
+  "entity-embedding",
+  "webhook-delivery",
+  "background-task-scheduler",
+  "ai-analysis",
+  "materialize",
+  "side-effects",
+  "search-reindex",
+];
+
+/**
  * Register all pg-boss workers.
  * Must be called after startBoss().
  */
 export async function registerAllWorkers(): Promise<void> {
   const boss = getBoss();
+
+  // Create all queues first (pg-boss v10 requires this before work/schedule)
+  for (const name of ALL_QUEUES) {
+    await boss.createQueue(name);
+  }
+  logger.info({ count: ALL_QUEUES.length }, "Created all pg-boss queues");
 
   // Search indexing
   await boss.work("search-index", async ([job]: any[]) =>
