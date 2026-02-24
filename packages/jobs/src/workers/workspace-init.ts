@@ -20,19 +20,20 @@ export async function handleWorkspaceInit(
     workspaceId: string;
     userId: string;
     templateName?: string;
+    packageSlug?: string;
   }>
 ): Promise<void> {
-  const { workspaceId, userId, templateName } = job.data;
+  const { workspaceId, userId, templateName, packageSlug } = job.data;
 
   logger.info(
-    { workspaceId, userId, templateName },
+    { workspaceId, userId, templateName, packageSlug },
     "Initializing workspace defaults"
   );
 
   const { ensureDefaultWhiteboard, ensureDefaultViews, ensureDefaultCommands } =
     await import("@synap/database");
 
-  // Whiteboard + commands always run. Default views only for non-template workspaces.
+  // Whiteboard + commands always run. Default views only for non-template/non-package workspaces.
   const tasks: Array<{ name: string; promise: Promise<any> }> = [
     {
       name: "whiteboard",
@@ -41,15 +42,15 @@ export async function handleWorkspaceInit(
     { name: "commands", promise: ensureDefaultCommands(workspaceId, userId) },
   ];
 
-  if (!templateName) {
+  if (!templateName && !packageSlug) {
     tasks.push({
       name: "views",
       promise: ensureDefaultViews(workspaceId, userId),
     });
   } else {
     logger.info(
-      { workspaceId, templateName },
-      "Skipping default views — workspace created from template"
+      { workspaceId, templateName, packageSlug },
+      "Skipping default views — workspace created from template/package"
     );
   }
 
@@ -59,7 +60,8 @@ export async function handleWorkspaceInit(
   tasks.forEach((t, i) => {
     resultMap[t.name] = results[i].status;
   });
-  if (templateName) resultMap.views = "skipped (template)";
+  if (templateName || packageSlug)
+    resultMap.views = "skipped (template/package)";
 
   logger.info(
     { workspaceId, ...resultMap },

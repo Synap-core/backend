@@ -133,10 +133,12 @@ export const workspacesRouter = router({
       try {
         const boss = getBoss();
         const templateName = (input.settings as any)?.templateName;
+        const packageSlug = (input.settings as any)?.packageSlug;
         await boss.send("workspace-init", {
           workspaceId,
           userId: ctx.userId,
           templateName,
+          packageSlug,
         });
       } catch (err) {
         console.warn(
