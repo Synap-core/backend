@@ -2,8 +2,23 @@
 
 import { Column, SQL } from 'drizzle-orm';
 
-type DatabaseClient = any;
-interface KratosIdentity {
+/**
+ * Context Types
+ *
+ * Proper type definitions for tRPC context to avoid `any` types.
+ */
+/**
+ * Database client type
+ *
+ * Note: Using `any` here to preserve Drizzle's schema inference.
+ * Attempting to use PostgresJsDatabase<any> loses the schema generic
+ * and breaks db.query.tableName access patterns.
+ */
+export type DatabaseClient = any;
+/**
+ * Ory Kratos identity
+ */
+export interface KratosIdentity {
 	id: string;
 	traits: {
 		email: string;
@@ -11,18 +26,27 @@ interface KratosIdentity {
 		[key: string]: unknown;
 	};
 }
-interface KratosSession {
+/**
+ * Ory Kratos session
+ */
+export interface KratosSession {
 	identity: KratosIdentity;
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
 }
-interface User {
+/**
+ * User object (simplified from Kratos identity)
+ */
+export interface User {
 	id: string;
 	email: string;
 	name?: string;
 }
-interface Context {
+/**
+ * Full tRPC context
+ */
+export interface Context {
 	db: DatabaseClient;
 	authenticated: boolean;
 	userId?: string | null;
@@ -33,7 +57,15 @@ interface Context {
 	workspaceId?: string | null;
 	workspaceRole?: string | null;
 }
-interface AgentMetadata {
+/**
+ * Users Table - Cache for Kratos Identity Data
+ *
+ * Purpose: Store Kratos identity data in Synap DB for performance
+ * - Allows JOINs without calling Kratos API
+ * - Can add Synap-specific fields (avatar, timezone)
+ * - Kratos remains source of truth for authentication
+ */
+export interface AgentMetadata {
 	agentType: string;
 	description?: string;
 	createdByUserId: string;
@@ -387,7 +419,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-type ChatThread = typeof chatThreads.$inferSelect;
+export type ChatThread = typeof chatThreads.$inferSelect;
 declare enum ThreadEntityRelationshipType {
 	USED_AS_CONTEXT = "used_as_context",
 	CREATED = "created",
@@ -412,25 +444,33 @@ declare enum ThreadDocumentConflictStatus {
 	PENDING = "pending",
 	RESOLVED = "resolved"
 }
-interface DerivedInput {
+export interface DerivedInput {
 	name: string;
 	label?: string;
 	type?: string;
 	options?: string[];
 	default?: string;
 }
-interface InputOverride {
+export interface InputOverride {
 	label?: string;
 	default?: string;
 	options?: string[];
 }
-interface WorkspaceLayoutConfig {
+/**
+ * Workspaces Schema - Multi-user workspace support
+ *
+ * A workspace can be:
+ * - Personal (single user)
+ * - Team (multiple users with roles)
+ * - Enterprise (advanced features)
+ */
+export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
 	sidebarApps?: string[];
 	defaultView?: string;
 	theme?: string;
 }
-interface WorkspaceSettings {
+export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
 	aiEnabled?: boolean;
@@ -671,7 +711,7 @@ declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-type MessageLink = typeof messageLinks.$inferSelect;
+export type MessageLink = typeof messageLinks.$inferSelect;
 declare enum PropertyValueType {
 	STRING = "string",
 	NUMBER = "number",
@@ -820,13 +860,19 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-type PropertyDef = typeof propertyDefs.$inferSelect;
+export type PropertyDef = typeof propertyDefs.$inferSelect;
 declare enum ProfileScope {
 	SYSTEM = "system",// Available to all users
 	WORKSPACE = "workspace",// Shared within workspace
 	USER = "user"
 }
-interface EventRecord {
+/**
+ * EventRecord - Database representation of an event
+ *
+ * This is the format returned from the database.
+ * It maps directly to the events table structure.
+ */
+export interface EventRecord {
 	id: string;
 	timestamp: Date;
 	subjectId: string;
@@ -840,7 +886,8 @@ interface EventRecord {
 	correlationId?: string;
 	source: string;
 }
-interface LinkedMessagePreview {
+/** Minimal message fields for list/preview */
+export interface LinkedMessagePreview {
 	id: string;
 	threadId: string;
 	role: string;
@@ -848,16 +895,19 @@ interface LinkedMessagePreview {
 	timestamp: Date;
 	userId: string;
 }
-interface LinkedMessageItem {
+export interface LinkedMessageItem {
 	link: MessageLink;
 	message: LinkedMessagePreview;
 }
-interface EffectiveProperty extends PropertyDef {
+export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
 	displayOrder: number;
 }
-interface ViewColumn {
+/**
+ * Column definition for views
+ */
+export interface ViewColumn {
 	id: string;
 	field: string;
 	title?: string;
@@ -866,17 +916,38 @@ interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
-type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
-interface EntityFilter {
+/**
+ * View Query Types
+ *
+ * Single source of truth for all view query and filter types.
+ */
+/**
+ * Filter operator types
+ */
+export type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
+/**
+ * Filter definition for entity queries
+ */
+export interface EntityFilter {
 	field: string;
 	operator: FilterOperator;
 	value?: unknown;
 }
-interface SortRule {
+/**
+ * Sort rule for entity queries
+ */
+export interface SortRule {
 	field: string;
 	direction: "asc" | "desc";
 }
-interface EntityQuery {
+/**
+ * Query definition for structured views
+ * Defines which entities to show and how to filter them
+ *
+ * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
+ * This query structure only contains filters, sorts, search, pagination, and groupBy
+ */
+export interface EntityQuery {
 	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
 	profileIds?: string[];
 	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
@@ -907,7 +978,10 @@ declare enum AgentType {
 	WRITING = "writing",
 	ACTION = "action"
 }
-type AgentTypeString = `${AgentType}` | (string & {});
+/**
+ * Agent type as string literal union (for flexibility)
+ */
+export type AgentTypeString = `${AgentType}` | (string & {});
 declare enum AIStepType {
 	THINKING = "thinking",
 	TOOL_CALL = "tool_call",
@@ -915,7 +989,17 @@ declare enum AIStepType {
 	DECISION = "decision",
 	ERROR = "error"
 }
-interface AIStep {
+/**
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
+ */
+export interface AIStep {
 	id: string;
 	type: AIStepType | string;
 	content: string;
@@ -929,7 +1013,10 @@ interface AIStep {
 	description?: string;
 	status?: "pending" | "running" | "complete" | "error";
 }
-interface BranchDecision {
+/**
+ * Branch decision from meta-agent
+ */
+export interface BranchDecision {
 	shouldBranch: boolean;
 	reason: string;
 	suggestedAgentType?: AgentTypeString;
@@ -969,7 +1056,35 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
-type TableAction = "create.requested" | "create.approved" | "create.validated" | "update.requested" | "update.approved" | "update.validated" | "delete.requested" | "delete.approved" | "delete.validated";
+/**
+ * @synap/events - Schema-Driven Event Generator
+ *
+ * This module generates event types and payload schemas from Drizzle database tables.
+ *
+ * V2.0 CONSOLIDATED PATTERN: {table}.{action}.{modifier}
+ *
+ * Actions: create | update | delete
+ * Modifiers: requested | validated
+ *
+ * Examples:
+ *   entities.create.requested  ← Intent submitted (by user or AI)
+ *   entities.create.validated  ← Change confirmed and applied
+ *   entities.update.requested  ← Update intent
+ *   entities.update.validated  ← Update confirmed
+ *
+ * No direct actions (e.g., entities.create) - all changes go through requested→validated flow.
+ */
+/**
+ * Standard CRUD actions with modifiers for table events
+ *
+ * V2.1: Added 'approved' modifier for 3-phase flow
+ *
+ * Flow:
+ *  1. requested: Intent (user/AI wants to do something)
+ *  2. approved: Validated (permissions checked, user approved if needed)
+ *  3. validated: Completed (DB operation done, entity exists)
+ */
+export type TableAction = "create.requested" | "create.approved" | "create.validated" | "update.requested" | "update.approved" | "update.validated" | "delete.requested" | "delete.approved" | "delete.validated";
 declare const CORE_TABLES: readonly [
 	"entities",
 	"documents",
@@ -985,9 +1100,22 @@ declare const CORE_TABLES: readonly [
 	"views",
 	"userPreferences"
 ];
-type CoreTable = (typeof CORE_TABLES)[number];
-type GeneratedEventType = `${CoreTable}.create.requested` | `${CoreTable}.create.approved` | `${CoreTable}.create.validated` | `${CoreTable}.update.requested` | `${CoreTable}.update.approved` | `${CoreTable}.update.validated` | `${CoreTable}.delete.requested` | `${CoreTable}.delete.approved` | `${CoreTable}.delete.validated`;
-interface WorkerMetadata {
+export type CoreTable = (typeof CORE_TABLES)[number];
+/**
+ * Flat list of all generated event types (for type checking)
+ *
+ * V2.1: Added .approved phase for 3-phase flow
+ */
+export type GeneratedEventType = `${CoreTable}.create.requested` | `${CoreTable}.create.approved` | `${CoreTable}.create.validated` | `${CoreTable}.update.requested` | `${CoreTable}.update.approved` | `${CoreTable}.update.validated` | `${CoreTable}.delete.requested` | `${CoreTable}.delete.approved` | `${CoreTable}.delete.validated`;
+/**
+ * Worker Registry - Static worker metadata for Admin UI
+ *
+ * V2.0: Simplified registry with only active workers
+ *
+ * Pattern: Table workers handle {table}.{crud}.requested events
+ * and emit {table}.{crud}.completed events.
+ */
+export interface WorkerMetadata {
 	id: string;
 	name: string;
 	description: string;
@@ -3243,7 +3371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					startedAt: Date;
 					threadId: string;
-					status: "completed" | "failed" | "running";
+					status: "completed" | "running" | "failed";
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
 					inputs: Record<string, unknown> | null;
@@ -3269,7 +3397,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				errorMessage: string | null;
 				startedAt: Date;
 				threadId: string;
-				status: "completed" | "failed" | "running";
+				status: "completed" | "running" | "failed";
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
 				inputs: Record<string, unknown> | null;

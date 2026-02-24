@@ -148,18 +148,44 @@ export const relationsRouter = router({
   /**
    * List all available relation types with metadata
    *
-   * Returns metadata for all 14 relation types including labels, descriptions,
-   * directionality, and categories for frontend consumption.
+   * Returns built-in types plus workspace-defined custom relation definitions.
+   * Custom types from relation_defs are categorized as "custom".
    */
-  listTypes: protectedProcedure.query(async () => {
-    const types = Object.entries(RELATION_TYPE_METADATA).map(
+  listTypes: protectedProcedure.query(async ({ ctx }) => {
+    // Built-in types
+    const builtInTypes = Object.entries(RELATION_TYPE_METADATA).map(
       ([type, meta]) => ({
         type,
         ...meta,
+        source: "built_in" as const,
       })
     );
 
-    return { types };
+    // Workspace-defined custom types (if workspace context is available)
+    let customTypes: Array<{
+      type: string;
+      label: string;
+      description: string;
+      directionality: "unidirectional" | "bidirectional";
+      category: "custom";
+      source: "workspace";
+    }> = [];
+
+    if (ctx.workspaceId) {
+      const database = await getDb();
+      const relDefRepo = new RelationDefRepository(database);
+      const defs = await relDefRepo.list(ctx.workspaceId);
+      customTypes = defs.map((def) => ({
+        type: def.slug,
+        label: def.displayName,
+        description: def.description ?? "",
+        directionality: def.isDirectional ? "unidirectional" : "bidirectional",
+        category: "custom" as const,
+        source: "workspace" as const,
+      }));
+    }
+
+    return { types: [...builtInTypes, ...customTypes] };
   }),
 
   /**
