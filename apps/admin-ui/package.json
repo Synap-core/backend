@@ -39,7 +39,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@synap-core/api-types": "^1.0.45",
+    "@synap-core/api-types": "workspace:*",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",

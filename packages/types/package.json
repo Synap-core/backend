@@ -87,13 +87,7 @@
     "yjs": "^13.6.11",
     "zod": "^4.3.6"
   },
-  "peerDependencies": {
-    "@synap-core/core": "workspace:*",
-    "@synap/database": "workspace:*"
-  },
   "devDependencies": {
-    "@synap-core/core": "workspace:*",
-    "@synap/database": "workspace:*",
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0"
