@@ -501,6 +501,10 @@ export interface WorkspaceSettings {
 	};
 	/** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
 	templateName?: string;
+	/** Slug of the control plane package used to create this workspace. */
+	packageSlug?: string;
+	/** Version of the package at time of creation. */
+	packageVersion?: string;
 	aiGovernance?: {
 		autoApprove?: boolean;
 		requireReviewFor?: string[];
