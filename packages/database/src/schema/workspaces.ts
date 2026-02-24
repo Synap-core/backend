@@ -63,6 +63,10 @@ export interface WorkspaceSettings {
     };
   };
 
+  // Template configuration
+  /** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
+  templateName?: string;
+
   // AI Governance Settings
   aiGovernance?: {
     autoApprove?: boolean; // Auto-approve AI-generated content

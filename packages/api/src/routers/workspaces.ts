@@ -132,9 +132,11 @@ export const workspacesRouter = router({
       // 5. Enqueue workspace-init for default whiteboard/views/commands
       try {
         const boss = getBoss();
+        const templateName = (input.settings as any)?.templateName;
         await boss.send("workspace-init", {
           workspaceId,
           userId: ctx.userId,
+          templateName,
         });
       } catch (err) {
         console.warn(
@@ -225,18 +227,22 @@ export const workspacesRouter = router({
         );
       }
 
-      const viewsResult = await ensureDefaultViews(input.id, ctx.userId);
-      console.log(
-        `[workspaces.get] ensureDefaultViews:`,
-        viewsResult.status,
-        viewsResult.message
-      );
-      if (viewsResult.status === "error") {
-        console.error(
-          `[workspaces.get] Failed to ensure default views:`,
-          viewsResult.message,
-          viewsResult.error
+      // Skip default views for template workspaces — template defines its own views
+      const isTemplateWorkspace = !!(workspace.settings as any)?.templateName;
+      if (!isTemplateWorkspace) {
+        const viewsResult = await ensureDefaultViews(input.id, ctx.userId);
+        console.log(
+          `[workspaces.get] ensureDefaultViews:`,
+          viewsResult.status,
+          viewsResult.message
         );
+        if (viewsResult.status === "error") {
+          console.error(
+            `[workspaces.get] Failed to ensure default views:`,
+            viewsResult.message,
+            viewsResult.error
+          );
+        }
       }
 
       const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);

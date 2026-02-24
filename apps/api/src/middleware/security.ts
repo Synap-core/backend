@@ -6,8 +6,6 @@
  * - Request size limits (prevent memory exhaustion)
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
-console.log("🔍 DEBUG: Loading apps/api/src/middleware/security.ts");
-
 import type { MiddlewareHandler } from "hono";
 import { rateLimiter } from "hono-rate-limiter";
 
@@ -30,8 +28,6 @@ export const rateLimitMiddleware = rateLimiter({
     // Bypass for localhost (Inngest, internal calls)
     const ip =
       c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
-    console.log("DEBUG: Rate Limit IP:", ip);
-
     // In development, bypass if IP is unknown (often happens with local fetch/Inngest)
     if (process.env.NODE_ENV === "development" && ip === "unknown") {
       return "localhost-bypass-" + Math.random();

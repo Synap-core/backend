@@ -87,7 +87,7 @@ export const profilePropertiesRouter = router({
    * Instead, mark properties as not required or hide them in UI.
    * This endpoint is kept for admin use only (future: workspace admin role check).
    *
-   * TODO: Add workspace admin role check before allowing unlink
+   * Restricted to workspace owner/admin roles.
    */
   unlink: workspaceProcedure
     .input(
@@ -97,8 +97,14 @@ export const profilePropertiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // TODO: Add workspace admin role check
-      // For now, we allow it but log a warning
+      // Only workspace owners/admins can unlink properties
+      if (!["owner", "admin"].includes(ctx.workspaceRole)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only workspace owners/admins can unlink properties",
+        });
+      }
+
       logger.warn(
         {
           profileId: input.profileId,

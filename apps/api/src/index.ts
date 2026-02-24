@@ -35,9 +35,18 @@ import {
   hubProtocolRestApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
-import { startBoss, stopBoss, registerAllWorkers, registerCronSchedules } from "@synap/jobs";
+import {
+  startBoss,
+  stopBoss,
+  registerAllWorkers,
+  registerCronSchedules,
+} from "@synap/jobs";
 import crypto from "crypto";
-import { getCorsOrigins } from "./middleware/security.js";
+import {
+  getCorsOrigins,
+  rateLimitMiddleware,
+  requestSizeLimit,
+} from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import { authMiddleware } from "@synap/auth";
 
@@ -101,9 +110,8 @@ try {
 const app = new Hono();
 
 // Security Middleware (Applied First)
-// TODO: Enable rate limiting and request size limits for production
-// app.use("*", requestSizeLimit); // Max 10MB requests
-// app.use("*", rateLimitMiddleware); // 100 req/15min per IP
+app.use("*", requestSizeLimit); // Max 10MB requests
+app.use("*", rateLimitMiddleware); // 100 req/15min per IP
 app.use("*", secureHeaders()); // Hono built-in security headers
 apiLogger.info("Security middleware registered");
 
@@ -519,7 +527,10 @@ try {
         await registerCronSchedules();
         apiLogger.info("pg-boss job queue started with all workers registered");
       } catch (err) {
-        apiLogger.error({ err }, "Failed to start pg-boss (non-fatal, side-effects will be unavailable)");
+        apiLogger.error(
+          { err },
+          "Failed to start pg-boss (non-fatal, side-effects will be unavailable)"
+        );
       }
     }
   );

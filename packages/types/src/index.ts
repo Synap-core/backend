@@ -62,5 +62,8 @@ export * from "./messages/index.js";
 // Profile System (Dynamic Entity Types)
 export * from "./profiles/index.js";
 
+// Vault (Secrets Management)
+export * from "./vault/index.js";
+
 // Unified event naming system (SubjectType, EventAction, EventPhase, EventName)
 export * from "./events/unified.js";

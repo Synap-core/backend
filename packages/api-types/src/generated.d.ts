@@ -2233,6 +2233,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		getDataPodStats: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				userCount: number;
+				agentCount: number;
+				workspaceCount: number;
+				entityCount: number;
+				documentCount: number;
+			};
+			meta: object;
+		}>;
+		listUsers: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				type?: "all" | "human" | "agent" | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				users: {
+					id: string;
+					email: string;
+					name: string | null;
+					userType: string;
+					agentMetadata: AgentMetadata | null;
+					createdAt: string;
+					workspaceMembershipCount: number;
+				}[];
+				pagination: {
+					total: number;
+					limit: number;
+					offset: number;
+					hasMore: boolean;
+				};
+			};
+			meta: object;
+		}>;
 	}>>;
 	hub: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

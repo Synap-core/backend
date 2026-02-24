@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../trpc.js";
 import {
   searchService,
@@ -11,6 +12,8 @@ import {
   indexingService,
 } from "@synap/search";
 import { getBoss } from "@synap/jobs";
+import { db, eq, and } from "@synap/database";
+import { workspaceMembers } from "@synap/database/schema";
 
 export const typesenseRouter = router({
   /**
@@ -98,7 +101,20 @@ export const typesenseRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // TODO: Check if user has admin permission for workspace
+      // Check user has admin/owner permission for workspace
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          eq(workspaceMembers.userId, ctx.userId)
+        ),
+      });
+
+      if (!membership || !["owner", "admin"].includes(membership.role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only workspace owners/admins can trigger reindex",
+        });
+      }
 
       // Trigger reindex job via pg-boss
       const boss = getBoss();

@@ -534,6 +534,9 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
+      '@synap-core/types':
+        specifier: workspace:*
+        version: link:../types
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage

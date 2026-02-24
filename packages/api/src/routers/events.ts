@@ -141,13 +141,14 @@ export const eventsRouter = router({
     .query(async ({ ctx, input }) => {
       const eventRepo = getEventRepository();
 
-      // Permission Check
-      // 1. System Admin (implemented via specific role or flag - placeholder for now)
-      // For now, we'll assume if no workspaceId is provided, it requires system admin
-      // TODO: Implement proper system admin check
-      const isSystemAdmin = false; // Replace with actual check
+      // Permission Check: workspace owner/admin, or scoped to own events
+      // System admin = user who owns at least one workspace
+      const ownedWorkspace = await db.query.workspaceMembers.findFirst({
+        where: (members, { and, eq }) =>
+          and(eq(members.userId, ctx.userId), eq(members.role, "owner")),
+      });
+      const isSystemAdmin = !!ownedWorkspace;
 
-      // 2. Workspace Owner
       if (input.workspaceId) {
         const membership = await db.query.workspaceMembers.findFirst({
           where: (members, { and, eq }) =>
@@ -210,7 +211,6 @@ export const eventsRouter = router({
       const eventRepo = getEventRepository();
 
       // Same permission logic as search
-      // TODO: Refactor into shared permission helper
       if (input.workspaceId) {
         const membership = await db.query.workspaceMembers.findFirst({
           where: (members, { and, eq }) =>

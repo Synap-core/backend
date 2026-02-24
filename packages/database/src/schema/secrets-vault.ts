@@ -45,21 +45,8 @@ export const secretTypeEnum = pgEnum("secret_type", [
   "oauth", // OAuth tokens
 ]);
 
-export const SECRET_TYPES = [
-  "password",
-  "api_key",
-  "credential",
-  "note",
-  "card",
-  "identity",
-  "ssh_key",
-  "certificate",
-  "env_variable",
-  "database",
-  "oauth",
-] as const;
-
-export type SecretType = (typeof SECRET_TYPES)[number];
+// Re-export from shared types package (single source of truth)
+export { SECRET_TYPES, type SecretType } from "@synap-core/types";
 
 // ============================================================================
 // Secrets Table

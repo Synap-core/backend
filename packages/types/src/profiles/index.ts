@@ -24,7 +24,8 @@ export type PropertyValueType =
   | "date"
   | "entity_id"
   | "array"
-  | "object";
+  | "object"
+  | "secret";
 
 /**
  * Profile Schema
@@ -60,6 +61,7 @@ export const PropertyDefSchema = z.object({
     "entity_id",
     "array",
     "object",
+    "secret",
   ]),
   constraints: z.record(z.string(), z.unknown()),
   uiHints: z.record(z.string(), z.unknown()),

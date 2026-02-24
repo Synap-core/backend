@@ -102,13 +102,15 @@ export const profilesRouter = router({
       const db = await getDb();
       const profileRepo = new ProfileRepository(db);
 
-      // Check for slug conflict
+      // Check for slug conflict — return existing profile gracefully
+      // (e.g., system profiles like "company" already exist and can be reused)
       const existing = await profileRepo.getBySlug(input.slug);
       if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `Profile slug already exists: ${input.slug}`,
-        });
+        logger.info(
+          { slug: input.slug, existingId: existing.id },
+          "Profile slug exists, returning existing"
+        );
+        return { profile: existing, existing: true };
       }
 
       // Validate parent profile if provided

@@ -9,6 +9,7 @@ import {
   type EffectiveProperty,
 } from "./profile-resolution-service.js";
 import { PropertyValueType } from "../schema/property-defs.js";
+import { isVaultReference } from "@synap-core/types";
 
 export interface ValidationResult {
   valid: boolean;
@@ -147,6 +148,16 @@ export class PropertyValidationService {
           }
         }
         return { value }; // Wrap in object
+
+      case PropertyValueType.SECRET: {
+        const ref = String(value);
+        if (!isVaultReference(ref)) {
+          throw new Error(
+            `Secret value must be a vault reference (vault://<uuid>), got: ${ref}`
+          );
+        }
+        return ref;
+      }
 
       default:
         return value;

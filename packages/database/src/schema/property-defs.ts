@@ -27,6 +27,7 @@ export enum PropertyValueType {
   ENTITY_ID = "entity_id",
   ARRAY = "array",
   OBJECT = "object",
+  SECRET = "secret",
 }
 
 export const propertyDefs = pgTable(
@@ -48,6 +49,7 @@ export const propertyDefs = pgTable(
         PropertyValueType.ENTITY_ID,
         PropertyValueType.ARRAY,
         PropertyValueType.OBJECT,
+        PropertyValueType.SECRET,
       ],
     }).notNull(),
 

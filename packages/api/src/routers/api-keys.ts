@@ -288,7 +288,11 @@ export const apiKeysRouter = router({
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
 
-      const newApiKey = await apiKeyRepo.rotate(input.keyId, newKey, ctx.userId);
+      const newApiKey = await apiKeyRepo.rotate(
+        input.keyId,
+        newKey,
+        ctx.userId
+      );
 
       // 3. Audit log
       auditLog({
@@ -323,23 +327,17 @@ export const apiKeysRouter = router({
    * List all system keys (System Admin only)
    */
   listSystemKeys: protectedProcedure.query(async ({ ctx }) => {
-    // TODO: Implement proper system admin check
-    const isSystemAdmin = false; // Replace with actual check
+    // System admin = user who owns at least one workspace on this pod
+    const ownedWorkspace = await db.query.workspaceMembers.findFirst({
+      where: (members, { and, eq }) =>
+        and(eq(members.userId, ctx.userId), eq(members.role, "owner")),
+    });
 
-    if (!isSystemAdmin) {
-      // For now, allow if user is owner of any workspace (temporary for demo)
-      // Real implementation should check system role
-      const ownedWorkspaces = await db.query.workspaceMembers.findFirst({
-        where: (members, { and, eq }) =>
-          and(eq(members.userId, ctx.userId), eq(members.role, "owner")),
+    if (!ownedWorkspace) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Requires system admin privileges",
       });
-
-      if (!ownedWorkspaces) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Requires system admin privileges",
-        });
-      }
     }
 
     const keys = await db.query.apiKeys.findMany({
