@@ -9,28 +9,8 @@
 // Direct re-exports from database
 export type { Relation, NewRelation } from "@synap/database";
 
-/**
- * Built-in relation types. Workspace-defined custom types (from relation_defs)
- * are also valid — use `string` when accepting arbitrary relation types.
- */
-export type BuiltInRelationType =
-  | "assigned_to"
-  | "mentions"
-  | "links_to"
-  | "parent_of"
-  | "relates_to"
-  | "tagged_with"
-  | "created_by"
-  | "attended_by"
-  | "depends_on"
-  | "blocks"
-  | "belongs_to_project"
-  | "embedded_in"
-  | "visualized_in"
-  | "references";
-
-/** Built-in or workspace-defined custom relation type */
-export type RelationType = BuiltInRelationType | (string & {});
+/** Relation type — any string slug from workspace relation_defs */
+export type RelationType = string;
 
 // Input types for API operations
 export interface CreateRelationInput {

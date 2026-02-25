@@ -431,7 +431,7 @@ export async function createWorkspaceFromDefinition(
         {
           sourceEntityId: sourceId,
           targetEntityId: targetId,
-          type: rel.type as any,
+          type: rel.type,
           workspaceId,
           userId,
           metadata: rel.metadata,

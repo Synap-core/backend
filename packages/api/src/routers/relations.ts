@@ -24,120 +24,15 @@ import {
   EventRepository,
   RelationRepository,
   RelationDefRepository,
+  SYSTEM_RELATION_TYPES,
   sql,
 } from "@synap/database";
-import {
-  relations,
-  entities,
-  RelationTypeSchema,
-  type RelationType,
-} from "@synap/database/schema";
+import { relations, entities } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
-
-/**
- * Relation Type Metadata
- *
- * Provides human-readable labels, descriptions, and categorization for all relation types.
- * Used by frontend for smart suggestions and UI display.
- */
-const RELATION_TYPE_METADATA: Record<
-  RelationType,
-  {
-    label: string;
-    description: string;
-    directionality: "unidirectional" | "bidirectional";
-    category: "workflow" | "social" | "reference" | "hierarchy";
-  }
-> = {
-  assigned_to: {
-    label: "Assigned To",
-    description: "Person assigned to task/project",
-    directionality: "unidirectional",
-    category: "workflow",
-  },
-  blocks: {
-    label: "Blocks",
-    description: "Prevents progress on another task",
-    directionality: "unidirectional",
-    category: "workflow",
-  },
-  depends_on: {
-    label: "Depends On",
-    description: "Requires completion of another task",
-    directionality: "unidirectional",
-    category: "workflow",
-  },
-  relates_to: {
-    label: "Relates To",
-    description: "General relationship between entities",
-    directionality: "bidirectional",
-    category: "reference",
-  },
-  mentions: {
-    label: "Mentions",
-    description: "Referenced in content",
-    directionality: "unidirectional",
-    category: "reference",
-  },
-  links_to: {
-    label: "Links To",
-    description: "Hyperlink or reference",
-    directionality: "unidirectional",
-    category: "reference",
-  },
-  parent_of: {
-    label: "Parent Of",
-    description: "Hierarchical parent relationship",
-    directionality: "unidirectional",
-    category: "hierarchy",
-  },
-  tagged_with: {
-    label: "Tagged With",
-    description: "Categorization tag",
-    directionality: "unidirectional",
-    category: "reference",
-  },
-  created_by: {
-    label: "Created By",
-    description: "Author or creator",
-    directionality: "unidirectional",
-    category: "social",
-  },
-  attended_by: {
-    label: "Attended By",
-    description: "Participant in event",
-    directionality: "unidirectional",
-    category: "social",
-  },
-  belongs_to_project: {
-    label: "Belongs To Project",
-    description: "Project membership",
-    directionality: "unidirectional",
-    category: "hierarchy",
-  },
-  embedded_in: {
-    label: "Embedded In",
-    description: "Embedded in view or document",
-    directionality: "unidirectional",
-    category: "reference",
-  },
-  visualized_in: {
-    label: "Visualized In",
-    description: "Displayed in view (for tracking)",
-    directionality: "unidirectional",
-    category: "reference",
-  },
-  references: {
-    label: "References",
-    description: "Cites or refers to",
-    directionality: "unidirectional",
-    category: "reference",
-  },
-};
 
 /**
  * Direction schema for relation queries
@@ -148,44 +43,31 @@ export const relationsRouter = router({
   /**
    * List all available relation types with metadata
    *
-   * Returns built-in types plus workspace-defined custom relation definitions.
-   * Custom types from relation_defs are categorized as "custom".
+   * Returns all relation definitions from the workspace's relation_defs table.
+   * Default types (assigned_to, depends_on, etc.) are seeded during workspace creation.
    */
   listTypes: protectedProcedure.query(async ({ ctx }) => {
-    // Built-in types
-    const builtInTypes = Object.entries(RELATION_TYPE_METADATA).map(
-      ([type, meta]) => ({
-        type,
-        ...meta,
-        source: "built_in" as const,
-      })
-    );
-
-    // Workspace-defined custom types (if workspace context is available)
-    let customTypes: Array<{
-      type: string;
-      label: string;
-      description: string;
-      directionality: "unidirectional" | "bidirectional";
-      category: "custom";
-      source: "workspace";
-    }> = [];
-
-    if (ctx.workspaceId) {
-      const database = await getDb();
-      const relDefRepo = new RelationDefRepository(database);
-      const defs = await relDefRepo.list(ctx.workspaceId);
-      customTypes = defs.map((def) => ({
-        type: def.slug,
-        label: def.displayName,
-        description: def.description ?? "",
-        directionality: def.isDirectional ? "unidirectional" : "bidirectional",
-        category: "custom" as const,
-        source: "workspace" as const,
-      }));
+    if (!ctx.workspaceId) {
+      return { types: [] };
     }
 
-    return { types: [...builtInTypes, ...customTypes] };
+    const database = await getDb();
+    const relDefRepo = new RelationDefRepository(database);
+    const defs = await relDefRepo.list(ctx.workspaceId);
+
+    const types = defs.map((def) => ({
+      type: def.slug,
+      label: def.displayName,
+      description: def.description ?? "",
+      directionality: def.isDirectional
+        ? ("unidirectional" as const)
+        : ("bidirectional" as const),
+      category:
+        ((def.uiHints as any)?.category as string) ?? ("custom" as const),
+      source: "workspace" as const,
+    }));
+
+    return { types };
   }),
 
   /**
@@ -198,7 +80,7 @@ export const relationsRouter = router({
     .input(
       z.object({
         entityId: z.string().uuid(),
-        type: RelationTypeSchema.optional(),
+        type: z.string().optional(),
         direction: DirectionSchema,
         limit: z.number().min(1).max(100).default(50),
       })
@@ -249,7 +131,7 @@ export const relationsRouter = router({
     .input(
       z.object({
         entityId: z.string().uuid(),
-        type: RelationTypeSchema.optional(),
+        type: z.string().optional(),
         direction: DirectionSchema,
         limit: z.number().min(1).max(100).default(50),
       })
@@ -379,19 +261,21 @@ export const relationsRouter = router({
         });
       }
 
-      // Validate type: must be a built-in type OR a workspace-defined relation def
-      const isBuiltIn = RelationTypeSchema.safeParse(input.type).success;
-      if (!isBuiltIn) {
+      // Validate type: must be a system type OR a workspace-defined relation def
+      const isSystemType = (
+        SYSTEM_RELATION_TYPES as readonly string[]
+      ).includes(input.type);
+      if (!isSystemType) {
         const database = await getDb();
         const relDefRepo = new RelationDefRepository(database);
-        const customDef = await relDefRepo.getBySlug(
+        const def = await relDefRepo.getBySlug(
           input.type,
           effectiveWorkspaceId
         );
-        if (!customDef) {
+        if (!def) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Unknown relation type: "${input.type}". Must be a built-in type or a workspace-defined relation definition.`,
+            message: `Unknown relation type: "${input.type}". Must be a workspace relation definition.`,
           });
         }
       }
@@ -427,7 +311,7 @@ export const relationsRouter = router({
           id,
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
-          type: input.type as RelationType,
+          type: input.type,
           workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           metadata: input.metadata,
