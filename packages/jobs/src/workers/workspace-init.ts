@@ -30,16 +30,24 @@ export async function handleWorkspaceInit(
     "Initializing workspace defaults"
   );
 
-  const { ensureDefaultWhiteboard, ensureDefaultViews, ensureDefaultCommands } =
-    await import("@synap/database");
+  const {
+    ensureDefaultWhiteboard,
+    ensureDefaultViews,
+    ensureDefaultCommands,
+    ensureDefaultRelationDefs,
+  } = await import("@synap/database");
 
-  // Whiteboard + commands always run. Default views only for non-template/non-package workspaces.
+  // Whiteboard + commands + relation defs always run. Default views only for non-template/non-package workspaces.
   const tasks: Array<{ name: string; promise: Promise<any> }> = [
     {
       name: "whiteboard",
       promise: ensureDefaultWhiteboard(workspaceId, userId),
     },
     { name: "commands", promise: ensureDefaultCommands(workspaceId, userId) },
+    {
+      name: "relation-defs",
+      promise: ensureDefaultRelationDefs(workspaceId, userId),
+    },
   ];
 
   if (!templateName && !packageSlug) {

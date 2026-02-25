@@ -57,6 +57,19 @@ export {
   type EnsureDefaultCommandsResult,
 } from "./utils/ensure-default-commands.js";
 
+// Export ensureDefaultRelationDefs utility
+export {
+  ensureDefaultRelationDefs,
+  type EnsureDefaultRelationDefsResult,
+} from "./utils/ensure-default-relation-defs.js";
+
+// Export default relation defs constants
+export {
+  DEFAULT_RELATION_DEFS,
+  SYSTEM_RELATION_TYPES,
+  type DefaultRelationDef,
+} from "./utils/default-relation-defs.js";
+
 // Export createWorkspaceFromDefinition utility
 export {
   createWorkspaceFromDefinition,

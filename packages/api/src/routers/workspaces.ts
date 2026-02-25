@@ -212,6 +212,7 @@ export const workspacesRouter = router({
         ensureDefaultWhiteboard,
         ensureDefaultViews,
         ensureDefaultCommands,
+        ensureDefaultRelationDefs,
       } = await import("@synap/database");
 
       const whiteboardResult = await ensureDefaultWhiteboard(
@@ -260,6 +261,23 @@ export const workspacesRouter = router({
           `[workspaces.get] Failed to ensure default commands:`,
           commandsResult.message,
           commandsResult.error
+        );
+      }
+
+      const relDefsResult = await ensureDefaultRelationDefs(
+        input.id,
+        ctx.userId
+      );
+      console.log(
+        `[workspaces.get] ensureDefaultRelationDefs:`,
+        relDefsResult.status,
+        relDefsResult.message
+      );
+      if (relDefsResult.status === "error") {
+        console.error(
+          `[workspaces.get] Failed to ensure default relation defs:`,
+          relDefsResult.message,
+          relDefsResult.error
         );
       }
 

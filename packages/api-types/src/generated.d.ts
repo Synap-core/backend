@@ -3410,28 +3410,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listTypes: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
-				types: ({
-					source: "built_in";
-					label: string;
-					description: string;
-					directionality: "unidirectional" | "bidirectional";
-					category: "workflow" | "social" | "reference" | "hierarchy";
-					type: string;
-				} | {
+				types: {
 					type: string;
 					label: string;
 					description: string;
 					directionality: "unidirectional" | "bidirectional";
-					category: "custom";
+					category: string;
 					source: "workspace";
-				})[];
+				}[];
 			};
 			meta: object;
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				entityId: string;
-				type?: "created_by" | "depends_on" | "assigned_to" | "mentions" | "links_to" | "parent_of" | "relates_to" | "tagged_with" | "attended_by" | "blocks" | "belongs_to_project" | "embedded_in" | "visualized_in" | "references" | undefined;
+				type?: string | undefined;
 				direction?: "source" | "target" | "both" | undefined;
 				limit?: number | undefined;
 			};
@@ -3452,7 +3445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getRelated: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				entityId: string;
-				type?: "created_by" | "depends_on" | "assigned_to" | "mentions" | "links_to" | "parent_of" | "relates_to" | "tagged_with" | "attended_by" | "blocks" | "belongs_to_project" | "embedded_in" | "visualized_in" | "references" | undefined;
+				type?: string | undefined;
 				direction?: "source" | "target" | "both" | undefined;
 				limit?: number | undefined;
 			};

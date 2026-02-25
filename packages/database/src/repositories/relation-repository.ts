@@ -5,7 +5,7 @@
  */
 
 import { eq, and } from "drizzle-orm";
-import { relations, RelationType } from "../schema/relations.js";
+import { relations } from "../schema/relations.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Relation, NewRelation } from "../schema/relations.js";
@@ -15,8 +15,8 @@ export interface CreateRelationInput {
   id?: string;
   sourceEntityId: string;
   targetEntityId: string;
-  /** Built-in RelationType or workspace-defined relation_defs slug */
-  type: RelationType | string;
+  /** Relation type slug (from workspace relation_defs or system types) */
+  type: string;
   workspaceId: string;
   userId: string;
   metadata?: Record<string, unknown>;
@@ -41,7 +41,7 @@ export class RelationRepository extends BaseRepository<
    */
   async create(data: CreateRelationInput, userId: string): Promise<Relation> {
     // Type validation is handled by the caller (router validates against
-    // both built-in RelationTypeSchema and workspace-defined relation_defs)
+    // workspace relation_defs and system types)
 
     const [relation] = await this.db
       .insert(relations)
