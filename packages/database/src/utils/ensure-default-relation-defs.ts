@@ -3,7 +3,7 @@
  *
  * Seeds the 12 domain-level relation types into a workspace's relation_defs table.
  * Called during workspace-init (same pattern as ensureDefaultViews, ensureDefaultCommands).
- * Uses upsert so it's safe to call multiple times.
+ * Checks existing defs first to avoid unnecessary upserts and report accurate counts.
  */
 
 import { getDb } from "../client-pg.js";
@@ -25,8 +25,23 @@ export async function ensureDefaultRelationDefs(
     const dbConn = await getDb();
     const relDefRepo = new RelationDefRepository(dbConn);
 
-    let created = 0;
-    for (const def of DEFAULT_RELATION_DEFS) {
+    // Check which defs already exist
+    const existing = await relDefRepo.list(workspaceId);
+    const existingSlugs = new Set(existing.map((d) => d.slug));
+
+    const missing = DEFAULT_RELATION_DEFS.filter(
+      (def) => !existingSlugs.has(def.slug)
+    );
+
+    if (missing.length === 0) {
+      return {
+        status: "skipped",
+        message: `All ${DEFAULT_RELATION_DEFS.length} default relation definitions already exist`,
+        defsCreated: 0,
+      };
+    }
+
+    for (const def of missing) {
       await relDefRepo.create({
         slug: def.slug,
         displayName: def.displayName,
@@ -36,13 +51,12 @@ export async function ensureDefaultRelationDefs(
         uiHints: def.uiHints,
         isDirectional: def.isDirectional,
       });
-      created++;
     }
 
     return {
       status: "created",
-      message: `Seeded ${created} default relation definitions`,
-      defsCreated: created,
+      message: `Seeded ${missing.length} default relation definitions (${existingSlugs.size} already existed)`,
+      defsCreated: missing.length,
     };
   } catch (error) {
     return {

@@ -83,6 +83,21 @@ export class RelationDefRepository {
   }
 
   /**
+   * Get a relation definition by ID (within a workspace)
+   */
+  async getById(
+    id: string,
+    workspaceId: string
+  ): Promise<RelationDef | undefined> {
+    return this.db.query.relationDefs.findFirst({
+      where: and(
+        eq(relationDefs.id, id),
+        eq(relationDefs.workspaceId, workspaceId)
+      ),
+    });
+  }
+
+  /**
    * Delete a relation definition
    */
   async delete(id: string): Promise<void> {
