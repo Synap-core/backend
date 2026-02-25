@@ -15,6 +15,7 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import { auditLog } from "../utils/audit-log.js";
 
 const logger = createLogger({ module: "profile-relations-router" });
 
@@ -66,11 +67,11 @@ export const profileRelationsRouter = router({
       }
 
       // Verify relation definition exists in this workspace
-      const allDefs = await relDefRepo.list(ctx.workspaceId);
-      const defExists = allDefs.some(
-        (d: { id: string }) => d.id === input.relationDefId
+      const relDef = await relDefRepo.getById(
+        input.relationDefId,
+        ctx.workspaceId
       );
-      if (!defExists) {
+      if (!relDef) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Relation definition not found: ${input.relationDefId}`,
@@ -83,6 +84,20 @@ export const profileRelationsRouter = router({
         relationDefId: input.relationDefId,
         displayOrder: input.displayOrder,
         metadata: input.metadata,
+      });
+
+      auditLog({
+        subjectType: "profile_relation",
+        action: "create",
+        phase: "completed",
+        subjectId: `${input.sourceProfileId}:${input.targetProfileId}:${input.relationDefId}`,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: {
+          sourceProfileId: input.sourceProfileId,
+          targetProfileId: input.targetProfileId,
+          relationDefId: input.relationDefId,
+        },
       });
 
       logger.info(
@@ -124,6 +139,20 @@ export const profileRelationsRouter = router({
         input.targetProfileId,
         input.relationDefId
       );
+
+      auditLog({
+        subjectType: "profile_relation",
+        action: "delete",
+        phase: "completed",
+        subjectId: `${input.sourceProfileId}:${input.targetProfileId}:${input.relationDefId}`,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: {
+          sourceProfileId: input.sourceProfileId,
+          targetProfileId: input.targetProfileId,
+          relationDefId: input.relationDefId,
+        },
+      });
 
       logger.info(
         {

@@ -9,6 +9,7 @@ import { router, workspaceProcedure } from "../trpc.js";
 import { getDb, RelationDefRepository } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import { auditLog } from "../utils/audit-log.js";
 
 const logger = createLogger({ module: "relation-defs-router" });
 
@@ -54,6 +55,16 @@ export const relationDefsRouter = router({
         isDirectional: input.isDirectional,
       });
 
+      auditLog({
+        subjectType: "relation_def",
+        action: "create",
+        phase: "completed",
+        subjectId: def.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { slug: def.slug, displayName: def.displayName },
+      });
+
       logger.info(
         { id: def.id, slug: def.slug, userId: ctx.userId },
         "Relation definition created"
@@ -79,6 +90,16 @@ export const relationDefsRouter = router({
       const db = await getDb();
       const repo = new RelationDefRepository(db);
       await repo.delete(input.id);
+
+      auditLog({
+        subjectType: "relation_def",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { id: input.id },
+      });
 
       logger.info(
         { id: input.id, userId: ctx.userId },
