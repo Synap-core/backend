@@ -1,8 +1,9 @@
 /**
  * Intelligence Router
  *
- * Commands (Raycast-style), runs (audit), and effective service (manifest).
- * runCommand creates a thread + run, then delegates to chat.sendMessage for streaming.
+ * Commands (Raycast-style), runs (audit), effective service (manifest),
+ * and proxy procedures for intelligence service management APIs
+ * (agents, tools, memory, skills, executions, proposals).
  */
 
 import { z } from "zod";
@@ -28,6 +29,71 @@ import {
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { infiniteChatRouter } from "./infinite-chat.js";
+
+// ── Intelligence Service Proxy Helpers ─────────────────────────────────────
+
+/** Fetch from the intelligence service Hub API (e.g. /api/hub/memory) */
+async function hubProxyFetch(
+  endpoint: string,
+  serviceUrl: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const url = `${serviceUrl}/api/hub${endpoint}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+      ...(options.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Intelligence service error (${res.status}): ${text}`,
+    });
+  }
+  return res;
+}
+
+/** Fetch from the intelligence service management API (e.g. /api/executions) */
+async function apiProxyFetch(
+  endpoint: string,
+  serviceUrl: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const url = `${serviceUrl}/api${endpoint}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+      ...(options.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Intelligence service error (${res.status}): ${text}`,
+    });
+  }
+  return res;
+}
+
+/** Resolve the intelligence service endpoint URL for the current workspace */
+async function getServiceEndpoint(
+  userId: string,
+  workspaceId: string
+): Promise<string> {
+  const resolved = await resolveIntelligenceService({
+    userId,
+    workspaceId,
+    capability: "chat",
+  });
+  return resolved.endpoint;
+}
 
 /** Default (proprietary) Synap Intelligence service manifest — used when no custom service is configured. */
 const DEFAULT_SERVICE_MANIFEST = {
@@ -412,5 +478,297 @@ export const intelligenceRouter = router({
         endpoint: resolved.endpoint,
         manifest,
       };
+    }),
+
+  // ── Agent Management Proxy ───────────────────────────────────────────────
+
+  /** List all agent definitions from intelligence service */
+  agentDefinitions: workspaceProcedure
+    .input(z.object({}))
+    .query(async ({ ctx }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch("/agent-definitions", endpoint);
+      const data = (await res.json()) as { agents: unknown[] };
+      return { agents: data.agents };
+    }),
+
+  /** List all tool definitions from intelligence service */
+  toolDefinitions: workspaceProcedure
+    .input(z.object({}))
+    .query(async ({ ctx }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch("/tool-definitions", endpoint);
+      const data = (await res.json()) as { tools: unknown[] };
+      return { tools: data.tools };
+    }),
+
+  /** Get user's agent config for a specific agent type */
+  agentConfig: workspaceProcedure
+    .input(z.object({ agentType: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch(
+        `/agent-configs/${encodeURIComponent(userId)}/${encodeURIComponent(input.agentType)}`,
+        endpoint
+      );
+      const data = (await res.json()) as { config: unknown };
+      return { config: data.config };
+    }),
+
+  /** Save user's agent config (prompt append, tool overrides, etc.) */
+  saveAgentConfig: workspaceProcedure
+    .input(
+      z.object({
+        agentType: z.string(),
+        promptAppend: z.string().nullable().optional(),
+        extraToolIds: z.array(z.string()).optional(),
+        disabledToolIds: z.array(z.string()).optional(),
+        maxStepsOverride: z.number().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { agentType, ...config } = input;
+      const res = await apiProxyFetch(
+        `/agent-configs/${encodeURIComponent(userId)}/${encodeURIComponent(agentType)}`,
+        endpoint,
+        { method: "PUT", body: JSON.stringify(config) }
+      );
+      const data = (await res.json()) as { config: unknown };
+      return { config: data.config };
+    }),
+
+  /** Delete user's agent config (reset to defaults) */
+  deleteAgentConfig: workspaceProcedure
+    .input(z.object({ agentType: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      await apiProxyFetch(
+        `/agent-configs/${encodeURIComponent(userId)}/${encodeURIComponent(input.agentType)}`,
+        endpoint,
+        { method: "DELETE" }
+      );
+      return { success: true };
+    }),
+
+  // ── Memory Proxy ─────────────────────────────────────────────────────────
+
+  /** List memory facts for current user */
+  memoryFacts: workspaceProcedure
+    .input(z.object({ limit: z.number().min(1).max(200).default(100) }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const params = new URLSearchParams({
+        userId,
+        limit: String(input.limit),
+      });
+      const res = await hubProxyFetch(`/memory?${params}`, endpoint);
+      const facts = await res.json();
+      return { facts: Array.isArray(facts) ? facts : [] };
+    }),
+
+  /** Semantic search memory facts */
+  searchMemory: workspaceProcedure
+    .input(
+      z.object({ query: z.string().min(1), limit: z.number().default(20) })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await hubProxyFetch("/memory/search", endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          userId,
+          query: input.query,
+          limit: input.limit,
+        }),
+      });
+      const facts = await res.json();
+      return { facts: Array.isArray(facts) ? facts : [] };
+    }),
+
+  /** Create a memory fact */
+  createMemoryFact: workspaceProcedure
+    .input(
+      z.object({
+        fact: z.string().min(1),
+        confidence: z.number().min(0).max(1).default(0.9),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await hubProxyFetch("/memory", endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          userId,
+          fact: input.fact,
+          confidence: input.confidence,
+        }),
+      });
+      const fact = await res.json();
+      return { fact };
+    }),
+
+  /** Delete a memory fact */
+  deleteMemoryFact: workspaceProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      await hubProxyFetch(`/memory/${encodeURIComponent(input.id)}`, endpoint, {
+        method: "DELETE",
+      });
+      return { success: true };
+    }),
+
+  // ── Skills Proxy ─────────────────────────────────────────────────────────
+
+  /** List user skills */
+  skills: workspaceProcedure.input(z.object({})).query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+    const res = await hubProxyFetch(
+      `/skills/getSkills?userId=${encodeURIComponent(userId)}`,
+      endpoint
+    );
+    const skills = await res.json();
+    return { skills: Array.isArray(skills) ? skills : [] };
+  }),
+
+  /** Create a user skill (Claude-generated code) */
+  createSkill: workspaceProcedure
+    .input(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().min(1),
+        parameters: z.record(z.string(), z.string()).optional(),
+        category: z.enum(["context", "action"]).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await hubProxyFetch("/skills/createSkill", endpoint, {
+        method: "POST",
+        body: JSON.stringify({ ...input, userId }),
+      });
+      const skill = await res.json();
+      return { skill };
+    }),
+
+  // ── Executions Proxy ─────────────────────────────────────────────────────
+
+  /** Get execution stats (24h summary) */
+  executionStats: workspaceProcedure
+    .input(z.object({ since: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const params = input.since
+        ? `?since=${encodeURIComponent(input.since)}`
+        : "";
+      const res = await apiProxyFetch(`/executions/stats${params}`, endpoint);
+      const data = (await res.json()) as { stats: unknown };
+      return { stats: data.stats };
+    }),
+
+  /** List executions with filters */
+  executions: workspaceProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(100).default(20),
+        offset: z.number().default(0),
+        agentType: z.string().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const params = new URLSearchParams({
+        limit: String(input.limit),
+        offset: String(input.offset),
+        userId,
+      });
+      if (input.agentType) params.set("agentType", input.agentType);
+      const res = await apiProxyFetch(`/executions?${params}`, endpoint);
+      const data = (await res.json()) as { executions: unknown[] };
+      return { executions: data.executions };
+    }),
+
+  /** Get execution detail with tool logs */
+  executionDetail: workspaceProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch(
+        `/executions/${encodeURIComponent(input.id)}`,
+        endpoint
+      );
+      const data = (await res.json()) as {
+        execution: unknown;
+        toolLogs: unknown[];
+      };
+      return data;
+    }),
+
+  // ── Proposals Proxy ──────────────────────────────────────────────────────
+
+  /** List proposals with optional status filter */
+  proposals: workspaceProcedure
+    .input(
+      z.object({
+        status: z.enum(["pending", "approved", "denied"]).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const params = new URLSearchParams({ userId });
+      if (input.status) params.set("status", input.status);
+      const res = await hubProxyFetch(`/proposals?${params}`, endpoint);
+      const proposals = await res.json();
+      return { proposals: Array.isArray(proposals) ? proposals : [] };
+    }),
+
+  /** Approve a proposal */
+  approveProposal: workspaceProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      await hubProxyFetch(
+        `/proposals/${encodeURIComponent(input.id)}`,
+        endpoint,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "approved", userId }),
+        }
+      );
+      return { success: true };
+    }),
+
+  /** Deny a proposal */
+  denyProposal: workspaceProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      await hubProxyFetch(
+        `/proposals/${encodeURIComponent(input.id)}`,
+        endpoint,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ status: "denied", userId }),
+        }
+      );
+      return { success: true };
     }),
 });
