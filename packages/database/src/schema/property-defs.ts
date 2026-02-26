@@ -24,6 +24,23 @@ export enum PropertyValueType {
   NUMBER = "number",
   BOOLEAN = "boolean",
   DATE = "date",
+  /**
+   * A UUID reference to another entity in the same workspace.
+   *
+   * This is a STRUCTURAL LINK — part of the profile schema, not the graph.
+   * When a property has this type, the value stored is the UUID of another entity.
+   * It represents a modelled, schema-defined relationship (e.g. "this task's project",
+   * "this deal's primary contact").
+   *
+   * These differ from semantic graph relations (`relations` table):
+   * - Structural links (entity_id props) are schema-defined, form-based, one-directional
+   * - Semantic relations are schema-free, emergent, bi-directional
+   *
+   * Use `entity_property_index.value_entity_id` for fast reverse-lookup:
+   * "find all entities whose [property] points to entity X"
+   *
+   * @see /docs/docs/concepts/entity-connections.md — architecture decision doc
+   */
   ENTITY_ID = "entity_id",
   ARRAY = "array",
   OBJECT = "object",

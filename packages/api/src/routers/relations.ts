@@ -1,15 +1,36 @@
 /**
- * Relations Router - Relationship Querying
+ * Relations Router — Semantic Graph Relations
  *
- * Synchronous CRUD operations for entity relationships.
- * Direct DB operations with inline permission checks.
+ * Manages TYPED GRAPH EDGES between entities (the `relations` table).
+ * These are SEMANTIC / EMERGENT relationships — not predefined by profile schemas.
  *
- * This router provides:
- * - get() - Get relations for an entity
- * - getRelated() - Get related entities
- * - getStats() - Get relation statistics
- * - create() - Create a new relation
- * - delete() - Delete a relation
+ * ── Two connection systems in Synap ──────────────────────────────────────────
+ *
+ * 1. STRUCTURAL LINKS (entity_id properties)
+ *    - Defined in profile schemas as properties with `valueType: "entity_id"`
+ *    - Part of the entity's core data model (e.g. Task.assignee, Deal.contact)
+ *    - Schema-first, form-based, one-directional
+ *    - How templates wire things together
+ *
+ * 2. SEMANTIC RELATIONS (this router — `relations` table)
+ *    - Created on the fly: by users, AI, or automations
+ *    - Not tied to any profile schema
+ *    - Bi-directional, traversable, support metadata
+ *    - Power the knowledge graph view
+ *    - Types come from `relation_defs` (workspace-scoped, DB-driven)
+ *
+ * Use `getConnections()` to fetch BOTH systems unified in one response.
+ *
+ * @see /docs/docs/concepts/entity-connections.md — full architecture guide
+ *
+ * Procedures:
+ * - listTypes()       - All relation types available in this workspace
+ * - get()             - Semantic relations for an entity
+ * - getRelated()      - Resolved entity objects that are related
+ * - getStats()        - Relation count statistics
+ * - getConnections()  - UNIFIED: graph + property links + thread references
+ * - create()          - Create a new semantic relation
+ * - delete()          - Delete a semantic relation
  */
 
 import { z } from "zod";
@@ -27,7 +48,13 @@ import {
   SYSTEM_RELATION_TYPES,
   sql,
 } from "@synap/database";
-import { relations, entities } from "@synap/database/schema";
+import {
+  relations,
+  entities,
+  entityPropertyIndex,
+  propertyDefs,
+  threadEntities,
+} from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -346,6 +373,176 @@ export const relationsRouter = router({
       return {
         id: relation.id,
         status: "created" as const,
+      };
+    }),
+
+  /**
+   * Get all connections for an entity — unified across three sources:
+   *
+   * 1. **Semantic graph relations** (`relations` table) — typed graph edges
+   *    created manually, by AI, or via the whiteboard.
+   *
+   * 2. **Structural property links** (`entity_property_index`) — entities whose
+   *    `entity_id` properties point to this entity. These come from the profile
+   *    schema and represent structural "belongs to / assigned to" style links.
+   *
+   * 3. **Thread connections** (`thread_entities`) — AI chat threads that
+   *    created, updated, or referenced this entity.
+   *
+   * Use this endpoint to build a unified "Connections" panel on an entity card
+   * or to traverse the full knowledge graph around any entity.
+   */
+  getConnections: protectedProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        /** Maximum items per source (default 50) */
+        limit: z.number().min(1).max(200).default(50),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const [graphRelations, propertyLinks, threadLinks] = await Promise.all([
+        // ── 1. Semantic graph relations ─────────────────────────────────────
+        db.query.relations.findMany({
+          where: and(
+            eq(relations.userId, ctx.userId),
+            or(
+              eq(relations.sourceEntityId, input.entityId),
+              eq(relations.targetEntityId, input.entityId)
+            )
+          ),
+          orderBy: [desc(relations.createdAt)],
+          limit: input.limit,
+        }),
+
+        // ── 2. Structural property links (reverse lookup via index) ──────────
+        // Find all entities whose entity_id properties point TO this entity.
+        // Uses the entity_property_index.value_entity_id column (indexed).
+        db
+          .select({
+            sourceEntityId: entityPropertyIndex.entityId,
+            propertyDefId: entityPropertyIndex.propertyDefId,
+            propertySlug: propertyDefs.slug,
+            propertyUiHints: propertyDefs.uiHints,
+          })
+          .from(entityPropertyIndex)
+          .innerJoin(
+            propertyDefs,
+            eq(entityPropertyIndex.propertyDefId, propertyDefs.id)
+          )
+          .where(eq(entityPropertyIndex.valueEntityId, input.entityId))
+          .limit(input.limit),
+
+        // ── 3. Thread connections ────────────────────────────────────────────
+        db.query.threadEntities.findMany({
+          where: and(
+            eq(threadEntities.entityId, input.entityId),
+            eq(threadEntities.userId, ctx.userId)
+          ),
+          orderBy: (te, { desc }) => [desc(te.createdAt)],
+          limit: input.limit,
+        }),
+      ]);
+
+      // Collect all entity IDs we need to resolve
+      const entityIdsToFetch = new Set<string>();
+
+      for (const rel of graphRelations) {
+        const otherId =
+          rel.sourceEntityId === input.entityId
+            ? rel.targetEntityId
+            : rel.sourceEntityId;
+        entityIdsToFetch.add(otherId);
+      }
+      for (const link of propertyLinks) {
+        entityIdsToFetch.add(link.sourceEntityId);
+      }
+
+      // Fetch all referenced entities in one query
+      const entityMap = new Map<string, typeof entities.$inferSelect>();
+      if (entityIdsToFetch.size > 0) {
+        const fetched = await db.query.entities.findMany({
+          where: and(
+            eq(entities.userId, ctx.userId),
+            or(...[...entityIdsToFetch].map((id) => eq(entities.id, id)))
+          ),
+        });
+        for (const e of fetched) {
+          entityMap.set(e.id, e);
+        }
+      }
+
+      // ── Shape the result ──────────────────────────────────────────────────
+
+      type Connection = {
+        entityId: string;
+        entity: typeof entities.$inferSelect | null;
+        label: string;
+        direction: "outgoing" | "incoming" | "structural";
+        source: "graph" | "property" | "thread";
+        relationType?: string;
+        /** Slug of the property that holds the link (e.g. "assignee", "project") */
+        propertySlug?: string;
+        /** Human-readable label of that property */
+        propertyLabel?: string;
+        threadId?: string;
+        threadRelationshipType?: string;
+        createdAt?: Date | null;
+      };
+
+      const connections: Connection[] = [];
+
+      for (const rel of graphRelations) {
+        const isOutgoing = rel.sourceEntityId === input.entityId;
+        const otherId = isOutgoing ? rel.targetEntityId : rel.sourceEntityId;
+        connections.push({
+          entityId: otherId,
+          entity: entityMap.get(otherId) ?? null,
+          label: rel.type,
+          direction: isOutgoing ? "outgoing" : "incoming",
+          source: "graph",
+          relationType: rel.type,
+          createdAt: rel.createdAt,
+        });
+      }
+
+      for (const link of propertyLinks) {
+        const uiHints = (link.propertyUiHints ?? {}) as Record<string, unknown>;
+        const propertyLabel =
+          (uiHints.label as string | undefined) ?? link.propertySlug ?? "link";
+        connections.push({
+          entityId: link.sourceEntityId,
+          entity: entityMap.get(link.sourceEntityId) ?? null,
+          label: propertyLabel,
+          direction: "structural",
+          source: "property",
+          propertySlug: link.propertySlug ?? undefined,
+          propertyLabel,
+          createdAt: null,
+        });
+      }
+
+      for (const te of threadLinks) {
+        connections.push({
+          entityId: te.entityId,
+          entity: null,
+          label: te.relationshipType,
+          direction: "incoming",
+          source: "thread",
+          threadId: te.threadId,
+          threadRelationshipType: te.relationshipType,
+          createdAt: te.createdAt,
+        });
+      }
+
+      return {
+        connections,
+        counts: {
+          total: connections.length,
+          graph: graphRelations.length,
+          structural: propertyLinks.length,
+          threads: threadLinks.length,
+        },
       };
     }),
 
