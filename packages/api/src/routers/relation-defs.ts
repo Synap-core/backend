@@ -74,6 +74,48 @@ export const relationDefsRouter = router({
     }),
 
   /**
+   * Update an existing relation definition
+   */
+  update: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        displayName: z.string().min(1).max(100).optional(),
+        description: z.string().optional(),
+        uiHints: z.record(z.string(), z.unknown()).optional(),
+        isDirectional: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const repo = new RelationDefRepository(db);
+
+      const def = await repo.update(input.id, ctx.workspaceId, {
+        displayName: input.displayName,
+        description: input.description,
+        uiHints: input.uiHints,
+        isDirectional: input.isDirectional,
+      });
+
+      auditLog({
+        subjectType: "relation_def",
+        action: "update",
+        phase: "completed",
+        subjectId: def.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { slug: def.slug, displayName: def.displayName },
+      });
+
+      logger.info(
+        { id: def.id, slug: def.slug, userId: ctx.userId },
+        "Relation definition updated"
+      );
+
+      return { relationDef: def };
+    }),
+
+  /**
    * Delete a relation definition (owner/admin only)
    */
   delete: workspaceProcedure
