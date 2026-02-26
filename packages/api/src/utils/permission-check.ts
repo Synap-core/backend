@@ -37,6 +37,12 @@ export interface PermissionCheckOpts {
   correlationId?: string;
   /** AI reasoning for why this action is proposed */
   reasoning?: string;
+  /** Provenance: which chat thread triggered this proposal */
+  threadId?: string;
+  /** Provenance: which command run generated this proposal */
+  commandRunId?: string;
+  /** Provenance: which specific message triggered this proposal */
+  sourceMessageId?: string;
 }
 
 /**
@@ -65,6 +71,9 @@ export async function checkPermissionOrPropose(
     source,
     data,
     correlationId,
+    threadId,
+    commandRunId,
+    sourceMessageId,
   } = opts;
 
   // 1. Personal resources (no workspace) - implicit ownership
@@ -149,6 +158,9 @@ export async function checkPermissionOrPropose(
               data,
               correlationId,
               reasoning: opts.reasoning,
+              threadId,
+              commandRunId,
+              sourceMessageId,
             });
           }
 
@@ -180,6 +192,9 @@ export async function checkPermissionOrPropose(
           data,
           correlationId,
           reasoning: opts.reasoning,
+          threadId,
+          commandRunId,
+          sourceMessageId,
         });
       }
     }
@@ -204,6 +219,9 @@ async function createProposal(opts: {
   data: Record<string, unknown>;
   correlationId?: string;
   reasoning?: string;
+  threadId?: string;
+  commandRunId?: string;
+  sourceMessageId?: string;
 }): Promise<{ granted: false; proposalId: string }> {
   const {
     userId,
@@ -214,6 +232,9 @@ async function createProposal(opts: {
     data,
     correlationId,
     reasoning,
+    threadId,
+    commandRunId,
+    sourceMessageId,
   } = opts;
 
   const targetId = (data.documentId ||
@@ -246,6 +267,10 @@ async function createProposal(opts: {
       proposalType: action,
       data: proposalData,
       status: ProposalStatus.PENDING,
+      createdBy: userId,
+      ...(threadId ? { threadId } : {}),
+      ...(commandRunId ? { commandRunId } : {}),
+      ...(sourceMessageId ? { sourceMessageId } : {}),
     })
     .returning();
 

@@ -41,6 +41,8 @@ export const proposalsRouter = router({
           .enum(["document", "entity", "whiteboard", "view", "profile"])
           .optional(),
         targetId: z.string().optional(),
+        /** Filter to proposals originating from a specific chat thread */
+        threadId: z.string().uuid().optional(),
         status: z
           .enum(["pending", "validated", "rejected", "all"])
           .default("pending"),
@@ -61,6 +63,10 @@ export const proposalsRouter = router({
 
       if (input.targetId) {
         conditions.push(eq(proposals.targetId, input.targetId));
+      }
+
+      if (input.threadId) {
+        conditions.push(eq(proposals.threadId, input.threadId));
       }
 
       if (input.status !== "all") {

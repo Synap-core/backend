@@ -7,6 +7,9 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import { chatThreads } from "./chat-threads.js";
+import { commandRuns } from "./command-runs.js";
+import { conversationMessages } from "./conversation-messages.js";
 
 /**
  * Proposal Status
@@ -50,6 +53,21 @@ export const proposals = pgTable(
       .notNull()
       .default(ProposalStatus.PENDING),
 
+    // Provenance: which conversation / message / run generated this proposal?
+    // All nullable — existing proposals have no provenance.
+    // ON DELETE SET NULL: losing the thread/run doesn't destroy the proposal record.
+    createdBy: text("created_by"), // userId or agentUserId that authored this proposal
+    threadId: uuid("thread_id").references(() => chatThreads.id, {
+      onDelete: "set null",
+    }),
+    commandRunId: uuid("command_run_id").references(() => commandRuns.id, {
+      onDelete: "set null",
+    }),
+    sourceMessageId: uuid("source_message_id").references(
+      () => conversationMessages.id,
+      { onDelete: "set null" }
+    ),
+
     // Review Metadata
     reviewedBy: text("reviewed_by"),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
@@ -75,6 +93,22 @@ export const proposals = pgTable(
     targetIdx: index("idx_proposals_target").on(
       table.targetType,
       table.targetId
+    ),
+
+    // Provenance indexes (partial — only where value exists)
+    threadIdIdx: index("idx_proposals_thread_id").on(table.threadId),
+    commandRunIdIdx: index("idx_proposals_command_run_id").on(
+      table.commandRunId
+    ),
+    sourceMessageIdIdx: index("idx_proposals_source_message_id").on(
+      table.sourceMessageId
+    ),
+    createdByIdx: index("idx_proposals_created_by").on(table.createdBy),
+
+    // Composite: pending proposals for a thread (used by getWorkspaceBranchTree)
+    threadStatusIdx: index("idx_proposals_thread_status").on(
+      table.threadId,
+      table.status
     ),
   })
 );

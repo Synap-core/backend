@@ -599,6 +599,8 @@ export const infiniteChatRouter = router({
                     threadId,
                   },
                   status: ProposalStatus.PENDING,
+                  createdBy: ctx.userId,
+                  threadId: threadId ?? undefined,
                 })
                 .returning();
 
@@ -630,6 +632,8 @@ export const infiniteChatRouter = router({
                     data: action.args,
                   },
                   status: ProposalStatus.PENDING,
+                  createdBy: ctx.userId,
+                  threadId: threadId ?? undefined,
                 })
                 .returning();
 
@@ -946,20 +950,29 @@ export const infiniteChatRouter = router({
           (messageCountMap[row.threadId] || 0) + 1;
       }
 
-      // Count all pending proposals for the workspace.
-      // Note: proposals are not directly linked to threads via a FK (no threadId column).
-      // Per-thread breakdown requires a future schema migration to add proposals.threadId.
+      // Count pending proposals per thread using the threadId FK (migration 0037).
       const pendingProposalRows = await db
-        .select({ count: drizzleSql<number>`count(*)::int` })
+        .select({
+          threadId: proposals.threadId,
+          count: drizzleSql<number>`count(*)::int`,
+        })
         .from(proposals)
         .where(
           and(
             eq(proposals.workspaceId, input.workspaceId),
-            eq(proposals.status, ProposalStatus.PENDING)
+            eq(proposals.status, ProposalStatus.PENDING),
+            inArray(proposals.threadId, threadIds)
           )
-        );
+        )
+        .groupBy(proposals.threadId);
       const proposalCounts: Record<string, number> = {};
-      const pendingProposalsTotal = pendingProposalRows[0]?.count ?? 0;
+      let pendingProposalsTotal = 0;
+      for (const row of pendingProposalRows) {
+        if (row.threadId) {
+          proposalCounts[row.threadId] = row.count;
+          pendingProposalsTotal += row.count;
+        }
+      }
 
       // Build thread map for O(1) child lookup
       const threadMap = new Map(allThreads.map((t) => [t.id, t]));
