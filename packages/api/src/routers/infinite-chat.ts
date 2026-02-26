@@ -11,7 +11,16 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, desc, and, or, lt, inArray } from "@synap/database";
+import {
+  db,
+  eq,
+  desc,
+  and,
+  or,
+  lt,
+  inArray,
+  drizzleSql,
+} from "@synap/database";
 import {
   chatThreads,
   conversationMessages,
@@ -36,6 +45,18 @@ import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import type { AIStep, HubResponse, ProposedAction } from "@synap-core/types";
 import type { ChatThread } from "@synap/database/schema";
+
+/**
+ * Node shape for the workspace branch tree response.
+ * Defined at module scope so tsc can include it in declaration output.
+ */
+export type BranchNodeResult = {
+  thread: ChatThread;
+  children: BranchNodeResult[];
+  messageCount: number;
+  lastActivity: Date;
+  depth: number;
+};
 
 /**
  * Infinite Chat Router (Week 2 implementation)
@@ -878,6 +899,102 @@ export const infiniteChatRouter = router({
       });
 
       return { branches };
+    }),
+
+  /**
+   * Get all branch trees for a workspace — returns all root threads with their
+   * children recursively, plus pending proposal counts per thread.
+   * Used by the Intelligence Hub workspace graph overview.
+   */
+  getWorkspaceBranchTree: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const allThreads = await db.query.chatThreads.findMany({
+        where: and(
+          eq(chatThreads.userId, ctx.userId),
+          eq(chatThreads.workspaceId, input.workspaceId)
+        ),
+        orderBy: [desc(chatThreads.updatedAt)],
+      });
+
+      if (allThreads.length === 0) {
+        return {
+          roots: [],
+          stats: {
+            totalThreads: 0,
+            activeThreads: 0,
+            pendingProposalsTotal: 0,
+          },
+          proposalCounts: {},
+        };
+      }
+
+      const threadIds = allThreads.map((t) => t.id);
+
+      // Count messages per thread
+      const messageCounts = await db
+        .select({ threadId: conversationMessages.threadId })
+        .from(conversationMessages)
+        .where(inArray(conversationMessages.threadId, threadIds));
+      const messageCountMap: Record<string, number> = {};
+      for (const row of messageCounts) {
+        messageCountMap[row.threadId] =
+          (messageCountMap[row.threadId] || 0) + 1;
+      }
+
+      // Count all pending proposals for the workspace.
+      // Note: proposals are not directly linked to threads via a FK (no threadId column).
+      // Per-thread breakdown requires a future schema migration to add proposals.threadId.
+      const pendingProposalRows = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(proposals)
+        .where(
+          and(
+            eq(proposals.workspaceId, input.workspaceId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        );
+      const proposalCounts: Record<string, number> = {};
+      const pendingProposalsTotal = pendingProposalRows[0]?.count ?? 0;
+
+      // Build thread map for O(1) child lookup
+      const threadMap = new Map(allThreads.map((t) => [t.id, t]));
+
+      function buildNode(thread: ChatThread, depth: number): BranchNodeResult {
+        const children = allThreads
+          .filter((t) => t.parentThreadId === thread.id)
+          .map((child) => buildNode(child, depth + 1));
+        return {
+          thread,
+          children,
+          messageCount: messageCountMap[thread.id] || 0,
+          lastActivity: thread.updatedAt,
+          depth,
+        };
+      }
+
+      // Root = no parentThreadId, or parent belongs to a different workspace
+      const roots = allThreads
+        .filter((t) => !t.parentThreadId || !threadMap.has(t.parentThreadId))
+        .map((t) => buildNode(t, 0));
+
+      const activeThreads = allThreads.filter(
+        (t) => t.status === "active"
+      ).length;
+
+      return {
+        roots,
+        stats: {
+          totalThreads: allThreads.length,
+          activeThreads,
+          pendingProposalsTotal,
+        },
+        proposalCounts,
+      };
     }),
 
   /**
