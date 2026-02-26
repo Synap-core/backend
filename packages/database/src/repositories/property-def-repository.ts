@@ -4,7 +4,7 @@
  * Handles CRUD operations for property definitions.
  */
 
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import {
   propertyDefs,
   type PropertyDef,
@@ -18,6 +18,8 @@ export interface CreatePropertyDefInput {
   valueType: PropertyValueType;
   constraints?: Record<string, unknown>;
   uiHints?: Record<string, unknown>;
+  /** When set, scopes this def to a specific profile (allows reusing slug names across profiles). */
+  profileId?: string;
 }
 
 export class PropertyDefRepository {
@@ -36,6 +38,7 @@ export class PropertyDefRepository {
         valueType: input.valueType,
         constraints: input.constraints || {},
         uiHints: input.uiHints || {},
+        profileId: input.profileId ?? null,
       } as NewPropertyDef)
       .returning();
 
@@ -43,14 +46,28 @@ export class PropertyDefRepository {
   }
 
   /**
-   * Get property definition by slug
+   * Get property definition by slug.
+   * When profileId is provided, looks up a profile-scoped def first.
+   * Falls back to a global def (profileId IS NULL) if no scoped def exists.
    */
-  async getBySlug(slug: string): Promise<PropertyDef | null> {
-    const result = await this.db.query.propertyDefs.findFirst({
-      where: eq(propertyDefs.slug, slug),
+  async getBySlug(
+    slug: string,
+    profileId?: string
+  ): Promise<PropertyDef | null> {
+    if (profileId) {
+      const scoped = await this.db.query.propertyDefs.findFirst({
+        where: and(
+          eq(propertyDefs.slug, slug),
+          eq(propertyDefs.profileId, profileId)
+        ),
+      });
+      if (scoped) return scoped;
+    }
+    // Fall back to global def
+    const global = await this.db.query.propertyDefs.findFirst({
+      where: and(eq(propertyDefs.slug, slug), isNull(propertyDefs.profileId)),
     });
-
-    return result || null;
+    return global || null;
   }
 
   /**

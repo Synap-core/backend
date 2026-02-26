@@ -68,7 +68,11 @@ export const propertyDefsRouter = router({
     }),
 
   /**
-   * Create a new property definition
+   * Create a new property definition.
+   *
+   * When profileId is provided the def is profile-scoped — allowing each profile
+   * to define its own `status`, `type`, `owner`, etc. without slug collisions.
+   * When omitted the def is global (legacy behaviour).
    */
   create: protectedProcedure
     .input(
@@ -81,19 +85,26 @@ export const propertyDefsRouter = router({
         valueType: PropertyValueTypeSchema,
         constraints: z.record(z.string(), z.unknown()).optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /** Profile UUID — scopes this def to a single profile. */
+        profileId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const propertyDefRepo = new PropertyDefRepository(db);
 
-      // Return existing on slug conflict — property defs are global and reusable
-      // across workspaces, so a template reusing "status" or "due-date" should
-      // just get the existing def back.
-      const existing = await propertyDefRepo.getBySlug(input.slug);
+      // Return existing on slug conflict (scoped to the same profile, or globally).
+      const existing = await propertyDefRepo.getBySlug(
+        input.slug,
+        input.profileId
+      );
       if (existing) {
         logger.info(
-          { slug: input.slug, existingId: existing.id },
+          {
+            slug: input.slug,
+            existingId: existing.id,
+            profileId: input.profileId,
+          },
           "Property def slug exists, returning existing"
         );
         return { propertyDef: existing, existing: true };
@@ -104,6 +115,7 @@ export const propertyDefsRouter = router({
         valueType: input.valueType as PropertyValueType,
         constraints: input.constraints,
         uiHints: input.uiHints,
+        profileId: input.profileId,
       });
 
       logger.info(

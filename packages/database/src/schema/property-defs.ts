@@ -12,8 +12,8 @@ import {
   jsonb,
   timestamp,
   index,
-  unique,
 } from "drizzle-orm/pg-core";
+import { profiles } from "./profiles.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
@@ -56,6 +56,12 @@ export const propertyDefs = pgTable(
     // Property identity (unique slug)
     slug: text("slug").notNull(),
 
+    // Profile scope — null means global/system def; non-null means profile-scoped def.
+    // Unique constraint: (slug, profile_id) per profile, (slug) for global defs.
+    profileId: uuid("profile_id").references(() => profiles.id, {
+      onDelete: "cascade",
+    }),
+
     // Value type
     valueType: text("value_type", {
       enum: [
@@ -94,8 +100,10 @@ export const propertyDefs = pgTable(
       .notNull(),
   },
   (table) => ({
-    slugUnique: unique("property_defs_slug_unique_idx").on(table.slug),
     valueTypeIdx: index("property_defs_value_type_idx").on(table.valueType),
+    profileIdIdx: index("property_defs_profile_id_idx").on(table.profileId),
+    // Note: unique constraints for (slug, profile_id) and global (slug WHERE profile_id IS NULL)
+    // are managed via partial unique indexes in migration 0039 (not expressible in Drizzle directly).
   })
 );
 
