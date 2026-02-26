@@ -473,10 +473,19 @@ export const intelligenceRouter = router({
             : { name: resolved.serviceId, capabilities: [] };
       }
 
+      const isDefaultService = resolved.serviceId === "default";
+      const intelligenceConfigured =
+        !isDefaultService ||
+        Boolean(
+          process.env.INTELLIGENCE_HUB_API_KEY?.trim() ||
+          process.env.HUB_PROTOCOL_API_KEY?.trim()
+        );
+
       return {
         serviceId: resolved.serviceId,
         endpoint: resolved.endpoint,
         manifest,
+        intelligenceConfigured,
       };
     }),
 
@@ -770,5 +779,43 @@ export const intelligenceRouter = router({
         }
       );
       return { success: true };
+    }),
+
+  // ── AI Channel Proxy ────────────────────────────────────────────────────
+
+  /** Start an AI-to-AI channel conversation */
+  startAIChannel: workspaceProcedure
+    .input(
+      z.object({
+        topic: z.string().min(1).max(500),
+        mode: z
+          .enum(["debate", "collaborate", "critique"])
+          .default("collaborate"),
+        maxTurns: z.number().int().min(1).max(5).default(3),
+        personaA: z
+          .object({
+            name: z.string().default("Perspective A"),
+            agentType: z.string().optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .default({ name: "Perspective A" }),
+        personaB: z
+          .object({
+            name: z.string().default("Perspective B"),
+            agentType: z.string().optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .default({ name: "Perspective B" }),
+        initialMessage: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch("/ai-channel", endpoint, {
+        method: "POST",
+        body: JSON.stringify({ userId, ...input }),
+      });
+      return res.json();
     }),
 });

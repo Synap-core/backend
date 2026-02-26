@@ -196,6 +196,7 @@ export const infiniteChatRouter = router({
         status: ChatThreadStatus.ACTIVE,
         agentId: "orchestrator",
         agentType: ChatThreadAgentType.DEFAULT,
+        metadata: { origin: "comment" },
       });
 
       await db.insert(conversationMessages).values({
@@ -215,6 +216,74 @@ export const infiniteChatRouter = router({
         targetId: input.documentId,
         relationshipType: MessageLinkRelationshipType.COMMENTS,
         position: input.position,
+        userId: ctx.userId,
+        workspaceId,
+      });
+
+      emitChatEvent({
+        event: "thread:created",
+        data: { threadId, userId: ctx.userId },
+        workspaceId,
+        userId: ctx.userId,
+      });
+
+      return { threadId, messageId: userMessageId };
+    }),
+
+  /**
+   * Create an entity comment: new thread with one user message linked to the entity.
+   * No AI response. Used when user sends a message from the entity panel Messages tab
+   * (linked messages are separate from AI chat).
+   */
+  createEntityComment: workspaceProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        content: z.string().min(1),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace context required",
+        });
+      }
+
+      const threadId = randomUUID();
+      const userMessageId = randomUUID();
+      const userMessageHash = createHash("sha256")
+        .update(`${userMessageId}${input.content}`)
+        .digest("hex");
+
+      await db.insert(chatThreads).values({
+        id: threadId,
+        userId: ctx.userId,
+        workspaceId,
+        threadType: ChatThreadType.MAIN,
+        status: ChatThreadStatus.ACTIVE,
+        agentId: "orchestrator",
+        agentType: ChatThreadAgentType.DEFAULT,
+        metadata: { origin: "comment" },
+      });
+
+      await db.insert(conversationMessages).values({
+        id: userMessageId,
+        threadId,
+        role: "user",
+        content: input.content,
+        userId: ctx.userId,
+        previousHash: "",
+        hash: userMessageHash,
+      });
+
+      const linksRepo = new MessageLinksRepository(db);
+      await linksRepo.create({
+        messageId: userMessageId,
+        targetType: MessageLinkTargetType.ENTITY,
+        targetId: input.entityId,
+        relationshipType: MessageLinkRelationshipType.COMMENTS,
         userId: ctx.userId,
         workspaceId,
       });
@@ -766,7 +835,31 @@ export const infiniteChatRouter = router({
         limit: input.limit,
       });
 
-      return { threads };
+      if (threads.length === 0) {
+        return { threads: [] };
+      }
+
+      const threadIds = threads.map((t) => t.id);
+      const rowsWithAssistant = await db
+        .select({ threadId: conversationMessages.threadId })
+        .from(conversationMessages)
+        .where(
+          and(
+            inArray(conversationMessages.threadId, threadIds),
+            eq(conversationMessages.role, "assistant")
+          )
+        );
+      const threadIdsWithAssistant = new Set(
+        rowsWithAssistant.map((r) => r.threadId)
+      );
+
+      const threadsWithFlags = threads.map((t) => ({
+        ...t,
+        hasAssistantMessage: threadIdsWithAssistant.has(t.id),
+        origin: (t.metadata as { origin?: string } | null)?.origin ?? "chat",
+      }));
+
+      return { threads: threadsWithFlags };
     }),
 
   /**
