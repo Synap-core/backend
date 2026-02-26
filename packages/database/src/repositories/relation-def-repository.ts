@@ -98,6 +98,46 @@ export class RelationDefRepository {
   }
 
   /**
+   * Update an existing relation definition by ID
+   */
+  async update(
+    id: string,
+    workspaceId: string,
+    input: Partial<
+      Pick<
+        CreateRelationDefInput,
+        "displayName" | "description" | "uiHints" | "isDirectional"
+      >
+    >
+  ): Promise<RelationDef> {
+    const [updated] = await this.db
+      .update(relationDefs)
+      .set({
+        ...(input.displayName !== undefined && {
+          displayName: input.displayName,
+        }),
+        ...(input.description !== undefined && {
+          description: input.description,
+        }),
+        ...(input.uiHints !== undefined && { uiHints: input.uiHints }),
+        ...(input.isDirectional !== undefined && {
+          isDirectional: input.isDirectional,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(relationDefs.id, id), eq(relationDefs.workspaceId, workspaceId))
+      )
+      .returning();
+
+    if (!updated) {
+      throw new Error(`Relation definition not found: ${id}`);
+    }
+
+    return updated;
+  }
+
+  /**
    * Delete a relation definition
    */
   async delete(id: string): Promise<void> {
