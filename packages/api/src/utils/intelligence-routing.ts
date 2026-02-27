@@ -14,6 +14,7 @@ import {
   intelligenceServices,
 } from "@synap/database/schema";
 import { IntelligenceHubClient } from "../clients/intelligence-hub.js";
+import { resolveServiceKey } from "./service-key-crypto.js";
 
 // Workspace settings interface (mirrors schema definition)
 interface WorkspaceSettings {
@@ -100,13 +101,14 @@ async function getActiveService(serviceId: string) {
 }
 
 /**
- * Create client from service record
+ * Create client from service record, using the service's own API key.
  */
 function createClient(service: any): ResolvedService {
+  const apiKey = resolveServiceKey(service.apiKey as string);
   return {
     serviceId: service.serviceId,
     endpoint: service.webhookUrl,
-    client: new IntelligenceHubClient(service.webhookUrl),
+    client: new IntelligenceHubClient(service.webhookUrl, apiKey),
   };
 }
 

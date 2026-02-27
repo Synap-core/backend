@@ -50,10 +50,12 @@ export interface IntelligenceHubResponse extends HubResponse {
  */
 export class IntelligenceHubClient {
   private baseUrl: string;
+  private apiKey: string;
 
-  constructor(baseUrl?: string) {
+  constructor(baseUrl?: string, apiKey?: string) {
     this.baseUrl =
       baseUrl || process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+    this.apiKey = apiKey || process.env.INTELLIGENCE_HUB_API_KEY || "";
   }
 
   /**
@@ -67,7 +69,7 @@ export class IntelligenceHubClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+          "X-API-Key": this.apiKey,
         },
         body: JSON.stringify({
           query: request.query,
@@ -105,7 +107,7 @@ export class IntelligenceHubClient {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+        "X-API-Key": this.apiKey,
       },
       body: JSON.stringify({ text }),
     });
@@ -132,7 +134,7 @@ export class IntelligenceHubClient {
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
-        "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+        "X-API-Key": this.apiKey,
       },
       body: JSON.stringify({
         query: request.query,

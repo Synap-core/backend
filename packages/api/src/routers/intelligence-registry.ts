@@ -5,9 +5,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, publicProcedure } from "../trpc.js";
-import { db, intelligenceServices, eq, and } from "@synap/database";
+import { router, protectedProcedure, publicProcedure, workspaceProcedure } from "../trpc.js";
+import { db, intelligenceServices, workspaces, eq, and } from "@synap/database";
+import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import { encryptServiceKey } from "../utils/service-key-crypto.js";
 
 const logger = createLogger({ module: "intelligence-registry" });
 
@@ -74,7 +76,7 @@ export const intelligenceRegistryRouter = router({
           description: input.description,
           version: input.version,
           webhookUrl: input.webhookUrl,
-          apiKey: input.apiKey,
+          apiKey: encryptServiceKey(input.apiKey),
           capabilities: input.capabilities,
           pricing: input.pricing || "free",
           status: "active",
@@ -196,6 +198,171 @@ export const intelligenceRegistryRouter = router({
         .where(eq(intelligenceServices.id, input.id));
 
       logger.info({ id: input.id }, "Intelligence service unregistered");
+
+      return { success: true };
+    }),
+
+  /**
+   * Rotate the API key for a registered service
+   *
+   * Separate from update() to make key rotation an explicit, auditable action.
+   */
+  rotateKey: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        newApiKey: z.string().min(1),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const [updated] = await db
+        .update(intelligenceServices)
+        .set({
+          apiKey: encryptServiceKey(input.newApiKey),
+          updatedAt: new Date(),
+        })
+        .where(eq(intelligenceServices.id, input.id))
+        .returning();
+
+      if (!updated) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Service not found" });
+      }
+
+      logger.info(
+        { serviceId: updated.serviceId },
+        "Intelligence service API key rotated"
+      );
+
+      return { success: true, serviceId: updated.serviceId };
+    }),
+
+  /**
+   * Connect a registered intelligence service to a workspace
+   *
+   * Sets workspace.settings.intelligenceServiceId so that requests from this
+   * workspace are routed to the specified service instead of the default.
+   */
+  connectToWorkspace: workspaceProcedure
+    .input(
+      z.object({
+        serviceId: z.string().min(1),
+        capability: z.enum(["chat", "analysis"]).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Verify the service exists and is active
+      const service = await db.query.intelligenceServices.findFirst({
+        where: and(
+          eq(intelligenceServices.serviceId, input.serviceId),
+          eq(intelligenceServices.status, "active"),
+          eq(intelligenceServices.enabled, true)
+        ),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Intelligence service "${input.serviceId}" not found or not active`,
+        });
+      }
+
+      // Load current workspace to merge settings
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+      });
+
+      if (!workspace) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+      }
+
+      const existing = (workspace.settings as Record<string, unknown>) ?? {};
+
+      let updatedSettings: Record<string, unknown>;
+
+      if (input.capability) {
+        // Capability-specific override
+        const overrides =
+          (existing.intelligenceServiceOverrides as Record<string, string> | undefined) ?? {};
+        updatedSettings = {
+          ...existing,
+          intelligenceServiceOverrides: {
+            ...overrides,
+            [input.capability]: input.serviceId,
+          },
+        };
+      } else {
+        // Default service for the workspace
+        updatedSettings = {
+          ...existing,
+          intelligenceServiceId: input.serviceId,
+        };
+      }
+
+      await db
+        .update(workspaces)
+        .set({ settings: updatedSettings, updatedAt: new Date() })
+        .where(eq(workspaces.id, ctx.workspaceId));
+
+      logger.info(
+        {
+          workspaceId: ctx.workspaceId,
+          serviceId: input.serviceId,
+          capability: input.capability ?? "default",
+        },
+        "Intelligence service connected to workspace"
+      );
+
+      return {
+        success: true,
+        workspaceId: ctx.workspaceId,
+        serviceId: input.serviceId,
+        capability: input.capability ?? "default",
+      };
+    }),
+
+  /**
+   * Disconnect the intelligence service from a workspace (revert to env default)
+   */
+  disconnectFromWorkspace: workspaceProcedure
+    .input(
+      z.object({
+        capability: z.enum(["chat", "analysis"]).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+      });
+
+      if (!workspace) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+      }
+
+      const existing = (workspace.settings as Record<string, unknown>) ?? {};
+      let updatedSettings: Record<string, unknown>;
+
+      if (input.capability) {
+        const overrides =
+          (existing.intelligenceServiceOverrides as Record<string, string> | undefined) ?? {};
+        const { [input.capability]: _removed, ...rest } = overrides;
+        updatedSettings = {
+          ...existing,
+          intelligenceServiceOverrides: rest,
+        };
+      } else {
+        const { intelligenceServiceId: _removed, ...rest } = existing;
+        updatedSettings = rest;
+      }
+
+      await db
+        .update(workspaces)
+        .set({ settings: updatedSettings, updatedAt: new Date() })
+        .where(eq(workspaces.id, ctx.workspaceId));
+
+      logger.info(
+        { workspaceId: ctx.workspaceId, capability: input.capability ?? "default" },
+        "Intelligence service disconnected from workspace"
+      );
 
       return { success: true };
     }),
