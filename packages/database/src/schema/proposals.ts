@@ -69,7 +69,8 @@ export const proposals = pgTable(
     }),
 
     // Attribution: which AI agent user created this proposal?
-    agentUserId: uuid("agent_user_id").references(() => users.id, {
+    // text to match users.id (Kratos identity IDs are stored as text, not UUID)
+    agentUserId: text("agent_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
 

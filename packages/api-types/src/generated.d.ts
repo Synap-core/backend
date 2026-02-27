@@ -1736,6 +1736,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				threadId?: string | undefined;
 				workspaceId?: string | undefined;
 				agentType?: "code" | "action" | "meta" | "default" | "prompting" | "knowledge-search" | "writing" | "onboarding" | undefined;
+				agentHandle?: string | undefined;
+				parentChannelId?: string | undefined;
 			};
 			output: {
 				threadId: string;
@@ -3474,6 +3476,39 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		unregister: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		rotateKey: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				newApiKey: string;
+			};
+			output: {
+				success: boolean;
+				serviceId: string;
+			};
+			meta: object;
+		}>;
+		connectToWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+				capability?: "chat" | "analysis" | undefined;
+			};
+			output: {
+				success: boolean;
+				workspaceId: string;
+				serviceId: string;
+				capability: string;
+			};
+			meta: object;
+		}>;
+		disconnectFromWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				capability?: "chat" | "analysis" | undefined;
 			};
 			output: {
 				success: boolean;
