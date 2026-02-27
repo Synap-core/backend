@@ -1,23 +1,31 @@
 /**
  * Hub Protocol - Branches Router
  *
- * Thin wrapper around regular API endpoints.
- * Uses API key authentication but calls regular API internally
- * to ensure all operations go through the same event sourcing infrastructure.
+ * AI governance: both createBranch and mergeBranch are significant workspace
+ * operations that always require a proposal from an AI agent. The user must
+ * approve before any branch is created or merged.
+ *
+ * Flow:
+ *   AI proposes → checkPermissionOrPropose → proposal created (PENDING)
+ *   User approves in inbox → proposals.approve → channelsRouter executes
  */
 
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { infiniteChatRouter } from "../infinite-chat.js";
-import { createHubProtocolCallerContext } from "./utils.js";
+import { TRPCError } from "@trpc/server";
+import { db, eq } from "@synap/database";
+import { channels } from "@synap/database/schema";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
 export const branchesRouter = router({
   /**
-   * Create branch thread
+   * Propose creating a branch thread
    * Requires: hub-protocol.write scope
    *
-   * Calls regular API's createThread endpoint internally
+   * AI governance: always creates a pending proposal.
+   * "channel.create_branch" is not in the default autoApproveFor whitelist.
+   * The user approves in the inbox → branches.approve → channelsRouter.createThread executes.
    */
   createBranch: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -39,16 +47,74 @@ export const branchesRouter = router({
           .optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
         inheritContext: z.boolean().default(true),
+        reasoning: z.string().optional(),
+        // agentUserId: the per-human agent user acting on behalf of userId.
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
-        ctx.scopes || []
-      );
-      const caller = infiniteChatRouter.createCaller(callerContext);
+      // Prefer explicit agentUserId from request; API key owner is a system account.
+      const agentUserId = input.agentUserId ?? ctx.userId!;
 
-      // Call regular API's createThread endpoint with branch parameters
+      // Resolve workspaceId from the parent thread
+      const parentChannel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.parentThreadId),
+        columns: { workspaceId: true },
+      });
+
+      if (!parentChannel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Parent thread not found",
+        });
+      }
+
+      const workspaceId = parentChannel.workspaceId ?? undefined;
+
+      // Governance check — branch creation requires proposal by default
+      const perm = await checkPermissionOrPropose({
+        userId: agentUserId,
+        agentUserId,
+        workspaceId,
+        subjectType: "channel",
+        action: "create_branch",
+        source: "intelligence",
+        reasoning:
+          input.reasoning ??
+          `AI proposes creating branch: ${input.branchPurpose}`,
+        data: {
+          parentThreadId: input.parentThreadId,
+          branchPurpose: input.branchPurpose,
+          agentId: input.agentId,
+          agentType: input.agentType,
+          agentConfig: input.agentConfig,
+          inheritContext: input.inheritContext,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          threadId: null,
+          proposalId: perm.proposalId,
+          message: "Branch creation proposed, awaiting approval",
+        };
+      }
+
+      // Auto-approved (workspace has relaxed governance — unlikely but supported):
+      // execute immediately via channelsRouter
+      const { channelsRouter } = await import("../channels.js");
+      const { createHubProtocolCallerContext } = await import("./utils.js");
+      const callerContext = await createHubProtocolCallerContext(
+        agentUserId,
+        ctx.scopes || [],
+        workspaceId
+      );
+      const caller = channelsRouter.createCaller(callerContext);
       const result = await caller.createThread({
         parentThreadId: input.parentThreadId,
         branchPurpose: input.branchPurpose,
@@ -61,15 +127,18 @@ export const branchesRouter = router({
       return {
         status: result.status,
         threadId: result.threadId,
-        message: result.message || "Branch creation requested",
+        proposalId: null,
+        message: result.message || "Branch created",
       };
     }),
 
   /**
-   * Merge branch thread
+   * Propose merging a branch thread
    * Requires: hub-protocol.write scope
    *
-   * Calls regular API's mergeBranch endpoint internally
+   * AI governance: merging is always proposed — the user must always validate
+   * a branch merge. "channel.merge" is not in the autoApproveFor whitelist
+   * and workspace owners cannot override this (merge is irreversible).
    */
   mergeBranch: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -77,16 +146,68 @@ export const branchesRouter = router({
         userId: z.string(),
         branchId: z.string().uuid(),
         summary: z.string().optional(),
+        reasoning: z.string().optional(),
+        // agentUserId: the per-human agent user acting on behalf of userId.
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
-        ctx.scopes || []
-      );
-      const caller = infiniteChatRouter.createCaller(callerContext);
+      // Prefer explicit agentUserId from request; API key owner is a system account.
+      const agentUserId = input.agentUserId ?? ctx.userId!;
 
-      // Call regular API's mergeBranch endpoint
+      // Resolve workspaceId from the branch channel
+      const branchChannel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.branchId),
+        columns: { workspaceId: true },
+      });
+
+      if (!branchChannel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Branch not found",
+        });
+      }
+
+      const workspaceId = branchChannel.workspaceId ?? undefined;
+
+      // Governance check — merge always requires proposal regardless of whitelist
+      const perm = await checkPermissionOrPropose({
+        userId: agentUserId,
+        agentUserId,
+        workspaceId,
+        subjectType: "channel",
+        action: "merge",
+        source: "intelligence",
+        reasoning:
+          input.reasoning ?? "AI proposes merging branch into parent thread",
+        data: {
+          branchId: input.branchId,
+          summary: input.summary,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Branch merge proposed, awaiting approval",
+        };
+      }
+
+      // Auto-approved path (should not occur in practice — "channel.merge" is
+      // intentionally excluded from any default whitelist, but handled for completeness)
+      const { channelsRouter } = await import("../channels.js");
+      const { createHubProtocolCallerContext } = await import("./utils.js");
+      const callerContext = await createHubProtocolCallerContext(
+        agentUserId,
+        ctx.scopes || [],
+        workspaceId
+      );
+      const caller = channelsRouter.createCaller(callerContext);
       const result = await caller.mergeBranch({
         branchId: input.branchId,
         summary: input.summary,
@@ -94,7 +215,8 @@ export const branchesRouter = router({
 
       return {
         status: result.status,
-        message: result.message || "Branch merge requested",
+        proposalId: null,
+        message: result.message || "Branch merged",
       };
     }),
 });

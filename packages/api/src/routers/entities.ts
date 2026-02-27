@@ -22,7 +22,7 @@ import {
   EventRepository,
   EntityRepository,
   DocumentRepository,
-  sql,
+  drizzleSql,
 } from "@synap/database";
 import { entities, documents } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
@@ -65,7 +65,9 @@ export const entitiesRouter = router({
         /** When true, entity has no workspace — visible everywhere */
         global: z.boolean().optional().default(false),
         /** Source of action for AI governance (e.g. "ai", "intelligence") */
-        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        source: z
+          .enum(["user", "ai", "intelligence", "system", "agent"])
+          .optional(),
         /** AI reasoning for proposals */
         reasoning: z.string().optional(),
         /** Agent user ID when action is performed by an AI agent */
@@ -132,6 +134,7 @@ export const entitiesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
+        sourceMessageId: (ctx as any).sourceMessageId ?? undefined,
         data: {
           id: entityId,
           profileSlug,
@@ -337,6 +340,108 @@ export const entitiesRouter = router({
     }),
 
   /**
+   * List entities across multiple workspaces the user has access to.
+   *
+   * Unlike `list` (which is workspace-scoped via header), this endpoint
+   * accepts an explicit `workspaceIds` array and is callable without an
+   * active workspace header. Useful for cross-workspace dashboards and
+   * global search aggregation.
+   *
+   * Security: `workspaceIds` is silently filtered to workspaces the caller
+   * is actually a member of — unknown or inaccessible IDs are ignored.
+   * Omitting `workspaceIds` returns entities from ALL user's workspaces.
+   */
+  listMulti: protectedProcedure
+    .input(
+      z.object({
+        workspaceIds: z.array(z.string().uuid()).optional(),
+        profileSlug: z.string().optional(),
+        includeGlobal: z.boolean().default(false),
+        limit: z.number().min(1).max(200).default(50),
+      })
+    )
+    .output(
+      z.object({
+        entities: z.array(EntitySchema),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const { validateWorkspaceAccess } =
+        await import("../utils/workspace-membership.js");
+
+      const validatedIds = await validateWorkspaceAccess(
+        ctx.userId,
+        input.workspaceIds
+      );
+
+      const db2 = await getDb();
+      const eventRepo = new EventRepository(db2);
+      const entityRepo = new EntityRepository(db2, eventRepo);
+
+      const results = await entityRepo.listForWorkspaces(
+        validatedIds,
+        ctx.userId,
+        {
+          profileSlug: input.profileSlug,
+          limit: input.limit,
+          includeGlobal: input.includeGlobal,
+        }
+      );
+
+      return { entities: results.map(toApiEntity) };
+    }),
+
+  /**
+   * List all entities in this workspace that have a URL property.
+   * Used by the browser's URL index to know which pages have been saved,
+   * powering the bookmark ⭐ state and duplicate detection.
+   * Returns a slim payload — no full property values, just what the index needs.
+   */
+  listSavedUrls: workspaceProcedure
+    .output(
+      z.array(
+        z.object({
+          id: z.string(),
+          url: z.string(),
+          title: z.string(),
+          profileSlug: z.string(),
+          createdAt: z.string(),
+        })
+      )
+    )
+    .query(async ({ ctx }) => {
+      const rows = await db
+        .select({
+          id: entities.id,
+          title: entities.title,
+          type: entities.type,
+          createdAt: entities.createdAt,
+          url: sql<string>`${entities.properties}->>'url'`,
+        })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.userId, ctx.userId),
+            or(
+              eq(entities.workspaceId, ctx.workspaceId),
+              isNull(entities.workspaceId)
+            ),
+            drizzleSql`${entities.properties}->>'url' IS NOT NULL`,
+            drizzleSql`${entities.properties}->>'url' != ''`
+          )
+        )
+        .orderBy(desc(entities.createdAt));
+
+      return rows.map((r) => ({
+        id: r.id,
+        url: r.url,
+        title: r.title ?? r.url,
+        profileSlug: r.type ?? "bookmark",
+        createdAt: r.createdAt?.toISOString() ?? new Date().toISOString(),
+      }));
+    }),
+
+  /**
    * Search entities (vector + text)
    */
   search: workspaceProcedure
@@ -463,7 +568,9 @@ export const entitiesRouter = router({
         description: z.string().optional(),
         documentId: z.string().uuid().nullable().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
-        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        source: z
+          .enum(["user", "ai", "intelligence", "system", "agent"])
+          .optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
       })
@@ -585,7 +692,9 @@ export const entitiesRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
+        source: z
+          .enum(["user", "ai", "intelligence", "system", "agent"])
+          .optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
       })

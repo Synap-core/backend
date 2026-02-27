@@ -15,6 +15,7 @@ import {
   timestamp,
   index,
   unique,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
@@ -23,8 +24,9 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * Profile Scope
  */
 export enum ProfileScope {
-  SYSTEM = "system", // Available to all users
-  WORKSPACE = "workspace", // Shared within workspace
+  SYSTEM = "system", // Available to all users (pod-wide)
+  SHARED = "shared", // Explicitly shared with specific workspaces via profile_workspace_access
+  WORKSPACE = "workspace", // Owned by a single workspace
   USER = "user", // Personal to user
 }
 
@@ -51,7 +53,12 @@ export const profiles = pgTable(
 
     // Scope (who can use this profile)
     scope: text("scope", {
-      enum: [ProfileScope.SYSTEM, ProfileScope.WORKSPACE, ProfileScope.USER],
+      enum: [
+        ProfileScope.SYSTEM,
+        ProfileScope.SHARED,
+        ProfileScope.WORKSPACE,
+        ProfileScope.USER,
+      ],
     })
       .notNull()
       .default(ProfileScope.WORKSPACE),
@@ -95,3 +102,35 @@ export type NewProfile = typeof profiles.$inferInsert;
  */
 export const insertProfileSchema = createInsertSchema(profiles);
 export const selectProfileSchema = createSelectSchema(profiles);
+
+/**
+ * profile_workspace_access
+ *
+ * Join table for ProfileScope.SHARED profiles.
+ * Allows a profile created in one workspace to be explicitly made available
+ * to a specific set of other workspaces without being fully system-scoped.
+ *
+ * Rows are created by grantAccess() and removed when the workspace is deleted.
+ */
+export const profileWorkspaceAccess = pgTable(
+  "profile_workspace_access",
+  {
+    profileId: uuid("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    grantedAt: timestamp("granted_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.profileId, table.workspaceId] }),
+    workspaceIdx: index("profile_workspace_access_workspace_idx").on(
+      table.workspaceId
+    ),
+  })
+);
+
+export type ProfileWorkspaceAccess = typeof profileWorkspaceAccess.$inferSelect;

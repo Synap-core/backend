@@ -2,8 +2,9 @@
  * Setup Event Broadcasting + Materialization Hooks
  *
  * This module registers hooks with the EventRepository:
- * 1. SSE broadcast hook — streams events to connected clients
- * 2. Materialization hook — enqueues .validated events for DB writes via pg-boss
+ * 1. SSE broadcast hook — streams events to connected clients (admin)
+ * 2. Domain event bridge — forwards .completed events to Realtime (Socket.IO) for entity, view, relation, document, workspace, workspace member
+ * 3. Materialization hook — enqueues .validated events for DB writes via pg-boss
  *
  * Call setupEventBroadcasting() at application startup.
  */
@@ -12,6 +13,7 @@ import { eventRepository, type EventHook } from "@synap/database";
 import { eventStreamManager } from "./event-stream-manager.js";
 import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
+import { emitDomainEventToRealtime } from "./utils/domain-event-bridge.js";
 
 const logger = createLogger({ module: "event-broadcasting" });
 
@@ -34,7 +36,12 @@ export function setupEventBroadcasting(): void {
     eventStreamManager.broadcast(event);
   };
 
-  // Hook 2: Materialization — enqueue .validated events for async DB writes
+  // Hook 2: Domain event → Socket.IO bridge
+  const domainBridgeHook: EventHook = (event) => {
+    emitDomainEventToRealtime(event);
+  };
+
+  // Hook 3: Materialization — enqueue .validated events for async DB writes
   // This is the bridge between the event pipeline and the materializer worker.
   // When a proposal is approved, the approval flow emits a .validated event
   // which this hook picks up and sends to the materializer via pg-boss.
@@ -72,10 +79,13 @@ export function setupEventBroadcasting(): void {
     }
   };
 
-  // Register both hooks
+  // Register all hooks
   eventRepository.addEventHook(broadcastHook);
+  eventRepository.addEventHook(domainBridgeHook);
   eventRepository.addEventHook(materializationHook);
 
-  logger.info("Event broadcasting + materialization hooks registered");
+  logger.info(
+    "Event broadcasting + domain bridge + materialization hooks registered"
+  );
   isSetup = true;
 }

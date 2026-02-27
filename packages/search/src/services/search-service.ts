@@ -27,7 +27,7 @@ export class SearchService {
     entities: "title",
     documents: "title",
     views: "name",
-    chat_threads: "title",
+    channels: "title",
     agents: "title",
   };
 
@@ -42,7 +42,7 @@ export class SearchService {
       "entities",
       "documents",
       "views",
-      "chat_threads",
+      "channels",
       "agents",
     ];
 

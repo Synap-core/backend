@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
 import {
   getDb,
   ProfileRepository,
@@ -21,7 +21,7 @@ import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "profiles-router" });
 
-const ProfileScopeSchema = z.enum(["system", "workspace", "user"]);
+const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
 
 export const profilesRouter = router({
   /**
@@ -90,6 +90,11 @@ export const profilesRouter = router({
         parentProfileId: z.string().uuid().optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
         scope: ProfileScopeSchema.default("workspace"),
+        /**
+         * For scope="shared": list of workspace IDs to grant access to immediately.
+         * The calling workspace is always included automatically.
+         */
+        allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
         source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
@@ -103,14 +108,21 @@ export const profilesRouter = router({
       const profileRepo = new ProfileRepository(db);
 
       // Check for slug conflict — return existing profile gracefully
-      // Profiles have a global unique slug constraint, so reuse across workspaces
-      // (e.g., "company" template profile created by workspace A is reused by workspace B)
+      // Profiles have a global unique slug constraint, so reuse across workspaces.
+      // For shared profiles, also grant access to the requesting workspace.
       const existing = await profileRepo.getBySlug(input.slug);
       if (existing) {
         logger.info(
           { slug: input.slug, existingId: existing.id },
           "Profile slug exists, returning existing"
         );
+        // Grant access if this workspace doesn't already have it
+        if (
+          existing.scope === ProfileScope.SHARED ||
+          input.scope === "shared"
+        ) {
+          await profileRepo.grantAccess(existing.id, ctx.workspaceId);
+        }
         return { profile: existing, existing: true };
       }
 
@@ -194,6 +206,9 @@ export const profilesRouter = router({
       if (input.scope === "system") {
         userId = undefined;
         workspaceId = undefined;
+      } else if (input.scope === "shared") {
+        // Shared profiles are owned by the creating workspace
+        workspaceId = ctx.workspaceId;
       } else if (input.scope === "workspace") {
         workspaceId = ctx.workspaceId;
       } else if (input.scope === "user") {
@@ -209,6 +224,16 @@ export const profilesRouter = router({
         userId,
         workspaceId,
       });
+
+      // For shared profiles, grant access to the creating workspace + any extra workspaces
+      if (input.scope === "shared") {
+        await profileRepo.grantAccess(profile.id, ctx.workspaceId);
+        for (const wsId of input.allowedWorkspaceIds ?? []) {
+          if (wsId !== ctx.workspaceId) {
+            await profileRepo.grantAccess(profile.id, wsId);
+          }
+        }
+      }
 
       // 4. Emit .completed event + side-effects
       auditLog({
@@ -244,6 +269,17 @@ export const profilesRouter = router({
         displayName: z.string().min(1).max(200).optional(),
         parentProfileId: z.string().uuid().optional().nullable(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * Change the profile scope. Caller must own the profile (workspaceId matches).
+         * Changing to "shared" requires owning workspace context.
+         * Changing from "shared" → other automatically revokes all existing grants.
+         */
+        scope: ProfileScopeSchema.optional(),
+        /**
+         * When changing scope to "shared": additional workspace IDs to grant access.
+         * The owning workspace always keeps access.
+         */
+        allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -263,6 +299,26 @@ export const profilesRouter = router({
           code: "NOT_FOUND",
           message: `Profile not found: ${input.id}`,
         });
+      }
+
+      // Scope changes require the calling workspace to own the profile
+      if (input.scope !== undefined && input.scope !== existing.scope) {
+        if (existing.workspaceId !== ctx.workspaceId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the owning workspace can change a profile's scope",
+          });
+        }
+
+        // Downgrading from "shared" → revoke all existing grants
+        if (existing.scope === "shared") {
+          const grantedWorkspaces = await profileRepo.getGrantedWorkspaces(
+            input.id
+          );
+          for (const wsId of grantedWorkspaces) {
+            await profileRepo.revokeAccess(input.id, wsId);
+          }
+        }
       }
 
       // Check for inheritance cycles if parent is being changed
@@ -294,10 +350,21 @@ export const profilesRouter = router({
         displayName: input.displayName,
         parentProfileId: input.parentProfileId ?? undefined,
         uiHints: input.uiHints,
+        scope: input.scope as ProfileScope | undefined,
       });
 
+      // When upgrading to "shared" — grant access to owning workspace + extras
+      if (input.scope === "shared") {
+        await profileRepo.grantAccess(input.id, ctx.workspaceId);
+        for (const wsId of input.allowedWorkspaceIds ?? []) {
+          if (wsId !== ctx.workspaceId) {
+            await profileRepo.grantAccess(input.id, wsId);
+          }
+        }
+      }
+
       logger.info(
-        { profileId: updated.id, userId: ctx.userId },
+        { profileId: updated.id, userId: ctx.userId, scope: updated.scope },
         "Profile updated"
       );
 
@@ -415,5 +482,176 @@ export const profilesRouter = router({
       );
 
       return { hierarchy };
+    }),
+
+  /**
+   * Grant a workspace access to a shared profile.
+   * Idempotent — safe to call multiple times.
+   */
+  grantAccess: workspaceProcedure
+    .input(
+      z.object({
+        profileId: z.string().uuid(),
+        targetWorkspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+      const resolutionService = new ProfileResolutionService(db);
+
+      // Verify the profile exists and the calling workspace can see it
+      const profile = await resolutionService.resolveProfile(
+        input.profileId,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${input.profileId}`,
+        });
+      }
+      if (profile.scope !== "shared") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only shared profiles can have workspace access grants",
+        });
+      }
+      // Only the workspace that owns the profile can grant access to others
+      if (profile.workspaceId !== ctx.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the owning workspace can grant access to a shared profile",
+        });
+      }
+
+      await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
+
+      logger.info(
+        {
+          profileId: input.profileId,
+          targetWorkspaceId: input.targetWorkspaceId,
+        },
+        "Profile access granted"
+      );
+
+      return { success: true };
+    }),
+
+  /**
+   * List profiles across multiple workspaces.
+   *
+   * Unlike `list` (single-workspace header), this endpoint accepts an explicit
+   * `workspaceIds` array and works without an active workspace header.
+   * Always includes system profiles and the caller's user profiles.
+   *
+   * Security: `workspaceIds` filtered to workspaces the caller is a member of.
+   * Omitting returns profiles from ALL user's workspaces.
+   */
+  listMulti: protectedProcedure
+    .input(
+      z.object({
+        workspaceIds: z.array(z.string().uuid()).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const { validateWorkspaceAccess } =
+        await import("../utils/workspace-membership.js");
+
+      const validatedIds = await validateWorkspaceAccess(
+        ctx.userId,
+        input.workspaceIds
+      );
+
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+
+      // Union accessible profiles across all validated workspaces
+      const seen = new Set<string>();
+      const allProfiles = [];
+
+      for (const wsId of validatedIds) {
+        const profiles = await profileRepo.getAccessibleProfiles(
+          ctx.userId,
+          wsId
+        );
+        for (const p of profiles) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            allProfiles.push(p);
+          }
+        }
+      }
+
+      // If no workspace IDs available, still return system + user profiles
+      if (validatedIds.length === 0) {
+        const systemProfiles = await profileRepo.getAccessibleProfiles(
+          ctx.userId,
+          "" // empty string won't match workspace profiles, only system+user
+        );
+        for (const p of systemProfiles) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            allProfiles.push(p);
+          }
+        }
+      }
+
+      return { profiles: allProfiles };
+    }),
+
+  /**
+   * Revoke a workspace's access to a shared profile.
+   */
+  revokeAccess: workspaceProcedure
+    .input(
+      z.object({
+        profileId: z.string().uuid(),
+        targetWorkspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+      const resolutionService = new ProfileResolutionService(db);
+
+      const profile = await resolutionService.resolveProfile(
+        input.profileId,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${input.profileId}`,
+        });
+      }
+      if (profile.scope !== "shared") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only shared profiles can have workspace access revoked",
+        });
+      }
+      if (profile.workspaceId !== ctx.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the owning workspace can revoke access to a shared profile",
+        });
+      }
+
+      await profileRepo.revokeAccess(input.profileId, input.targetWorkspaceId);
+
+      logger.info(
+        {
+          profileId: input.profileId,
+          targetWorkspaceId: input.targetWorkspaceId,
+        },
+        "Profile access revoked"
+      );
+
+      return { success: true };
     }),
 });

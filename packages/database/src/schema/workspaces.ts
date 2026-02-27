@@ -81,8 +81,23 @@ export interface WorkspaceSettings {
 
   // AI Governance Settings
   aiGovernance?: {
-    autoApprove?: boolean; // Auto-approve AI-generated content
-    requireReviewFor?: string[]; // Event types requiring review (e.g., ['agent.create'])
+    /**
+     * Whitelist of event keys that AI agents may execute WITHOUT a proposal.
+     * Everything else defaults to proposal-required.
+     *
+     * Format: "<subjectType>.<action>" or "<subjectType>.*" glob.
+     * Default (when field absent): ["search.*", "memory.recall", "entity.read", "document.read"]
+     *
+     * Examples:
+     *   "entity.read"    — agents can read entities without proposal
+     *   "search.*"       — all search operations bypass proposal
+     *   "entity.create"  — agents can create entities without proposal (high trust)
+     */
+    autoApproveFor?: string[];
+    /** @deprecated Use autoApproveFor instead. Kept for migration reference only. */
+    requireReviewFor?: string[];
+    /** @deprecated Use autoApproveFor instead. */
+    autoApprove?: boolean;
     maxAgentsPerUser?: number; // Limit AI agents per user
     allowAgentCreation?: boolean; // Allow users to create custom agents
     /** Who can approve AI proposals. Default: "owner_and_admins" */

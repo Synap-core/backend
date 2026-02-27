@@ -2,8 +2,23 @@
 
 import { Column, SQL } from 'drizzle-orm';
 
-type DatabaseClient = any;
-interface KratosIdentity {
+/**
+ * Context Types
+ *
+ * Proper type definitions for tRPC context to avoid `any` types.
+ */
+/**
+ * Database client type
+ *
+ * Note: Using `any` here to preserve Drizzle's schema inference.
+ * Attempting to use PostgresJsDatabase<any> loses the schema generic
+ * and breaks db.query.tableName access patterns.
+ */
+export type DatabaseClient = any;
+/**
+ * Ory Kratos identity
+ */
+export interface KratosIdentity {
 	id: string;
 	traits: {
 		email: string;
@@ -11,18 +26,27 @@ interface KratosIdentity {
 		[key: string]: unknown;
 	};
 }
-interface KratosSession {
+/**
+ * Ory Kratos session
+ */
+export interface KratosSession {
 	identity: KratosIdentity;
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
 }
-interface User {
+/**
+ * User object (simplified from Kratos identity)
+ */
+export interface User {
 	id: string;
 	email: string;
 	name?: string;
 }
-interface Context {
+/**
+ * Full tRPC context
+ */
+export interface Context {
 	db: DatabaseClient;
 	authenticated: boolean;
 	userId?: string | null;
@@ -33,22 +57,52 @@ interface Context {
 	workspaceId?: string | null;
 	workspaceRole?: string | null;
 }
-interface AgentMetadata {
+/**
+ * Users Table - Cache for Kratos Identity Data
+ *
+ * Purpose: Store Kratos identity data in Synap DB for performance
+ * - Allows JOINs without calling Kratos API
+ * - Can add Synap-specific fields (avatar, timezone)
+ * - Kratos remains source of truth for authentication
+ */
+export interface AgentMetadata {
 	agentType: string;
 	description?: string;
 	createdByUserId: string;
 	capabilities?: string[];
 }
-declare enum ChatThreadType {
-	MAIN = "main",
-	BRANCH = "branch"
+declare enum MessageRole {
+	USER = "user",
+	ASSISTANT = "assistant",
+	SYSTEM = "system"
 }
-declare enum ChatThreadStatus {
+declare enum MessageAuthorType {
+	HUMAN = "human",
+	AI_AGENT = "ai_agent",
+	EXTERNAL = "external",// message imported from external platform
+	BOT = "bot"
+}
+declare enum MessageCategory {
+	CHAT = "chat",// standard conversational message
+	COMMENT = "comment",// comment on an entity/document/view
+	SYSTEM_NOTIFICATION = "system_notification",// cross-channel update, conflict alerts, etc.
+	REVIEW = "review"
+}
+declare enum ChannelType {
+	AI_THREAD = "ai_thread",
+	BRANCH = "branch",
+	ENTITY_COMMENTS = "entity_comments",
+	DOCUMENT_REVIEW = "document_review",
+	VIEW_DISCUSSION = "view_discussion",
+	DIRECT = "direct",
+	EXTERNAL_IMPORT = "external_import"
+}
+declare enum ChannelStatus {
 	ACTIVE = "active",
 	MERGED = "merged",
 	ARCHIVED = "archived"
 }
-declare enum ChatThreadAgentType {
+declare enum ChannelAgentType {
 	DEFAULT = "default",
 	META = "meta",
 	PROMPTING = "prompting",
@@ -59,13 +113,13 @@ declare enum ChatThreadAgentType {
 	ONBOARDING = "onboarding",
 	WORKSPACE_CREATION = "workspace-creation"
 }
-declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
-	name: "chat_threads";
+declare const channels: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "channels";
 	schema: undefined;
 	columns: {
 		id: import("drizzle-orm/pg-core").PgColumn<{
 			name: "id";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgUUID";
 			data: string;
@@ -82,7 +136,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		userId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "user_id";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
 			data: string;
@@ -102,7 +156,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "workspace_id";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgUUID";
 			data: string;
@@ -119,7 +173,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		title: import("drizzle-orm/pg-core").PgColumn<{
 			name: "title";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
 			data: string;
@@ -137,12 +191,12 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
-		threadType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "thread_type";
-			tableName: "chat_threads";
+		channelType: import("drizzle-orm/pg-core").PgColumn<{
+			name: "channel_type";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
-			data: ChatThreadType;
+			data: ChannelType;
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -150,16 +204,58 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			isAutoincrement: false;
 			hasRuntimeDefault: false;
 			enumValues: [
-				ChatThreadType.MAIN,
-				ChatThreadType.BRANCH
+				ChannelType.AI_THREAD,
+				ChannelType.BRANCH,
+				ChannelType.ENTITY_COMMENTS,
+				ChannelType.DOCUMENT_REVIEW,
+				ChannelType.VIEW_DISCUSSION,
+				ChannelType.DIRECT,
+				ChannelType.EXTERNAL_IMPORT
 			];
 			baseColumn: never;
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
-		parentThreadId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "parent_thread_id";
-			tableName: "chat_threads";
+		contextObjectType: import("drizzle-orm/pg-core").PgColumn<{
+			name: "context_object_type";
+			tableName: "channels";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		contextObjectId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "context_object_id";
+			tableName: "channels";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		parentChannelId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "parent_channel_id";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgUUID";
 			data: string;
@@ -176,7 +272,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		branchedFromMessageId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "branched_from_message_id";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgUUID";
 			data: string;
@@ -193,7 +289,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		branchPurpose: import("drizzle-orm/pg-core").PgColumn<{
 			name: "branch_purpose";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
 			data: string;
@@ -213,7 +309,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		agentId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "agent_id";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
 			data: string;
@@ -233,10 +329,10 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		status: import("drizzle-orm/pg-core").PgColumn<{
 			name: "status";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
-			data: ChatThreadStatus;
+			data: ChannelStatus;
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -244,9 +340,9 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			isAutoincrement: false;
 			hasRuntimeDefault: false;
 			enumValues: [
-				ChatThreadStatus.ACTIVE,
-				ChatThreadStatus.MERGED,
-				ChatThreadStatus.ARCHIVED
+				ChannelStatus.ACTIVE,
+				ChannelStatus.MERGED,
+				ChannelStatus.ARCHIVED
 			];
 			baseColumn: never;
 			identity: undefined;
@@ -254,10 +350,10 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		agentType: import("drizzle-orm/pg-core").PgColumn<{
 			name: "agent_type";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
-			data: ChatThreadAgentType;
+			data: ChannelAgentType;
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -265,15 +361,15 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			isAutoincrement: false;
 			hasRuntimeDefault: false;
 			enumValues: [
-				ChatThreadAgentType.DEFAULT,
-				ChatThreadAgentType.META,
-				ChatThreadAgentType.PROMPTING,
-				ChatThreadAgentType.KNOWLEDGE_SEARCH,
-				ChatThreadAgentType.CODE,
-				ChatThreadAgentType.WRITING,
-				ChatThreadAgentType.ACTION,
-				ChatThreadAgentType.ONBOARDING,
-				ChatThreadAgentType.WORKSPACE_CREATION
+				ChannelAgentType.DEFAULT,
+				ChannelAgentType.META,
+				ChannelAgentType.PROMPTING,
+				ChannelAgentType.KNOWLEDGE_SEARCH,
+				ChannelAgentType.CODE,
+				ChannelAgentType.WRITING,
+				ChannelAgentType.ACTION,
+				ChannelAgentType.ONBOARDING,
+				ChannelAgentType.WORKSPACE_CREATION
 			];
 			baseColumn: never;
 			identity: undefined;
@@ -281,7 +377,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		agentConfig: import("drizzle-orm/pg-core").PgColumn<{
 			name: "agent_config";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "json";
 			columnType: "PgJsonb";
 			data: unknown;
@@ -298,7 +394,47 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		contextSummary: import("drizzle-orm/pg-core").PgColumn<{
 			name: "context_summary";
-			tableName: "chat_threads";
+			tableName: "channels";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		externalSource: import("drizzle-orm/pg-core").PgColumn<{
+			name: "external_source";
+			tableName: "channels";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		externalChannelId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "external_channel_id";
+			tableName: "channels";
 			dataType: "string";
 			columnType: "PgText";
 			data: string;
@@ -318,7 +454,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		metadata: import("drizzle-orm/pg-core").PgColumn<{
 			name: "metadata";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "json";
 			columnType: "PgJsonb";
 			data: unknown;
@@ -335,7 +471,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		createdAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "created_at";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "date";
 			columnType: "PgTimestamp";
 			data: Date;
@@ -352,7 +488,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "updated_at";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "date";
 			columnType: "PgTimestamp";
 			data: Date;
@@ -369,7 +505,7 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		mergedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "merged_at";
-			tableName: "chat_threads";
+			tableName: "channels";
 			dataType: "date";
 			columnType: "PgTimestamp";
 			data: Date;
@@ -387,50 +523,53 @@ declare const chatThreads: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-type ChatThread = typeof chatThreads.$inferSelect;
-declare enum ThreadEntityRelationshipType {
+export type Channel = typeof channels.$inferSelect;
+declare enum ChannelContextObjectType {
+	ENTITY = "entity",
+	DOCUMENT = "document",
+	VIEW = "view",
+	PROPOSAL = "proposal",
+	INBOX_ITEM = "inbox_item"
+}
+declare enum ChannelContextRelationshipType {
 	USED_AS_CONTEXT = "used_as_context",
 	CREATED = "created",
 	UPDATED = "updated",
 	REFERENCED = "referenced",
 	INHERITED_FROM_PARENT = "inherited_from_parent"
 }
-declare enum ThreadEntityConflictStatus {
+declare enum ChannelContextConflictStatus {
 	NONE = "none",
 	PENDING = "pending",
 	RESOLVED = "resolved"
 }
-declare enum ThreadDocumentRelationshipType {
-	USED_AS_CONTEXT = "used_as_context",
-	CREATED = "created",
-	UPDATED = "updated",
-	REFERENCED = "referenced",
-	INHERITED_FROM_PARENT = "inherited_from_parent"
-}
-declare enum ThreadDocumentConflictStatus {
-	NONE = "none",
-	PENDING = "pending",
-	RESOLVED = "resolved"
-}
-interface DerivedInput {
+export interface DerivedInput {
 	name: string;
 	label?: string;
 	type?: string;
 	options?: string[];
 	default?: string;
 }
-interface InputOverride {
+export interface InputOverride {
 	label?: string;
 	default?: string;
 	options?: string[];
 }
-interface WorkspaceLayoutConfig {
+/**
+ * Workspaces Schema - Multi-user workspace support
+ *
+ * A workspace can be:
+ * - Personal (single user)
+ * - Team (multiple users with roles)
+ * - Enterprise (advanced features)
+ */
+export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
 	sidebarApps?: string[];
 	defaultView?: string;
 	theme?: string;
 }
-interface WorkspaceSettings {
+export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
 	aiEnabled?: boolean;
@@ -671,12 +810,29 @@ declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-type MessageLink = typeof messageLinks.$inferSelect;
+export type MessageLink = typeof messageLinks.$inferSelect;
 declare enum PropertyValueType {
 	STRING = "string",
 	NUMBER = "number",
 	BOOLEAN = "boolean",
 	DATE = "date",
+	/**
+	 * A UUID reference to another entity in the same workspace.
+	 *
+	 * This is a STRUCTURAL LINK — part of the profile schema, not the graph.
+	 * When a property has this type, the value stored is the UUID of another entity.
+	 * It represents a modelled, schema-defined relationship (e.g. "this task's project",
+	 * "this deal's primary contact").
+	 *
+	 * These differ from semantic graph relations (`relations` table):
+	 * - Structural links (entity_id props) are schema-defined, form-based, one-directional
+	 * - Semantic relations are schema-free, emergent, bi-directional
+	 *
+	 * Use `entity_property_index.value_entity_id` for fast reverse-lookup:
+	 * "find all entities whose [property] points to entity X"
+	 *
+	 * @see /docs/docs/concepts/entity-connections.md — architecture decision doc
+	 */
 	ENTITY_ID = "entity_id",
 	ARRAY = "array",
 	OBJECT = "object",
@@ -719,6 +875,23 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				string,
 				...string[]
 			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		profileId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "profile_id";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
 			baseColumn: never;
 			identity: undefined;
 			generated: undefined;
@@ -820,13 +993,19 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	};
 	dialect: "pg";
 }>;
-type PropertyDef = typeof propertyDefs.$inferSelect;
+export type PropertyDef = typeof propertyDefs.$inferSelect;
 declare enum ProfileScope {
 	SYSTEM = "system",// Available to all users
 	WORKSPACE = "workspace",// Shared within workspace
 	USER = "user"
 }
-interface EventRecord {
+/**
+ * EventRecord - Database representation of an event
+ *
+ * This is the format returned from the database.
+ * It maps directly to the events table structure.
+ */
+export interface EventRecord {
 	id: string;
 	timestamp: Date;
 	subjectId: string;
@@ -840,24 +1019,28 @@ interface EventRecord {
 	correlationId?: string;
 	source: string;
 }
-interface LinkedMessagePreview {
+/** Minimal message fields for list/preview */
+export interface LinkedMessagePreview {
 	id: string;
-	threadId: string;
+	channelId: string;
 	role: string;
 	content: string;
 	timestamp: Date;
 	userId: string;
 }
-interface LinkedMessageItem {
+export interface LinkedMessageItem {
 	link: MessageLink;
 	message: LinkedMessagePreview;
 }
-interface EffectiveProperty extends PropertyDef {
+export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
 	displayOrder: number;
 }
-interface ViewColumn {
+/**
+ * Column definition for views
+ */
+export interface ViewColumn {
 	id: string;
 	field: string;
 	title?: string;
@@ -866,17 +1049,38 @@ interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
-type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
-interface EntityFilter {
+/**
+ * View Query Types
+ *
+ * Single source of truth for all view query and filter types.
+ */
+/**
+ * Filter operator types
+ */
+export type FilterOperator = "equals" | "not_equals" | "contains" | "not_contains" | "in" | "not_in" | "is_empty" | "is_not_empty" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal";
+/**
+ * Filter definition for entity queries
+ */
+export interface EntityFilter {
 	field: string;
 	operator: FilterOperator;
 	value?: unknown;
 }
-interface SortRule {
+/**
+ * Sort rule for entity queries
+ */
+export interface SortRule {
 	field: string;
 	direction: "asc" | "desc";
 }
-interface EntityQuery {
+/**
+ * Query definition for structured views
+ * Defines which entities to show and how to filter them
+ *
+ * NOTE: profileIds/profileSlugs are now stored in views.scopeProfileIds
+ * This query structure only contains filters, sorts, search, pagination, and groupBy
+ */
+export interface EntityQuery {
 	/** @deprecated - Profile IDs now stored in views.scopeProfileIds */
 	profileIds?: string[];
 	/** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
@@ -907,7 +1111,10 @@ declare enum AgentType {
 	WRITING = "writing",
 	ACTION = "action"
 }
-type AgentTypeString = `${AgentType}` | (string & {});
+/**
+ * Agent type as string literal union (for flexibility)
+ */
+export type AgentTypeString = `${AgentType}` | (string & {});
 declare enum AIStepType {
 	THINKING = "thinking",
 	TOOL_CALL = "tool_call",
@@ -915,7 +1122,17 @@ declare enum AIStepType {
 	DECISION = "decision",
 	ERROR = "error"
 }
-interface AIStep {
+/**
+ * AI step - shows what the AI is doing
+ *
+ * Represents any step in the AI's reasoning/execution process:
+ * - thinking: General analysis and reasoning
+ * - tool_call: When AI calls a tool
+ * - tool_result: Result from tool execution
+ * - decision: AI making a decision
+ * - error: Error during processing
+ */
+export interface AIStep {
 	id: string;
 	type: AIStepType | string;
 	content: string;
@@ -929,7 +1146,10 @@ interface AIStep {
 	description?: string;
 	status?: "pending" | "running" | "complete" | "error";
 }
-interface BranchDecision {
+/**
+ * Branch decision from meta-agent
+ */
+export interface BranchDecision {
 	shouldBranch: boolean;
 	reason: string;
 	suggestedAgentType?: AgentTypeString;
@@ -969,7 +1189,46 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
-type TableAction = "create.requested" | "create.approved" | "create.validated" | "update.requested" | "update.approved" | "update.validated" | "delete.requested" | "delete.approved" | "delete.validated";
+/**
+ * Node shape for the workspace branch tree response.
+ * Defined at module scope so tsc can include it in declaration output.
+ */
+export type BranchNodeResult = {
+	channel: Channel;
+	children: BranchNodeResult[];
+	messageCount: number;
+	lastActivity: Date;
+	depth: number;
+};
+/**
+ * @synap/events - Schema-Driven Event Generator
+ *
+ * This module generates event types and payload schemas from Drizzle database tables.
+ *
+ * V2.0 CONSOLIDATED PATTERN: {table}.{action}.{modifier}
+ *
+ * Actions: create | update | delete
+ * Modifiers: requested | validated
+ *
+ * Examples:
+ *   entities.create.requested  ← Intent submitted (by user or AI)
+ *   entities.create.validated  ← Change confirmed and applied
+ *   entities.update.requested  ← Update intent
+ *   entities.update.validated  ← Update confirmed
+ *
+ * No direct actions (e.g., entities.create) - all changes go through requested→validated flow.
+ */
+/**
+ * Standard CRUD actions with modifiers for table events
+ *
+ * V2.1: Added 'approved' modifier for 3-phase flow
+ *
+ * Flow:
+ *  1. requested: Intent (user/AI wants to do something)
+ *  2. approved: Validated (permissions checked, user approved if needed)
+ *  3. validated: Completed (DB operation done, entity exists)
+ */
+export type TableAction = "create.requested" | "create.approved" | "create.validated" | "update.requested" | "update.approved" | "update.validated" | "delete.requested" | "delete.approved" | "delete.validated";
 declare const CORE_TABLES: readonly [
 	"entities",
 	"documents",
@@ -985,9 +1244,22 @@ declare const CORE_TABLES: readonly [
 	"views",
 	"userPreferences"
 ];
-type CoreTable = (typeof CORE_TABLES)[number];
-type GeneratedEventType = `${CoreTable}.create.requested` | `${CoreTable}.create.approved` | `${CoreTable}.create.validated` | `${CoreTable}.update.requested` | `${CoreTable}.update.approved` | `${CoreTable}.update.validated` | `${CoreTable}.delete.requested` | `${CoreTable}.delete.approved` | `${CoreTable}.delete.validated`;
-interface WorkerMetadata {
+export type CoreTable = (typeof CORE_TABLES)[number];
+/**
+ * Flat list of all generated event types (for type checking)
+ *
+ * V2.1: Added .approved phase for 3-phase flow
+ */
+export type GeneratedEventType = `${CoreTable}.create.requested` | `${CoreTable}.create.approved` | `${CoreTable}.create.validated` | `${CoreTable}.update.requested` | `${CoreTable}.update.approved` | `${CoreTable}.update.validated` | `${CoreTable}.delete.requested` | `${CoreTable}.delete.approved` | `${CoreTable}.delete.validated`;
+/**
+ * Worker Registry - Static worker metadata for Admin UI
+ *
+ * V2.0: Simplified registry with only active workers
+ *
+ * Pattern: Table workers handle {table}.{crud}.requested events
+ * and emit {table}.{crud}.completed events.
+ */
+export interface WorkerMetadata {
 	id: string;
 	name: string;
 	description: string;
@@ -1033,7 +1305,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				data: Record<string, unknown>;
 				version: number;
 				metadata?: Record<string, unknown> | undefined;
-				source?: "system" | "sync" | "api" | "automation" | "migration" | undefined;
+				source?: "sync" | "system" | "api" | "automation" | "migration" | undefined;
 				causationId?: string | undefined;
 				correlationId?: string | undefined;
 			};
@@ -1339,15 +1611,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				};
 				status?: undefined;
@@ -1362,6 +1638,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					start: number;
 					end: number;
 				};
+				content: string;
+			};
+			output: {
+				threadId: `${string}-${string}-${string}-${string}-${string}`;
+				messageId: `${string}-${string}-${string}-${string}-${string}`;
+			};
+			meta: object;
+		}>;
+		createEntityComment: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
 				content: string;
 			};
 			output: {
@@ -1395,15 +1682,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				} | undefined;
 				aiSteps: AIStep[];
@@ -1430,7 +1721,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -1473,9 +1764,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null;
 					deletedAt: Date | null;
 					content: string;
-					threadId: string;
+					channelId: string;
 					parentId: string | null;
-					role: "user" | "system" | "assistant";
+					role: MessageRole;
+					authorType: MessageAuthorType;
+					messageCategory: MessageCategory;
+					externalSource: string | null;
+					inboxItemId: string | null;
 					previousHash: string | null;
 					hash: string;
 				}[];
@@ -1487,11 +1782,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listThreads: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				threadType?: "main" | "branch" | undefined;
+				threadType?: "main" | "branch" | "ai_thread" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
 				threads: {
+					hasAssistantMessage: boolean;
+					origin: string;
 					workspaceId: string | null;
 					userId: string;
 					id: string;
@@ -1499,15 +1796,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
 			};
@@ -1526,17 +1827,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
+			};
+			meta: object;
+		}>;
+		getWorkspaceBranchTree: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: {
+				roots: BranchNodeResult[];
+				stats: {
+					totalThreads: number;
+					activeThreads: number;
+					pendingProposalsTotal: number;
+				};
+				proposalCounts: Record<string, number>;
 			};
 			meta: object;
 		}>;
@@ -1566,40 +1886,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				};
-				entities: {
+				contextItems: {
 					workspaceId: string;
 					userId: string;
 					id: string;
 					createdAt: Date;
-					entityId: string;
-					threadId: string;
+					channelId: string;
 					sourceMessageId: string | null;
-					relationshipType: ThreadEntityRelationshipType;
-					conflictStatus: ThreadEntityConflictStatus;
-					sourceEventId: string | null;
-				}[] | undefined;
-				documents: {
-					workspaceId: string;
-					userId: string;
-					id: string;
-					createdAt: Date;
-					documentId: string;
-					threadId: string;
-					sourceMessageId: string | null;
-					relationshipType: ThreadDocumentRelationshipType;
-					conflictStatus: ThreadDocumentConflictStatus;
-					sourceEventId: string | null;
+					objectType: ChannelContextObjectType;
+					objectId: string;
+					relationshipType: ChannelContextRelationshipType;
+					conflictStatus: ChannelContextConflictStatus;
 				}[] | undefined;
 				branchTree: any;
 			};
@@ -1635,7 +1947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				tree: {
-					thread: ChatThread;
+					channel: Channel;
 					children: any[];
 				} | null;
 				flatBranches: {
@@ -1646,15 +1958,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
 				activeBranches: {
@@ -1665,15 +1981,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
 				mergedBranches: {
@@ -1684,15 +2004,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					title: string | null;
-					status: ChatThreadStatus;
-					threadType: ChatThreadType;
-					parentThreadId: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
 					branchedFromMessageId: string | null;
 					branchPurpose: string | null;
 					agentId: string;
-					agentType: ChatThreadAgentType;
+					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
 			};
@@ -1701,32 +2025,45 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getThreadContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				threadId: string;
+				objectTypes?: ("entity" | "proposal" | "view" | "inbox_item" | "document")[] | undefined;
 				relationshipTypes?: ("created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent")[] | undefined;
 			};
 			output: {
+				items: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					createdAt: Date;
+					channelId: string;
+					sourceMessageId: string | null;
+					objectType: ChannelContextObjectType;
+					objectId: string;
+					relationshipType: ChannelContextRelationshipType;
+					conflictStatus: ChannelContextConflictStatus;
+				}[];
 				entities: {
 					workspaceId: string;
 					userId: string;
 					id: string;
 					createdAt: Date;
-					entityId: string;
-					threadId: string;
+					channelId: string;
 					sourceMessageId: string | null;
-					relationshipType: ThreadEntityRelationshipType;
-					conflictStatus: ThreadEntityConflictStatus;
-					sourceEventId: string | null;
+					objectType: ChannelContextObjectType;
+					objectId: string;
+					relationshipType: ChannelContextRelationshipType;
+					conflictStatus: ChannelContextConflictStatus;
 				}[];
 				documents: {
 					workspaceId: string;
 					userId: string;
 					id: string;
 					createdAt: Date;
-					documentId: string;
-					threadId: string;
+					channelId: string;
 					sourceMessageId: string | null;
-					relationshipType: ThreadDocumentRelationshipType;
-					conflictStatus: ThreadDocumentConflictStatus;
-					sourceEventId: string | null;
+					objectType: ChannelContextObjectType;
+					objectId: string;
+					relationshipType: ChannelContextRelationshipType;
+					conflictStatus: ChannelContextConflictStatus;
 				}[];
 			};
 			meta: object;
@@ -1743,6 +2080,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				targetType?: "entity" | "view" | "document" | "profile" | "whiteboard" | undefined;
 				targetId?: string | undefined;
+				threadId?: string | undefined;
 				status?: "pending" | "validated" | "rejected" | "all" | undefined;
 				limit?: number | undefined;
 			};
@@ -1753,10 +2091,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					data: unknown;
 					updatedAt: Date;
 					createdAt: Date;
+					sourceMessageId: string | null;
 					status: ProposalStatus;
+					createdBy: string | null;
+					threadId: string | null;
 					targetType: string;
 					targetId: string;
 					proposalType: string;
+					commandRunId: string | null;
 					reviewedBy: string | null;
 					reviewedAt: Date | null;
 					rejectionReason: string | null;
@@ -1915,7 +2257,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				data: Record<string, unknown>;
 				userId: string;
 				subjectId?: string | undefined;
-				source?: "system" | "sync" | "api" | "automation" | "migration" | undefined;
+				source?: "sync" | "system" | "api" | "automation" | "migration" | undefined;
 				correlationId?: string | undefined;
 				causationId?: string | undefined;
 			};
@@ -2647,7 +2989,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				sessionId: string;
-				chatThreadId: `${string}-${string}-${string}-${string}-${string}`;
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
 			};
 			meta: object;
 		}>;
@@ -3242,8 +3584,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					threadId: string;
 					status: "completed" | "running" | "failed";
+					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
 					inputs: Record<string, unknown> | null;
@@ -3268,8 +3610,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				threadId: string;
 				status: "completed" | "running" | "failed";
+				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
 				inputs: Record<string, unknown> | null;
@@ -3293,7 +3635,187 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					endpoints?: string[];
 					authType?: string;
 				};
+				intelligenceConfigured: boolean;
 			};
+			meta: object;
+		}>;
+		agentDefinitions: import("@trpc/server").TRPCQueryProcedure<{
+			input: Record<string, never>;
+			output: {
+				agents: unknown[];
+			};
+			meta: object;
+		}>;
+		toolDefinitions: import("@trpc/server").TRPCQueryProcedure<{
+			input: Record<string, never>;
+			output: {
+				tools: unknown[];
+			};
+			meta: object;
+		}>;
+		agentConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentType: string;
+			};
+			output: {
+				config: unknown;
+			};
+			meta: object;
+		}>;
+		saveAgentConfig: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentType: string;
+				promptAppend?: string | null | undefined;
+				extraToolIds?: string[] | undefined;
+				disabledToolIds?: string[] | undefined;
+				maxStepsOverride?: number | null | undefined;
+			};
+			output: {
+				config: unknown;
+			};
+			meta: object;
+		}>;
+		deleteAgentConfig: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentType: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		memoryFacts: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+			};
+			output: {
+				facts: any[];
+			};
+			meta: object;
+		}>;
+		searchMemory: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query: string;
+				limit?: number | undefined;
+			};
+			output: {
+				facts: any[];
+			};
+			meta: object;
+		}>;
+		createMemoryFact: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				fact: string;
+				confidence?: number | undefined;
+			};
+			output: {
+				fact: any;
+			};
+			meta: object;
+		}>;
+		deleteMemoryFact: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		skills: import("@trpc/server").TRPCQueryProcedure<{
+			input: Record<string, never>;
+			output: {
+				skills: any[];
+			};
+			meta: object;
+		}>;
+		createSkill: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				description: string;
+				parameters?: Record<string, string> | undefined;
+				category?: "context" | "action" | undefined;
+			};
+			output: {
+				skill: any;
+			};
+			meta: object;
+		}>;
+		executionStats: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				since?: string | undefined;
+			};
+			output: {
+				stats: unknown;
+			};
+			meta: object;
+		}>;
+		executions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
+				agentType?: string | undefined;
+			};
+			output: {
+				executions: unknown[];
+			};
+			meta: object;
+		}>;
+		executionDetail: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				execution: unknown;
+				toolLogs: unknown[];
+			};
+			meta: object;
+		}>;
+		proposals: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				status?: "denied" | "pending" | "approved" | undefined;
+			};
+			output: {
+				proposals: any[];
+			};
+			meta: object;
+		}>;
+		approveProposal: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		denyProposal: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		startAIChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				topic: string;
+				mode?: "debate" | "collaborate" | "critique" | undefined;
+				maxTurns?: number | undefined;
+				personaA?: {
+					name?: string | undefined;
+					agentType?: string | undefined;
+					systemPrompt?: string | undefined;
+				} | undefined;
+				personaB?: {
+					name?: string | undefined;
+					agentType?: string | undefined;
+					systemPrompt?: string | undefined;
+				} | undefined;
+				initialMessage?: string | undefined;
+			};
+			output: any;
 			meta: object;
 		}>;
 	}>>;
@@ -3496,6 +4018,48 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				status: "created";
 				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		getConnections: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				entityId: string;
+				limit?: number | undefined;
+			};
+			output: {
+				connections: {
+					entityId: string;
+					entity: {
+						workspaceId: string | null;
+						userId: string;
+						id: string;
+						updatedAt: Date;
+						createdAt: Date;
+						type: string;
+						profileId: string | null;
+						title: string | null;
+						preview: string | null;
+						documentId: string | null;
+						properties: unknown;
+						version: number;
+						deletedAt: Date | null;
+					} | null;
+					label: string;
+					direction: "outgoing" | "incoming" | "structural";
+					source: "graph" | "property" | "thread";
+					relationType?: string;
+					propertySlug?: string;
+					propertyLabel?: string;
+					channelId?: string;
+					channelRelationshipType?: string;
+					createdAt?: Date | null;
+				}[];
+				counts: {
+					total: number;
+					graph: number;
+					structural: number;
+					threads: number;
+				};
 			};
 			meta: object;
 		}>;
@@ -5703,6 +6267,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					profileId: string | null;
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
@@ -5720,6 +6285,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					profileId: string | null;
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
@@ -5734,12 +6300,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				valueType: "string" | "number" | "boolean" | "object" | "array" | "date" | "secret" | "entity_id";
 				constraints?: Record<string, unknown> | undefined;
 				uiHints?: Record<string, unknown> | undefined;
+				profileId?: string | undefined;
 			};
 			output: {
 				propertyDef: {
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					profileId: string | null;
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
@@ -5751,6 +6319,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					profileId: string | null;
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
@@ -5773,6 +6342,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					profileId: string | null;
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
@@ -5883,6 +6453,30 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				slug: string;
 				displayName: string;
+				description?: string | undefined;
+				uiHints?: Record<string, unknown> | undefined;
+				isDirectional?: boolean | undefined;
+			};
+			output: {
+				relationDef: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					description: string | null;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					isDirectional: boolean;
+				};
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				displayName?: string | undefined;
 				description?: string | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 				isDirectional?: boolean | undefined;

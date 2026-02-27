@@ -16,7 +16,8 @@ import type { Context } from "../../types/context.js";
 export async function createHubProtocolCallerContext(
   userId: string,
   scopes: string[],
-  workspaceId?: string | null
+  workspaceId?: string | null,
+  sourceMessageId?: string | null
 ): Promise<
   Context & {
     scopes?: string[];
@@ -41,6 +42,11 @@ export async function createHubProtocolCallerContext(
     user: null,
     session: null,
     workspaceId: workspaceId ?? null,
+    // Always brand hub-protocol delegated calls as intelligence-sourced.
+    source: "intelligence",
+    isHubProtocol: true,
+    // Link proposals created during this request to the triggering message.
+    sourceMessageId: sourceMessageId ?? null,
   };
 
   return ctx;

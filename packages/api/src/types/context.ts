@@ -57,4 +57,19 @@ export interface Context {
   socketIO?: any; // Socket.IO server instance (type: Server from 'socket.io')
   workspaceId?: string | null; // Workspace ID from X-Workspace-Id header
   workspaceRole?: string | null; // User's role in the workspace (set by workspaceProcedure)
+  /**
+   * Request source — "intelligence" when the request comes from the Intelligence Hub
+   * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
+   */
+  source?: string | null;
+  /**
+   * Hard flag — true only when authenticated via a hub-protocol scoped API key.
+   * Cannot be spoofed by a human JWT session.
+   */
+  isHubProtocol?: boolean;
+  /**
+   * The message ID that triggered this hub-protocol request.
+   * When set, proposals created during this request are linked to this message.
+   */
+  sourceMessageId?: string | null;
 }

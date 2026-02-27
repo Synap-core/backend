@@ -37,6 +37,12 @@ export interface PermissionCheckOpts {
   correlationId?: string;
   /** AI reasoning for why this action is proposed */
   reasoning?: string;
+  /** Provenance: which chat thread triggered this proposal */
+  threadId?: string;
+  /** Provenance: which command run generated this proposal */
+  commandRunId?: string;
+  /** Provenance: which specific message triggered this proposal */
+  sourceMessageId?: string;
 }
 
 /**
@@ -49,7 +55,8 @@ export interface PermissionCheckOpts {
  * 4. Call verifyPermission() with effective user
  * 5. If denied → return { denied: true }
  * 6. AI policy:
- *    a. Agent user → check requireReviewFor list; if event listed, propose; else auto-approve
+ *    a. Agent user → check autoApproveFor whitelist; DEFAULT is proposal unless event matches
+ *       Default whitelist (when field absent): search.*, memory.recall, entity.read, document.read
  *    b. Non-agent AI source → use legacy aiAutoApprove toggle
  * 7. Otherwise → return { granted: true }
  */
@@ -65,6 +72,9 @@ export async function checkPermissionOrPropose(
     source,
     data,
     correlationId,
+    threadId,
+    commandRunId,
+    sourceMessageId,
   } = opts;
 
   // 1. Personal resources (no workspace) - implicit ownership
@@ -116,48 +126,73 @@ export async function checkPermissionOrPropose(
     }
 
     // 5. AI policy check
-    if (source === "ai" || source === "intelligence") {
-      // Check if the effective user is an AI agent
-      if (agentUserId) {
-        const [agentUser] = await db
-          .select({ userType: users.userType })
-          .from(users)
-          .where(eq(users.id, agentUserId))
+    //
+    // Agent user path: agentUserId is the canonical signal that this is an AI action.
+    // Source field is just metadata — not used to gate behaviour here.
+    if (agentUserId) {
+      // Confirm the user row is actually an agent (defence-in-depth)
+      const [agentUser] = await db
+        .select({ userType: users.userType })
+        .from(users)
+        .where(eq(users.id, agentUserId))
+        .limit(1);
+
+      if (agentUser?.userType === "agent") {
+        // Agent user: permission already verified via role above.
+        // DEFAULT: all agent actions require a proposal.
+        // EXCEPTION: actions listed in autoApproveFor whitelist bypass proposal.
+        const [ws] = await db
+          .select({ settings: workspaces.settings })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
           .limit(1);
 
-        if (agentUser?.userType === "agent") {
-          // Agent user: permission already verified via role above.
-          // Check workspace requireReviewFor for per-event-type overrides.
-          const [ws] = await db
-            .select({ settings: workspaces.settings })
-            .from(workspaces)
-            .where(eq(workspaces.id, workspaceId))
-            .limit(1);
+        const settings = ws?.settings as WorkspaceSettings | undefined;
 
-          const settings = ws?.settings as WorkspaceSettings | undefined;
-          const requireReview = settings?.aiGovernance?.requireReviewFor ?? [];
-          const eventKey = `${subjectType}.${action}`;
+        // Default whitelist: read-only + safe context-tracking operations.
+        // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
+        const DEFAULT_AUTO_APPROVE = [
+          "search.*",
+          "memory.recall",
+          "entity.read",
+          "document.read",
+          "context.*",
+        ];
+        const autoApproveFor =
+          settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
 
-          if (requireReview.includes(eventKey)) {
-            // Workspace explicitly requires review for this event type
-            return createProposal({
-              userId,
-              workspaceId,
-              subjectType,
-              action,
-              source,
-              data,
-              correlationId,
-              reasoning: opts.reasoning,
-            });
-          }
+        const eventKey = `${subjectType}.${action}`;
+        const isAutoApproved = autoApproveFor.some((pattern) =>
+          pattern.endsWith(".*")
+            ? eventKey.startsWith(pattern.slice(0, -2))
+            : eventKey === pattern
+        );
 
-          // Agent has permission and no review required — auto-approve
+        if (isAutoApproved) {
           return { granted: true };
         }
-      }
 
-      // Non-agent AI source: use legacy aiAutoApprove toggle
+        // Default: agent action requires a proposal
+        return createProposal({
+          userId,
+          agentUserId,
+          workspaceId,
+          subjectType,
+          action,
+          source,
+          data,
+          correlationId,
+          reasoning: opts.reasoning,
+          threadId,
+          commandRunId,
+          sourceMessageId,
+        });
+      }
+    }
+
+    // Legacy AI source path (no agent user row, but caller signals AI-sourced action).
+    // Use the legacy aiAutoApprove workspace toggle.
+    if (source === "ai" || source === "intelligence") {
       const [ws] = await db
         .select({ settings: workspaces.settings })
         .from(workspaces)
@@ -173,6 +208,7 @@ export async function checkPermissionOrPropose(
       if (!aiAutoApprove) {
         return createProposal({
           userId,
+          agentUserId,
           workspaceId,
           subjectType,
           action,
@@ -180,6 +216,9 @@ export async function checkPermissionOrPropose(
           data,
           correlationId,
           reasoning: opts.reasoning,
+          threadId,
+          commandRunId,
+          sourceMessageId,
         });
       }
     }
@@ -197,6 +236,7 @@ export async function checkPermissionOrPropose(
  */
 async function createProposal(opts: {
   userId: string;
+  agentUserId?: string;
   workspaceId: string;
   subjectType: string;
   action: string;
@@ -204,9 +244,13 @@ async function createProposal(opts: {
   data: Record<string, unknown>;
   correlationId?: string;
   reasoning?: string;
+  threadId?: string;
+  commandRunId?: string;
+  sourceMessageId?: string;
 }): Promise<{ granted: false; proposalId: string }> {
   const {
     userId,
+    agentUserId,
     workspaceId,
     subjectType,
     action,
@@ -214,6 +258,9 @@ async function createProposal(opts: {
     data,
     correlationId,
     reasoning,
+    threadId,
+    commandRunId,
+    sourceMessageId,
   } = opts;
 
   const targetId = (data.documentId ||
@@ -246,6 +293,11 @@ async function createProposal(opts: {
       proposalType: action,
       data: proposalData,
       status: ProposalStatus.PENDING,
+      createdBy: userId,
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(threadId ? { threadId } : {}),
+      ...(commandRunId ? { commandRunId } : {}),
+      ...(sourceMessageId ? { sourceMessageId } : {}),
     })
     .returning();
 

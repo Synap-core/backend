@@ -13,10 +13,10 @@ import { db, eq, and, desc } from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
-  chatThreads,
-  ChatThreadType,
-  ChatThreadStatus,
-  ChatThreadAgentType,
+  channels,
+  ChannelType,
+  ChannelStatus,
+  ChannelAgentType,
   intelligenceServices,
   type NewIntelligenceCommand,
 } from "@synap/database/schema";
@@ -28,7 +28,7 @@ import {
 } from "../utils/command-template.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { infiniteChatRouter } from "./infinite-chat.js";
+import { channelsRouter } from "./channels.js";
 
 // ── Intelligence Service Proxy Helpers ─────────────────────────────────────
 
@@ -326,14 +326,14 @@ export const intelligenceRouter = router({
       );
 
       const [thread] = await db
-        .insert(chatThreads)
+        .insert(channels)
         .values({
           userId,
           workspaceId,
-          threadType: ChatThreadType.MAIN,
-          status: ChatThreadStatus.ACTIVE,
+          channelType: ChannelType.AI_THREAD,
+          status: ChannelStatus.ACTIVE,
           agentId: "orchestrator",
-          agentType: ChatThreadAgentType.DEFAULT,
+          agentType: ChannelAgentType.DEFAULT,
         })
         .returning();
       if (!thread) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -362,7 +362,7 @@ export const intelligenceRouter = router({
       if (!run) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       try {
-        const chatCaller = infiniteChatRouter.createCaller(ctx as any);
+        const chatCaller = channelsRouter.createCaller(ctx as any);
         await chatCaller.sendMessage({
           threadId: thread.id,
           content: compiledPrompt,
@@ -473,10 +473,19 @@ export const intelligenceRouter = router({
             : { name: resolved.serviceId, capabilities: [] };
       }
 
+      const isDefaultService = resolved.serviceId === "default";
+      const intelligenceConfigured =
+        !isDefaultService ||
+        Boolean(
+          process.env.INTELLIGENCE_HUB_API_KEY?.trim() ||
+          process.env.HUB_PROTOCOL_API_KEY?.trim()
+        );
+
       return {
         serviceId: resolved.serviceId,
         endpoint: resolved.endpoint,
         manifest,
+        intelligenceConfigured,
       };
     }),
 
@@ -770,5 +779,43 @@ export const intelligenceRouter = router({
         }
       );
       return { success: true };
+    }),
+
+  // ── AI Channel Proxy ────────────────────────────────────────────────────
+
+  /** Start an AI-to-AI channel conversation */
+  startAIChannel: workspaceProcedure
+    .input(
+      z.object({
+        topic: z.string().min(1).max(500),
+        mode: z
+          .enum(["debate", "collaborate", "critique"])
+          .default("collaborate"),
+        maxTurns: z.number().int().min(1).max(5).default(3),
+        personaA: z
+          .object({
+            name: z.string().default("Perspective A"),
+            agentType: z.string().optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .default({ name: "Perspective A" }),
+        personaB: z
+          .object({
+            name: z.string().default("Perspective B"),
+            agentType: z.string().optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .default({ name: "Perspective B" }),
+        initialMessage: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch("/ai-channel", endpoint, {
+        method: "POST",
+        body: JSON.stringify({ userId, ...input }),
+      });
+      return res.json();
     }),
 });

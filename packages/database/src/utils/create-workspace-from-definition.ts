@@ -14,6 +14,7 @@ import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { WorkspaceMemberRepository } from "../repositories/workspace-member-repository.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
+import { ProfileScope } from "../schema/profiles.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { ViewRepository } from "../repositories/view-repository.js";
@@ -184,6 +185,7 @@ export async function createWorkspaceFromDefinition(
   for (const profile of definition.profiles ?? []) {
     const scopeMap: Record<string, string> = {
       SYSTEM: "system",
+      SHARED: "shared",
       WORKSPACE: "workspace",
       USER: "user",
     };
@@ -191,23 +193,50 @@ export async function createWorkspaceFromDefinition(
       ? (scopeMap[profile.scope] ?? "workspace")
       : "workspace";
 
-    const created = await profileRepo.create({
-      slug: profile.slug,
-      displayName: profile.displayName,
-      uiHints: {
-        icon: profile.icon,
-        color: profile.color,
-        description: profile.description,
-      },
-      scope: scope as any,
-      workspaceId,
-      userId,
-    });
+    // Handle pod-wide slug uniqueness: if the slug already exists (e.g., "company"
+    // was created by a previous workspace from the same template), reuse the
+    // existing profile rather than failing the entire creation.
+    const existing = await profileRepo.getBySlug(profile.slug);
+    let profileIsReused = false;
+    let created;
+
+    if (existing) {
+      logger.info(
+        { slug: profile.slug, existingId: existing.id, scope: existing.scope },
+        "Profile slug exists; reusing existing profile"
+      );
+      // For shared profiles that already exist, grant this workspace access
+      if (existing.scope === "shared") {
+        await profileRepo.grantAccess(existing.id, workspaceId);
+      }
+      created = existing;
+      profileIsReused = true;
+    } else {
+      created = await profileRepo.create({
+        slug: profile.slug,
+        displayName: profile.displayName,
+        uiHints: {
+          icon: profile.icon,
+          color: profile.color,
+          description: profile.description,
+        },
+        scope: scope as ProfileScope,
+        workspaceId,
+        userId,
+      });
+      // For newly created shared profiles, grant the creating workspace access
+      if (scope === "shared") {
+        await profileRepo.grantAccess(created.id, workspaceId);
+      }
+    }
 
     profileMap[profile.slug] = created.id;
     profileIds.push(created.id);
 
-    // 4. Create property definitions and link to profile
+    // 4. Create property definitions and link to profile.
+    // Skip entirely if we reused an existing profile — its property defs are already
+    // set up and re-inserting would hit the (slug, profile_id) unique constraint.
+    if (profileIsReused) continue;
     for (let i = 0; i < (profile.properties ?? []).length; i++) {
       const prop = profile.properties![i];
 
@@ -221,6 +250,9 @@ export async function createWorkspaceFromDefinition(
           enumValues: prop.enumValues,
         },
         ...(prop.constraints ? { constraints: prop.constraints } : {}),
+        // Scope def to this profile so generic slugs (status, type, owner)
+        // can be reused across profiles without colliding on the global unique index.
+        profileId: created.id,
       });
 
       await profilePropRepo.link({

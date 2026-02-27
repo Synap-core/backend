@@ -43,13 +43,21 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
     "apiKeyId" in ctx &&
     (ctx as any).apiKeyId
   ) {
+    const existingScopes = (ctx as any).scopes as string[];
+    const isHubProtocolKey = existingScopes.some((s: string) =>
+      s.startsWith("hub-protocol.")
+    );
     return next({
       ctx: {
         ...ctx,
-        scopes: (ctx as any).scopes as string[],
+        scopes: existingScopes,
         apiKeyId: (ctx as any).apiKeyId as string,
         apiKeyName: ((ctx as any).apiKeyName ?? "hub-protocol") as string,
         authenticated: true as const,
+        // Preserve hub-protocol branding from createHubProtocolCallerContext
+        ...(isHubProtocolKey || (ctx as any).isHubProtocol
+          ? { source: "intelligence", isHubProtocol: true }
+          : {}),
       },
     });
   }
@@ -97,12 +105,19 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
     });
   }
 
+  // Auto-brand hub-protocol requests at the authentication boundary.
+  // Any API key with hub-protocol.* scope cannot masquerade as a human request.
+  const isHubProtocolKey = keyRecord.scope.some((s: string) =>
+    s.startsWith("hub-protocol.")
+  );
+
   logger.debug(
     {
       userId: keyRecord.userId,
       keyName: keyRecord.keyName,
       scopes: keyRecord.scope,
       path,
+      isHubProtocol: isHubProtocolKey,
     },
     "API key validated successfully"
   );
@@ -116,6 +131,10 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
       apiKeyId: keyRecord.id,
       apiKeyName: keyRecord.keyName,
       authenticated: true as const,
+      // Architecturally enforce: hub-protocol keys are always AI-sourced.
+      ...(isHubProtocolKey
+        ? { source: "intelligence", isHubProtocol: true }
+        : {}),
     },
   });
 });

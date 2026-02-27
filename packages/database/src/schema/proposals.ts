@@ -6,7 +6,11 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { users } from "./users.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import { channels } from "./channels.js";
+import { commandRuns } from "./command-runs.js";
+import { messages } from "./messages.js";
 
 /**
  * Proposal Status
@@ -50,6 +54,28 @@ export const proposals = pgTable(
       .notNull()
       .default(ProposalStatus.PENDING),
 
+    // Provenance: which conversation / message / run generated this proposal?
+    // All nullable — existing proposals have no provenance.
+    // ON DELETE SET NULL: losing the thread/run doesn't destroy the proposal record.
+    createdBy: text("created_by"), // userId or agentUserId that authored this proposal
+    threadId: uuid("thread_id").references(() => channels.id, {
+      onDelete: "set null",
+    }),
+    commandRunId: uuid("command_run_id").references(() => commandRuns.id, {
+      onDelete: "set null",
+    }),
+    sourceMessageId: uuid("source_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+
+    // Attribution: which AI agent user created this proposal?
+    agentUserId: uuid("agent_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    // Expiry: proposals older than this are treated as expired
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+
     // Review Metadata
     reviewedBy: text("reviewed_by"),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
@@ -76,6 +102,23 @@ export const proposals = pgTable(
       table.targetType,
       table.targetId
     ),
+
+    // Provenance indexes (partial — only where value exists)
+    threadIdIdx: index("idx_proposals_thread_id").on(table.threadId),
+    commandRunIdIdx: index("idx_proposals_command_run_id").on(
+      table.commandRunId
+    ),
+    sourceMessageIdIdx: index("idx_proposals_source_message_id").on(
+      table.sourceMessageId
+    ),
+    createdByIdx: index("idx_proposals_created_by").on(table.createdBy),
+
+    // Composite: pending proposals for a thread (used by getWorkspaceBranchTree)
+    threadStatusIdx: index("idx_proposals_thread_status").on(
+      table.threadId,
+      table.status
+    ),
+    agentUserIdIdx: index("idx_proposals_agent_user_id").on(table.agentUserId),
   })
 );
 

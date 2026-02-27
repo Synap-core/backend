@@ -6,7 +6,7 @@ export { entitiesCollectionSchema } from "./entities.js";
 export { documentsCollectionSchema } from "./documents.js";
 export { viewsCollectionSchema } from "./views.js";
 export { projectsCollectionSchema } from "./projects.js";
-export { chatThreadsCollectionSchema } from "./chat-threads.js";
+export { channelsCollectionSchema } from "./channels.js";
 export { agentsCollectionSchema } from "./agents.js";
 
 export const ALL_COLLECTIONS = [
@@ -14,7 +14,7 @@ export const ALL_COLLECTIONS = [
   "documents",
   "views",
   "projects",
-  "chat_threads",
+  "channels",
   "agents",
 ] as const;
 

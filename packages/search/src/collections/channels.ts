@@ -1,11 +1,11 @@
 /**
- * Chat Threads Collection Schema
+ * Channels Collection Schema
  */
 
 import type { CollectionCreateSchema } from "../types/index.js";
 
-export const chatThreadsCollectionSchema: CollectionCreateSchema = {
-  name: "chat_threads",
+export const channelsCollectionSchema: CollectionCreateSchema = {
+  name: "channels",
   fields: [
     // Required fields
     { name: "id", type: "string", facet: false },

@@ -6,10 +6,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import {
   getDb,
   PropertyDefRepository,
+  ProfileRepository,
   PropertyValueType,
 } from "@synap/database";
 // PropertySlugConflictError not used, removed
@@ -31,13 +32,29 @@ const PropertyValueTypeSchema = z.enum([
 
 export const propertyDefsRouter = router({
   /**
-   * List all property definitions
+   * List property definitions accessible to the calling workspace.
+   *
+   * Returns only defs whose profile is accessible to this workspace
+   * (system profiles, workspace-owned profiles, shared profiles with access,
+   * user profiles) plus globally-scoped defs (profileId IS NULL).
+   *
+   * Uses workspaceProcedure so ctx.workspaceId is available.
    */
-  list: protectedProcedure.query(async () => {
+  list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const propertyDefRepo = new PropertyDefRepository(db);
+    const profileRepo = new ProfileRepository(db);
 
-    const propertyDefs = await propertyDefRepo.list();
+    // Get profiles accessible to this workspace, then return their property defs
+    // plus any global (profileId IS NULL) defs.
+    const accessibleProfiles = await profileRepo.getAccessibleProfiles(
+      ctx.userId,
+      ctx.workspaceId
+    );
+    const accessibleProfileIds = accessibleProfiles.map((p) => p.id);
+
+    const propertyDefs =
+      await propertyDefRepo.listForProfiles(accessibleProfileIds);
 
     return { propertyDefs };
   }),
@@ -68,7 +85,11 @@ export const propertyDefsRouter = router({
     }),
 
   /**
-   * Create a new property definition
+   * Create a new property definition.
+   *
+   * When profileId is provided the def is profile-scoped — allowing each profile
+   * to define its own `status`, `type`, `owner`, etc. without slug collisions.
+   * When omitted the def is global (legacy behaviour).
    */
   create: protectedProcedure
     .input(
@@ -81,19 +102,26 @@ export const propertyDefsRouter = router({
         valueType: PropertyValueTypeSchema,
         constraints: z.record(z.string(), z.unknown()).optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /** Profile UUID — scopes this def to a single profile. */
+        profileId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const propertyDefRepo = new PropertyDefRepository(db);
 
-      // Return existing on slug conflict — property defs are global and reusable
-      // across workspaces, so a template reusing "status" or "due-date" should
-      // just get the existing def back.
-      const existing = await propertyDefRepo.getBySlug(input.slug);
+      // Return existing on slug conflict (scoped to the same profile, or globally).
+      const existing = await propertyDefRepo.getBySlug(
+        input.slug,
+        input.profileId
+      );
       if (existing) {
         logger.info(
-          { slug: input.slug, existingId: existing.id },
+          {
+            slug: input.slug,
+            existingId: existing.id,
+            profileId: input.profileId,
+          },
           "Property def slug exists, returning existing"
         );
         return { propertyDef: existing, existing: true };
@@ -104,6 +132,7 @@ export const propertyDefsRouter = router({
         valueType: input.valueType as PropertyValueType,
         constraints: input.constraints,
         uiHints: input.uiHints,
+        profileId: input.profileId,
       });
 
       logger.info(

@@ -1,7 +1,7 @@
 /**
  * Chat Types - Domain Model
  *
- * Chat-related types for Synap's infinite chat with branching.
+ * Chat-related types for Synap's channel-based messaging with branching.
  * Leverages database-generated types and Hub Protocol types.
  */
 
@@ -11,7 +11,7 @@ import type {
   BranchDecision,
   AgentTypeString,
   MessageMetadata,
-  ProposedAction,
+  CreatedProposal,
 } from "../hub-protocol/index.js";
 
 // =============================================================================
@@ -19,35 +19,31 @@ import type {
 // =============================================================================
 
 /**
- * Chat thread (conversation)
+ * Channel (conversation container — was ChatThread)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type { ChatThread, NewChatThread } from "@synap/database";
+export type { Channel, NewChannel } from "@synap/database";
 
 /**
- * Chat message
+ * Message (was ChatMessage / ConversationMessageRow)
  *
  * Generated from database schema - DO NOT manually define
  */
 export type {
-  ConversationMessageRow as ChatMessage,
-  NewConversationMessageRow as NewChatMessage,
+  MessageRow as ChatMessage,
+  NewMessageRow as NewChatMessage,
 } from "@synap/database";
 
 /**
- * Thread entities (context tracking)
+ * Channel context item (replaces ThreadEntity + ThreadDocument)
  *
  * Generated from database schema - DO NOT manually define
  */
-export type { ThreadEntity, NewThreadEntity } from "@synap/database";
-
-/**
- * Thread documents (context tracking)
- *
- * Generated from database schema - DO NOT manually define
- */
-export type { ThreadDocument, NewThreadDocument } from "@synap/database";
+export type {
+  ChannelContextItem,
+  NewChannelContextItem,
+} from "@synap/database";
 
 // =============================================================================
 // UI State Types
@@ -58,7 +54,7 @@ export type { ThreadDocument, NewThreadDocument } from "@synap/database";
  */
 export interface BranchNode {
   id: string;
-  threadId: string;
+  channelId: string;
   parentId?: string;
   children: string[];
   depth: number;
@@ -79,7 +75,7 @@ export interface ChatUIState {
   aiSteps: AIStep[];
   extractedEntities: ExtractedEntity[];
   /** In-stream action proposals (create/update entity or document) */
-  proposedActions?: ProposedAction[];
+  proposedActions?: CreatedProposal[];
   branchDecision?: BranchDecision;
   error?: string;
 }
@@ -113,7 +109,7 @@ export interface SendMessageResponse {
  * Create branch request
  */
 export interface CreateBranchRequest {
-  parentThreadId: string;
+  parentChannelId: string;
   branchedFromMessageId: string;
   agentType: AgentTypeString;
   title?: string;
@@ -124,8 +120,8 @@ export interface CreateBranchRequest {
  * Create branch response
  */
 export interface CreateBranchResponse {
-  threadId: string;
-  thread: any; // ChatThread type
+  channelId: string;
+  channel: any; // Channel type
 }
 
 // =============================================================================
@@ -133,10 +129,10 @@ export interface CreateBranchResponse {
 // =============================================================================
 
 /**
- * useChatThread hook result
+ * useChatChannel hook result
  */
 export interface UseChatThreadResult {
-  thread: any; // ChatThread | undefined
+  channel: any; // Channel | undefined
   messages: any[]; // ChatMessage[]
   isLoading: boolean;
   error: Error | null;
@@ -154,7 +150,7 @@ export interface UseStreamingMessageResult {
   content: string;
   aiSteps: AIStep[];
   entities: ExtractedEntity[];
-  proposedActions?: ProposedAction[];
+  proposedActions?: CreatedProposal[];
   branchDecision?: BranchDecision;
   isStreaming: boolean;
   error?: string;
