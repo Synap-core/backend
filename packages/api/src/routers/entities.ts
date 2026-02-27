@@ -132,6 +132,7 @@ export const entitiesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
+        sourceMessageId: (ctx as any).sourceMessageId ?? undefined,
         data: {
           id: entityId,
           profileSlug,

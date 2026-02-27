@@ -3,7 +3,7 @@ import { setupRouter } from "./routers/setup.js";
 import { eventsRouter } from "./routers/events.js";
 import { captureRouter } from "./routers/capture.js";
 import { entitiesRouter } from "./routers/entities.js";
-import { infiniteChatRouter as chatRouter } from "./routers/infinite-chat.js";
+import { channelsRouter as chatRouter } from "./routers/channels.js";
 import { proposalsRouter } from "./routers/proposals.js";
 import { suggestionsRouter } from "./routers/suggestions.js";
 import { systemRouter } from "./routers/system.js";

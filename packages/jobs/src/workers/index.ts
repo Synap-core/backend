@@ -12,7 +12,7 @@ import { getBoss } from "../boss.js";
 import { createLogger } from "@synap-core/core";
 import { handleSearchIndex, handleBulkIndex } from "./search-worker.js";
 import { handleWorkspaceInit } from "./workspace-init.js";
-import { handleCrossThreadNotify } from "./cross-thread-notifier.js";
+import { handleCrossChannelNotify } from "./cross-channel-notifier.js";
 import {
   handleDocumentSnapshot,
   handleDocumentRestore,
@@ -81,11 +81,13 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: workspace-init");
 
-  // Cross-thread notifications
+  // Cross-channel notifications
   await boss.work("cross-thread-notify", async ([job]: any[]) =>
-    handleCrossThreadNotify(job)
+    handleCrossChannelNotify(job)
   );
-  logger.info("Registered worker: cross-thread-notify");
+  logger.info(
+    "Registered worker: cross-thread-notify (cross-channel-notifier)"
+  );
 
   // Document snapshots
   await boss.work("document-snapshot", async ([job]: any[]) =>

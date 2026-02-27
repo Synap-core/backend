@@ -14,8 +14,12 @@ import {
   documents,
   eq,
   and,
+  or,
   desc,
+  isNull,
+  gt,
   getWorkspaceMembership,
+  normalizeDocumentType,
 } from "@synap/database";
 import { ProposalStatus, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
@@ -27,6 +31,8 @@ import {
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
+import { channelsRouter } from "./channels.js";
+import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 
 export const proposalsRouter = router({
   /**
@@ -79,6 +85,11 @@ export const proposalsRouter = router({
               : ProposalStatus.REJECTED;
         conditions.push(eq(proposals.status, statusEnum));
       }
+
+      // Exclude expired proposals (expiresAt is null = no expiry, or in the future)
+      conditions.push(
+        or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date()))!
+      );
 
       // Verify user has editor+ access to the workspace
       if (input.workspaceId) {
@@ -221,6 +232,274 @@ export const proposalsRouter = router({
             updatedAt: new Date(),
           })
           .where(eq(documents.id, proposal.targetId));
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
+      // Document creation proposal: AI proposed a new document (content stored in JSONB).
+      // Upload content to MinIO and insert DB row now that the user approved.
+      if (
+        proposal.targetType === "document" &&
+        proposal.proposalType === "create"
+      ) {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const documentId = proposal.targetId;
+        const docType = normalizeDocumentType(
+          (data.type as string) || "markdown",
+          "markdown"
+        );
+        const extension = docType === "markdown" ? "md" : docType;
+        const content = (data.content as string) || "";
+        const docUserId = (data.userId as string) || userId;
+        const storageKey = storage.buildPath(
+          docUserId,
+          "document",
+          documentId,
+          extension
+        );
+        const metadata = await storage.upload(storageKey, content, {
+          contentType: "text/markdown",
+        });
+
+        await db.insert(documents).values({
+          id: documentId,
+          title: (data.title as string) || "Untitled",
+          type: docType,
+          storageUrl: metadata.url,
+          storageKey: metadata.path,
+          size: metadata.size,
+          mimeType: "text/markdown",
+          userId: docUserId,
+          workspaceId: proposal.workspaceId,
+          currentVersion: 1,
+          lastSavedVersion: 1,
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
+      // Branch creation proposal: AI proposed creating a branch.
+      // Execute via channelsRouter now that the user approved.
+      if (
+        proposal.targetType === "channel" &&
+        proposal.proposalType === "create_branch"
+      ) {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId!,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const branchCallerCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId!,
+          workspaceRole: membership.role,
+        };
+        const caller = channelsRouter.createCaller(branchCallerCtx);
+        await caller.createThread({
+          parentThreadId: data.parentThreadId as string,
+          branchPurpose: data.branchPurpose as string,
+          agentId: data.agentId as string | undefined,
+          agentType: data.agentType as
+            | "default"
+            | "meta"
+            | "prompting"
+            | "knowledge-search"
+            | "code"
+            | "writing"
+            | "action"
+            | undefined,
+          agentConfig: data.agentConfig as Record<string, unknown> | undefined,
+          inheritContext: (data.inheritContext as boolean) ?? true,
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
+      // Branch merge proposal: AI proposed merging a branch.
+      // The user must always validate a merge — execute now that they approved.
+      if (
+        proposal.targetType === "channel" &&
+        proposal.proposalType === "merge_branch"
+      ) {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId!,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const mergeCallerCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId!,
+          workspaceRole: membership.role,
+        };
+        const caller = channelsRouter.createCaller(mergeCallerCtx);
+        await caller.mergeBranch({
+          branchId: data.branchId as string,
+          summary: data.summary as string | undefined,
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
+      // Entity creation proposal: AI proposed a new entity.
+      // Execute inline via entitiesRouter (human approver context bypasses governance).
+      if (
+        proposal.targetType === "entity" &&
+        proposal.proposalType === "create"
+      ) {
+        const innerData = ((proposal.data as any)?.data ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId!,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const entityCallerCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId!,
+          workspaceRole: membership.role,
+        };
+        const entityCaller = regularEntitiesRouter.createCaller(
+          entityCallerCtx as any
+        );
+        const profileSlug = innerData.profileSlug as string | undefined;
+        if (!profileSlug) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Entity proposal is missing profileSlug",
+          });
+        }
+        await entityCaller.create({
+          profileSlug,
+          title: (innerData.title as string) || "Untitled",
+          description: innerData.description as string | undefined,
+          properties: innerData.properties as
+            | Record<string, unknown>
+            | undefined,
+          source: "system",
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
+      // Entity update proposal: AI proposed changes to an existing entity.
+      // Execute inline via entitiesRouter (human approver context bypasses governance).
+      if (
+        proposal.targetType === "entity" &&
+        proposal.proposalType === "update"
+      ) {
+        const innerData = ((proposal.data as any)?.data ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const entityId = (innerData.id as string) || proposal.targetId;
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId!,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const entityCallerCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId!,
+          workspaceRole: membership.role,
+        };
+        const entityCaller = regularEntitiesRouter.createCaller(
+          entityCallerCtx as any
+        );
+        await entityCaller.update({
+          id: entityId,
+          title: innerData.title as string | undefined,
+          description: innerData.description as string | undefined,
+          properties: innerData.properties as
+            | Record<string, unknown>
+            | undefined,
+          source: "system",
+        });
 
         await db
           .update(proposals)

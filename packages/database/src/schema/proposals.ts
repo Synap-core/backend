@@ -6,10 +6,11 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { users } from "./users.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-import { chatThreads } from "./chat-threads.js";
+import { channels } from "./channels.js";
 import { commandRuns } from "./command-runs.js";
-import { conversationMessages } from "./conversation-messages.js";
+import { messages } from "./messages.js";
 
 /**
  * Proposal Status
@@ -57,16 +58,23 @@ export const proposals = pgTable(
     // All nullable — existing proposals have no provenance.
     // ON DELETE SET NULL: losing the thread/run doesn't destroy the proposal record.
     createdBy: text("created_by"), // userId or agentUserId that authored this proposal
-    threadId: uuid("thread_id").references(() => chatThreads.id, {
+    threadId: uuid("thread_id").references(() => channels.id, {
       onDelete: "set null",
     }),
     commandRunId: uuid("command_run_id").references(() => commandRuns.id, {
       onDelete: "set null",
     }),
-    sourceMessageId: uuid("source_message_id").references(
-      () => conversationMessages.id,
-      { onDelete: "set null" }
-    ),
+    sourceMessageId: uuid("source_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+
+    // Attribution: which AI agent user created this proposal?
+    agentUserId: uuid("agent_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+
+    // Expiry: proposals older than this are treated as expired
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
 
     // Review Metadata
     reviewedBy: text("reviewed_by"),
@@ -110,6 +118,7 @@ export const proposals = pgTable(
       table.threadId,
       table.status
     ),
+    agentUserIdIdx: index("idx_proposals_agent_user_id").on(table.agentUserId),
   })
 );
 

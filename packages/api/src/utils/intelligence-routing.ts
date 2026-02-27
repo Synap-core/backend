@@ -7,11 +7,13 @@
  * 3. Fallback to environment variable service
  */
 
-import { db, eq, and } from "@synap/database";
+import { db, eq, and, sql } from "@synap/database";
 import {
   userPreferences,
   workspaces,
   intelligenceServices,
+  users,
+  workspaceMembers,
 } from "@synap/database/schema";
 import { IntelligenceHubClient } from "../clients/intelligence-hub.js";
 
@@ -35,6 +37,8 @@ export interface ResolvedService {
   serviceId: string;
   endpoint: string;
   client: IntelligenceHubClient;
+  /** Per-human AI agent user ID, if one exists for this user+workspace pair */
+  agentUserId?: string;
 }
 
 /**
@@ -44,6 +48,9 @@ export async function resolveIntelligenceService(
   ctx: ServiceResolutionContext
 ): Promise<ResolvedService> {
   const capability = ctx.capability || "default";
+
+  // Look up the dedicated AI agent user for this human+workspace (non-blocking)
+  const agentUserId = await lookupAgentUser(ctx.userId, ctx.workspaceId);
 
   // 1. Check workspace preference (if in workspace)
   if (ctx.workspaceId) {
@@ -61,7 +68,7 @@ export async function resolveIntelligenceService(
 
     if (wsServiceId) {
       const service = await getActiveService(wsServiceId);
-      if (service) return createClient(service);
+      if (service) return { ...createClient(service), agentUserId };
     }
   }
 
@@ -79,11 +86,40 @@ export async function resolveIntelligenceService(
 
   if (userServiceId) {
     const service = await getActiveService(userServiceId);
-    if (service) return createClient(service);
+    if (service) return { ...createClient(service), agentUserId };
   }
 
   // 3. Fallback to default service from environment
-  return createDefaultClient();
+  return { ...createDefaultClient(), agentUserId };
+}
+
+/**
+ * Find the dedicated AI agent user for a given human user+workspace pair.
+ * Returns undefined if no agent user exists (graceful degradation).
+ */
+async function lookupAgentUser(
+  userId: string,
+  workspaceId?: string
+): Promise<string | undefined> {
+  if (!workspaceId) return undefined;
+  try {
+    const [row] = await db
+      .select({ id: users.id })
+      .from(users)
+      .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+      .where(
+        and(
+          eq(users.userType, "agent"),
+          eq(workspaceMembers.workspaceId, workspaceId),
+          sql`${users.agentMetadata}->>'createdByUserId' = ${userId}`
+        )
+      )
+      .limit(1);
+    return row?.id;
+  } catch {
+    // Agent user lookup is non-critical; degrade gracefully
+    return undefined;
+  }
 }
 
 /**

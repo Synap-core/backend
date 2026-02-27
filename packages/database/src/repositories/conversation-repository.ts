@@ -13,20 +13,18 @@
 import { sql } from "../client-pg.js";
 import { createHash, randomUUID } from "crypto";
 import type { ConversationMessageMetadata } from "@synap-core/core";
+import { MessageRole } from "../schema/messages.js";
+
+// re-export so existing callers that import MessageRole from this module keep working
+export { MessageRole };
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-export enum MessageRole {
-  USER = "user",
-  ASSISTANT = "assistant",
-  SYSTEM = "system",
-}
-
 export interface ConversationMessage {
   id: string;
-  threadId: string;
+  channelId: string;
   parentId: string | null;
   role: MessageRole;
   content: string;
@@ -39,7 +37,7 @@ export interface ConversationMessage {
 }
 
 export interface AppendMessageData {
-  threadId: string;
+  channelId: string;
   parentId?: string;
   role: MessageRole;
   content: string;
@@ -48,7 +46,7 @@ export interface AppendMessageData {
 }
 
 export interface ThreadInfo {
-  threadId: string;
+  channelId: string;
   messageCount: number;
   latestMessage: ConversationMessage | null;
   branches: number;
@@ -69,7 +67,7 @@ export class ConversationRepository {
     let previousHash: string | null = null;
     if (data.parentId) {
       const parentResult = await sql`
-        SELECT hash FROM conversation_messages WHERE id = ${data.parentId}
+        SELECT hash FROM messages WHERE id = ${data.parentId}
       `;
 
       if (parentResult.length === 0) {
@@ -90,9 +88,9 @@ export class ConversationRepository {
 
     // Insert message
     const result = await sql`
-      INSERT INTO conversation_messages (
+      INSERT INTO messages (
         id,
-        thread_id,
+        channel_id,
         parent_id,
         role,
         content,
@@ -103,7 +101,7 @@ export class ConversationRepository {
         hash
       ) VALUES (
         ${messageId},
-        ${data.threadId},
+        ${data.channelId},
         ${data.parentId || null},
         ${data.role},
         ${data.content},
@@ -123,12 +121,12 @@ export class ConversationRepository {
    * Get thread history (all messages in order)
    */
   async getThreadHistory(
-    threadId: string,
+    channelId: string,
     limit: number = 100
   ): Promise<ConversationMessage[]> {
     const result = await sql`
-      SELECT * FROM conversation_messages
-      WHERE thread_id = ${threadId}
+      SELECT * FROM messages
+      WHERE channel_id = ${channelId}
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
       LIMIT ${limit}
@@ -141,11 +139,11 @@ export class ConversationRepository {
    * Get latest message in thread
    */
   async getLatestMessage(
-    threadId: string
+    channelId: string
   ): Promise<ConversationMessage | null> {
     const result = await sql`
-      SELECT * FROM conversation_messages
-      WHERE thread_id = ${threadId}
+      SELECT * FROM messages
+      WHERE channel_id = ${channelId}
         AND deleted_at IS NULL
       ORDER BY timestamp DESC
       LIMIT 1
@@ -160,7 +158,7 @@ export class ConversationRepository {
   async createBranch(parentMessageId: string, userId: string): Promise<string> {
     // Verify parent exists
     const parentResult = await sql`
-      SELECT * FROM conversation_messages WHERE id = ${parentMessageId}
+      SELECT * FROM messages WHERE id = ${parentMessageId}
     `;
 
     if (parentResult.length === 0) {
@@ -176,14 +174,14 @@ export class ConversationRepository {
       );
     }
 
-    // Create new thread ID
-    const newThreadId = randomUUID();
+    // Create new channel ID for the branch
+    const newChannelId = randomUUID();
 
-    // Copy all messages up to (and including) the parent into new thread
+    // Copy all messages up to (and including) the parent into the new channel
     await sql`
-      INSERT INTO conversation_messages (
+      INSERT INTO messages (
         id,
-        thread_id,
+        channel_id,
         parent_id,
         role,
         content,
@@ -195,7 +193,7 @@ export class ConversationRepository {
       )
       SELECT
         gen_random_uuid(),
-        ${newThreadId},
+        ${newChannelId},
         parent_id,
         role,
         content,
@@ -204,14 +202,14 @@ export class ConversationRepository {
         timestamp,
         previous_hash,
         hash
-      FROM conversation_messages
-      WHERE thread_id = ${parent.threadId}
-        AND timestamp <= (SELECT timestamp FROM conversation_messages WHERE id = ${parentMessageId})
+      FROM messages
+      WHERE channel_id = ${parent.channelId}
+        AND timestamp <= (SELECT timestamp FROM messages WHERE id = ${parentMessageId})
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
     `;
 
-    return newThreadId;
+    return newChannelId;
   }
 
   /**
@@ -219,7 +217,7 @@ export class ConversationRepository {
    */
   async getBranches(parentId: string): Promise<ConversationMessage[]> {
     const result = await sql`
-      SELECT * FROM conversation_messages
+      SELECT * FROM messages
       WHERE parent_id = ${parentId}
         AND deleted_at IS NULL
       ORDER BY timestamp ASC
@@ -231,13 +229,13 @@ export class ConversationRepository {
   /**
    * Verify hash chain integrity
    */
-  async verifyHashChain(threadId: string): Promise<{
+  async verifyHashChain(channelId: string): Promise<{
     isValid: boolean;
     brokenAt: string | null;
     message: string;
   }> {
     const result = await sql`
-      SELECT * FROM verify_hash_chain(${threadId})
+      SELECT * FROM verify_hash_chain(${channelId})
     `;
 
     const row = result[0];
@@ -251,20 +249,20 @@ export class ConversationRepository {
   /**
    * Get thread info (metadata)
    */
-  async getThreadInfo(threadId: string): Promise<ThreadInfo> {
+  async getThreadInfo(channelId: string): Promise<ThreadInfo> {
     const countResult = await sql`
-      SELECT count_thread_messages(${threadId}) as count
+      SELECT count_thread_messages(${channelId}) as count
     `;
 
-    const latestMessage = await this.getLatestMessage(threadId);
+    const latestMessage = await this.getLatestMessage(channelId);
 
     // Count branches (messages with multiple children)
     const branchResult = await sql`
       SELECT COUNT(DISTINCT parent_id) as branches
       FROM (
         SELECT parent_id, COUNT(*) as children
-        FROM conversation_messages
-        WHERE thread_id = ${threadId}
+        FROM messages
+        WHERE channel_id = ${channelId}
           AND parent_id IS NOT NULL
           AND deleted_at IS NULL
         GROUP BY parent_id
@@ -273,7 +271,7 @@ export class ConversationRepository {
     `;
 
     return {
-      threadId,
+      channelId,
       messageCount: countResult[0].count,
       latestMessage,
       branches: branchResult[0].branches || 0,
@@ -288,45 +286,45 @@ export class ConversationRepository {
     limit: number = 20
   ): Promise<
     Array<{
-      threadId: string;
+      channelId: string;
       latestMessage: ConversationMessage;
       messageCount: number;
     }>
   > {
     const result = await sql`
-      WITH thread_latest AS (
-        SELECT DISTINCT ON (thread_id)
-          thread_id,
+      WITH channel_latest AS (
+        SELECT DISTINCT ON (channel_id)
+          channel_id,
           id,
           content,
           timestamp
-        FROM conversation_messages
+        FROM messages
         WHERE user_id = ${userId}
           AND deleted_at IS NULL
-        ORDER BY thread_id, timestamp DESC
+        ORDER BY channel_id, timestamp DESC
       ),
-      thread_counts AS (
+      channel_counts AS (
         SELECT
-          thread_id,
+          channel_id,
           COUNT(*) as message_count
-        FROM conversation_messages
+        FROM messages
         WHERE user_id = ${userId}
           AND deleted_at IS NULL
-        GROUP BY thread_id
+        GROUP BY channel_id
       )
       SELECT
-        tl.*,
-        tc.message_count,
-        cm.*
-      FROM thread_latest tl
-      JOIN thread_counts tc ON tl.thread_id = tc.thread_id
-      JOIN conversation_messages cm ON tl.id = cm.id
-      ORDER BY tl.timestamp DESC
+        cl.*,
+        cc.message_count,
+        m.*
+      FROM channel_latest cl
+      JOIN channel_counts cc ON cl.channel_id = cc.channel_id
+      JOIN messages m ON cl.id = m.id
+      ORDER BY cl.timestamp DESC
       LIMIT ${limit}
     `;
 
     return result.map((row) => ({
-      threadId: row.thread_id,
+      channelId: row.channel_id,
       messageCount: parseInt(row.message_count, 10),
       latestMessage: this.mapRow(row),
     }));
@@ -337,7 +335,7 @@ export class ConversationRepository {
    */
   async deleteMessage(messageId: string, userId: string): Promise<void> {
     const result = await sql`
-      UPDATE conversation_messages
+      UPDATE messages
       SET deleted_at = NOW()
       WHERE id = ${messageId}
         AND user_id = ${userId}
@@ -383,7 +381,7 @@ export class ConversationRepository {
 
     return {
       id: row.id,
-      threadId: row.thread_id,
+      channelId: row.channel_id,
       parentId: row.parent_id,
       role: row.role as MessageRole,
       content: row.content,

@@ -11,7 +11,7 @@ import type {
   BranchDecision,
   TokenUsage,
   AIStep,
-  ProposedAction,
+  CreatedProposal,
 } from "@synap-core/types";
 
 export interface IntelligenceHubRequest {
@@ -24,6 +24,10 @@ export interface IntelligenceHubRequest {
   projectId?: string;
   /** Active workspace (required for entity create/update – event chain) */
   workspaceId?: string;
+  /** ID of the user message that triggered this request — links proposals to the message */
+  sourceMessageId?: string;
+  /** Per-human AI agent user ID — used for proposal attribution in hub-protocol tool calls */
+  agentUserId?: string;
   // Data Pod credentials for Hub Protocol access
   dataPodUrl?: string;
   dataPodApiKey?: string;
@@ -36,7 +40,7 @@ export type {
   BranchDecision,
   TokenUsage,
   AIStep,
-  ProposedAction,
+  CreatedProposal,
 };
 
 // Legacy interface for backwards compatibility
@@ -144,6 +148,8 @@ export class IntelligenceHubClient {
         projectId: request.projectId,
         stream: true,
         workspaceId: request.workspaceId,
+        sourceMessageId: request.sourceMessageId,
+        agentUserId: request.agentUserId,
         dataPodUrl:
           request.dataPodUrl ||
           process.env.PUBLIC_URL ||
@@ -189,8 +195,6 @@ export class IntelligenceHubClient {
                 yield { type: "chunk", content: data.content };
               } else if (data.type === "step" && data.step) {
                 yield { type: "step", step: data.step };
-              } else if (data.type === "proposal" && data.data) {
-                yield { type: "proposal", proposal: data.data };
               } else if (data.type === "entities" && data.entities) {
                 yield { type: "entities", entities: data.entities };
               } else if (data.type === "branch_decision" && data.decision) {

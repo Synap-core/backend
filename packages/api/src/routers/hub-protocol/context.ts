@@ -9,11 +9,16 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { infiniteChatRouter } from "../infinite-chat.js";
+import { channelsRouter } from "../channels.js";
 import { entitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { db } from "@synap/database";
-import { entities, documents, workspaceMembers, chatThreads } from "@synap/database/schema";
+import {
+  entities,
+  documents,
+  workspaceMembers,
+  channels,
+} from "@synap/database/schema";
 import { inArray, eq } from "@synap/database";
 
 export const contextRouter = router({
@@ -34,16 +39,17 @@ export const contextRouter = router({
       // Look up the thread's userId, workspaceId, contextSummary and metadata
       const thread = await db
         .select({
-          userId: chatThreads.userId,
-          workspaceId: chatThreads.workspaceId,
-          contextSummary: chatThreads.contextSummary,
-          metadata: chatThreads.metadata,
+          userId: channels.userId,
+          workspaceId: channels.workspaceId,
+          contextSummary: channels.contextSummary,
+          metadata: channels.metadata,
         })
-        .from(chatThreads)
-        .where(eq(chatThreads.id, input.threadId))
+        .from(channels)
+        .where(eq(channels.id, input.threadId))
         .limit(1)
         .then((r) => r[0]);
-      const workspaceId = thread?.workspaceId ?? (ctx as any).workspaceId ?? null;
+      const workspaceId =
+        thread?.workspaceId ?? (ctx as any).workspaceId ?? null;
       const threadUserId = thread?.userId ?? ctx.userId!;
       // Use the thread's actual userId (not API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
@@ -51,7 +57,7 @@ export const contextRouter = router({
         ctx.scopes || [],
         workspaceId
       );
-      const chatCaller = infiniteChatRouter.createCaller(callerContext);
+      const chatCaller = channelsRouter.createCaller(callerContext);
       const entitiesCaller = entitiesRouter.createCaller(callerContext);
 
       // Get thread with context (includes thread_entities and thread_documents rows)
@@ -72,13 +78,14 @@ export const contextRouter = router({
         limit: 10,
       });
 
-      // Linked entities/documents (B2): from thread_entities and thread_documents
-      const linkedEntityIds: string[] = (threadResult.entities ?? []).map(
-        (e: { entityId: string }) => e.entityId
-      );
-      const linkedDocumentIds: string[] = (threadResult.documents ?? []).map(
-        (d: { documentId: string }) => d.documentId
-      );
+      // Linked entities/documents from channel_context_items
+      const contextItems = threadResult.contextItems ?? [];
+      const linkedEntityIds: string[] = contextItems
+        .filter((i: { objectType: string }) => i.objectType === "entity")
+        .map((i: { objectId: string }) => i.objectId);
+      const linkedDocumentIds: string[] = contextItems
+        .filter((i: { objectType: string }) => i.objectType === "document")
+        .map((i: { objectId: string }) => i.objectId);
 
       // Resolve linked entities and documents for prompt injection (id, type/title)
       let linkedEntities: Array<{
@@ -157,14 +164,15 @@ export const contextRouter = router({
         .where(eq(workspaceMembers.userId, input.userId))
         .limit(1)
         .then((r) => r[0]);
-      const workspaceId = membership?.workspaceId ?? (ctx as any).workspaceId ?? null;
+      const workspaceId =
+        membership?.workspaceId ?? (ctx as any).workspaceId ?? null;
       // Use input.userId (the real user) not ctx.userId (the API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
         workspaceId
       );
-      const chatCaller = infiniteChatRouter.createCaller(callerContext);
+      const chatCaller = channelsRouter.createCaller(callerContext);
       const entitiesCaller = entitiesRouter.createCaller(callerContext);
 
       // Get recent entities
@@ -217,15 +225,15 @@ export const contextRouter = router({
       // We could extend the regular API to support this, but for now we keep it direct
       // since it's a specialized Hub Protocol operation
       const { db, eq } = await import("@synap/database");
-      const { chatThreads } = await import("@synap/database/schema");
+      const { channels } = await import("@synap/database/schema");
 
       await db
-        .update(chatThreads)
+        .update(channels)
         .set({
           contextSummary: input.contextSummary,
           updatedAt: new Date(),
         })
-        .where(eq(chatThreads.id, input.threadId));
+        .where(eq(channels.id, input.threadId));
 
       return { success: true };
     }),

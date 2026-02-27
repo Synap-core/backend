@@ -10,16 +10,15 @@ export * from "./entities.js";
 export * from "./entity-vectors.js";
 export * from "./documents.js";
 export * from "./relations.js";
-export * from "./conversation-messages.js";
+export * from "./messages.js";
 export * from "./knowledge-facts.js";
 export * from "./ai-suggestions.js";
 export * from "./api-keys.js";
 export * from "./webhook_subscriptions.js";
 
-// New schemas for chat system
-export * from "./chat-threads.js";
-export * from "./thread-entities.js";
-export * from "./thread-documents.js";
+// Channels system (replaces chat-threads + thread-entities + thread-documents)
+export * from "./channels.js";
+export * from "./channel-context-items.js";
 export * from "./agents.js";
 export * from "./projects.js";
 export * from "./roles.js";

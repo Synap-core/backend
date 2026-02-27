@@ -5,6 +5,7 @@
  * - tRPC API endpoints
  * - Ory Kratos routes (session-based authentication)
  * - Token Exchange endpoint
+ * - Control Plane Handshake endpoint (/api/handshake)
  * - pg-boss job queue (background jobs)
  */
 
@@ -42,6 +43,7 @@ import {
   registerCronSchedules,
 } from "@synap/jobs";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import {
   getCorsOrigins,
   rateLimitMiddleware,
@@ -275,10 +277,178 @@ app.post("/api/auth/token-exchange", async (c) => {
   }
 });
 
+// Control Plane Handshake Endpoint
+// Accepts a short-lived JWT issued by the Synap Control Plane (PLATFORM_JWT_SECRET),
+// verifies it, then creates or finds a Kratos identity and issues a Kratos session.
+// The session cookie is set in the response for browser-based auth.
+//
+// Env var required: CONTROL_PLANE_JWT_SECRET (must match control plane's PLATFORM_JWT_SECRET)
+//
+// Flow:
+//   Browser → POST /pods/handshake (control plane) → JWT
+//   Browser → POST ${podUrl}/api/handshake { token } (this endpoint) → Kratos session cookie
+app.post("/api/handshake", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { token } = body as { token?: string };
+
+    if (!token || typeof token !== "string") {
+      return c.json({ error: "token is required" }, 400);
+    }
+
+    // Verify the handshake JWT
+    const secret = process.env.CONTROL_PLANE_JWT_SECRET;
+    if (!secret) {
+      apiLogger.error("CONTROL_PLANE_JWT_SECRET is not configured");
+      return c.json({ error: "Server configuration error" }, 500);
+    }
+
+    let payload: {
+      sub: string;
+      email: string;
+      name?: string;
+      aud: string;
+      iss: string;
+      type: string;
+    };
+
+    try {
+      payload = jwt.verify(token, secret, {
+        issuer: "synap-control-plane",
+      }) as typeof payload;
+    } catch (jwtErr) {
+      apiLogger.warn({ err: jwtErr }, "Handshake token verification failed");
+      return c.json({ error: "Invalid or expired handshake token" }, 401);
+    }
+
+    if (payload.type !== "handshake") {
+      return c.json({ error: "Invalid token type" }, 400);
+    }
+
+    const { email, name } = payload;
+    if (!email) {
+      return c.json({ error: "Token missing email claim" }, 400);
+    }
+
+    const kratosAdminUrl =
+      process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+
+    // 1. Find existing Kratos identity by email
+    let identityId: string | null = null;
+
+    const listResp = await fetch(
+      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
+    );
+
+    if (listResp.ok) {
+      const identities = (await listResp.json()) as Array<{ id: string }>;
+      if (Array.isArray(identities) && identities.length > 0) {
+        identityId = identities[0].id;
+        apiLogger.info({ email, identityId }, "Found existing Kratos identity");
+      }
+    }
+
+    // 2. If no identity, create one (provisioning new cloud user on this pod)
+    if (!identityId) {
+      apiLogger.info({ email }, "Creating new Kratos identity for cloud user");
+
+      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_id: "default",
+          traits: { email, ...(name ? { name } : {}) },
+          credentials: {
+            password: {
+              config: {
+                // Random password — this user authenticates via handshake, not password
+                password: crypto.randomBytes(32).toString("hex"),
+              },
+            },
+          },
+          verifiable_addresses: [
+            {
+              value: email,
+              verified: true,
+              via: "email",
+              status: "completed",
+            },
+          ],
+        }),
+      });
+
+      if (!createResp.ok) {
+        const errBody = await createResp.text();
+        apiLogger.error(
+          { status: createResp.status, body: errBody },
+          "Failed to create Kratos identity"
+        );
+        return c.json({ error: "Failed to provision user account" }, 500);
+      }
+
+      const newIdentity = (await createResp.json()) as { id: string };
+      identityId = newIdentity.id;
+      apiLogger.info({ email, identityId }, "Created Kratos identity");
+    }
+
+    // 3. Create a Kratos session for the identity via admin API
+    const sessionResp = await fetch(
+      `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }
+    );
+
+    if (!sessionResp.ok) {
+      const errBody = await sessionResp.text();
+      apiLogger.error(
+        { status: sessionResp.status, body: errBody },
+        "Failed to create Kratos session"
+      );
+      return c.json({ error: "Failed to create session" }, 500);
+    }
+
+    const sessionData = (await sessionResp.json()) as {
+      session?: { id: string; active: boolean };
+      session_token?: string;
+    };
+
+    const sessionToken = sessionData.session_token;
+
+    if (!sessionToken) {
+      apiLogger.error({ sessionData }, "No session_token in Kratos response");
+      return c.json(
+        { error: "Session token not returned by auth server" },
+        500
+      );
+    }
+
+    // 4. Set session cookie for the browser
+    const isSecure = c.req.url.startsWith("https");
+    c.header(
+      "Set-Cookie",
+      `ory_kratos_session=${sessionToken}; Path=/; HttpOnly; ${isSecure ? "Secure; " : ""}SameSite=None`
+    );
+
+    apiLogger.info(
+      { email, identityId },
+      "Handshake successful — session created"
+    );
+
+    return c.json({ success: true, session: sessionData.session });
+  } catch (error) {
+    apiLogger.error({ err: error }, "Handshake endpoint error");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 apiLogger.info(
   "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
 );
 apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
+apiLogger.info("Control Plane handshake endpoint enabled at /api/handshake");
 
 // SSE endpoint for real-time event streaming (admin dashboard)
 // Server-Sent Events endpoint for event broadcasting

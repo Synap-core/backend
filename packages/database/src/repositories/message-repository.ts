@@ -5,12 +5,12 @@
  */
 
 import type { EventRepository } from "./event-repository.js";
-import { conversationMessages } from "../schema/index.js";
+import { messages } from "../schema/index.js";
 import { randomUUID, createHash } from "crypto";
 import { eq } from "drizzle-orm";
 
 export interface CreateMessageInput {
-  threadId: string;
+  channelId: string;
   content: string;
   role: "user" | "assistant" | "system";
   parentId?: string;
@@ -19,7 +19,7 @@ export interface CreateMessageInput {
   userId: string;
 }
 
-export type Message = typeof conversationMessages.$inferSelect;
+export type Message = typeof messages.$inferSelect;
 
 export class MessageRepository {
   constructor(
@@ -32,7 +32,7 @@ export class MessageRepository {
 
     // Compute hash
     const hashInput = JSON.stringify({
-      threadId: input.threadId,
+      channelId: input.channelId,
       content: input.content,
       role: input.role,
       timestamp: new Date().toISOString(),
@@ -40,10 +40,10 @@ export class MessageRepository {
     const hash = createHash("sha256").update(hashInput).digest("hex");
 
     const [message] = await this.db
-      .insert(conversationMessages)
+      .insert(messages)
       .values({
         id: messageId,
-        threadId: input.threadId,
+        channelId: input.channelId,
         parentId: input.parentId,
         role: input.role,
         content: input.content,
@@ -63,7 +63,7 @@ export class MessageRepository {
       userId,
       source: "api",
       timestamp: new Date(),
-      data: { messageId, threadId: input.threadId },
+      data: { messageId, channelId: input.channelId },
       metadata: {},
     });
 
@@ -71,9 +71,7 @@ export class MessageRepository {
   }
 
   async delete(id: string, userId: string): Promise<void> {
-    await this.db
-      .delete(conversationMessages)
-      .where(eq(conversationMessages.id, id));
+    await this.db.delete(messages).where(eq(messages.id, id));
 
     await this.eventRepo.append({
       id: randomUUID(),

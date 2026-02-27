@@ -77,15 +77,18 @@ export interface DocumentVersionCreatedEvent {
 // =============================================================================
 
 export interface AIProposalEvent {
+  /** UUID of the proposal row — pass to proposals.approve/reject */
   proposalId: string;
-  workspaceId: string;
-  targetType: "entity" | "document";
-  targetId?: string;
-  operation: "create" | "update" | "delete";
-  data: unknown;
-  reasoning: string;
-  confidence: number;
-  createdAt: string;
+  /** Channel/thread the AI message was sent to */
+  threadId: string;
+  /** User message that triggered this proposal */
+  messageId: string;
+  /** Tool that created the proposal (e.g. "create_entity", "update_document") */
+  toolName: string;
+  /** Human-readable description of the proposed action */
+  description: string;
+  /** Agent user that triggered the proposal (if available) */
+  agentUserId?: string;
 }
 
 export interface AIProposalStatusEvent {

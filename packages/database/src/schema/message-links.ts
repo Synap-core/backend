@@ -13,7 +13,7 @@ import {
   jsonb,
   index,
 } from "drizzle-orm/pg-core";
-import { conversationMessages } from "./conversation-messages.js";
+import { messages } from "./messages.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const messageLinks = pgTable(
@@ -25,7 +25,7 @@ export const messageLinks = pgTable(
     // Message reference
     messageId: uuid("message_id")
       .notNull()
-      .references(() => conversationMessages.id, { onDelete: "cascade" }),
+      .references(() => messages.id, { onDelete: "cascade" }),
 
     // Universal link (polymorphic)
     targetType: text("target_type").notNull(), // "entity" | "document" | "proposal" | "message" | "event" | "user" | ...

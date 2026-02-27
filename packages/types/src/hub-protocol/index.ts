@@ -86,13 +86,16 @@ export interface HubRequest {
 }
 
 /**
- * Action proposal from the AI (in-stream or in complete)
+ * A proposal created by backend governance during an AI response.
+ * The proposal row already exists in the DB; this is a reference to it.
  */
-export interface ProposedAction {
-  id: string;
+export interface CreatedProposal {
+  /** UUID of the proposal row in proposals table */
+  proposalId: string;
+  /** Tool that triggered the proposal (e.g. "create_entity", "update_document") */
   toolName: string;
+  /** Human-readable summary of the proposed action */
   description: string;
-  args: Record<string, unknown>;
 }
 
 /**
@@ -114,8 +117,8 @@ export interface HubResponse {
   /** Token usage statistics (optional) */
   usage?: TokenUsage;
 
-  /** Action proposals (create/update entity or document) for user approval */
-  proposedActions?: ProposedAction[];
+  /** Proposals created by backend governance during this response */
+  createdProposals?: CreatedProposal[];
 }
 
 // =============================================================================
@@ -128,7 +131,6 @@ export interface HubResponse {
 export enum StreamEventType {
   CONTENT = "content",
   STEP = "step",
-  PROPOSAL = "proposal",
   ENTITIES = "entities",
   BRANCH_DECISION = "branch_decision",
   COMPLETE = "complete",
@@ -142,8 +144,6 @@ export interface HubStreamEvent {
   type: StreamEventType | string;
   content?: string;
   step?: AIStep;
-  /** Incremental proposal (one per action proposal in stream) */
-  proposal?: ProposedAction;
   entities?: ExtractedEntity[];
   decision?: BranchDecision;
   data?: unknown;
@@ -260,10 +260,10 @@ export interface MessageMetadata {
   branchDecision?: BranchDecision;
   /** Token usage (optional) */
   usage?: TokenUsage;
-  /** In-stream action proposals (create/update entity or document) for user approval */
-  proposedActions?: ProposedAction[];
-  /** Proposal row IDs (same order as proposedActions) – use with proposals.approve/reject */
+  /** Proposals created by backend governance during this AI response */
   proposalIds?: string[];
+  /** Intelligence service that generated this message */
+  serviceId?: string;
   [key: string]: unknown; // Allow custom metadata
 }
 

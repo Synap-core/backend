@@ -11,7 +11,7 @@ import {
   EntityIndexer,
   DocumentIndexer,
   ViewIndexer,
-  ChatThreadIndexer,
+  ChannelIndexer,
   AgentIndexer,
 } from "../indexers/index.js";
 
@@ -22,7 +22,7 @@ export class IndexingService {
     entities: new EntityIndexer(),
     documents: new DocumentIndexer(),
     views: new ViewIndexer(),
-    chat_threads: new ChatThreadIndexer(),
+    channels: new ChannelIndexer(),
     agents: new AgentIndexer(),
   };
 
@@ -165,9 +165,9 @@ export class IndexingService {
           where: inArray(schema.views.id, ids),
         });
 
-      case "chat_threads":
-        return db.query.chatThreads.findMany({
-          where: inArray(schema.chatThreads.id, ids),
+      case "channels":
+        return db.query.channels.findMany({
+          where: inArray(schema.channels.id, ids),
         });
 
       case "agents":

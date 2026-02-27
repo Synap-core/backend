@@ -61,6 +61,9 @@ export const entitiesRouter = router({
         type: z.string(),
         title: z.string(),
         description: z.string().optional(),
+        // agentUserId: the per-human agent user (userType:"agent") acting on behalf of userId.
+        // The Intelligence Hub must pass this explicitly — it is NOT the API key owner.
+        agentUserId: z.string().uuid().optional(),
         // AI metadata for tracking AI-generated proposals
         aiMetadata: z
           .object({
@@ -73,26 +76,30 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Use the real user (input.userId), not ctx.userId (API key owner)
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
+        input.userId,
         ctx.scopes || [],
-        ctx.workspaceId ?? undefined
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
-      // Call regular API's create endpoint
-      // Note: Regular API doesn't have aiMetadata, but we can add it to the event
       const result = await caller.create({
-        profileSlug: input.type, // Map type to profileSlug
+        profileSlug: input.type,
         title: input.title,
         description: input.description,
-        source: "intelligence",
-        agentUserId: ctx.userId ?? undefined,
+        // Use "agent" source when agentUserId is present — enables proper attribution in events
+        source: input.agentUserId ? "agent" : "intelligence",
+        // Prefer explicit agentUserId from request; fall back to API key owner only
+        // as last resort (API key owner is a system account, not a per-human agent).
+        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
       });
       return {
         status: result.status,
         message: result.message,
         id: result.id,
+        proposalId: result.proposalId,
       };
     }),
 
@@ -110,29 +117,33 @@ export const entitiesRouter = router({
         title: z.string().optional(),
         preview: z.string().optional(),
         metadata: z.record(z.string(), z.any()).optional(),
+        // agentUserId: the per-human agent user acting on behalf of userId.
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Use the real user (input.userId), not ctx.userId (API key owner)
       const callerContext = await createHubProtocolCallerContext(
-        ctx.userId!,
+        input.userId,
         ctx.scopes || [],
-        ctx.workspaceId ?? undefined
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
-      // Call regular API's update endpoint
-      // Note: Regular API doesn't have metadata parameter in update,
-      // but we can pass it via properties
       const result = await caller.update({
         id: input.entityId,
         title: input.title,
-        description: input.preview, // Map preview to description
-        properties: input.metadata, // Map metadata to properties
+        description: input.preview,
+        properties: input.metadata,
+        source: input.agentUserId ? "agent" : "intelligence",
+        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
       });
 
       return {
         status: result.status,
         message: result.message,
+        proposalId: result.proposalId,
       };
     }),
 });

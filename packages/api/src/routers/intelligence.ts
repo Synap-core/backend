@@ -13,10 +13,10 @@ import { db, eq, and, desc } from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
-  chatThreads,
-  ChatThreadType,
-  ChatThreadStatus,
-  ChatThreadAgentType,
+  channels,
+  ChannelType,
+  ChannelStatus,
+  ChannelAgentType,
   intelligenceServices,
   type NewIntelligenceCommand,
 } from "@synap/database/schema";
@@ -28,7 +28,7 @@ import {
 } from "../utils/command-template.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { infiniteChatRouter } from "./infinite-chat.js";
+import { channelsRouter } from "./channels.js";
 
 // ── Intelligence Service Proxy Helpers ─────────────────────────────────────
 
@@ -326,14 +326,14 @@ export const intelligenceRouter = router({
       );
 
       const [thread] = await db
-        .insert(chatThreads)
+        .insert(channels)
         .values({
           userId,
           workspaceId,
-          threadType: ChatThreadType.MAIN,
-          status: ChatThreadStatus.ACTIVE,
+          channelType: ChannelType.AI_THREAD,
+          status: ChannelStatus.ACTIVE,
           agentId: "orchestrator",
-          agentType: ChatThreadAgentType.DEFAULT,
+          agentType: ChannelAgentType.DEFAULT,
         })
         .returning();
       if (!thread) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -362,7 +362,7 @@ export const intelligenceRouter = router({
       if (!run) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       try {
-        const chatCaller = infiniteChatRouter.createCaller(ctx as any);
+        const chatCaller = channelsRouter.createCaller(ctx as any);
         await chatCaller.sendMessage({
           threadId: thread.id,
           content: compiledPrompt,

@@ -21,7 +21,7 @@ import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "profiles-router" });
 
-const ProfileScopeSchema = z.enum(["system", "workspace", "user"]);
+const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
 
 export const profilesRouter = router({
   /**
@@ -90,6 +90,11 @@ export const profilesRouter = router({
         parentProfileId: z.string().uuid().optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
         scope: ProfileScopeSchema.default("workspace"),
+        /**
+         * For scope="shared": list of workspace IDs to grant access to immediately.
+         * The calling workspace is always included automatically.
+         */
+        allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
         source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
@@ -103,14 +108,21 @@ export const profilesRouter = router({
       const profileRepo = new ProfileRepository(db);
 
       // Check for slug conflict — return existing profile gracefully
-      // Profiles have a global unique slug constraint, so reuse across workspaces
-      // (e.g., "company" template profile created by workspace A is reused by workspace B)
+      // Profiles have a global unique slug constraint, so reuse across workspaces.
+      // For shared profiles, also grant access to the requesting workspace.
       const existing = await profileRepo.getBySlug(input.slug);
       if (existing) {
         logger.info(
           { slug: input.slug, existingId: existing.id },
           "Profile slug exists, returning existing"
         );
+        // Grant access if this workspace doesn't already have it
+        if (
+          existing.scope === ProfileScope.SHARED ||
+          input.scope === "shared"
+        ) {
+          await profileRepo.grantAccess(existing.id, ctx.workspaceId);
+        }
         return { profile: existing, existing: true };
       }
 
@@ -194,6 +206,9 @@ export const profilesRouter = router({
       if (input.scope === "system") {
         userId = undefined;
         workspaceId = undefined;
+      } else if (input.scope === "shared") {
+        // Shared profiles are owned by the creating workspace
+        workspaceId = ctx.workspaceId;
       } else if (input.scope === "workspace") {
         workspaceId = ctx.workspaceId;
       } else if (input.scope === "user") {
@@ -209,6 +224,16 @@ export const profilesRouter = router({
         userId,
         workspaceId,
       });
+
+      // For shared profiles, grant access to the creating workspace + any extra workspaces
+      if (input.scope === "shared") {
+        await profileRepo.grantAccess(profile.id, ctx.workspaceId);
+        for (const wsId of input.allowedWorkspaceIds ?? []) {
+          if (wsId !== ctx.workspaceId) {
+            await profileRepo.grantAccess(profile.id, wsId);
+          }
+        }
+      }
 
       // 4. Emit .completed event + side-effects
       auditLog({
@@ -415,5 +440,114 @@ export const profilesRouter = router({
       );
 
       return { hierarchy };
+    }),
+
+  /**
+   * Grant a workspace access to a shared profile.
+   * Idempotent — safe to call multiple times.
+   */
+  grantAccess: workspaceProcedure
+    .input(
+      z.object({
+        profileId: z.string().uuid(),
+        targetWorkspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+      const resolutionService = new ProfileResolutionService(db);
+
+      // Verify the profile exists and the calling workspace can see it
+      const profile = await resolutionService.resolveProfile(
+        input.profileId,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${input.profileId}`,
+        });
+      }
+      if (profile.scope !== "shared") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only shared profiles can have workspace access grants",
+        });
+      }
+      // Only the workspace that owns the profile can grant access to others
+      if (profile.workspaceId !== ctx.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the owning workspace can grant access to a shared profile",
+        });
+      }
+
+      await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
+
+      logger.info(
+        {
+          profileId: input.profileId,
+          targetWorkspaceId: input.targetWorkspaceId,
+        },
+        "Profile access granted"
+      );
+
+      return { success: true };
+    }),
+
+  /**
+   * Revoke a workspace's access to a shared profile.
+   */
+  revokeAccess: workspaceProcedure
+    .input(
+      z.object({
+        profileId: z.string().uuid(),
+        targetWorkspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+      const resolutionService = new ProfileResolutionService(db);
+
+      const profile = await resolutionService.resolveProfile(
+        input.profileId,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${input.profileId}`,
+        });
+      }
+      if (profile.scope !== "shared") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only shared profiles can have workspace access revoked",
+        });
+      }
+      if (profile.workspaceId !== ctx.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the owning workspace can revoke access to a shared profile",
+        });
+      }
+
+      await profileRepo.revokeAccess(input.profileId, input.targetWorkspaceId);
+
+      logger.info(
+        {
+          profileId: input.profileId,
+          targetWorkspaceId: input.targetWorkspaceId,
+        },
+        "Profile access revoked"
+      );
+
+      return { success: true };
     }),
 });

@@ -53,7 +53,8 @@ import {
   entities,
   entityPropertyIndex,
   propertyDefs,
-  threadEntities,
+  channelContextItems,
+  ChannelContextObjectType,
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -386,7 +387,7 @@ export const relationsRouter = router({
    *    `entity_id` properties point to this entity. These come from the profile
    *    schema and represent structural "belongs to / assigned to" style links.
    *
-   * 3. **Thread connections** (`thread_entities`) — AI chat threads that
+   * 3. **Channel connections** (`channel_context_items`) — channels that
    *    created, updated, or referenced this entity.
    *
    * Use this endpoint to build a unified "Connections" panel on an entity card
@@ -401,7 +402,7 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const [graphRelations, propertyLinks, threadLinks] = await Promise.all([
+      const [graphRelations, propertyLinks, channelLinks] = await Promise.all([
         // ── 1. Semantic graph relations ─────────────────────────────────────
         db.query.relations.findMany({
           where: and(
@@ -433,13 +434,14 @@ export const relationsRouter = router({
           .where(eq(entityPropertyIndex.valueEntityId, input.entityId))
           .limit(input.limit),
 
-        // ── 3. Thread connections ────────────────────────────────────────────
-        db.query.threadEntities.findMany({
+        // ── 3. Channel connections ───────────────────────────────────────────
+        db.query.channelContextItems.findMany({
           where: and(
-            eq(threadEntities.entityId, input.entityId),
-            eq(threadEntities.userId, ctx.userId)
+            eq(channelContextItems.objectId, input.entityId),
+            eq(channelContextItems.objectType, ChannelContextObjectType.ENTITY),
+            eq(channelContextItems.userId, ctx.userId)
           ),
-          orderBy: (te, { desc }) => [desc(te.createdAt)],
+          orderBy: (ci, { desc }) => [desc(ci.createdAt)],
           limit: input.limit,
         }),
       ]);
@@ -485,8 +487,8 @@ export const relationsRouter = router({
         propertySlug?: string;
         /** Human-readable label of that property */
         propertyLabel?: string;
-        threadId?: string;
-        threadRelationshipType?: string;
+        channelId?: string;
+        channelRelationshipType?: string;
         createdAt?: Date | null;
       };
 
@@ -522,16 +524,16 @@ export const relationsRouter = router({
         });
       }
 
-      for (const te of threadLinks) {
+      for (const ci of channelLinks) {
         connections.push({
-          entityId: te.entityId,
+          entityId: ci.objectId,
           entity: null,
-          label: te.relationshipType,
+          label: ci.relationshipType,
           direction: "incoming",
           source: "thread",
-          threadId: te.threadId,
-          threadRelationshipType: te.relationshipType,
-          createdAt: te.createdAt,
+          channelId: ci.channelId,
+          channelRelationshipType: ci.relationshipType,
+          createdAt: ci.createdAt,
         });
       }
 
@@ -541,7 +543,7 @@ export const relationsRouter = router({
           total: connections.length,
           graph: graphRelations.length,
           structural: propertyLinks.length,
-          threads: threadLinks.length,
+          threads: channelLinks.length,
         },
       };
     }),

@@ -125,7 +125,7 @@ export const documentSessions = pgTable(
     userId: text("user_id").notNull(),
 
     // Chat integration
-    chatThreadId: uuid("chat_thread_id").notNull(), // Dedicated chat for this document
+    channelId: uuid("channel_id").notNull(), // Dedicated channel for this document
 
     // Session state
     isActive: boolean("is_active").notNull().default(true),

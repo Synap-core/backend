@@ -7,7 +7,7 @@
 
 import {
   messageLinks,
-  conversationMessages,
+  messages,
   type MessageLink,
   type NewMessageLink,
 } from "../schema/index.js";
@@ -41,7 +41,7 @@ export interface GetByTargetWithMessagesOptions {
 /** Minimal message fields for list/preview */
 export interface LinkedMessagePreview {
   id: string;
-  threadId: string;
+  channelId: string;
   role: string;
   content: string;
   timestamp: Date;
@@ -143,7 +143,7 @@ export class MessageLinksRepository {
     type Row = {
       link: typeof messageLinks.$inferSelect;
       id: string;
-      threadId: string;
+      channelId: string;
       role: string;
       content: string;
       timestamp: Date;
@@ -154,7 +154,7 @@ export class MessageLinksRepository {
       eq(messageLinks.targetType, targetType),
       eq(messageLinks.targetId, targetId),
       eq(messageLinks.workspaceId, workspaceId),
-      isNull(conversationMessages.deletedAt),
+      isNull(messages.deletedAt),
     ];
 
     if (cursor) {
@@ -178,18 +178,15 @@ export class MessageLinksRepository {
     const rows = await this.db
       .select({
         link: messageLinks,
-        id: conversationMessages.id,
-        threadId: conversationMessages.threadId,
-        role: conversationMessages.role,
-        content: conversationMessages.content,
-        timestamp: conversationMessages.timestamp,
-        userId: conversationMessages.userId,
+        id: messages.id,
+        channelId: messages.channelId,
+        role: messages.role,
+        content: messages.content,
+        timestamp: messages.timestamp,
+        userId: messages.userId,
       })
       .from(messageLinks)
-      .innerJoin(
-        conversationMessages,
-        eq(messageLinks.messageId, conversationMessages.id)
-      )
+      .innerJoin(messages, eq(messageLinks.messageId, messages.id))
       .where(and(...conditions))
       .orderBy(desc(messageLinks.createdAt))
       .limit(limitFetch);
@@ -200,7 +197,7 @@ export class MessageLinksRepository {
         link: row.link,
         message: {
           id: row.id,
-          threadId: row.threadId,
+          channelId: row.channelId,
           role: row.role,
           content: row.content,
           timestamp: row.timestamp,

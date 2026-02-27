@@ -13,7 +13,7 @@ import {
   jsonb,
   index,
 } from "drizzle-orm/pg-core";
-import { chatThreads } from "./chat-threads.js";
+import { channels } from "./channels.js";
 import { intelligenceCommands } from "./intelligence-commands.js";
 
 export const commandRuns = pgTable(
@@ -22,7 +22,7 @@ export const commandRuns = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     threadId: uuid("thread_id")
       .notNull()
-      .references(() => chatThreads.id, { onDelete: "cascade" }),
+      .references(() => channels.id, { onDelete: "cascade" }),
     commandId: uuid("command_id")
       .notNull()
       .references(() => intelligenceCommands.id, { onDelete: "cascade" }),

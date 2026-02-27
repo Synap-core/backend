@@ -93,7 +93,12 @@ export const documentsRouter = router({
       const documentId = randomUUID();
       const docType = normalizeDocumentType(input.type, "markdown");
       const extension = docType === "markdown" ? "md" : docType;
-      const storageKey = storage.buildPath(userId, "document", documentId, extension);
+      const storageKey = storage.buildPath(
+        userId,
+        "document",
+        documentId,
+        extension
+      );
 
       // 1. Upload content to MinIO
       const content = input.content || "";
@@ -148,7 +153,12 @@ export const documentsRouter = router({
       const docType = normalizeDocumentType(input.type, "markdown");
       const extension = docType === "markdown" ? "md" : docType;
       const mimeType = input.mimeType || "text/plain";
-      const storageKey = storage.buildPath(userId, "document", documentId, extension);
+      const storageKey = storage.buildPath(
+        userId,
+        "document",
+        documentId,
+        extension
+      );
 
       // 1. Upload content to MinIO
       const metadata = await storage.upload(storageKey, input.content, {
@@ -515,20 +525,20 @@ export const documentsRouter = router({
       // Session tracking only — no version bump on start.
       // Versions are created when the editing session ends (room close)
       // or on explicit save (Cmd+S / auto-save cron).
-      const chatThreadId = randomUUID();
+      const channelId = randomUUID();
 
       const [session] = await db
         .insert(documentSessions)
         .values({
           documentId: input.documentId,
           userId,
-          chatThreadId,
+          channelId,
           isActive: true,
           activeCollaborators: [{ type: "user", id: userId }],
         })
         .returning();
 
-      return { sessionId: session.id, chatThreadId };
+      return { sessionId: session.id, channelId };
     }),
 
   /**

@@ -55,7 +55,8 @@ export interface PermissionCheckOpts {
  * 4. Call verifyPermission() with effective user
  * 5. If denied → return { denied: true }
  * 6. AI policy:
- *    a. Agent user → check requireReviewFor list; if event listed, propose; else auto-approve
+ *    a. Agent user → check autoApproveFor whitelist; DEFAULT is proposal unless event matches
+ *       Default whitelist (when field absent): search.*, memory.recall, entity.read, document.read
  *    b. Non-agent AI source → use legacy aiAutoApprove toggle
  * 7. Otherwise → return { granted: true }
  */
@@ -136,7 +137,8 @@ export async function checkPermissionOrPropose(
 
         if (agentUser?.userType === "agent") {
           // Agent user: permission already verified via role above.
-          // Check workspace requireReviewFor for per-event-type overrides.
+          // DEFAULT: all agent actions require a proposal.
+          // EXCEPTION: actions listed in autoApproveFor whitelist bypass proposal.
           const [ws] = await db
             .select({ settings: workspaces.settings })
             .from(workspaces)
@@ -144,28 +146,46 @@ export async function checkPermissionOrPropose(
             .limit(1);
 
           const settings = ws?.settings as WorkspaceSettings | undefined;
-          const requireReview = settings?.aiGovernance?.requireReviewFor ?? [];
-          const eventKey = `${subjectType}.${action}`;
 
-          if (requireReview.includes(eventKey)) {
-            // Workspace explicitly requires review for this event type
-            return createProposal({
-              userId,
-              workspaceId,
-              subjectType,
-              action,
-              source,
-              data,
-              correlationId,
-              reasoning: opts.reasoning,
-              threadId,
-              commandRunId,
-              sourceMessageId,
-            });
+          // Default whitelist: read-only + safe context-tracking operations.
+          // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
+          const DEFAULT_AUTO_APPROVE = [
+            "search.*",
+            "memory.recall",
+            "entity.read",
+            "document.read",
+            "context.*",
+          ];
+          const autoApproveFor =
+            settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
+
+          const eventKey = `${subjectType}.${action}`;
+          const isAutoApproved = autoApproveFor.some((pattern) =>
+            pattern.endsWith(".*")
+              ? eventKey.startsWith(pattern.slice(0, -2))
+              : eventKey === pattern
+          );
+
+          if (isAutoApproved) {
+            // Event is in the trusted whitelist — auto-approve
+            return { granted: true };
           }
 
-          // Agent has permission and no review required — auto-approve
-          return { granted: true };
+          // Default: agent action requires a proposal
+          return createProposal({
+            userId,
+            agentUserId,
+            workspaceId,
+            subjectType,
+            action,
+            source,
+            data,
+            correlationId,
+            reasoning: opts.reasoning,
+            threadId,
+            commandRunId,
+            sourceMessageId,
+          });
         }
       }
 
@@ -185,6 +205,7 @@ export async function checkPermissionOrPropose(
       if (!aiAutoApprove) {
         return createProposal({
           userId,
+          agentUserId,
           workspaceId,
           subjectType,
           action,
@@ -212,6 +233,7 @@ export async function checkPermissionOrPropose(
  */
 async function createProposal(opts: {
   userId: string;
+  agentUserId?: string;
   workspaceId: string;
   subjectType: string;
   action: string;
@@ -225,6 +247,7 @@ async function createProposal(opts: {
 }): Promise<{ granted: false; proposalId: string }> {
   const {
     userId,
+    agentUserId,
     workspaceId,
     subjectType,
     action,
@@ -268,6 +291,7 @@ async function createProposal(opts: {
       data: proposalData,
       status: ProposalStatus.PENDING,
       createdBy: userId,
+      ...(agentUserId ? { agentUserId } : {}),
       ...(threadId ? { threadId } : {}),
       ...(commandRunId ? { commandRunId } : {}),
       ...(sourceMessageId ? { sourceMessageId } : {}),
