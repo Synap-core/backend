@@ -7,7 +7,7 @@
  * 3. Fallback to environment variable service
  */
 
-import { db, eq, and, sql } from "@synap/database";
+import { db, eq, and, drizzleSql } from "@synap/database";
 import {
   userPreferences,
   workspaces,
@@ -111,7 +111,7 @@ async function lookupAgentUser(
         and(
           eq(users.userType, "agent"),
           eq(workspaceMembers.workspaceId, workspaceId),
-          sql`${users.agentMetadata}->>'createdByUserId' = ${userId}`
+          drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`
         )
       )
       .limit(1);

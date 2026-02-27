@@ -276,6 +276,7 @@ app.post("/entities", async (c) => {
     agentUserId?: string;
     workspaceId: string;
     type: string;
+    profileSlug?: string;
     title: string;
     description?: string;
     properties?: Record<string, unknown>;

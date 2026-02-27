@@ -22,7 +22,7 @@ import {
   EventRepository,
   EntityRepository,
   DocumentRepository,
-  sql,
+  drizzleSql,
 } from "@synap/database";
 import { entities, documents } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
@@ -426,8 +426,8 @@ export const entitiesRouter = router({
               eq(entities.workspaceId, ctx.workspaceId),
               isNull(entities.workspaceId)
             ),
-            sql`${entities.properties}->>'url' IS NOT NULL`,
-            sql`${entities.properties}->>'url' != ''`
+            drizzleSql`${entities.properties}->>'url' IS NOT NULL`,
+            drizzleSql`${entities.properties}->>'url' != ''`
           )
         )
         .orderBy(desc(entities.createdAt));
