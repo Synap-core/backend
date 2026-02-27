@@ -16,6 +16,8 @@ ALTER TABLE property_defs
   ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE;
 
 -- 2. Drop the old global slug unique constraint
+--    It may exist as a CONSTRAINT (created via UNIQUE constraint syntax) or as a plain index.
+ALTER TABLE property_defs DROP CONSTRAINT IF EXISTS property_defs_slug_unique_idx;
 DROP INDEX IF EXISTS property_defs_slug_unique_idx;
 
 -- 3. Global property defs (profile_id IS NULL): still unique by slug
