@@ -88,7 +88,7 @@ mcpHttpApp.post("/", async (c) => {
   }
 
   const keyRecord = await apiKeyService.validateApiKey(token);
-  if (!keyRecord) {
+  if (!keyRecord || !keyRecord.userId) {
     return c.json(
       jsonRpcError(null, -32600, "Invalid or expired API key"),
       401

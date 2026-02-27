@@ -368,18 +368,27 @@ export const skillsRouter = router({
         // For TOML manifests, try to load a companion SKILL.md at the same URL base.
         // Many ZeroClaw skills store the instruction markdown separately.
         let companionMarkdown: string | undefined;
-        const companionUrl = input.url.replace(/\.toml$/i, ".md");
-        if (companionUrl !== input.url) {
-          try {
-            const companionRes = await fetch(companionUrl, {
-              headers: fetchHeaders,
-            });
-            if (companionRes.ok) {
+        // Build companion URL: replace .toml extension, or append .md for extension-less URLs
+        const companionUrl = input.url.endsWith(".toml")
+          ? input.url.replace(/\.toml$/i, ".md")
+          : `${input.url}.md`;
+        try {
+          const companionRes = await fetch(companionUrl, {
+            headers: fetchHeaders,
+          });
+          if (companionRes.ok) {
+            const ct = companionRes.headers.get("content-type") ?? "";
+            // Only accept text responses (markdown, plain text) — reject HTML/JSON/binary
+            if (ct.includes("text/") || ct === "") {
               companionMarkdown = await companionRes.text();
+              // Sanity check: ignore if it looks like an HTML error page
+              if (companionMarkdown.trimStart().startsWith("<!")) {
+                companionMarkdown = undefined;
+              }
             }
-          } catch {
-            // Non-fatal — inline instructions in TOML are the fallback
           }
+        } catch {
+          // Non-fatal — inline instructions in TOML are the fallback
         }
         parsed = parseSkillToml(rawContent, companionMarkdown);
       } else {
