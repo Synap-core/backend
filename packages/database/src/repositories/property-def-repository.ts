@@ -4,7 +4,7 @@
  * Handles CRUD operations for property definitions.
  */
 
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, inArray, or } from "drizzle-orm";
 import {
   propertyDefs,
   type PropertyDef,
@@ -79,6 +79,41 @@ export class PropertyDefRepository {
     });
 
     return result || null;
+  }
+
+  /**
+   * Batch-fetch property definitions by IDs.
+   * Returns a Map<id, PropertyDef> for O(1) lookup.
+   * Used by getEffectiveProperties() to avoid N+1 queries.
+   */
+  async getManyByIds(ids: string[]): Promise<Map<string, PropertyDef>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.db.query.propertyDefs.findMany({
+      where: inArray(propertyDefs.id, ids),
+    });
+    return new Map(rows.map((pd) => [pd.id, pd]));
+  }
+
+  /**
+   * List property definitions accessible for a given set of profile IDs.
+   * Returns global defs (profileId IS NULL) + defs for the specified profiles.
+   * Used by propertyDefsRouter.list() to prevent cross-workspace leaks.
+   */
+  async listForProfiles(profileIds: string[]): Promise<PropertyDef[]> {
+    if (profileIds.length === 0) {
+      // Only return global defs when no profiles are accessible
+      return this.db.query.propertyDefs.findMany({
+        where: isNull(propertyDefs.profileId),
+        orderBy: (pd, { asc }) => [asc(pd.slug)],
+      });
+    }
+    return this.db.query.propertyDefs.findMany({
+      where: or(
+        isNull(propertyDefs.profileId),
+        inArray(propertyDefs.profileId, profileIds)
+      ),
+      orderBy: (pd, { asc }) => [asc(pd.slug)],
+    });
   }
 
   /**

@@ -4,7 +4,7 @@
  * Handles CRUD operations for profiles (entity types).
  */
 
-import { eq, and, or, inArray, sql } from "drizzle-orm";
+import { eq, and, or, sql, isNotNull } from "drizzle-orm";
 import {
   profiles,
   profileWorkspaceAccess,
@@ -183,60 +183,46 @@ export class ProfileRepository {
    *
    * Returns: system profiles + workspace-owned profiles + user profiles
    *          + shared profiles explicitly granted to this workspace.
+   *
+   * Uses a single LEFT JOIN query (1 round-trip) instead of 3 sequential queries.
    */
   async getAccessibleProfiles(
     userId: string,
     workspaceId: string
   ): Promise<Profile[]> {
-    // 1. Direct matches (system, workspace-owned, user-owned)
-    const direct = await this.db.query.profiles.findMany({
-      where: and(
-        eq(profiles.isActive, true),
-        or(
-          eq(profiles.scope, ProfileScope.SYSTEM),
-          and(
-            eq(profiles.scope, ProfileScope.WORKSPACE),
-            eq(profiles.workspaceId, workspaceId)
-          ),
-          and(
-            eq(profiles.scope, ProfileScope.USER),
-            eq(profiles.userId, userId)
+    const rows = await this.db
+      .selectDistinctOn([profiles.id], { p: profiles })
+      .from(profiles)
+      .leftJoin(
+        profileWorkspaceAccess,
+        and(
+          eq(profileWorkspaceAccess.profileId, profiles.id),
+          eq(profileWorkspaceAccess.workspaceId, workspaceId)
+        )
+      )
+      .where(
+        and(
+          eq(profiles.isActive, true),
+          or(
+            eq(profiles.scope, ProfileScope.SYSTEM),
+            and(
+              eq(profiles.scope, ProfileScope.WORKSPACE),
+              eq(profiles.workspaceId, workspaceId)
+            ),
+            and(
+              eq(profiles.scope, ProfileScope.USER),
+              eq(profiles.userId, userId)
+            ),
+            and(
+              eq(profiles.scope, ProfileScope.SHARED),
+              isNotNull(profileWorkspaceAccess.workspaceId)
+            )
           )
         )
-      ),
-      orderBy: (profiles, { asc }) => [asc(profiles.displayName)],
-    });
+      )
+      .orderBy(profiles.displayName);
 
-    // 2. Shared profiles this workspace has been granted access to
-    const accessRows = await this.db
-      .select({ profileId: profileWorkspaceAccess.profileId })
-      .from(profileWorkspaceAccess)
-      .where(eq(profileWorkspaceAccess.workspaceId, workspaceId));
-
-    let sharedProfiles: Profile[] = [];
-    if (accessRows.length > 0) {
-      const sharedIds = accessRows.map((r) => r.profileId);
-      sharedProfiles = await this.db.query.profiles.findMany({
-        where: and(
-          eq(profiles.isActive, true),
-          eq(profiles.scope, ProfileScope.SHARED),
-          inArray(profiles.id, sharedIds)
-        ),
-        orderBy: (profiles, { asc }) => [asc(profiles.displayName)],
-      });
-    }
-
-    // Deduplicate by id (system profiles could overlap in edge cases)
-    const seen = new Set<string>();
-    const combined: Profile[] = [];
-    for (const p of [...direct, ...sharedProfiles]) {
-      if (!seen.has(p.id)) {
-        seen.add(p.id);
-        combined.push(p);
-      }
-    }
-    combined.sort((a, b) => a.displayName.localeCompare(b.displayName));
-    return combined;
+    return rows.map((r) => r.p);
   }
 
   /**

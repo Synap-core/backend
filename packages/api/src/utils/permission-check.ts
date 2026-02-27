@@ -126,70 +126,73 @@ export async function checkPermissionOrPropose(
     }
 
     // 5. AI policy check
-    if (source === "ai" || source === "intelligence") {
-      // Check if the effective user is an AI agent
-      if (agentUserId) {
-        const [agentUser] = await db
-          .select({ userType: users.userType })
-          .from(users)
-          .where(eq(users.id, agentUserId))
+    //
+    // Agent user path: agentUserId is the canonical signal that this is an AI action.
+    // Source field is just metadata — not used to gate behaviour here.
+    if (agentUserId) {
+      // Confirm the user row is actually an agent (defence-in-depth)
+      const [agentUser] = await db
+        .select({ userType: users.userType })
+        .from(users)
+        .where(eq(users.id, agentUserId))
+        .limit(1);
+
+      if (agentUser?.userType === "agent") {
+        // Agent user: permission already verified via role above.
+        // DEFAULT: all agent actions require a proposal.
+        // EXCEPTION: actions listed in autoApproveFor whitelist bypass proposal.
+        const [ws] = await db
+          .select({ settings: workspaces.settings })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
           .limit(1);
 
-        if (agentUser?.userType === "agent") {
-          // Agent user: permission already verified via role above.
-          // DEFAULT: all agent actions require a proposal.
-          // EXCEPTION: actions listed in autoApproveFor whitelist bypass proposal.
-          const [ws] = await db
-            .select({ settings: workspaces.settings })
-            .from(workspaces)
-            .where(eq(workspaces.id, workspaceId))
-            .limit(1);
+        const settings = ws?.settings as WorkspaceSettings | undefined;
 
-          const settings = ws?.settings as WorkspaceSettings | undefined;
+        // Default whitelist: read-only + safe context-tracking operations.
+        // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
+        const DEFAULT_AUTO_APPROVE = [
+          "search.*",
+          "memory.recall",
+          "entity.read",
+          "document.read",
+          "context.*",
+        ];
+        const autoApproveFor =
+          settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
 
-          // Default whitelist: read-only + safe context-tracking operations.
-          // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
-          const DEFAULT_AUTO_APPROVE = [
-            "search.*",
-            "memory.recall",
-            "entity.read",
-            "document.read",
-            "context.*",
-          ];
-          const autoApproveFor =
-            settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
+        const eventKey = `${subjectType}.${action}`;
+        const isAutoApproved = autoApproveFor.some((pattern) =>
+          pattern.endsWith(".*")
+            ? eventKey.startsWith(pattern.slice(0, -2))
+            : eventKey === pattern
+        );
 
-          const eventKey = `${subjectType}.${action}`;
-          const isAutoApproved = autoApproveFor.some((pattern) =>
-            pattern.endsWith(".*")
-              ? eventKey.startsWith(pattern.slice(0, -2))
-              : eventKey === pattern
-          );
-
-          if (isAutoApproved) {
-            // Event is in the trusted whitelist — auto-approve
-            return { granted: true };
-          }
-
-          // Default: agent action requires a proposal
-          return createProposal({
-            userId,
-            agentUserId,
-            workspaceId,
-            subjectType,
-            action,
-            source,
-            data,
-            correlationId,
-            reasoning: opts.reasoning,
-            threadId,
-            commandRunId,
-            sourceMessageId,
-          });
+        if (isAutoApproved) {
+          return { granted: true };
         }
-      }
 
-      // Non-agent AI source: use legacy aiAutoApprove toggle
+        // Default: agent action requires a proposal
+        return createProposal({
+          userId,
+          agentUserId,
+          workspaceId,
+          subjectType,
+          action,
+          source,
+          data,
+          correlationId,
+          reasoning: opts.reasoning,
+          threadId,
+          commandRunId,
+          sourceMessageId,
+        });
+      }
+    }
+
+    // Legacy AI source path (no agent user row, but caller signals AI-sourced action).
+    // Use the legacy aiAutoApprove workspace toggle.
+    if (source === "ai" || source === "intelligence") {
       const [ws] = await db
         .select({ settings: workspaces.settings })
         .from(workspaces)

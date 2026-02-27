@@ -124,7 +124,7 @@ export const documentsRouter = router({
         phase: "completed",
         subjectId: documentId,
         userId: agentUserId,
-        source: "intelligence",
+        source: input.agentUserId ? "agent" : "intelligence",
       });
 
       emitSideEffects({

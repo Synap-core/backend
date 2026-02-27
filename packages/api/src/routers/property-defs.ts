@@ -6,10 +6,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import {
   getDb,
   PropertyDefRepository,
+  ProfileRepository,
   PropertyValueType,
 } from "@synap/database";
 // PropertySlugConflictError not used, removed
@@ -31,13 +32,29 @@ const PropertyValueTypeSchema = z.enum([
 
 export const propertyDefsRouter = router({
   /**
-   * List all property definitions
+   * List property definitions accessible to the calling workspace.
+   *
+   * Returns only defs whose profile is accessible to this workspace
+   * (system profiles, workspace-owned profiles, shared profiles with access,
+   * user profiles) plus globally-scoped defs (profileId IS NULL).
+   *
+   * Uses workspaceProcedure so ctx.workspaceId is available.
    */
-  list: protectedProcedure.query(async () => {
+  list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const propertyDefRepo = new PropertyDefRepository(db);
+    const profileRepo = new ProfileRepository(db);
 
-    const propertyDefs = await propertyDefRepo.list();
+    // Get profiles accessible to this workspace, then return their property defs
+    // plus any global (profileId IS NULL) defs.
+    const accessibleProfiles = await profileRepo.getAccessibleProfiles(
+      ctx.userId,
+      ctx.workspaceId
+    );
+    const accessibleProfileIds = accessibleProfiles.map((p) => p.id);
+
+    const propertyDefs =
+      await propertyDefRepo.listForProfiles(accessibleProfileIds);
 
     return { propertyDefs };
   }),

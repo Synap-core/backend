@@ -5,7 +5,7 @@
  * Properties are validated against profile schemas and stored in entities.properties JSONB.
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, or, isNull, inArray, desc } from "drizzle-orm";
 import { entities } from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -76,6 +76,51 @@ export class EntityRepository extends BaseRepository<
       this.profileResolution
     );
     this.propertyIndex = new PropertyIndexService(db);
+  }
+
+  /**
+   * List entities across multiple workspaces (used by cross-workspace queries).
+   * Returns entities where workspaceId is in the provided list.
+   * Optionally includes global entities (workspaceId IS NULL).
+   */
+  async listForWorkspaces(
+    workspaceIds: string[],
+    userId: string,
+    opts: {
+      profileSlug?: string;
+      limit?: number;
+      includeGlobal?: boolean;
+    } = {}
+  ): Promise<Entity[]> {
+    const { profileSlug, limit = 50, includeGlobal = false } = opts;
+
+    // Build workspace condition
+    let workspaceCondition;
+    if (workspaceIds.length > 0 && includeGlobal) {
+      workspaceCondition = or(
+        inArray(entities.workspaceId, workspaceIds),
+        isNull(entities.workspaceId)
+      );
+    } else if (workspaceIds.length > 0) {
+      workspaceCondition = inArray(entities.workspaceId, workspaceIds);
+    } else if (includeGlobal) {
+      workspaceCondition = isNull(entities.workspaceId);
+    } else {
+      // No workspaces + no global → return empty
+      return [];
+    }
+
+    const conditions = [eq(entities.userId, userId), workspaceCondition];
+
+    if (profileSlug) {
+      conditions.push(eq(entities.type, profileSlug));
+    }
+
+    return this.db.query.entities.findMany({
+      where: and(...conditions),
+      orderBy: [desc(entities.updatedAt)],
+      limit,
+    });
   }
 
   /**

@@ -314,7 +314,8 @@ export const viewsRouter = router({
   list: protectedProcedure
     .input(
       z.object({
-        workspaceId: z.string().uuid().optional(),
+        /** Filter to one or more workspaces. Omit to return all user's views. */
+        workspaceIds: z.array(z.string().uuid()).optional(),
         type: z
           .enum([
             "whiteboard",
@@ -334,12 +335,15 @@ export const viewsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const workspaceCondition =
+        input.workspaceIds && input.workspaceIds.length > 0
+          ? inArray(views.workspaceId, input.workspaceIds)
+          : undefined;
+
       const query = db.query.views.findMany({
         where: and(
           eq(views.userId, ctx.userId),
-          input.workspaceId
-            ? eq(views.workspaceId, input.workspaceId)
-            : undefined,
+          workspaceCondition,
           input.type && input.type !== "all"
             ? eq(views.type, input.type)
             : undefined

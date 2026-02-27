@@ -78,34 +78,48 @@ export class ProfileResolutionService {
   }
 
   /**
-   * Get effective properties for a profile (with inheritance)
-   * Merges properties from parent profiles
+   * Get effective properties for a profile (with inheritance).
+   * Merges properties from parent profiles; child values override parent values.
+   *
+   * Uses 3 flat queries regardless of hierarchy depth (no N+1):
+   *   1. getHierarchy()   — profiles in ancestor chain
+   *   2. getByProfiles()  — all profile_properties rows for those profiles
+   *   3. getManyByIds()   — all property_defs referenced by those rows
    */
   async getEffectiveProperties(
     profileId: string
   ): Promise<EffectiveProperty[]> {
-    // Get profile hierarchy
+    // 1. Profile hierarchy (root → leaf) — 1 query per level (small, bounded depth)
     const hierarchy = await this.getProfileHierarchy(profileId);
+    if (hierarchy.length === 0) return [];
 
-    // Collect all properties from hierarchy
+    // 2. All profile-property links for every profile in the hierarchy — 1 query
+    const profileIds = hierarchy.map((p) => p.id);
+    const allProfileProperties =
+      await this.profilePropertyRepo.getByProfiles(profileIds);
+
+    if (allProfileProperties.length === 0) return [];
+
+    // 3. All property defs referenced by those links — 1 query
+    const propDefIds = [
+      ...new Set(allProfileProperties.map((pp) => pp.propertyDefId)),
+    ];
+    const propDefMap = await this.propertyDefRepo.getManyByIds(propDefIds);
+
+    // Merge: process root-to-leaf so child values override parent values
     const propertyMap = new Map<string, EffectiveProperty>();
 
-    // Process from root to leaf (parent properties first)
     for (const profile of hierarchy) {
-      const profileProperties = await this.profilePropertyRepo.getByProfile(
-        profile.id
+      const profileProperties = allProfileProperties.filter(
+        (pp) => pp.profileId === profile.id
       );
 
       for (const profileProperty of profileProperties) {
-        const propertyDef = await this.propertyDefRepo.getById(
-          profileProperty.propertyDefId
-        );
-
+        const propertyDef = propDefMap.get(profileProperty.propertyDefId);
         if (!propertyDef) continue;
 
-        // Child profiles can override parent properties
-        // But we keep the first occurrence (parent) unless explicitly overridden
         if (!propertyMap.has(propertyDef.slug)) {
+          // First occurrence (from root) — add as-is
           propertyMap.set(propertyDef.slug, {
             ...propertyDef,
             required: profileProperty.required,
@@ -113,22 +127,21 @@ export class ProfileResolutionService {
             displayOrder: profileProperty.displayOrder,
           });
         } else {
-          // Override with child values (child takes precedence)
+          // Child overrides: required can only go up; child default + order take precedence
           const existing = propertyMap.get(propertyDef.slug)!;
           propertyMap.set(propertyDef.slug, {
             ...existing,
-            required: profileProperty.required || existing.required, // Child can make required
+            required: profileProperty.required || existing.required,
             defaultValue:
               profileProperty.defaultValue !== null
                 ? profileProperty.defaultValue
-                : existing.defaultValue, // Child default takes precedence
-            displayOrder: profileProperty.displayOrder, // Child order takes precedence
+                : existing.defaultValue,
+            displayOrder: profileProperty.displayOrder,
           });
         }
       }
     }
 
-    // Sort by display order
     return Array.from(propertyMap.values()).sort(
       (a, b) => a.displayOrder - b.displayOrder
     );

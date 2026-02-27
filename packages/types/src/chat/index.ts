@@ -11,7 +11,7 @@ import type {
   BranchDecision,
   AgentTypeString,
   MessageMetadata,
-  ProposedAction,
+  CreatedProposal,
 } from "../hub-protocol/index.js";
 
 // =============================================================================
@@ -75,7 +75,7 @@ export interface ChatUIState {
   aiSteps: AIStep[];
   extractedEntities: ExtractedEntity[];
   /** In-stream action proposals (create/update entity or document) */
-  proposedActions?: ProposedAction[];
+  proposedActions?: CreatedProposal[];
   branchDecision?: BranchDecision;
   error?: string;
 }
@@ -150,7 +150,7 @@ export interface UseStreamingMessageResult {
   content: string;
   aiSteps: AIStep[];
   entities: ExtractedEntity[];
-  proposedActions?: ProposedAction[];
+  proposedActions?: CreatedProposal[];
   branchDecision?: BranchDecision;
   isStreaming: boolean;
   error?: string;

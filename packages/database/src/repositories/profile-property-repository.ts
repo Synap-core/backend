@@ -4,7 +4,7 @@
  * Handles linking profiles to property definitions.
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import {
   profileProperties,
   type ProfileProperty,
@@ -84,6 +84,18 @@ export class ProfilePropertyRepository {
       orderBy: (profileProperties, { asc }) => [
         asc(profileProperties.displayOrder),
       ],
+    });
+  }
+
+  /**
+   * Batch-fetch all profile-property links for a set of profile IDs.
+   * Used by getEffectiveProperties() to avoid N+1 queries across the hierarchy.
+   */
+  async getByProfiles(profileIds: string[]): Promise<ProfileProperty[]> {
+    if (profileIds.length === 0) return [];
+    return this.db.query.profileProperties.findMany({
+      where: inArray(profileProperties.profileId, profileIds),
+      orderBy: (pp, { asc }) => [asc(pp.displayOrder)],
     });
   }
 

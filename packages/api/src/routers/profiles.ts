@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
 import {
   getDb,
   ProfileRepository,
@@ -269,6 +269,17 @@ export const profilesRouter = router({
         displayName: z.string().min(1).max(200).optional(),
         parentProfileId: z.string().uuid().optional().nullable(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * Change the profile scope. Caller must own the profile (workspaceId matches).
+         * Changing to "shared" requires owning workspace context.
+         * Changing from "shared" → other automatically revokes all existing grants.
+         */
+        scope: ProfileScopeSchema.optional(),
+        /**
+         * When changing scope to "shared": additional workspace IDs to grant access.
+         * The owning workspace always keeps access.
+         */
+        allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -288,6 +299,26 @@ export const profilesRouter = router({
           code: "NOT_FOUND",
           message: `Profile not found: ${input.id}`,
         });
+      }
+
+      // Scope changes require the calling workspace to own the profile
+      if (input.scope !== undefined && input.scope !== existing.scope) {
+        if (existing.workspaceId !== ctx.workspaceId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only the owning workspace can change a profile's scope",
+          });
+        }
+
+        // Downgrading from "shared" → revoke all existing grants
+        if (existing.scope === "shared") {
+          const grantedWorkspaces = await profileRepo.getGrantedWorkspaces(
+            input.id
+          );
+          for (const wsId of grantedWorkspaces) {
+            await profileRepo.revokeAccess(input.id, wsId);
+          }
+        }
       }
 
       // Check for inheritance cycles if parent is being changed
@@ -319,10 +350,21 @@ export const profilesRouter = router({
         displayName: input.displayName,
         parentProfileId: input.parentProfileId ?? undefined,
         uiHints: input.uiHints,
+        scope: input.scope as ProfileScope | undefined,
       });
 
+      // When upgrading to "shared" — grant access to owning workspace + extras
+      if (input.scope === "shared") {
+        await profileRepo.grantAccess(input.id, ctx.workspaceId);
+        for (const wsId of input.allowedWorkspaceIds ?? []) {
+          if (wsId !== ctx.workspaceId) {
+            await profileRepo.grantAccess(input.id, wsId);
+          }
+        }
+      }
+
       logger.info(
-        { profileId: updated.id, userId: ctx.userId },
+        { profileId: updated.id, userId: ctx.userId, scope: updated.scope },
         "Profile updated"
       );
 
@@ -496,6 +538,68 @@ export const profilesRouter = router({
       );
 
       return { success: true };
+    }),
+
+  /**
+   * List profiles across multiple workspaces.
+   *
+   * Unlike `list` (single-workspace header), this endpoint accepts an explicit
+   * `workspaceIds` array and works without an active workspace header.
+   * Always includes system profiles and the caller's user profiles.
+   *
+   * Security: `workspaceIds` filtered to workspaces the caller is a member of.
+   * Omitting returns profiles from ALL user's workspaces.
+   */
+  listMulti: protectedProcedure
+    .input(
+      z.object({
+        workspaceIds: z.array(z.string().uuid()).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const { validateWorkspaceAccess } =
+        await import("../utils/workspace-membership.js");
+
+      const validatedIds = await validateWorkspaceAccess(
+        ctx.userId,
+        input.workspaceIds
+      );
+
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+
+      // Union accessible profiles across all validated workspaces
+      const seen = new Set<string>();
+      const allProfiles = [];
+
+      for (const wsId of validatedIds) {
+        const profiles = await profileRepo.getAccessibleProfiles(
+          ctx.userId,
+          wsId
+        );
+        for (const p of profiles) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            allProfiles.push(p);
+          }
+        }
+      }
+
+      // If no workspace IDs available, still return system + user profiles
+      if (validatedIds.length === 0) {
+        const systemProfiles = await profileRepo.getAccessibleProfiles(
+          ctx.userId,
+          "" // empty string won't match workspace profiles, only system+user
+        );
+        for (const p of systemProfiles) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            allProfiles.push(p);
+          }
+        }
+      }
+
+      return { profiles: allProfiles };
     }),
 
   /**
