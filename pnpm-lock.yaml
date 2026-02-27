@@ -245,10 +245,16 @@ importers:
       hono-rate-limiter:
         specifier: ^0.4.2
         version: 0.4.2(hono@4.11.4)
+      jsonwebtoken:
+        specifier: ^9.0.2
+        version: 9.0.3
       zod:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
+      '@types/jsonwebtoken':
+        specifier: ^9.0.0
+        version: 9.0.10
       '@types/pg':
         specifier: ^8.15.6
         version: 8.16.0

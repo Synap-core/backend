@@ -56,6 +56,21 @@ export interface Context {
 	socketIO?: any;
 	workspaceId?: string | null;
 	workspaceRole?: string | null;
+	/**
+	 * Request source — "intelligence" when the request comes from the Intelligence Hub
+	 * via API key auth. Set automatically by api-key-auth middleware; never set by humans.
+	 */
+	source?: string | null;
+	/**
+	 * Hard flag — true only when authenticated via a hub-protocol scoped API key.
+	 * Cannot be spoofed by a human JWT session.
+	 */
+	isHubProtocol?: boolean;
+	/**
+	 * The message ID that triggered this hub-protocol request.
+	 * When set, proposals created during this request are linked to this message.
+	 */
+	sourceMessageId?: string | null;
 }
 /**
  * Users Table - Cache for Kratos Identity Data
@@ -611,8 +626,23 @@ export interface WorkspaceSettings {
 	/** Current provisioning status */
 	provisioningStatus?: "pending" | "active" | "failed";
 	aiGovernance?: {
-		autoApprove?: boolean;
+		/**
+		 * Whitelist of event keys that AI agents may execute WITHOUT a proposal.
+		 * Everything else defaults to proposal-required.
+		 *
+		 * Format: "<subjectType>.<action>" or "<subjectType>.*" glob.
+		 * Default (when field absent): ["search.*", "memory.recall", "entity.read", "document.read"]
+		 *
+		 * Examples:
+		 *   "entity.read"    — agents can read entities without proposal
+		 *   "search.*"       — all search operations bypass proposal
+		 *   "entity.create"  — agents can create entities without proposal (high trust)
+		 */
+		autoApproveFor?: string[];
+		/** @deprecated Use autoApproveFor instead. Kept for migration reference only. */
 		requireReviewFor?: string[];
+		/** @deprecated Use autoApproveFor instead. */
+		autoApprove?: boolean;
 		maxAgentsPerUser?: number;
 		allowAgentCreation?: boolean;
 		/** Who can approve AI proposals. Default: "owner_and_admins" */
@@ -995,8 +1025,9 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 }>;
 export type PropertyDef = typeof propertyDefs.$inferSelect;
 declare enum ProfileScope {
-	SYSTEM = "system",// Available to all users
-	WORKSPACE = "workspace",// Shared within workspace
+	SYSTEM = "system",// Available to all users (pod-wide)
+	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
+	WORKSPACE = "workspace",// Owned by a single workspace
 	USER = "user"
 }
 /**
@@ -1392,7 +1423,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentId?: string | undefined;
 				content?: string | undefined;
 				global?: boolean | undefined;
-				source?: "user" | "system" | "intelligence" | "ai" | undefined;
+				source?: "user" | "system" | "intelligence" | "ai" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -1489,6 +1520,48 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listMulti: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceIds?: string[] | undefined;
+				profileSlug?: string | undefined;
+				includeGlobal?: boolean | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				entities: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		listSavedUrls: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				url: string;
+				title: string;
+				profileSlug: string;
+				createdAt: string;
+			}[];
+			meta: object;
+		}>;
 		search: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				query: string;
@@ -1547,7 +1620,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				documentId?: string | null | undefined;
 				properties?: Record<string, unknown> | undefined;
-				source?: "user" | "system" | "intelligence" | "ai" | undefined;
+				source?: "user" | "system" | "intelligence" | "ai" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -1565,7 +1638,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				source?: "user" | "system" | "intelligence" | "ai" | undefined;
+				source?: "user" | "system" | "intelligence" | "ai" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -1721,7 +1794,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -1784,6 +1857,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				threadType?: "main" | "branch" | "ai_thread" | undefined;
 				limit?: number | undefined;
+				contextObjectId?: string | undefined;
+				contextObjectType?: "entity" | "view" | "document" | undefined;
 			};
 			output: {
 				threads: {
@@ -1904,10 +1979,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				contextItems: {
 					workspaceId: string;
 					userId: string;
+					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
 					channelId: string;
-					sourceMessageId: string | null;
 					objectType: ChannelContextObjectType;
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
@@ -2032,10 +2107,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: {
 					workspaceId: string;
 					userId: string;
+					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
 					channelId: string;
-					sourceMessageId: string | null;
 					objectType: ChannelContextObjectType;
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
@@ -2044,10 +2119,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entities: {
 					workspaceId: string;
 					userId: string;
+					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
 					channelId: string;
-					sourceMessageId: string | null;
 					objectType: ChannelContextObjectType;
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
@@ -2056,10 +2131,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documents: {
 					workspaceId: string;
 					userId: string;
+					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
 					channelId: string;
-					sourceMessageId: string | null;
 					objectType: ChannelContextObjectType;
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
@@ -2087,18 +2162,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				proposals: {
 					workspaceId: string;
+					sourceMessageId: string | null;
 					id: string;
 					data: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					sourceMessageId: string | null;
 					status: ProposalStatus;
+					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
 					targetType: string;
 					targetId: string;
 					proposalType: string;
 					commandRunId: string | null;
+					agentUserId: string | null;
 					reviewedBy: string | null;
 					reviewedAt: Date | null;
 					rejectionReason: string | null;
@@ -2474,7 +2551,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listUsers: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				type?: "all" | "human" | "agent" | undefined;
+				type?: "agent" | "all" | "human" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -4657,7 +4734,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId?: string | undefined;
+				workspaceIds?: string[] | undefined;
 				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
 			};
 			output: {
@@ -6136,7 +6213,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				displayName: string;
 				parentProfileId?: string | undefined;
 				uiHints?: Record<string, unknown> | undefined;
-				scope?: "workspace" | "user" | "system" | undefined;
+				scope?: "workspace" | "user" | "shared" | "system" | undefined;
+				allowedWorkspaceIds?: string[] | undefined;
 				source?: "user" | "system" | "intelligence" | "ai" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
@@ -6194,6 +6272,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				displayName?: string | undefined;
 				parentProfileId?: string | null | undefined;
 				uiHints?: Record<string, unknown> | undefined;
+				scope?: "workspace" | "user" | "shared" | "system" | undefined;
+				allowedWorkspaceIds?: string[] | undefined;
 			};
 			output: {
 				profile: {
@@ -6250,6 +6330,48 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 				}[];
+			};
+			meta: object;
+		}>;
+		grantAccess: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				profileId: string;
+				targetWorkspaceId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		listMulti: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceIds?: string[] | undefined;
+			};
+			output: {
+				profiles: {
+					workspaceId: string | null;
+					userId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					version: number;
+					isActive: boolean;
+					scope: ProfileScope;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					parentProfileId: string | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		revokeAccess: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				profileId: string;
+				targetWorkspaceId: string;
+			};
+			output: {
+				success: boolean;
 			};
 			meta: object;
 		}>;

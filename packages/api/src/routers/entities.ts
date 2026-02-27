@@ -12,6 +12,7 @@ import { z } from "zod";
 import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
 import {
   db,
+  sql,
   eq,
   desc,
   and,
@@ -375,7 +376,7 @@ export const entitiesRouter = router({
       );
 
       const db2 = await getDb();
-      const eventRepo = new EventRepository(db2);
+      const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(db2, eventRepo);
 
       const results = await entityRepo.listForWorkspaces(
@@ -416,7 +417,7 @@ export const entitiesRouter = router({
           title: entities.title,
           type: entities.type,
           createdAt: entities.createdAt,
-          url: sql<string>`${entities.properties}->>'url'`,
+          url: drizzleSql<string>`${entities.properties}->>'url'`,
         })
         .from(entities)
         .where(

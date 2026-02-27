@@ -11,6 +11,10 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import {
+  resolveAgentHandle,
+  extractMentionAgentType,
+} from "../utils/agent-handles.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -394,6 +398,10 @@ export const channelsRouter = router({
             "onboarding",
           ])
           .optional(),
+        /** @mention handle, e.g. "cto" or "ai" — resolved to agentType for this call only */
+        agentHandle: z.string().optional(),
+        /** Originating channel ID when spawning a new AI_THREAD from a non-AI channel */
+        parentChannelId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -401,6 +409,11 @@ export const channelsRouter = router({
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const requestedAgentType = input.agentType;
+
+      // Resolve @mention handle → agentType (for per-call override, not stored on channel)
+      const mentionedAgentType =
+        (input.agentHandle ? resolveAgentHandle(input.agentHandle) : null) ??
+        extractMentionAgentType(content);
 
       // Create channel when not provided
       if (!channelId) {
@@ -423,6 +436,8 @@ export const channelsRouter = router({
             status: ChannelStatus.ACTIVE,
             agentId: "orchestrator",
             agentType: channelAgentType,
+            parentChannelId: input.parentChannelId ?? null,
+            title: input.agentHandle ? `@${input.agentHandle}` : undefined,
           })
           .returning();
         channelId = channel.id;
@@ -491,13 +506,17 @@ export const channelsRouter = router({
       }> = [];
       let hubResponse: Partial<HubResponse> = { content: "" };
 
+      // Effective agent type: @mention override → channel setting → default
+      const effectiveAgentType =
+        mentionedAgentType ?? channel.agentType ?? "meta";
+
       try {
         const stream = resolvedService.client.sendMessageStream({
           query: content,
           threadId: channelId,
           userId: ctx.userId,
           agentId: channel.agentId ?? "orchestrator",
-          agentType: channel.agentType ?? "meta",
+          agentType: effectiveAgentType,
           workspaceId,
           // Link proposals created during this response to the triggering user message
           sourceMessageId: userMessageId,
@@ -615,7 +634,7 @@ export const channelsRouter = router({
           threadId: channelId,
           userId: ctx.userId,
           agentId: channel.agentId ?? "orchestrator",
-          agentType: channel.agentType ?? "meta",
+          agentType: effectiveAgentType,
           workspaceId,
           sourceMessageId: userMessageId,
           agentUserId: agentUserId ?? resolvedService.agentUserId,

@@ -11,7 +11,7 @@ import { z } from "zod";
  * Profile Scope
  * Determines who can access and use a profile
  */
-export type ProfileScope = "system" | "workspace" | "user";
+export type ProfileScope = "system" | "workspace" | "user" | "shared";
 
 /**
  * Property Value Types
@@ -36,7 +36,7 @@ export const ProfileSchema = z.object({
   displayName: z.string(),
   parentProfileId: z.string().uuid().nullable(),
   uiHints: z.record(z.string(), z.unknown()),
-  scope: z.enum(["system", "workspace", "user"]),
+  scope: z.enum(["system", "workspace", "user", "shared"]),
   userId: z.string().nullable(),
   workspaceId: z.string().uuid().nullable(),
   isActive: z.boolean(),
