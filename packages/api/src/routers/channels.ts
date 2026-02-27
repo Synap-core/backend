@@ -41,7 +41,9 @@ import {
   ProposalStatus,
   users,
   workspaceMembers,
+  workspaces,
 } from "@synap/database/schema";
+import type { WorkspaceSettings } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { MessageLinksRepository } from "@synap/database";
@@ -510,6 +512,20 @@ export const channelsRouter = router({
       const effectiveAgentType =
         mentionedAgentType ?? channel.agentType ?? "meta";
 
+      // Fetch workspace MCP server configs (non-blocking, degrade gracefully)
+      let mcpServers: WorkspaceSettings["mcpServers"] | undefined;
+      if (workspaceId) {
+        try {
+          const ws = await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, workspaceId),
+            columns: { settings: true },
+          });
+          mcpServers = (ws?.settings as WorkspaceSettings)?.mcpServers;
+        } catch {
+          // Non-critical — agents still work without MCP servers
+        }
+      }
+
       try {
         const stream = resolvedService.client.sendMessageStream({
           query: content,
@@ -522,6 +538,8 @@ export const channelsRouter = router({
           sourceMessageId: userMessageId,
           // Per-human AI agent user — enables full attribution for hub-protocol tool calls
           agentUserId: agentUserId ?? resolvedService.agentUserId,
+          // MCP servers configured for this workspace
+          mcpServers,
         });
 
         for await (const chunk of stream) {

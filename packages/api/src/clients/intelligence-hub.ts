@@ -14,6 +14,17 @@ import type {
   CreatedProposal,
 } from "@synap-core/types";
 
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  enabled?: boolean;
+}
+
 export interface IntelligenceHubRequest {
   query: string;
   threadId: string;
@@ -31,6 +42,8 @@ export interface IntelligenceHubRequest {
   // Data Pod credentials for Hub Protocol access
   dataPodUrl?: string;
   dataPodApiKey?: string;
+  /** MCP server configs for this workspace — enables browser, shell, messaging tools */
+  mcpServers?: McpServerConfig[];
 }
 
 // Re-export from types package
@@ -88,6 +101,7 @@ export class IntelligenceHubClient {
             "http://localhost:3000",
           dataPodApiKey:
             request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
+          mcpServers: request.mcpServers,
         }),
       });
 
@@ -158,6 +172,7 @@ export class IntelligenceHubClient {
           "http://localhost:3000",
         dataPodApiKey:
           request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
+        mcpServers: request.mcpServers,
       }),
     });
 

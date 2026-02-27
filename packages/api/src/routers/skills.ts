@@ -16,6 +16,8 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
+import { parseSkillMd } from "../skills/skill-md-parser.js";
+import { parseSkillToml } from "../skills/skill-toml-parser.js";
 
 export const skillsRouter = router({
   /**
@@ -112,7 +114,11 @@ export const skillsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { id: skillId, status: "proposed" as const, proposalId: perm.proposalId };
+        return {
+          id: skillId,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
       }
 
       // 2. Direct DB operation
@@ -309,6 +315,137 @@ export const skillsRouter = router({
 
       return {
         status: "deleted" as const,
+      };
+    }),
+
+  /**
+   * Install a skill from a URL (SKILL.md or SKILL.toml format)
+   *
+   * Supports:
+   *   - OpenClaw ClawHub skills (SKILL.md with YAML frontmatter)
+   *   - ZeroClaw skills (SKILL.toml with companion markdown)
+   *
+   * The `code` field stores the instruction text.
+   * `metadata.skillType = 'instruction'` tells the Intelligence Hub
+   * to inject this skill's content into the agent system prompt rather
+   * than executing it as code.
+   */
+  installFromUrl: protectedProcedure
+    .input(
+      z.object({
+        url: z.string().url("Must be a valid URL"),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      // Fetch the remote skill file
+      let rawContent: string;
+      try {
+        const res = await fetch(input.url, {
+          headers: {
+            Accept: "text/plain, text/markdown, application/toml, */*",
+          },
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        rawContent = await res.text();
+      } catch (err) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Failed to fetch skill from URL: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+
+      // Parse as SKILL.md or SKILL.toml
+      const isToml =
+        input.url.endsWith(".toml") ||
+        rawContent.trimStart().startsWith("[skill]");
+
+      const parsed = isToml
+        ? parseSkillToml(rawContent)
+        : parseSkillMd(rawContent);
+
+      if (!parsed) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Could not parse the skill file. Expected SKILL.md (YAML frontmatter + markdown) or SKILL.toml format.",
+        });
+      }
+
+      if (!parsed.instructions.trim()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Skill has no instructions. Please check the skill file content.",
+        });
+      }
+
+      // Check if a skill with this name already exists for this user+workspace
+      const existing = await db.query.skills.findFirst({
+        where: and(
+          eq(skills.userId, userId),
+          eq(skills.workspaceId, input.workspaceId),
+          eq(skills.name, parsed.name)
+        ),
+      });
+
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `A skill named '${parsed.name}' is already installed. Delete it first or install under a different name.`,
+        });
+      }
+
+      const skillId = randomUUID();
+
+      // Store skill — instructions go in `code` field; skillType in metadata
+      const [skill] = await db
+        .insert(skills)
+        .values({
+          id: skillId,
+          userId,
+          workspaceId: input.workspaceId,
+          name: parsed.name,
+          description: parsed.description,
+          code: parsed.instructions, // instructions text, not executable code
+          category: "instruction",
+          executionMode: "sync",
+          status: "active",
+          metadata: {
+            skillType: parsed.skillType,
+            source: parsed.source,
+            version: parsed.version,
+            installedFromUrl: input.url,
+            dependencies: parsed.dependencies,
+          },
+        })
+        .returning();
+
+      auditLog({
+        subjectType: "skill",
+        action: "create",
+        phase: "completed",
+        subjectId: skill.id,
+        userId,
+        workspaceId: input.workspaceId,
+        data: {
+          name: parsed.name,
+          source: parsed.source,
+          skillType: parsed.skillType,
+        },
+      });
+
+      return {
+        id: skill.id,
+        name: skill.name,
+        status: "installed" as const,
+        skillType: parsed.skillType,
+        source: parsed.source,
+        version: parsed.version,
       };
     }),
 });

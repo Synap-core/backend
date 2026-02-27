@@ -584,11 +584,31 @@ export interface WorkspaceLayoutConfig {
 	defaultView?: string;
 	theme?: string;
 }
+/**
+ * MCP server configuration — stored per workspace.
+ * Agents in this workspace will have access to tools from these servers.
+ */
+export interface McpServerConfig {
+	/** Unique slug within the workspace, e.g. "playwright", "whatsapp" */
+	id: string;
+	/** Human-readable name shown in UI */
+	name: string;
+	/** Transport mechanism */
+	transport: "stdio" | "http";
+	command?: string;
+	args?: string[];
+	url?: string;
+	env?: Record<string, string>;
+	/** Set to false to disable without removing config. Default: true. */
+	enabled?: boolean;
+}
 export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
 	aiEnabled?: boolean;
 	allowExternalSharing?: boolean;
+	/** External MCP servers whose tools will be available to AI agents in this workspace */
+	mcpServers?: McpServerConfig[];
 	layout?: WorkspaceLayoutConfig;
 	mainWhiteboardId?: string;
 	intelligenceServiceId?: string;

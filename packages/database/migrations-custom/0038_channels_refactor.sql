@@ -27,6 +27,9 @@ ALTER TABLE chat_threads RENAME TO channels;
 ALTER TABLE channels RENAME COLUMN thread_type TO channel_type;
 ALTER TABLE channels RENAME COLUMN parent_thread_id TO parent_channel_id;
 
+-- Drop the old check constraint (it allowed 'main','branch' etc. but not 'ai_thread')
+ALTER TABLE channels DROP CONSTRAINT IF EXISTS chat_threads_thread_type_check;
+
 -- Migrate old threadType values: 'main' → 'ai_thread'; 'branch' stays
 UPDATE channels SET channel_type = 'ai_thread' WHERE channel_type = 'main';
 

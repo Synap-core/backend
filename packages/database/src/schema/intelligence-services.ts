@@ -18,6 +18,8 @@ export const intelligenceServices = pgTable("intelligence_services", {
 
   // Service endpoints
   webhookUrl: text("webhook_url").notNull(),
+  /** MCP server URL exposed by this service (e.g. ZeroClaw/OpenClaw local tools via MCP) */
+  mcpEndpoint: text("mcp_endpoint"),
 
   // Authentication
   apiKey: text("api_key").notNull(), // For authenticating callbacks from service

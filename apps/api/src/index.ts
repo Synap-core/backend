@@ -34,6 +34,7 @@ import {
   appRouter,
   createContext as createApiContext,
   hubProtocolRestApp,
+  mcpHttpApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -532,6 +533,11 @@ app.route("/webhooks", webhookRouter);
 app.route("/api/hub", hubProtocolRestApp);
 // Alias: some hub clients use /api/hub-protocol prefix
 app.route("/api/hub-protocol", hubProtocolRestApp);
+
+// MCP Server endpoint (for external agents: ZeroClaw, OpenClaw, Claude Desktop, Cursor)
+// Auth: Hub Protocol API key via Authorization: Bearer <key>
+// Protocol: JSON-RPC 2.0 over HTTP POST
+app.route("/mcp", mcpHttpApp);
 
 // tRPC endpoint
 app.use(
