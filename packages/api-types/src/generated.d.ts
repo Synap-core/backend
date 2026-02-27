@@ -3413,6 +3413,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
+				mcpEndpoint: string | null;
 				apiKey: string;
 				pricing: string | null;
 				enabled: boolean;
@@ -3456,6 +3457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
+				mcpEndpoint: string | null;
 				pricing: string | null;
 				enabled: boolean;
 				lastHealthCheck: Date | null;
@@ -3481,6 +3483,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				version: string | null;
 				webhookUrl: string;
+				mcpEndpoint: string | null;
 				apiKey: string;
 				capabilities: string[];
 				pricing: string | null;
@@ -5995,6 +5998,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				status: "deleted";
 				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		installFromUrl: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				url: string;
+				workspaceId: string;
+			};
+			output: {
+				id: string;
+				name: string;
+				status: "installed";
+				skillType: "instruction";
+				source: "custom" | "clawhub" | "zeroclaw";
+				version: string;
 			};
 			meta: object;
 		}>;

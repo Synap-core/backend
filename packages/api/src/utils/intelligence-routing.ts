@@ -38,6 +38,8 @@ export interface ResolvedService {
   serviceId: string;
   endpoint: string;
   client: IntelligenceHubClient;
+  /** MCP server URL exposed by this service (ZeroClaw/OpenClaw local tools) */
+  mcpEndpoint?: string;
   /** Per-human AI agent user ID, if one exists for this user+workspace pair */
   agentUserId?: string;
 }
@@ -145,6 +147,7 @@ function createClient(service: any): ResolvedService {
     serviceId: service.serviceId,
     endpoint: service.webhookUrl,
     client: new IntelligenceHubClient(service.webhookUrl, apiKey),
+    mcpEndpoint: service.mcpEndpoint ?? undefined,
   };
 }
 

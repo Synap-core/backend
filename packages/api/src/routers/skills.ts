@@ -342,12 +342,11 @@ export const skillsRouter = router({
 
       // Fetch the remote skill file
       let rawContent: string;
+      const fetchHeaders = {
+        Accept: "text/plain, text/markdown, application/toml, */*",
+      };
       try {
-        const res = await fetch(input.url, {
-          headers: {
-            Accept: "text/plain, text/markdown, application/toml, */*",
-          },
-        });
+        const res = await fetch(input.url, { headers: fetchHeaders });
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
@@ -364,9 +363,28 @@ export const skillsRouter = router({
         input.url.endsWith(".toml") ||
         rawContent.trimStart().startsWith("[skill]");
 
-      const parsed = isToml
-        ? parseSkillToml(rawContent)
-        : parseSkillMd(rawContent);
+      let parsed;
+      if (isToml) {
+        // For TOML manifests, try to load a companion SKILL.md at the same URL base.
+        // Many ZeroClaw skills store the instruction markdown separately.
+        let companionMarkdown: string | undefined;
+        const companionUrl = input.url.replace(/\.toml$/i, ".md");
+        if (companionUrl !== input.url) {
+          try {
+            const companionRes = await fetch(companionUrl, {
+              headers: fetchHeaders,
+            });
+            if (companionRes.ok) {
+              companionMarkdown = await companionRes.text();
+            }
+          } catch {
+            // Non-fatal — inline instructions in TOML are the fallback
+          }
+        }
+        parsed = parseSkillToml(rawContent, companionMarkdown);
+      } else {
+        parsed = parseSkillMd(rawContent);
+      }
 
       if (!parsed) {
         throw new TRPCError({

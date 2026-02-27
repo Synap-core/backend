@@ -525,6 +525,23 @@ export const channelsRouter = router({
           // Non-critical — agents still work without MCP servers
         }
       }
+      // Inject the resolved intelligence service's MCP endpoint (e.g. ZeroClaw/OpenClaw)
+      // as a pre-configured HTTP MCP server so agents can use its local tools.
+      if (resolvedService.mcpEndpoint) {
+        const serviceMcpEntry = {
+          id: resolvedService.serviceId,
+          name: resolvedService.serviceId,
+          transport: "http" as const,
+          url: resolvedService.mcpEndpoint,
+          enabled: true,
+        };
+        mcpServers = mcpServers
+          ? [
+              ...mcpServers.filter((s) => s.id !== resolvedService.serviceId),
+              serviceMcpEntry,
+            ]
+          : [serviceMcpEntry];
+      }
 
       try {
         const stream = resolvedService.client.sendMessageStream({
@@ -656,6 +673,7 @@ export const channelsRouter = router({
           workspaceId,
           sourceMessageId: userMessageId,
           agentUserId: agentUserId ?? resolvedService.agentUserId,
+          mcpServers,
         });
 
         fullContent = hubResponse.content || "";

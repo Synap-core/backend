@@ -29,7 +29,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/synap-backend"
 INTELLIGENCE_DIR="$SCRIPT_DIR/synap-intelligence-service"
-ZEROCLAW_DIR="$SCRIPT_DIR/synap-zeroclaw-bridge"
+AGENT_BRIDGE_DIR="$SCRIPT_DIR/synap-agent-bridge"
 
 # =============================================================================
 # Banner
