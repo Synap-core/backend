@@ -12,8 +12,8 @@
 
 import { z } from "zod";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
-import { db, intelligenceServices, eq, gte, drizzleSql } from "@synap/database";
-import { messages, MessageAuthorType } from "@synap/database/schema";
+import { db, intelligenceServices, eq, drizzleSql } from "@synap/database";
+import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "capabilities" });

@@ -25,6 +25,7 @@ import {
   DocumentRepository,
   EntityRepository,
   drizzleSql,
+  sql,
   users,
   createWorkspaceFromDefinition,
 } from "@synap/database";
