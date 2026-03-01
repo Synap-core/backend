@@ -13,6 +13,7 @@ import type {
   MessageMetadata,
   CreatedProposal,
 } from "../hub-protocol/index.js";
+import type { Channel } from "@synap/database";
 
 // =============================================================================
 // Database Types (Re-exported from Drizzle schema)
