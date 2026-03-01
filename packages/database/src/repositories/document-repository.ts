@@ -29,6 +29,7 @@ export interface UpdateDocumentInput {
   currentVersion?: number;
   size?: number;
   metadata?: Record<string, unknown>;
+  entityId?: string;
 }
 
 export class DocumentRepository extends BaseRepository<
@@ -84,6 +85,7 @@ export class DocumentRepository extends BaseRepository<
         currentVersion: data.currentVersion,
         size: data.size,
         metadata: data.metadata,
+        entityId: data.entityId,
         updatedAt: new Date(),
       } as Partial<NewDocument>)
       .where(and(eq(documents.id, id), eq(documents.userId, userId)))

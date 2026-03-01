@@ -1655,7 +1655,7 @@ export const channelsRouter = router({
 });
 
 /** Recursive node returned by getBranchTree — mirrors the frontend BranchNode shape */
-type BranchTreeNode = {
+export type BranchTreeNode = {
   channel: Channel;
   children: BranchTreeNode[];
 };

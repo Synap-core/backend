@@ -178,18 +178,6 @@ export const capabilitiesRouter = router({
       const since = new Date();
       since.setDate(since.getDate() - input.days);
 
-      // Base conditions
-      const conditions = [
-        eq(messages.authorType, MessageAuthorType.AI_AGENT),
-        gte(messages.timestamp, since),
-      ];
-
-      if (input.workspaceId) {
-        // Join via channels is complex; use channelId subquery approach
-        // Instead, filter by workspace-scoped channels via drizzleSql
-        // For now scope to messages where we have the data
-      }
-
       // Query: group by metadata->>'serviceId', count messages and sum tokens
       const rows = await db.execute(
         drizzleSql`
@@ -208,7 +196,7 @@ export const capabilitiesRouter = router({
       );
 
       const stats = (
-        rows.rows as Array<{
+        rows as unknown as Array<{
           service_id: string;
           message_count: number;
           total_tokens: number;

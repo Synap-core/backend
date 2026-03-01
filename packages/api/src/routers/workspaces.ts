@@ -24,7 +24,7 @@ import {
   WorkspaceMemberRepository,
   DocumentRepository,
   EntityRepository,
-  sql,
+  drizzleSql,
   users,
   createWorkspaceFromDefinition,
 } from "@synap/database";
@@ -1483,7 +1483,7 @@ export const workspacesRouter = router({
       await db
         .update(workspaces)
         .set({
-          settings: sql`settings || ${JSON.stringify({ mcpServers: input.servers })}::jsonb`,
+          settings: drizzleSql`settings || ${JSON.stringify({ mcpServers: input.servers })}::jsonb`,
           updatedAt: new Date(),
         })
         .where(eq(workspaces.id, input.workspaceId));

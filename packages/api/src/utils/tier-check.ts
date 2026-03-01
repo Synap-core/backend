@@ -14,7 +14,7 @@
 
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
-import { middleware } from "../trpc";
+import { middleware } from "../trpc.js";
 
 const logger = createLogger({ module: "tier-check" });
 
@@ -151,7 +151,8 @@ async function fetchPackageRequiredTier(slug: string): Promise<string | null> {
  *   export const multiWorkspaceProcedure = protectedProcedure.use(requireTier("team"));
  */
 export function requireTier(minTier: keyof typeof TIER_RANK) {
-  return middleware(async ({ ctx, next }) => {
+  return middleware(async (opts) => {
+    const { ctx, next } = opts;
     const userId = (ctx as { userId?: string }).userId;
     if (!userId) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
