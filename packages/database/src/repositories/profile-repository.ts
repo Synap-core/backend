@@ -19,6 +19,8 @@ export interface CreateProfileInput {
   displayName: string;
   parentProfileId?: string;
   uiHints?: Record<string, unknown>;
+  /** Default property values applied when creating a new entity of this type. */
+  defaultValues?: Record<string, unknown>;
   scope?: ProfileScope;
   userId?: string;
   workspaceId?: string;
@@ -48,6 +50,7 @@ export class ProfileRepository {
         displayName: input.displayName,
         parentProfileId: input.parentProfileId || null,
         uiHints: input.uiHints || {},
+        defaultValues: input.defaultValues || {},
         scope: input.scope || ProfileScope.WORKSPACE,
         userId: input.userId || null,
         workspaceId: input.workspaceId || null,
@@ -258,6 +261,8 @@ export class ProfileRepository {
     if (input.parentProfileId !== undefined)
       updateData.parentProfileId = input.parentProfileId || null;
     if (input.uiHints !== undefined) updateData.uiHints = input.uiHints;
+    if (input.defaultValues !== undefined)
+      updateData.defaultValues = input.defaultValues;
     if (input.scope !== undefined) updateData.scope = input.scope;
     if (input.userId !== undefined) updateData.userId = input.userId || null;
     if (input.workspaceId !== undefined)

@@ -20,6 +20,43 @@ import type { WorkspaceSettings } from "@synap/database/schema";
 
 const logger = createLogger({ module: "permission-check" });
 
+/**
+ * Filesystem paths that are ALWAYS blocked for external agent writes,
+ * regardless of user approval or workspace settings.
+ *
+ * This is the backend enforcement layer. The synap-os skill also enforces these
+ * rules on the OpenClaw side (first line of defence).
+ *
+ * Pattern semantics:
+ *   - /i flag: case-insensitive matching
+ *   - Anchored at start where relevant to avoid partial matches
+ */
+const BLOCKED_FILESYSTEM_PATHS: RegExp[] = [
+  // Synap internal directories
+  /synap[-_]backend/i,
+  /synap[-_]intelligence/i,
+  /synap[-_]realtime/i,
+  // Container / deployment config
+  /docker-compose/i,
+  /\.env(?:\.|$)/,
+  /\.env\.local/,
+  /\.env\.production/,
+  // System directories
+  /^\/etc\//,
+  /^\/usr\//,
+  /^\/bin\//,
+  /^\/sbin\//,
+  /^\/root\//,
+  /^\/sys\//,
+  /^\/proc\//,
+  /^\/dev\//,
+  // Key files
+  /private\.key/i,
+  /\.pem$/i,
+  /id_rsa/i,
+  /authorized_keys/i,
+];
+
 export type PermissionResult =
   | { granted: true }
   | { granted: false; proposalId: string }
@@ -80,6 +117,24 @@ export async function checkPermissionOrPropose(
   // 1. Personal resources (no workspace) - implicit ownership
   if (!workspaceId) {
     return { granted: true };
+  }
+
+  // 1a. Filesystem path blocklist — enforced before any role check.
+  // These paths are hard-blocked regardless of user approval or workspace settings.
+  // This is a defence-in-depth layer: the synap-os skill also enforces these rules.
+  if (subjectType === "filesystem" && data?.path) {
+    const path = String(data.path);
+    const isBlocked = BLOCKED_FILESYSTEM_PATHS.some((re) => re.test(path));
+    if (isBlocked) {
+      logger.warn(
+        { path, userId, workspaceId },
+        "Filesystem path blocked by security policy"
+      );
+      return {
+        denied: true,
+        reason: "Path is blocked by Synap security policy.",
+      };
+    }
   }
 
   // 2. Determine required permission
@@ -151,12 +206,16 @@ export async function checkPermissionOrPropose(
 
         // Default whitelist: read-only + safe context-tracking operations.
         // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
+        // "filesystem.read" is safe — agents can read files without proposals.
+        // "filesystem.write_workspace" is safe — OpenClaw's own ~/openclaw/workspace/ directory.
         const DEFAULT_AUTO_APPROVE = [
           "search.*",
           "memory.recall",
           "entity.read",
           "document.read",
           "context.*",
+          "filesystem.read",
+          "filesystem.write_workspace",
         ];
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
@@ -169,6 +228,33 @@ export async function checkPermissionOrPropose(
         );
 
         if (isAutoApproved) {
+          // Audit trail: record auto-approved action (non-blocking, non-critical)
+          db.insert(proposals)
+            .values({
+              workspaceId,
+              targetType: subjectType,
+              targetId: String(data?.id ?? randomUUID()),
+              proposalType: `${subjectType}.${action}`,
+              data: {
+                ...data,
+                agentUserId,
+                _autoApprove: {
+                  matchedPattern: autoApproveFor.find((p) =>
+                    p.endsWith(".*")
+                      ? eventKey.startsWith(p.slice(0, -2))
+                      : eventKey === p
+                  ),
+                  approvedAt: new Date().toISOString(),
+                  approvedBy: "system:auto_approve",
+                },
+              },
+              status: ProposalStatus.AUTO_APPROVED,
+              createdBy: agentUserId,
+              threadId: threadId as any,
+              commandRunId: commandRunId as any,
+            })
+            .catch(() => {}); // non-critical — never block the operation
+
           return { granted: true };
         }
 

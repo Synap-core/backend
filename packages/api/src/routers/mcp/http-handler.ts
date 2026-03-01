@@ -16,6 +16,7 @@
 
 import { Hono } from "hono";
 import { apiKeyService } from "../../services/api-keys.js";
+import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { resources } from "./resources/index.js";
 import { prompts } from "./prompts/index.js";
@@ -97,6 +98,16 @@ mcpHttpApp.post("/", async (c) => {
 
   const userId = keyRecord.userId;
   const scopes: string[] = (keyRecord.scope as string[]) ?? [];
+
+  // ── 1b. Per-key rate limit (100 req/min) ─────────────────────────────────
+  try {
+    checkHubRateLimit(keyRecord.id, "mcp");
+  } catch {
+    return c.json(
+      jsonRpcError(null, -32000, "Rate limit exceeded. Please slow down."),
+      429
+    );
+  }
 
   // ── 2. Parse JSON-RPC body ───────────────────────────────────────────────
   let body: {

@@ -89,6 +89,8 @@ export const profilesRouter = router({
         displayName: z.string().min(1).max(200),
         parentProfileId: z.string().uuid().optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /** Default property values applied to new entities of this type. */
+        defaultValues: z.record(z.string(), z.unknown()).optional(),
         scope: ProfileScopeSchema.default("workspace"),
         /**
          * For scope="shared": list of workspace IDs to grant access to immediately.
@@ -220,6 +222,7 @@ export const profilesRouter = router({
         displayName: input.displayName,
         parentProfileId: input.parentProfileId,
         uiHints: input.uiHints,
+        defaultValues: input.defaultValues,
         scope: input.scope as ProfileScope,
         userId,
         workspaceId,
@@ -269,6 +272,8 @@ export const profilesRouter = router({
         displayName: z.string().min(1).max(200).optional(),
         parentProfileId: z.string().uuid().optional().nullable(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
+        /** Default property values applied to new entities of this type. */
+        defaultValues: z.record(z.string(), z.unknown()).optional(),
         /**
          * Change the profile scope. Caller must own the profile (workspaceId matches).
          * Changing to "shared" requires owning workspace context.
@@ -350,6 +355,7 @@ export const profilesRouter = router({
         displayName: input.displayName,
         parentProfileId: input.parentProfileId ?? undefined,
         uiHints: input.uiHints,
+        defaultValues: input.defaultValues,
         scope: input.scope as ProfileScope | undefined,
       });
 

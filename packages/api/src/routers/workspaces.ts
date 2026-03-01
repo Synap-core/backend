@@ -28,11 +28,16 @@ import {
   users,
   createWorkspaceFromDefinition,
 } from "@synap/database";
+import type {
+  WorkspaceSettings,
+  McpServerConfig,
+} from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
 
@@ -82,7 +87,15 @@ export const workspacesRouter = router({
         };
       }
 
-      // 2. Direct DB operation
+      // 2. Tier check for package-based workspaces
+      const packageSlug = (input.settings as any)?.packageSlug as
+        | string
+        | undefined;
+      if (packageSlug) {
+        await assertPackageTierAccess(ctx.userId, packageSlug);
+      }
+
+      // 3. Direct DB operation
       const dbConn = await getDb();
       const eventRepo = new EventRepository(sql);
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
@@ -1166,6 +1179,12 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Enforce tier access before creating. Self-hosted pods (no CP configured)
+      // are always allowed. Throws FORBIDDEN if tier is insufficient.
+      if (input.packageSlug) {
+        await assertPackageTierAccess(ctx.userId, input.packageSlug);
+      }
+
       const result = await createWorkspaceFromDefinition({
         definition: input.definition,
         userId: ctx.userId,
@@ -1213,9 +1232,8 @@ export const workspacesRouter = router({
               ctx.userId
             );
 
-            // Link entity → document and document → entity
+            // Link entity → document (single direction — no backlink needed)
             await entRepo.update(entityId, { documentId: doc.id }, ctx.userId);
-            await docRepo.update(doc.id, { entityId }, ctx.userId);
           } catch (err) {
             logger.warn(
               { err, entityId, title: entity.title },
@@ -1397,5 +1415,79 @@ export const workspacesRouter = router({
         role: invite.role,
         expiresAt: invite.expiresAt,
       };
+    }),
+
+  /**
+   * Get workspace-level MCP server configurations.
+   * These are user-added MCP servers applied to all AI requests in this workspace.
+   */
+  getMcpServers: protectedProcedure
+    .input(z.object({ workspaceId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      // Verify member access
+      const member = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          eq(workspaceMembers.userId, ctx.userId)
+        ),
+      });
+      if (!member) throw new TRPCError({ code: "FORBIDDEN" });
+
+      const ws = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, input.workspaceId),
+        columns: { settings: true },
+      });
+      return ((ws?.settings as WorkspaceSettings)?.mcpServers ??
+        []) as McpServerConfig[];
+    }),
+
+  /**
+   * Update workspace-level MCP server configurations.
+   * Replaces the entire mcpServers array. Requires editor+ role.
+   */
+  updateMcpServers: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string(),
+        servers: z.array(
+          z.object({
+            id: z.string().min(1),
+            name: z.string().min(1),
+            transport: z.enum(["stdio", "http"]),
+            command: z.string().optional(),
+            args: z.array(z.string()).optional(),
+            url: z.string().url().optional(),
+            env: z.record(z.string(), z.string()).optional(),
+            enabled: z.boolean().optional().default(true),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Require editor+ role
+      const member = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, input.workspaceId),
+          eq(workspaceMembers.userId, ctx.userId)
+        ),
+      });
+      if (!member) throw new TRPCError({ code: "FORBIDDEN" });
+      if (!["editor", "admin", "owner"].includes(member.role ?? "")) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Editor role required to manage MCP servers",
+        });
+      }
+
+      // Merge mcpServers into JSONB settings (preserves other settings fields)
+      await db
+        .update(workspaces)
+        .set({
+          settings: sql`settings || ${JSON.stringify({ mcpServers: input.servers })}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(eq(workspaces.id, input.workspaceId));
+
+      return { count: input.servers.length };
     }),
 });

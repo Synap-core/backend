@@ -34,6 +34,13 @@ export const intelligenceServices = pgTable("intelligence_services", {
   status: text("status").notNull().default("active"), // 'active', 'inactive', 'suspended'
   enabled: boolean("enabled").notNull().default(true),
 
+  /**
+   * Whether this service's MCP endpoint is approved to inject tools into LLM requests.
+   * Default false — must be explicitly approved by workspace owner/admin or auto-approved
+   * via the trusted Hub Protocol provisioning path (control plane sets this to true).
+   */
+  mcpApproved: boolean("mcp_approved").notNull().default(false),
+
   // Metadata
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
 

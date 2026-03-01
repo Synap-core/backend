@@ -26,6 +26,8 @@ export enum AgentType {
   CODE = "code",
   WRITING = "writing",
   ACTION = "action",
+  ONBOARDING = "onboarding",
+  WORKSPACE_CREATION = "workspace-creation",
 }
 
 /**

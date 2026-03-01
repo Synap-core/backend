@@ -46,24 +46,52 @@ export type {
 } from "@synap/database";
 
 // =============================================================================
+// Channel & Message Enum Types
+//
+// Single source of truth for all string unions derived from the DB schema enums.
+// Frontend imports these instead of redefining them locally.
+// =============================================================================
+
+/** Channel type — maps to `channel_type` column */
+export type ChannelTypeString =
+  | "ai_thread"
+  | "branch"
+  | "entity_comments"
+  | "document_review"
+  | "view_discussion"
+  | "direct"
+  | "external_import"
+  | "a2ai";
+
+/** Channel status — maps to `status` column */
+export type ChannelStatusString = "active" | "merged" | "archived";
+
+/** Message role — maps to `role` column */
+export type MessageRoleString = "user" | "assistant" | "system";
+
+/** Message author type — maps to `author_type` column */
+export type MessageAuthorTypeString = "human" | "ai_agent" | "external" | "bot";
+
+/** Message category — maps to `message_category` column */
+export type MessageCategoryString =
+  | "chat"
+  | "comment"
+  | "system_notification"
+  | "review";
+
+// =============================================================================
 // UI State Types
 // =============================================================================
 
 /**
- * Branch node for UI tree visualization
+ * Branch node for UI tree visualization.
+ *
+ * Matches the nested structure returned by `getBranchTree` tRPC procedure.
+ * Each node wraps a full Channel and its recursive children.
  */
 export interface BranchNode {
-  id: string;
-  channelId: string;
-  parentId?: string;
-  children: string[];
-  depth: number;
-  agentType: AgentTypeString;
-  status: "active" | "archived" | "merged";
-  title?: string;
-  branchPurpose?: string;
-  createdAt: string;
-  mergedAt?: string;
+  channel: Channel;
+  children: BranchNode[];
 }
 
 /**
@@ -121,7 +149,7 @@ export interface CreateBranchRequest {
  */
 export interface CreateBranchResponse {
   channelId: string;
-  channel: any; // Channel type
+  channel: Channel;
 }
 
 // =============================================================================
@@ -129,31 +157,34 @@ export interface CreateBranchResponse {
 // =============================================================================
 
 /**
- * useChatChannel hook result
+ * useChatThread hook result
  */
 export interface UseChatThreadResult {
-  channel: any; // Channel | undefined
-  messages: any[]; // ChatMessage[]
+  thread: Channel | undefined;
   isLoading: boolean;
   error: Error | null;
-  sendMessage: (content: string) => Promise<void>;
   createBranch: (
-    messageId: string,
-    agentType: AgentTypeString
-  ) => Promise<string>;
+    purpose: string,
+    agentType?: AgentTypeString
+  ) => Promise<Channel>;
+  mergeBranch: (branchId: string) => Promise<void>;
+  updateThread: (updates: {
+    title?: string;
+    branchPurpose?: string;
+    agentType?: AgentTypeString;
+    agentConfig?: Record<string, unknown>;
+  }) => Promise<void>;
+  archiveThread: () => Promise<void>;
 }
 
 /**
  * useStreamingMessage hook result
  */
 export interface UseStreamingMessageResult {
-  content: string;
-  aiSteps: AIStep[];
-  entities: ExtractedEntity[];
-  proposedActions?: CreatedProposal[];
-  branchDecision?: BranchDecision;
+  streamingContent: string;
+  streamingSteps: AIStep[];
   isStreaming: boolean;
-  error?: string;
+  currentStep: AIStep | null;
 }
 
 /**
@@ -166,11 +197,12 @@ export interface UseAIStepsResult {
 }
 
 /**
- * useBranchTree hook result
+ * useBranches hook result
  */
-export interface UseBranchTreeResult {
-  nodes: BranchNode[];
-  rootNode?: BranchNode;
-  currentNode?: BranchNode;
+export interface UseBranchesResult {
+  branchTree: BranchNode | null;
+  flatBranches: Channel[];
+  activeBranches: Channel[];
+  mergedBranches: Channel[];
   isLoading: boolean;
 }

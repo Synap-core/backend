@@ -3979,6 +3979,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					capabilities: string[];
 					pricing: string;
 					version: string | null;
+					webhookUrl: string | null;
+					lastHealthCheck: Date | null;
 				}[];
 			};
 			meta: object;
@@ -3989,6 +3991,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				available: boolean;
+			};
+			meta: object;
+		}>;
+		checkHealth: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+			};
+			output: {
+				serviceId: string;
+				isHealthy: boolean;
+				checkedAt: Date;
+			};
+			meta: object;
+		}>;
+		serviceUsageStats: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				days?: number | undefined;
+			};
+			output: {
+				stats: {
+					serviceId: string;
+					messageCount: number;
+					totalTokens: number;
+					avgLatencyMs: number;
+				}[];
+				since: string;
+				days: number;
 			};
 			meta: object;
 		}>;

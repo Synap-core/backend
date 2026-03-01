@@ -723,15 +723,29 @@ runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
 
-process.on("SIGTERM", async () => {
-  apiLogger.info("SIGTERM received, shutting down gracefully");
-  try {
-    await stopBoss();
-    apiLogger.info("pg-boss stopped");
-  } catch (err) {
-    apiLogger.error({ err }, "Error stopping pg-boss");
-  }
-  process.exit(0);
+// Process-level error handlers — catch anything that escapes the request cycle
+process.on("unhandledRejection", (reason) => {
+  apiLogger.error({ reason }, "Unhandled promise rejection");
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  apiLogger.error({ error }, "Uncaught exception");
+  process.exit(1);
+});
+
+// Graceful shutdown
+["SIGTERM", "SIGINT"].forEach((signal) => {
+  process.on(signal, async () => {
+    apiLogger.info(`${signal} received, shutting down gracefully`);
+    try {
+      await stopBoss();
+      apiLogger.info("pg-boss stopped");
+    } catch (err) {
+      apiLogger.error({ err }, "Error stopping pg-boss");
+    }
+    process.exit(0);
+  });
 });
 
 export default app;

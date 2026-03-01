@@ -51,6 +51,10 @@ export const profiles = pgTable(
     // - { icon: "calendar", color: "#3B82F6", description: "Scheduled events" }
     uiHints: jsonb("ui_hints").default("{}").notNull(),
 
+    // Default property values applied when creating a new entity of this type.
+    // Example: { status: "open", priority: "medium" }
+    defaultValues: jsonb("default_values").default("{}").notNull(),
+
     // Scope (who can use this profile)
     scope: text("scope", {
       enum: [

@@ -31,3 +31,10 @@ export * from "./utils/realtime-broadcast.js";
 
 // Unified event types (used by audit-log, event-stream-manager, etc.)
 export * from "./types/index.js";
+
+// A2AI response trigger job queue constants (imported by @synap/api hub-protocol router)
+export {
+  A2AI_TRIGGER_QUEUE,
+  A2AI_TRIGGER_JOB_OPTIONS,
+  type A2AIResponseTriggerData,
+} from "./workers/a2ai-response-trigger.js";

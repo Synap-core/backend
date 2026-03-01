@@ -25,7 +25,7 @@ import {
   DocumentRepository,
   drizzleSql,
 } from "@synap/database";
-import { entities, documents } from "@synap/database/schema";
+import { entities, documents, views } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -79,8 +79,9 @@ export const entitiesRouter = router({
       const entityId = randomUUID();
       const correlationId = randomUUID();
 
-      // Resolve profile
+      // Resolve profile — capture full profile object so defaultValues are available at step 3
       let profileSlug: string | undefined;
+      let earlyResolvedProfile: any = null;
       if (input.profileSlug) {
         profileSlug = input.profileSlug;
       } else if (input.profileId) {
@@ -98,6 +99,7 @@ export const entitiesRouter = router({
           });
         }
         profileSlug = profile.slug;
+        earlyResolvedProfile = profile; // carry forward — avoids second DB call below
       } else {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -169,6 +171,25 @@ export const entitiesRouter = router({
       const entityRepo = new EntityRepository(database, eventRepo);
       const docRepo = new DocumentRepository(database, eventRepo);
 
+      // Merge profile.defaultValues into caller-supplied properties.
+      // Profile defaults are applied first; caller values take precedence.
+      // For profileSlug path: resolve now. For profileId path: already resolved above.
+      let resolvedProfile: any = earlyResolvedProfile;
+      if (!resolvedProfile && input.profileSlug) {
+        const resolutionService = new ProfileResolutionService(database);
+        resolvedProfile = await resolutionService.resolveProfile(
+          input.profileSlug,
+          ctx.userId,
+          ctx.workspaceId
+        );
+      }
+      const profileDefaults =
+        (resolvedProfile?.defaultValues as Record<string, unknown>) ?? {};
+      const effectiveProperties: Record<string, unknown> = {
+        ...profileDefaults,
+        ...(input.properties ?? {}),
+      };
+
       let createdEntity: any;
 
       if (input.content) {
@@ -202,15 +223,9 @@ export const entitiesRouter = router({
             title: input.title || undefined,
             preview: input.description || undefined,
             documentId: createdDocument.id,
-            properties: input.properties || undefined,
+            properties: effectiveProperties,
             profileSlug,
           },
-          ctx.userId
-        );
-
-        await docRepo.update(
-          createdDocument.id,
-          { entityId: createdEntity.id },
           ctx.userId
         );
       } else {
@@ -222,7 +237,7 @@ export const entitiesRouter = router({
             title: input.title || undefined,
             preview: input.description || undefined,
             documentId: input.documentId || undefined,
-            properties: input.properties || undefined,
+            properties: effectiveProperties,
             profileSlug,
           },
           ctx.userId
@@ -630,12 +645,6 @@ export const entitiesRouter = router({
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
-      const docRepo = new DocumentRepository(database, eventRepo);
-
-      const previousEntity = await db.query.entities.findFirst({
-        where: and(eq(entities.id, input.id), eq(entities.userId, ctx.userId)),
-        columns: { documentId: true },
-      });
 
       await entityRepo.update(
         input.id,
@@ -647,22 +656,6 @@ export const entitiesRouter = router({
         },
         ctx.userId
       );
-
-      // Sync document.entityId when entity.documentId changes
-      const oldDocumentId = previousEntity?.documentId ?? null;
-      const newDocumentId = input.documentId ?? null;
-      if (oldDocumentId !== newDocumentId) {
-        if (oldDocumentId) {
-          await docRepo.update(oldDocumentId, { entityId: null }, ctx.userId);
-        }
-        if (newDocumentId) {
-          await docRepo.update(
-            newDocumentId,
-            { entityId: input.id },
-            ctx.userId
-          );
-        }
-      }
 
       // 4. Emit .completed event + side-effects
       auditLog({
@@ -802,5 +795,94 @@ export const entitiesRouter = router({
       });
 
       return { status: "deleted", message: "Entity deleted" };
+    }),
+
+  /**
+   * Set entity view mode: "document" (default) or "bento" (dashboard).
+   *
+   * When switching to bento for the first time, automatically creates a
+   * dedicated bento view and stores its ID in entity properties (__bentoViewId).
+   * System keys use __ prefix to distinguish from user-defined properties.
+   */
+  setEntityViewMode: workspaceProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        mode: z.enum(["document", "bento"]),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(database, eventRepo);
+
+      // Fetch current entity
+      const entity = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, input.entityId),
+          eq(entities.userId, ctx.userId)
+        ),
+      });
+
+      if (!entity) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+
+      const currentProperties =
+        (entity.properties as Record<string, unknown>) || {};
+      let bentoViewId = currentProperties.__bentoViewId as string | undefined;
+
+      // Create bento view on first switch to bento mode
+      if (input.mode === "bento" && !bentoViewId) {
+        const DEFAULT_ENTITY_BENTO_CONFIG = {
+          layout: "bento",
+          blocks: [
+            {
+              id: "entity-header",
+              kind: "widget",
+              widgetType: "entity-header",
+              pos: { x: 0, y: 0, w: 12, h: 2 },
+            },
+            {
+              id: "entity-props",
+              kind: "widget",
+              widgetType: "entity-properties",
+              pos: { x: 0, y: 2, w: 4, h: 6 },
+            },
+          ],
+        };
+
+        const newViewId = randomUUID();
+        await db.insert(views).values({
+          id: newViewId,
+          workspaceId: ctx.workspaceId || null,
+          userId: ctx.userId,
+          type: "bento",
+          category: "composite",
+          name: `${entity.title || "Entity"} Dashboard`,
+          config: DEFAULT_ENTITY_BENTO_CONFIG,
+          metadata: { entityId: input.entityId, source: "entity-bento" },
+        });
+        bentoViewId = newViewId;
+      }
+
+      // Merge system keys into existing properties
+      const updatedProperties: Record<string, unknown> = {
+        ...currentProperties,
+        __viewMode: input.mode,
+        ...(bentoViewId ? { __bentoViewId: bentoViewId } : {}),
+      };
+
+      await entityRepo.update(
+        input.entityId,
+        { properties: updatedProperties },
+        ctx.userId
+      );
+
+      return {
+        status: "ok",
+        viewMode: input.mode,
+        bentoViewId: bentoViewId ?? null,
+      };
     }),
 });

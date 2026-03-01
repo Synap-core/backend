@@ -412,8 +412,40 @@ services:
         condition: service_started # Changed from service_healthy to service_started (less strict)
     dns:
       - 127.0.0.11 # Docker's internal DNS (for container names)
-      - 1.1.1.1    # Cloudflare (for external domains like ACME CAs)
-      - 8.8.8.8    # Google (fallback)
+      - 1.1.1.1 # Cloudflare (for external domains like ACME CAs)
+      - 8.8.8.8 # Google (fallback)
+
+  # ============================================================================
+  # OPENCLAW (opt-in — managed via control plane /openclaw/provision)
+  #
+  # Uncomment and configure to add OpenClaw as a world-interface agent.
+  # OpenClaw provides: shell, filesystem, browser automation, and messaging
+  # channels (Telegram, WhatsApp, Slack, Discord, iMessage, Teams...).
+  #
+  # Environment variables are injected automatically by the provisioning flow.
+  # Manual setup: copy this block, fill in SYNAP_* vars, run:
+  #   docker compose up -d openclaw
+  #   openclaw skill install https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap-os/SKILL.md
+  # ============================================================================
+  # openclaw:
+  #   container_name: openclaw
+  #   image: ghcr.io/openclaw/openclaw:latest
+  #   restart: unless-stopped
+  #   volumes:
+  #     - openclaw_config:/root/.openclaw
+  #     - openclaw_workspace:/root/openclaw/workspace
+  #   environment:
+  #     - SYNAP_POD_URL=${SYNAP_POD_URL:-http://backend:4000}
+  #     - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY}        # From /openclaw/register or Settings → API Keys
+  #     - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID}          # Your workspace UUID
+  #     - OPENCLAW_MODEL=anthropic/claude-sonnet-4-6        # AI model for OpenClaw
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}            # Required for the model above
+  #   ports:
+  #     - "18789:18789"   # OpenClaw gateway (HTTP + WebSocket)
+  #   networks:
+  #     - synap-net
+  #   profiles:
+  #     - openclaw
 
   # ============================================================================
   # MONITORING (Dozzle)
@@ -438,6 +470,8 @@ volumes:
   typesense_data:
   caddy_data:
   caddy_config:
+  openclaw_config:
+  openclaw_workspace:
 
 networks:
   synap-net:

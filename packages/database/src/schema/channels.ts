@@ -30,6 +30,7 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * VIEW_DISCUSSION — discussion thread attached to a view
  * DIRECT          — direct message between two users
  * EXTERNAL_IMPORT — imported conversation from an external platform (WhatsApp, Slack, Gmail, etc.)
+ * A2AI            — agent-to-agent async communication channel; no human required as author
  */
 export enum ChannelType {
   AI_THREAD = "ai_thread",
@@ -39,6 +40,7 @@ export enum ChannelType {
   VIEW_DISCUSSION = "view_discussion",
   DIRECT = "direct",
   EXTERNAL_IMPORT = "external_import",
+  A2AI = "a2ai",
 }
 
 /**
@@ -87,6 +89,7 @@ export const channels = pgTable(
         ChannelType.VIEW_DISCUSSION,
         ChannelType.DIRECT,
         ChannelType.EXTERNAL_IMPORT,
+        ChannelType.A2AI,
       ],
     })
       .notNull()

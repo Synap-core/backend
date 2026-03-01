@@ -45,6 +45,7 @@ import {
 } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { validateExternalUrl } from "../utils/validate-url.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { MessageLinksRepository } from "@synap/database";
 import {
@@ -104,6 +105,69 @@ async function ensureAgentUser(
   });
 
   return agentUser.id;
+}
+
+/**
+ * Relay the Synap AI's response to an external platform (Telegram, WhatsApp, etc.)
+ * via the registered OpenClaw intelligence service.
+ *
+ * Uses the `channels` capability to find the service that handles external messaging.
+ * If no such service is registered (no OpenClaw), this is a silent no-op.
+ *
+ * OpenClaw expects an OpenAI-compatible POST to `/v1/chat/completions` with an
+ * `x-openclaw-session-key` header containing the platform's native channel ID.
+ * It routes the content to the correct platform + contact automatically.
+ */
+async function relayToExternalChannel(opts: {
+  workspaceId: string | undefined;
+  userId: string;
+  externalSource: string;
+  externalChannelId: string;
+  content: string;
+}): Promise<void> {
+  const { workspaceId, userId, externalSource, externalChannelId, content } =
+    opts;
+
+  let service: Awaited<ReturnType<typeof resolveIntelligenceService>>;
+  try {
+    service = await resolveIntelligenceService({
+      userId,
+      workspaceId,
+      capability: "channels", // routes to OpenClaw/ZeroClaw which have "channels" capability
+    });
+  } catch {
+    return; // no service registered for channels capability — silent no-op
+  }
+
+  // Only relay if the resolved service is NOT the default Intelligence Hub
+  // (which can't receive external relay calls)
+  if (service.serviceId === "default" || !service.endpoint) return;
+
+  // SSRF guard: validate the service endpoint before fetching
+  const urlCheck = validateExternalUrl(service.endpoint);
+  if (!urlCheck.valid) {
+    console.warn(
+      "[channels] Blocked relay to potentially unsafe endpoint:",
+      service.endpoint,
+      urlCheck.reason
+    );
+    return;
+  }
+
+  await fetch(`${service.endpoint}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-openclaw-session-key": externalChannelId,
+      "x-openclaw-platform": externalSource,
+    },
+    body: JSON.stringify({
+      model: "synap-relay",
+      messages: [{ role: "assistant", content }],
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
 }
 
 /**
@@ -232,6 +296,160 @@ export const channelsRouter = router({
       });
 
       return { threadId: channelId, thread: channel };
+    }),
+
+  /**
+   * Create an external-import channel.
+   *
+   * Called either:
+   *   a) directly by the user (manual import from settings)
+   *   b) by proposals.approve when a hub-protocol `createExternalChannel` proposal is approved
+   *
+   * The channel stores the external platform conversation and lets the AI and user
+   * interact with it inside the workspace. No AI auto-response on creation.
+   */
+  createExternalChannel: workspaceProcedure
+    .input(
+      z.object({
+        externalSource: z.string(),
+        externalChannelId: z.string(),
+        title: z.string().min(1).max(255),
+        externalParticipants: z.array(z.string()).optional(),
+        initialMessage: z.string().optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace context required",
+        });
+      }
+
+      // Idempotency: check if a channel for this external source + ID already exists
+      const existing = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.workspaceId, workspaceId),
+          eq(channels.externalSource, input.externalSource),
+          eq(channels.externalChannelId, input.externalChannelId)
+        ),
+      });
+
+      if (existing) {
+        return { channelId: existing.id, status: "exists" as const };
+      }
+
+      const channelId = randomUUID();
+      await db.insert(channels).values({
+        id: channelId,
+        userId: ctx.userId,
+        workspaceId,
+        channelType: ChannelType.EXTERNAL_IMPORT,
+        status: ChannelStatus.ACTIVE,
+        title: input.title,
+        externalSource: input.externalSource,
+        externalChannelId: input.externalChannelId,
+        metadata: {
+          externalParticipants: input.externalParticipants ?? [],
+          ...(input.metadata ?? {}),
+        },
+      });
+
+      emitChatEvent({
+        event: "channel:created",
+        data: {
+          channelId,
+          userId: ctx.userId,
+          externalSource: input.externalSource,
+        },
+        workspaceId,
+        userId: ctx.userId,
+      });
+
+      return { channelId, status: "created" as const };
+    }),
+
+  /**
+   * Create an A2AI (agent-to-agent) channel.
+   *
+   * A2AI channels enable async peer communication between AI agents without
+   * requiring a human author. Both Synap IS and external agents (OpenClaw, etc.)
+   * can post to and read from these channels.
+   *
+   * Visibility:
+   *   "closed" — only named participants (agent user IDs) can post
+   *   "open"   — discoverable by any agent; first post from a new agent triggers
+   *              a lightweight proposal so the user can approve/deny the new participant
+   *
+   * Humans can observe and inject messages at any time.
+   */
+  createA2AIChannel: workspaceProcedure
+    .input(
+      z.object({
+        topic: z.string().min(1).max(500),
+        visibility: z.enum(["open", "closed"]).default("closed"),
+        /** Agent user IDs that can post (required for closed, recommended for open) */
+        participants: z.array(z.string().uuid()).optional(),
+        agentType: z
+          .enum([
+            "default",
+            "meta",
+            "prompting",
+            "knowledge-search",
+            "code",
+            "writing",
+            "action",
+          ])
+          .optional(),
+        title: z.string().max(255).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace context required",
+        });
+      }
+
+      // Editor role or higher required to create A2AI channels (L-2)
+      if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Editor role or higher required to create A2AI channels",
+        });
+      }
+
+      const channelId = randomUUID();
+      await db.insert(channels).values({
+        id: channelId,
+        userId: ctx.userId,
+        workspaceId,
+        channelType: ChannelType.A2AI,
+        status: ChannelStatus.ACTIVE,
+        title: input.title ?? input.topic.slice(0, 80),
+        agentId: "orchestrator",
+        agentType:
+          (input.agentType as ChannelAgentType) ?? ChannelAgentType.DEFAULT,
+        metadata: {
+          topic: input.topic,
+          visibility: input.visibility,
+          participants: input.participants ?? [],
+          a2aiStatus: "active",
+        },
+      });
+
+      emitChatEvent({
+        event: "channel:created",
+        data: { channelId, userId: ctx.userId, channelType: ChannelType.A2AI },
+        workspaceId,
+        userId: ctx.userId,
+      });
+
+      return { channelId, status: "created" as const };
     }),
 
   /**
@@ -527,7 +745,8 @@ export const channelsRouter = router({
       }
       // Inject the resolved intelligence service's MCP endpoint (e.g. ZeroClaw/OpenClaw)
       // as a pre-configured HTTP MCP server so agents can use its local tools.
-      if (resolvedService.mcpEndpoint) {
+      // Guard: only inject if explicitly approved — prevents unauthorized tool injection.
+      if (resolvedService.mcpEndpoint && resolvedService.mcpApproved) {
         const serviceMcpEntry = {
           id: resolvedService.serviceId,
           name: resolvedService.serviceId,
@@ -706,13 +925,31 @@ export const channelsRouter = router({
         .update(`${assistantMessageId}${fullContent}${userMessageHash}`)
         .digest("hex");
 
+      // Derive auto-approved actions: tool calls in aiSteps not matched by a created proposal
+      const effectiveAiSteps =
+        aiSteps.length > 0 ? aiSteps : (hubResponse?.aiSteps ?? []);
+      const proposalToolNameSet = new Set(
+        createdProposals.map((cp) => cp.toolName)
+      );
+      const autoApprovedActions = effectiveAiSteps
+        .filter(
+          (s) =>
+            s.type === "tool_call" &&
+            s.toolName &&
+            !proposalToolNameSet.has(s.toolName)
+        )
+        .map((s) => s.toolName as string)
+        .filter((name, idx, arr) => arr.indexOf(name) === idx); // deduplicate
+
       const messageMetadata = {
-        aiSteps: aiSteps.length > 0 ? aiSteps : hubResponse?.aiSteps || [],
+        aiSteps: effectiveAiSteps,
         tokens: hubResponse?.usage?.totalTokens,
         proposalIds:
           createdProposals.length > 0
             ? createdProposals.map((cp) => cp.proposalId)
             : undefined,
+        autoApprovedActions:
+          autoApprovedActions.length > 0 ? autoApprovedActions : undefined,
         serviceId: resolvedService.serviceId,
       };
 
@@ -774,6 +1011,29 @@ export const channelsRouter = router({
         workspaceId: workspaceId ?? null,
         userId: ctx.userId,
       });
+
+      // Outbound relay: for EXTERNAL_IMPORT channels, forward the AI response back to
+      // the external platform via OpenClaw's OpenAI-compatible endpoint.
+      // Non-blocking — failure here must never affect the response to the frontend.
+      if (
+        channel.channelType === ChannelType.EXTERNAL_IMPORT &&
+        channel.externalSource &&
+        channel.externalChannelId &&
+        fullContent
+      ) {
+        relayToExternalChannel({
+          workspaceId: workspaceId || channel.workspaceId || undefined,
+          userId: ctx.userId,
+          externalSource: channel.externalSource,
+          externalChannelId: channel.externalChannelId,
+          content: fullContent,
+        }).catch((err) => {
+          console.error(
+            "[channels] Outbound relay to external channel failed:",
+            err
+          );
+        });
+      }
 
       // Create branch if decided
       let branchChannel = undefined;
@@ -1394,23 +1654,26 @@ export const channelsRouter = router({
     }),
 });
 
+/** Recursive node returned by getBranchTree — mirrors the frontend BranchNode shape */
+type BranchTreeNode = {
+  channel: Channel;
+  children: BranchTreeNode[];
+};
+
 /**
  * Helper: build branch tree structure
  */
 function buildBranchTree(
   channels: Channel[],
   rootId: string
-): { channel: Channel; children: any[] } | null {
+): BranchTreeNode | null {
   const root = channels.find((c) => c.id === rootId);
   if (!root) return null;
 
   const children = channels
     .filter((c) => c.parentChannelId === rootId)
     .map((child) => buildBranchTree(channels, child.id))
-    .filter(Boolean) as any[];
+    .filter((n): n is BranchTreeNode => n !== null);
 
-  return {
-    channel: root,
-    children,
-  };
+  return { channel: root, children };
 }

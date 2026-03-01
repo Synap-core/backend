@@ -5,7 +5,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, publicProcedure, workspaceProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  publicProcedure,
+  workspaceProcedure,
+} from "../trpc.js";
 import { db, intelligenceServices, workspaces, eq, and } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -225,7 +230,10 @@ export const intelligenceRegistryRouter = router({
         .returning();
 
       if (!updated) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Service not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Service not found",
+        });
       }
 
       logger.info(
@@ -272,7 +280,10 @@ export const intelligenceRegistryRouter = router({
       });
 
       if (!workspace) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
       }
 
       const existing = (workspace.settings as Record<string, unknown>) ?? {};
@@ -282,7 +293,9 @@ export const intelligenceRegistryRouter = router({
       if (input.capability) {
         // Capability-specific override
         const overrides =
-          (existing.intelligenceServiceOverrides as Record<string, string> | undefined) ?? {};
+          (existing.intelligenceServiceOverrides as
+            | Record<string, string>
+            | undefined) ?? {};
         updatedSettings = {
           ...existing,
           intelligenceServiceOverrides: {
@@ -335,7 +348,10 @@ export const intelligenceRegistryRouter = router({
       });
 
       if (!workspace) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
       }
 
       const existing = (workspace.settings as Record<string, unknown>) ?? {};
@@ -343,7 +359,9 @@ export const intelligenceRegistryRouter = router({
 
       if (input.capability) {
         const overrides =
-          (existing.intelligenceServiceOverrides as Record<string, string> | undefined) ?? {};
+          (existing.intelligenceServiceOverrides as
+            | Record<string, string>
+            | undefined) ?? {};
         const { [input.capability]: _removed, ...rest } = overrides;
         updatedSettings = {
           ...existing,
@@ -360,8 +378,106 @@ export const intelligenceRegistryRouter = router({
         .where(eq(workspaces.id, ctx.workspaceId));
 
       logger.info(
-        { workspaceId: ctx.workspaceId, capability: input.capability ?? "default" },
+        {
+          workspaceId: ctx.workspaceId,
+          capability: input.capability ?? "default",
+        },
         "Intelligence service disconnected from workspace"
+      );
+
+      return { success: true };
+    }),
+
+  /**
+   * Approve a service's MCP endpoint for tool injection.
+   *
+   * Once approved, the service's mcpEndpoint is injected into LLM requests for
+   * this workspace, allowing the AI to call tools exposed by the service (e.g.
+   * ZeroClaw shell/browser, OpenClaw messaging/filesystem).
+   *
+   * Only workspace owners and admins can approve MCP tools — this is an explicit
+   * security decision, not a default. Services registered via Hub Protocol (control
+   * plane provisioning) are auto-approved at registration time.
+   */
+  approveMcp: workspaceProcedure
+    .input(z.object({ serviceId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      // Require editor+ role to approve MCP tools
+      if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Editor role or higher required to approve MCP tools",
+        });
+      }
+
+      const service = await db.query.intelligenceServices.findFirst({
+        where: eq(intelligenceServices.serviceId, input.serviceId),
+      });
+
+      if (!service) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Service not found",
+        });
+      }
+
+      if (!service.mcpEndpoint) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This service does not expose an MCP endpoint",
+        });
+      }
+
+      await db
+        .update(intelligenceServices)
+        .set({
+          mcpApproved: true,
+          updatedAt: new Date(),
+          metadata: {
+            ...((service.metadata as Record<string, unknown>) ?? {}),
+            mcpApprovedAt: new Date().toISOString(),
+            mcpApprovedByUserId: ctx.userId,
+            mcpApprovedInWorkspace: ctx.workspaceId,
+          },
+        })
+        .where(eq(intelligenceServices.serviceId, input.serviceId));
+
+      logger.info(
+        {
+          serviceId: input.serviceId,
+          approvedBy: ctx.userId,
+          workspaceId: ctx.workspaceId,
+        },
+        "MCP tools approved for intelligence service"
+      );
+
+      return { success: true, serviceId: input.serviceId };
+    }),
+
+  /**
+   * Revoke MCP approval for a service.
+   *
+   * After revocation, the service's tools are no longer injected into LLM requests.
+   * The service itself remains active — only MCP tool injection is disabled.
+   */
+  revokeMcp: workspaceProcedure
+    .input(z.object({ serviceId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Editor role or higher required to revoke MCP approval",
+        });
+      }
+
+      await db
+        .update(intelligenceServices)
+        .set({ mcpApproved: false, updatedAt: new Date() })
+        .where(eq(intelligenceServices.serviceId, input.serviceId));
+
+      logger.info(
+        { serviceId: input.serviceId, revokedBy: ctx.userId },
+        "MCP approval revoked for intelligence service"
       );
 
       return { success: true };
@@ -393,5 +509,22 @@ export const intelligenceRegistryRouter = router({
         capabilities: s.capabilities,
         webhookUrl: s.webhookUrl,
       }));
+    }),
+
+  /**
+   * Get MCP status for a specific intelligence service.
+   * Returns the mcpEndpoint URL and whether MCP tools are approved for this workspace.
+   */
+  getMcpStatus: protectedProcedure
+    .input(z.object({ serviceId: z.string().min(1) }))
+    .query(async ({ input }) => {
+      const svc = await db.query.intelligenceServices.findFirst({
+        where: eq(intelligenceServices.serviceId, input.serviceId),
+        columns: { mcpEndpoint: true, mcpApproved: true },
+      });
+      return {
+        mcpEndpoint: svc?.mcpEndpoint ?? null,
+        mcpApproved: svc?.mcpApproved ?? false,
+      };
     }),
 });

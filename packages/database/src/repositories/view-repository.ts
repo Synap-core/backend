@@ -35,7 +35,7 @@ export interface CreateViewInput {
   type: ViewType;
   name: string;
   description?: string;
-  documentId?: string;
+  documentId?: string | null;
   workspaceId: string;
   userId: string;
   // NEW: Scope profiles (required for structured views)

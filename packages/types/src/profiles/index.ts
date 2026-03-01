@@ -36,6 +36,8 @@ export const ProfileSchema = z.object({
   displayName: z.string(),
   parentProfileId: z.string().uuid().nullable(),
   uiHints: z.record(z.string(), z.unknown()),
+  /** Default property values applied when creating a new entity of this type. */
+  defaultValues: z.record(z.string(), z.unknown()).default({}),
   scope: z.enum(["system", "workspace", "user", "shared"]),
   userId: z.string().nullable(),
   workspaceId: z.string().uuid().nullable(),

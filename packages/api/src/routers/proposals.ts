@@ -398,6 +398,57 @@ export const proposalsRouter = router({
         return { success: true };
       }
 
+      // External channel import proposal: AI (e.g. OpenClaw) wants to import a
+      // WhatsApp/Slack/Telegram conversation as a Synap channel.
+      // Execute createExternalChannel now that the user approved.
+      if (
+        proposal.targetType === "channel" &&
+        proposal.proposalType === "create_external_import"
+      ) {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId!,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        const extCallerCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId!,
+          workspaceRole: membership.role,
+        };
+        const caller = channelsRouter.createCaller(extCallerCtx);
+        await caller.createExternalChannel({
+          externalSource: data.externalSource as string,
+          externalChannelId: data.externalChannelId as string,
+          title: data.title as string,
+          externalParticipants: data.externalParticipants as
+            | string[]
+            | undefined,
+          initialMessage: data.initialMessage as string | undefined,
+          metadata: data.metadata as Record<string, unknown> | undefined,
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        return { success: true };
+      }
+
       // Entity creation proposal: AI proposed a new entity.
       // Execute inline via entitiesRouter (human approver context bypasses governance).
       if (

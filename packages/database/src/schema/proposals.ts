@@ -19,6 +19,8 @@ export enum ProposalStatus {
   PENDING = "pending",
   APPROVED = "approved",
   REJECTED = "rejected",
+  /** Action was on the autoApproveFor whitelist — executed immediately, audited here for traceability. */
+  AUTO_APPROVED = "auto_approved",
 }
 
 /**
@@ -49,6 +51,7 @@ export const proposals = pgTable(
         ProposalStatus.PENDING,
         ProposalStatus.APPROVED,
         ProposalStatus.REJECTED,
+        ProposalStatus.AUTO_APPROVED,
       ],
     })
       .notNull()

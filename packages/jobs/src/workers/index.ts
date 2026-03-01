@@ -27,6 +27,10 @@ import { handleWebhookDelivery } from "./webhook-worker.js";
 import { handleBackgroundTaskScheduler } from "./background-task-scheduler.js";
 import { handleAiAnalysis } from "./ai-workers.js";
 import { handleMaterialize } from "./materializer.js";
+import {
+  handleA2AIResponseTrigger,
+  A2AI_TRIGGER_QUEUE,
+} from "./a2ai-response-trigger.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -53,6 +57,7 @@ const ALL_QUEUES = [
   "materialize",
   "side-effects",
   "search-reindex",
+  A2AI_TRIGGER_QUEUE,
 ];
 
 /**
@@ -153,6 +158,14 @@ export async function registerAllWorkers(): Promise<void> {
   // Search reindex (triggered by admin)
   await boss.work("search-reindex", async () => handleBulkIndex());
   logger.info("Registered worker: search-reindex");
+
+  // A2AI response trigger (with retry, replaces fire-and-forget)
+  await boss.work(
+    A2AI_TRIGGER_QUEUE,
+    { includeMetadata: true },
+    async ([job]: any[]) => handleA2AIResponseTrigger(job)
+  );
+  logger.info("Registered worker: a2ai-response-trigger");
 
   logger.info("All workers registered");
 }

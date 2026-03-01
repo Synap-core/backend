@@ -132,7 +132,7 @@ export const viewsRouter = router({
         if ("proposalId" in perm) {
           return {
             view: null as any,
-            documentId: null as any,
+            documentId: null,
             status: "proposed",
             message: "View creation proposed for review",
             proposalId: perm.proposalId,
@@ -203,48 +203,57 @@ export const viewsRouter = router({
         workspaceId: effectiveWorkspaceId,
       });
 
-      // Create document for content storage
       const { randomUUID: genId } = await import("crypto");
-      const docId = genId();
-      const initialContent = input.initialContent || {};
-      const contentStr = JSON.stringify(initialContent);
-      const contentBuffer = Buffer.from(contentStr, "utf-8");
-
-      // Build proper storage path and upload to MinIO
-      const ext = input.type === "whiteboard" ? "json" : "json";
-      const storageKey = storage.buildPath(ctx.userId, input.type, docId, ext);
-      const uploadResult = await storage.upload(storageKey, contentBuffer, {
-        contentType: "application/json",
-      });
-
-      const [doc] = await db
-        .insert(documents)
-        .values({
-          id: docId,
-          userId: ctx.userId,
-          workspaceId: effectiveWorkspaceId,
-          type: input.type,
-          title: input.name,
-          storageUrl: uploadResult.url,
-          storageKey: uploadResult.path,
-          size: uploadResult.size,
-          mimeType: "application/json",
-          currentVersion: 1,
-        } as any)
-        .returning();
-
-      // Create initial version with content
-      await db.insert(documentVersions).values({
-        documentId: doc.id,
-        version: 1,
-        content: contentStr,
-        author: "user",
-        authorId: ctx.userId,
-        message: "Initial version",
-      });
-
-      // Create view directly via ViewRepository
       const viewId = genId();
+
+      // Canvas views (whiteboard, mindmap) need a document for Yjs + MinIO + versioning.
+      // Structured and bento views store their config directly in views.config (JSONB) —
+      // no document needed.
+      let docId: string | null = null;
+      if (category === "canvas") {
+        const initialContent = input.initialContent || {};
+        const contentStr = JSON.stringify(initialContent);
+        const contentBuffer = Buffer.from(contentStr, "utf-8");
+
+        const ext = "json";
+        const storageKey = storage.buildPath(
+          ctx.userId,
+          input.type,
+          viewId,
+          ext
+        );
+        const uploadResult = await storage.upload(storageKey, contentBuffer, {
+          contentType: "application/json",
+        });
+
+        docId = genId();
+        const [doc] = await db
+          .insert(documents)
+          .values({
+            id: docId,
+            userId: ctx.userId,
+            workspaceId: effectiveWorkspaceId,
+            type: input.type,
+            title: input.name,
+            storageUrl: uploadResult.url,
+            storageKey: uploadResult.path,
+            size: uploadResult.size,
+            mimeType: "application/json",
+            currentVersion: 1,
+          } as any)
+          .returning();
+
+        await db.insert(documentVersions).values({
+          documentId: doc.id,
+          version: 1,
+          content: contentStr,
+          author: "user",
+          authorId: ctx.userId,
+          message: "Initial version",
+        });
+      }
+
+      // Create view
       const baseMetadata = {
         entityCount: 0,
         createdBy: ctx.userId,
@@ -261,7 +270,7 @@ export const viewsRouter = router({
           type: input.type as any,
           name: input.name,
           description: input.description,
-          documentId: doc.id,
+          documentId: docId,
           workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           scopeProfileIds: input.scopeProfileIds,
@@ -287,7 +296,7 @@ export const viewsRouter = router({
           id: viewId,
           type: input.type,
           name: input.name,
-          documentId: doc.id,
+          ...(docId ? { documentId: docId } : {}),
         },
       });
 
@@ -305,7 +314,7 @@ export const viewsRouter = router({
         },
       });
 
-      return { view: createdView, documentId: doc.id, status: "created" };
+      return { view: createdView, documentId: docId, status: "created" };
     }),
 
   /**
