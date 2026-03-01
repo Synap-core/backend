@@ -31,6 +31,7 @@ import {
   handleA2AIResponseTrigger,
   A2AI_TRIGGER_QUEUE,
 } from "./a2ai-response-trigger.js";
+import { handleIntelligenceHealthCheck } from "./intelligence-health-check.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -39,6 +40,7 @@ const logger = createLogger({ module: "workers" });
  * pg-boss v10 requires queues to be created before work() or schedule().
  */
 const ALL_QUEUES = [
+  "intelligence-health-check",
   "search-index",
   "search-bulk-index",
   "workspace-init",
@@ -166,6 +168,12 @@ export async function registerAllWorkers(): Promise<void> {
     async ([job]: any[]) => handleA2AIResponseTrigger(job)
   );
   logger.info("Registered worker: a2ai-response-trigger");
+
+  // Intelligence service health checks (cron: every 2min)
+  await boss.work("intelligence-health-check", async () =>
+    handleIntelligenceHealthCheck()
+  );
+  logger.info("Registered worker: intelligence-health-check");
 
   logger.info("All workers registered");
 }

@@ -166,16 +166,27 @@ async function lookupAgentUser(
 }
 
 /**
- * Get active service by ID
+ * Get active service by ID.
+ * Returns null if the service is known-unhealthy (skip routing to it).
  */
 async function getActiveService(serviceId: string) {
-  return db.query.intelligenceServices.findFirst({
+  const svc = await db.query.intelligenceServices.findFirst({
     where: and(
       eq(intelligenceServices.serviceId, serviceId),
       eq(intelligenceServices.status, "active"),
       eq(intelligenceServices.enabled, true)
     ),
   });
+  if (!svc) return null;
+  // Skip explicitly unhealthy services — route to fallback instead
+  if ((svc as any).lastHealthStatus === "unhealthy") {
+    logger.warn(
+      { serviceId: svc.serviceId },
+      "Skipping unhealthy intelligence service — falling through to next option"
+    );
+    return null;
+  }
+  return svc;
 }
 
 /**

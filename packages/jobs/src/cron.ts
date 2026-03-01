@@ -37,5 +37,9 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("search-bulk-index", "*/30 * * * *", {});
   logger.info("Registered cron: search-bulk-index (every 30min)");
 
+  // Intelligence service health checks (every 2 minutes)
+  await boss.schedule("intelligence-health-check", "*/2 * * * *", {});
+  logger.info("Registered cron: intelligence-health-check (every 2min)");
+
   logger.info("All cron schedules registered");
 }

@@ -79,6 +79,7 @@ export const capabilitiesRouter = router({
         version: true,
         webhookUrl: true,
         lastHealthCheck: true,
+        lastHealthStatus: true,
       },
     });
 
@@ -110,6 +111,7 @@ export const capabilitiesRouter = router({
         version: s.version,
         webhookUrl: s.webhookUrl ?? null,
         lastHealthCheck: s.lastHealthCheck ?? null,
+        lastHealthStatus: (s as any).lastHealthStatus ?? null,
       })),
     };
   }),
@@ -145,7 +147,11 @@ export const capabilitiesRouter = router({
 
       await db
         .update(intelligenceServices)
-        .set({ lastHealthCheck: checkedAt, updatedAt: checkedAt })
+        .set({
+          lastHealthCheck: checkedAt,
+          lastHealthStatus: isHealthy ? "healthy" : "unhealthy",
+          updatedAt: checkedAt,
+        })
         .where(eq(intelligenceServices.id, svc.id));
 
       logger.debug(

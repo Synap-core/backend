@@ -48,6 +48,12 @@ export const intelligenceServices = pgTable("intelligence_services", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   lastHealthCheck: timestamp("last_health_check"),
+  /**
+   * Last known health status — persisted so routing and UI can use it
+   * without having to re-ping. Updated by the intelligence-health-check cron job.
+   * "healthy" | "degraded" | "unhealthy"
+   */
+  lastHealthStatus: text("last_health_status"),
 });
 
 export type IntelligenceService = typeof intelligenceServices.$inferSelect;
