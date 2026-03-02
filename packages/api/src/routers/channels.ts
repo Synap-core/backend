@@ -1394,11 +1394,14 @@ export const channelsRouter = router({
       });
 
       if (!branch || branch.channelType !== "branch") {
-        throw new Error("Branch not found");
+        throw new TRPCError({ code: "NOT_FOUND", message: "Branch not found" });
       }
 
       if (!branch.parentChannelId) {
-        throw new Error("Branch has no parent channel");
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Branch has no parent channel",
+        });
       }
 
       await db
@@ -1525,7 +1528,10 @@ export const channelsRouter = router({
       });
 
       if (!channel) {
-        throw new Error("Channel not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
       }
 
       await db
@@ -1572,7 +1578,10 @@ export const channelsRouter = router({
       });
 
       if (!channel) {
-        throw new Error("Channel not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
       }
 
       await db
@@ -1667,7 +1676,10 @@ export const channelsRouter = router({
       });
 
       if (!channel) {
-        throw new Error("Channel not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
       }
 
       const conditions: any[] = [

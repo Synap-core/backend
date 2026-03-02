@@ -83,9 +83,10 @@ export const intelligenceRegistryRouter = router({
       });
 
       if (existing) {
-        throw new Error(
-          `Service with ID "${input.serviceId}" already registered`
-        );
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Service with ID "${input.serviceId}" already registered`,
+        });
       }
 
       const [service] = await db
@@ -171,7 +172,10 @@ export const intelligenceRegistryRouter = router({
       });
 
       if (!service) {
-        throw new Error("Service not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Service not found",
+        });
       }
 
       // Don't expose API key
@@ -197,7 +201,10 @@ export const intelligenceRegistryRouter = router({
         .returning();
 
       if (!updated) {
-        throw new Error("Service not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Service not found",
+        });
       }
 
       logger.info(

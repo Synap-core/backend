@@ -307,7 +307,10 @@ export const preferencesRouter = router({
         });
 
         if (!service) {
-          throw new Error("Intelligence service not found or inactive");
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Intelligence service not found or inactive",
+          });
         }
       }
 

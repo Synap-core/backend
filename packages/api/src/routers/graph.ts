@@ -49,7 +49,7 @@ export const graphRouter = router({
       });
 
       if (!entity) {
-        throw new Error("Entity not found");
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
 
       if (!input.includeRelations) {

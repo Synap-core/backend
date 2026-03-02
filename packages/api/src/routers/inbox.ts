@@ -190,7 +190,10 @@ export const inboxRouter = router({
         .returning({ id: inboxItems.id });
 
       if (result.length === 0) {
-        throw new Error("Inbox item not found or access denied");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Inbox item not found or access denied",
+        });
       }
 
       logger.info(

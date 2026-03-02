@@ -163,7 +163,7 @@ export const searchRouter = router({
       });
 
       if (!entity) {
-        throw new Error("Entity not found");
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
 
       logger.debug(
