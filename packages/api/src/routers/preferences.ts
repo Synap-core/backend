@@ -3,6 +3,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { userPreferences } from "@synap/database/schema";
 import { eq } from "@synap/database";

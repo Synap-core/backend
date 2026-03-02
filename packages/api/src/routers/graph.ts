@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq, and, or, inArray, desc } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";

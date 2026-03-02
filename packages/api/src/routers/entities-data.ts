@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { db, sql, eq, desc, and, isNull, ilike, or } from "@synap/database";
 import { entities } from "@synap/database/schema";
