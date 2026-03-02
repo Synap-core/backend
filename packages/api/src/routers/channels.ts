@@ -644,6 +644,21 @@ export const channelsRouter = router({
               "workspaceId is required when sending a message without a thread",
           });
         }
+        // Verify workspace membership before creating a channel in it
+        if (workspaceId && requestedAgentType !== "onboarding") {
+          const membership = await db.query.workspaceMembers.findFirst({
+            where: and(
+              eq(workspaceMembers.workspaceId, workspaceId),
+              eq(workspaceMembers.userId, ctx.userId)
+            ),
+          });
+          if (!membership) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "You are not a member of this workspace",
+            });
+          }
+        }
         const channelAgentType = requestedAgentType
           ? (requestedAgentType as ChannelAgentType)
           : ChannelAgentType.DEFAULT;
@@ -679,6 +694,22 @@ export const channelsRouter = router({
           code: "NOT_FOUND",
           message: "Channel not found",
         });
+      }
+
+      // Verify the user has access to the channel's workspace
+      if (channel.workspaceId && channel.userId !== ctx.userId) {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, channel.workspaceId),
+            eq(workspaceMembers.userId, ctx.userId)
+          ),
+        });
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You do not have access to this channel",
+          });
+        }
       }
 
       // Save user message
@@ -987,24 +1018,30 @@ export const channelsRouter = router({
       const entities = hubResponse?.entities || [];
 
       if (entities.length > 0) {
-        const { getBoss } = await import("@synap/jobs");
+        try {
+          const { getBoss } = await import("@synap/jobs");
 
-        for (const entity of entities) {
-          await getBoss().send("entity-embedding", {
-            type: entity.type,
-            title: entity.title,
-            preview: entity.description,
-            userId: ctx.userId,
-            workspaceId: workspaceId ?? ctx.workspaceId,
-            source: "chat-extraction",
-            action: "create",
-          });
+          for (const entity of entities) {
+            await getBoss().send("entity-embedding", {
+              type: entity.type,
+              title: entity.title,
+              preview: entity.description,
+              userId: ctx.userId,
+              workspaceId: workspaceId ?? ctx.workspaceId,
+              source: "chat-extraction",
+              action: "create",
+            });
 
-          createdEntities.push({
-            type: entity.type,
-            title: entity.title,
-            status: "requested",
-          });
+            createdEntities.push({
+              type: entity.type,
+              title: entity.title,
+              status: "requested",
+            });
+          }
+        } catch (err) {
+          // Non-critical — entity embedding is a background enrichment.
+          // Job queue being down should not fail the chat message.
+          console.warn("[sendMessage] Entity embedding job queue failed:", err);
         }
       }
 
