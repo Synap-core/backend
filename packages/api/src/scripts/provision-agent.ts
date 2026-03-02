@@ -27,7 +27,7 @@ import {
   and,
   eq,
 } from "@synap/database";
-import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
+import { users, workspaceMembers, apiKeys, workspaces } from "@synap/database/schema";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 
 const serviceType = process.env.SERVICE_TYPE;
@@ -59,33 +59,44 @@ if (!entry) {
   process.exit(1);
 }
 
-if (!workspaceIdEnv && !adminEmail) {
-  console.error(
-    "❌ ERROR: Either WORKSPACE_ID or ADMIN_EMAIL must be provided"
-  );
-  process.exit(1);
-}
+// WORKSPACE_ID or ADMIN_EMAIL are optional — falls back to first workspace in DB
 
 async function resolveWorkspaceId(
   db: Awaited<ReturnType<typeof getDb>>
 ): Promise<string> {
   if (workspaceIdEnv) return workspaceIdEnv;
 
-  const [member] = await db
-    .select({ workspaceId: workspaceMembers.workspaceId })
-    .from(users)
-    .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
-    .where(eq(users.email, adminEmail!))
+  // Try ADMIN_EMAIL lookup first (user must have logged in at least once)
+  if (adminEmail) {
+    const [member] = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(users)
+      .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+      .where(eq(users.email, adminEmail))
+      .limit(1);
+
+    if (member) {
+      console.log(`ℹ️  Resolved workspace: ${member.workspaceId} (from user ${adminEmail})`);
+      return member.workspaceId;
+    }
+
+    // On fresh installs the admin user is in Kratos but not yet in the local DB
+    // (they appear after first login). Fall through to first-workspace fallback.
+    console.warn(`⚠️  User "${adminEmail}" not found in local DB (not logged in yet). Falling back to first workspace.`);
+  }
+
+  // Last resort: pick the first workspace in the DB (single-tenant self-hosted)
+  const [first] = await db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(workspaces)
     .limit(1);
 
-  if (!member) {
-    console.error(`❌ ERROR: No workspace found for user "${adminEmail}"`);
+  if (!first) {
+    console.error("❌ ERROR: No workspaces found in database. Run the backend at least once to create the default workspace.");
     process.exit(1);
   }
-  console.log(
-    `ℹ️  Resolved workspace: ${member.workspaceId} (from user ${adminEmail})`
-  );
-  return member.workspaceId;
+  console.log(`ℹ️  Resolved workspace: ${first.id} ("${first.name}") — first workspace fallback`);
+  return first.id;
 }
 
 async function findAgent(
@@ -202,6 +213,8 @@ async function run() {
         key: plainKey,
         scope: entry.defaultScopes,
         userId: agent.id,
+        keyType: "hub_inbound",
+        description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
       },
       "system"
     );
@@ -279,6 +292,8 @@ async function run() {
       key: plainKey,
       scope: entry.defaultScopes,
       userId: agentId,
+      keyType: "hub_inbound",
+      description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
     },
     "system"
   );

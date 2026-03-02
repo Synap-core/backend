@@ -18,6 +18,10 @@ export interface CreateApiKeyInput {
   scope: string[];
   expiresAt?: Date;
   userId: string;
+  /** Categorical label for what this key is used for */
+  keyType?: "hub_inbound" | "user_pat" | "system";
+  /** Human-readable explanation of this key's purpose */
+  description?: string;
 }
 
 export interface UpdateApiKeyInput {
@@ -59,6 +63,8 @@ export class ApiKeyRepository extends BaseRepository<
         userId: data.userId,
         isActive: true,
         usageCount: 0,
+        keyType: data.keyType ?? "hub_inbound",
+        description: data.description,
       })
       .returning();
 

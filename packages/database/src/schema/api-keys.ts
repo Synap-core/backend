@@ -39,6 +39,13 @@ export const apiKeys = pgTable(
     keyPrefix: text("key_prefix").notNull(), // 'synap_hub_live_', 'synap_hub_test_', 'synap_user_'
     keyHash: text("key_hash").notNull(), // Bcrypt hash (cost factor 12)
 
+    // Key Type & Description
+    keyType: text("key_type")
+      .notNull()
+      .default("hub_inbound")
+      .$type<"hub_inbound" | "user_pat" | "system">(), // Categorical purpose label
+    description: text("description"), // Human-readable explanation of what this key does
+
     // Metadata
     hubId: text("hub_id"), // NULL for user keys, set for Hub keys
     scope: text("scope")
