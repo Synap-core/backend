@@ -265,6 +265,20 @@ export const entitiesRouter = router({
         data: { profileSlug, title: input.title },
       });
 
+      // Dispatch entity embedding job (non-blocking — failure never blocks creation)
+      try {
+        const { getBoss } = await import("@synap/jobs");
+        await getBoss().send("entity-embedding", {
+          entityId: createdEntity.id,
+          title: createdEntity.title || input.title,
+          preview: createdEntity.preview || input.description,
+          userId: ctx.userId,
+          action: "create",
+        });
+      } catch (err) {
+        console.warn("[entities.create] Failed to queue embedding job:", err);
+      }
+
       return {
         status: "created",
         message: "Entity created",
@@ -675,6 +689,22 @@ export const entitiesRouter = router({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
       });
+
+      // Dispatch entity embedding job (non-blocking — only if searchable fields changed)
+      if (input.title !== undefined || input.description !== undefined) {
+        try {
+          const { getBoss } = await import("@synap/jobs");
+          await getBoss().send("entity-embedding", {
+            entityId: input.id,
+            title: input.title,
+            preview: input.description,
+            userId: ctx.userId,
+            action: "update",
+          });
+        } catch (err) {
+          console.warn("[entities.update] Failed to queue embedding job:", err);
+        }
+      }
 
       return { status: "updated", message: "Entity updated" };
     }),

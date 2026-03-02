@@ -317,6 +317,9 @@ export async function checkPermissionOrPropose(
   return { granted: true };
 }
 
+/** Proposals auto-expire after this many days if not reviewed. */
+const PROPOSAL_TTL_DAYS = 30;
+
 /**
  * Create a proposal for an AI-sourced action that requires review.
  */
@@ -380,6 +383,7 @@ async function createProposal(opts: {
       data: proposalData,
       status: ProposalStatus.PENDING,
       createdBy: userId,
+      expiresAt: new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
       ...(agentUserId ? { agentUserId } : {}),
       ...(threadId ? { threadId } : {}),
       ...(commandRunId ? { commandRunId } : {}),

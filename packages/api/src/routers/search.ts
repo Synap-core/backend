@@ -15,6 +15,7 @@ import {
   desc,
   sqlDrizzle as sql,
 } from "@synap/database";
+import { intelligenceHubClient } from "../clients/intelligence-hub.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "search-router" });
@@ -84,7 +85,7 @@ export const searchRouter = router({
     .input(
       z.object({
         query: z.string().min(1),
-        type: z.enum(["note", "task", "document", "project"]).optional(),
+        type: z.string().optional(),
         limit: z.number().min(1).max(50).default(10),
         threshold: z.number().min(0).max(1).default(0.7),
       })
@@ -94,20 +95,48 @@ export const searchRouter = router({
 
       logger.debug({ userId, query: input.query }, "Semantic search requested");
 
-      // TODO: Implement vector search with pgvector
-      // 1. Generate embedding for input.query using AI service
-      // 2. Query entity_vectors using cosine similarity
-      // 3. Join back to entities table
-      // 4. Return ranked results
+      // Generate embedding for query via Intelligence Hub
+      let embedding: number[];
+      try {
+        embedding = await intelligenceHubClient.generateEmbedding(input.query);
+      } catch (error) {
+        logger.warn(
+          { err: error },
+          "Embedding generation failed — returning empty semantic results"
+        );
+        return { entities: [] };
+      }
 
-      // For now, return empty results with a note
-      logger.warn(
-        "Semantic search not yet implemented - requires embedding service"
-      );
+      const embeddingStr = `[${embedding.join(",")}]`;
+
+      // pgvector cosine similarity search against entity_vectors
+      const results = await sql`
+        SELECT
+          ev.title,
+          ev.preview,
+          e.id,
+          e.type,
+          e.created_at,
+          1 - (ev.embedding <=> ${embeddingStr}::vector) as similarity
+        FROM entity_vectors ev
+        JOIN entities e ON ev.entity_id = e.id
+        WHERE ev.user_id = ${userId}
+          AND e.deleted_at IS NULL
+          ${input.type ? sql`AND ev.entity_type = ${input.type}` : sql``}
+          AND 1 - (ev.embedding <=> ${embeddingStr}::vector) >= ${input.threshold}
+        ORDER BY similarity DESC
+        LIMIT ${input.limit}
+      `;
 
       return {
-        entities: [],
-        message: "Semantic search requires embedding service configuration",
+        entities: (results as any[]).map((r) => ({
+          id: r.id,
+          type: r.type,
+          title: r.title,
+          preview: r.preview,
+          similarity: Number(r.similarity),
+          createdAt: r.created_at,
+        })),
       };
     }),
 

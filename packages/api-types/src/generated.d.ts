@@ -3961,6 +3961,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		agentDefinitions: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				agents: unknown[];
+			};
+			meta: object;
+		}>;
 		memoryFacts: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
@@ -7226,6 +7233,88 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	agentConfigs: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				configs: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					agentType: string;
+					promptAppend: string | null;
+					extraToolIds: string[];
+					disabledToolIds: string[];
+					maxStepsOverride: number | null;
+					modelOverride: string | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentType: string;
+			};
+			output: {
+				config: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					agentType: string;
+					promptAppend: string | null;
+					extraToolIds: string[];
+					disabledToolIds: string[];
+					maxStepsOverride: number | null;
+					modelOverride: string | null;
+				} | null;
+			};
+			meta: object;
+		}>;
+		upsert: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentType: string;
+				promptAppend?: string | null | undefined;
+				extraToolIds?: string[] | undefined;
+				disabledToolIds?: string[] | undefined;
+				maxStepsOverride?: number | null | undefined;
+				modelOverride?: string | null | undefined;
+			};
+			output: {
+				config: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					agentType: string;
+					promptAppend: string | null;
+					extraToolIds: string[];
+					disabledToolIds: string[];
+					maxStepsOverride: number | null;
+					modelOverride: string | null;
+				};
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentType: string;
 			};
 			output: {
 				success: boolean;
