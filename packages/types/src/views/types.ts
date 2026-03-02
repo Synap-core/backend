@@ -18,11 +18,6 @@
 export type ViewCategory = "structured" | "canvas" | "composite";
 
 /**
- * View type enum (imported from index.ts)
- */
-import type { ViewType } from "./index.js";
-
-/**
  * Map view types to their categories
  */
 export const VIEW_TYPE_CATEGORIES: Record<string, ViewCategory> = {
