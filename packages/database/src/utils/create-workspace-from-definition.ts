@@ -28,6 +28,60 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "create-workspace-from-definition" });
 
+// ─── Helpers for auto-generated profile bento views ──────────────────────────
+
+/** Convert kebab-case icon name to PascalCase for bento widget ICON_MAP lookup */
+function kebabToPascalCase(str: string): string {
+  return str
+    .split("-")
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join("");
+}
+
+/**
+ * Build the default bento block set for a profile dashboard.
+ * Layout: section-header (row 0) → stat-card count (row 2) → view-table (row 5)
+ */
+function buildDefaultProfileBentoBlocks(profile: {
+  slug: string;
+  displayName: string;
+  icon?: string;
+  color?: string;
+}): Array<Record<string, unknown>> {
+  const color = profile.color ?? "#6366F1";
+  const icon = profile.icon ? kebabToPascalCase(profile.icon) : "Database";
+  const slug = profile.slug;
+  return [
+    {
+      id: `${slug}-header`,
+      kind: "widget",
+      widgetType: "section-header",
+      pos: { x: 0, y: 0, w: 12, h: 2 },
+      config: { title: profile.displayName, icon, profileSlug: slug, color },
+    },
+    {
+      id: `${slug}-count`,
+      kind: "widget",
+      widgetType: "stat-card",
+      pos: { x: 0, y: 2, w: 3, h: 3 },
+      config: {
+        label: `Total ${profile.displayName}s`,
+        aggregation: "count",
+        profileSlug: slug,
+        icon,
+        color,
+      },
+    },
+    {
+      id: `${slug}-table`,
+      kind: "widget",
+      widgetType: "view-table",
+      pos: { x: 0, y: 5, w: 12, h: 9 },
+      config: { profileSlug: slug },
+    },
+  ];
+}
+
 /**
  * Subset of PackageDefinition fields consumed by this utility.
  * Kept loose (Record-based) so it works with both control-plane
@@ -154,6 +208,25 @@ export async function createWorkspaceFromDefinition(
   const settings: WorkspaceSettings = {};
   if (definition.layoutConfig) {
     settings.layout = definition.layoutConfig;
+  }
+
+  // Auto-generate sidebarItems from profiles when the template doesn't specify them.
+  // Each profile gets one sidebar tab pointing to its auto-created bento view (named
+  // after profile.displayName). Templates can override this by providing sidebarItems.
+  if (
+    !(definition.layoutConfig as any)?.sidebarItems &&
+    (definition.profiles ?? []).length > 0
+  ) {
+    settings.layout = {
+      ...(settings.layout ?? {}),
+      sidebarItems: (definition.profiles ?? []).map((p) => ({
+        kind: "view",
+        viewName: p.displayName,
+        profileSlug: p.slug,
+        label: p.displayName,
+        icon: p.icon,
+      })),
+    } as any;
   }
   if (packageSlug) {
     settings.packageSlug = packageSlug;
@@ -344,6 +417,38 @@ export async function createWorkspaceFromDefinition(
 
     viewMap[view.name] = viewResult.id;
     viewIds.push(viewResult.id);
+  }
+
+  // 6b. Auto-create default bento view for each profile without an explicit one.
+  // The view is named after profile.displayName so sidebarItems can resolve it by name.
+  const profilesWithExplicitBento = new Set(
+    (definition.views ?? [])
+      .filter((v) => v.type === "bento" && v.scopeProfileSlug)
+      .map((v) => v.scopeProfileSlug!)
+  );
+
+  for (const profile of definition.profiles ?? []) {
+    if (profilesWithExplicitBento.has(profile.slug)) continue;
+    const scopeProfileId = profileMap[profile.slug];
+    const blocks = buildDefaultProfileBentoBlocks(profile);
+
+    const viewResult = await viewRepo.create(
+      {
+        name: profile.displayName,
+        type: "bento" as any,
+        scopeProfileIds: scopeProfileId ? [scopeProfileId] : undefined,
+        config: { layout: "bento", blocks },
+        workspaceId,
+        userId,
+      },
+      userId
+    );
+    viewMap[profile.displayName] = viewResult.id;
+    viewIds.push(viewResult.id);
+    logger.debug(
+      { profileSlug: profile.slug, viewId: viewResult.id },
+      "Auto-created profile bento view"
+    );
   }
 
   // 7. Create bento home dashboard
