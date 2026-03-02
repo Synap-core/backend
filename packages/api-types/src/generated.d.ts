@@ -3551,6 +3551,57 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		provisionAgent: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceType: string;
+			};
+			output: {
+				status: "provisioned" | "already_provisioned";
+				agentUserId: string;
+				agentEmail: string;
+				apiKey: string | null;
+				workspaceId: string;
+				podUrl: string;
+				dockerCommand: string;
+			};
+			meta: object;
+		}>;
+		deprovisionAgent: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceType: string;
+			};
+			output: {
+				status: "deprovisioned";
+			};
+			meta: object;
+		}>;
+		rotateAgentKey: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceType: string;
+			};
+			output: {
+				status: "rotated";
+				apiKey: string;
+				dockerCommand: string;
+			};
+			meta: object;
+		}>;
+		getAgentStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				serviceType: string;
+			};
+			output: {
+				provisioned: boolean;
+				serviceRegistered: boolean;
+				mcpEndpoint: string | null;
+				mcpApproved: boolean;
+				agentUserId: string | null;
+				agentEmail: string | null;
+				podUrl: string;
+				workspaceId: string;
+			};
+			meta: object;
+		}>;
 	}>>;
 	intelligence: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

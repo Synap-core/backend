@@ -13,6 +13,7 @@ import {
   IconUsers,
   IconBuildingCommunity,
   IconTopologyStarRing3,
+  IconPlug,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
 import { colors, layout, spacing, typography } from "../../theme/tokens";
@@ -50,6 +51,7 @@ const sections: NavSection[] = [
       { path: "/workspace", label: "Overview", icon: IconBuildingCommunity },
       { path: "/proposals", label: "Proposals", icon: IconCheckbox },
       { path: "/commands", label: "Intelligence", icon: IconTerminal2 },
+      { path: "/services", label: "Services", icon: IconPlug },
     ],
   },
   {

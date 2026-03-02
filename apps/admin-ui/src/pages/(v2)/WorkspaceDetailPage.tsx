@@ -26,6 +26,7 @@ import {
   IconBuildingCommunity,
   IconRobot,
   IconEdit,
+  IconPlug,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
 import { useWorkspace } from "../../lib/workspace";
@@ -220,6 +221,12 @@ export default function WorkspaceDetailPage() {
           <Tabs.Tab value="invitations">Invitations</Tabs.Tab>
           <Tabs.Tab value="settings">Settings</Tabs.Tab>
           <Tabs.Tab value="intelligence">Intelligence</Tabs.Tab>
+          <Tabs.Tab value="services">
+            <Group gap={4}>
+              <IconPlug size={14} />
+              Services
+            </Group>
+          </Tabs.Tab>
         </Tabs.List>
 
         {/* Members Tab */}
@@ -506,6 +513,27 @@ export default function WorkspaceDetailPage() {
                 })
               }
             />
+          </Stack>
+        </Tabs.Panel>
+
+        {/* Services Tab */}
+        <Tabs.Panel value="services">
+          <Stack gap={spacing[3]} maw={560}>
+            <Text fw={600}>External Agent Services</Text>
+            <Text size="sm" c="dimmed">
+              Provision Docker-based agent containers (OpenClaw, ZeroClaw, …) that connect to this
+              workspace via Hub Protocol.
+            </Text>
+            <Button
+              component={Link}
+              to="/services"
+              leftSection={<IconPlug size={16} />}
+              variant="light"
+              color="teal"
+              w="fit-content"
+            >
+              Manage Services
+            </Button>
           </Stack>
         </Tabs.Panel>
 

@@ -11,10 +11,26 @@ import {
   publicProcedure,
   workspaceProcedure,
 } from "../trpc.js";
-import { db, intelligenceServices, workspaces, eq, and } from "@synap/database";
+import {
+  db,
+  intelligenceServices,
+  workspaces,
+  eq,
+  and,
+  getDb,
+  EventRepository,
+  ApiKeyRepository,
+  sql,
+  drizzleSql,
+} from "@synap/database";
+import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
+import { verifyPermission } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import { randomUUID, randomBytes } from "crypto";
 import { encryptServiceKey } from "../utils/service-key-crypto.js";
+import { auditLog } from "../utils/audit-log.js";
+import { getServiceEntry } from "../utils/agent-services/index.js";
 
 const logger = createLogger({ module: "intelligence-registry" });
 
@@ -527,4 +543,396 @@ export const intelligenceRegistryRouter = router({
         mcpApproved: svc?.mcpApproved ?? false,
       };
     }),
+
+  // ===========================================================================================
+  // Generic Agent Provisioning
+  // ===========================================================================================
+
+  /**
+   * Provision an external agent service for this workspace.
+   *
+   * Creates a dedicated AI agent user + Hub Protocol API key for the requested
+   * service type (e.g. "openclaw", "zeroclaw"). The API key is returned ONCE —
+   * pass it to the container as SYNAP_HUB_API_KEY. Use rotateAgentKey to get a
+   * fresh credential.
+   *
+   * Idempotent: if an agent of this type already exists, returns already_provisioned
+   * without creating a new key.
+   */
+  provisionAgent: workspaceProcedure
+    .input(z.object({ serviceType: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: ctx.workspaceId },
+        requiredPermission: "manage",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: perm.reason || "Owner or admin role required to provision agent services",
+        });
+      }
+
+      // Throws if serviceType is not registered
+      const entry = getServiceEntry(input.serviceType);
+
+      // Check for existing agent user of this type
+      const existing = await findProvisionedAgent(ctx.workspaceId, input.serviceType);
+      if (existing) {
+        logger.info(
+          { workspaceId: ctx.workspaceId, agentUserId: existing.id, serviceType: input.serviceType },
+          "Agent already provisioned for workspace — returning existing info"
+        );
+        const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+        return {
+          status: "already_provisioned" as const,
+          agentUserId: existing.id,
+          agentEmail: existing.email,
+          apiKey: null as string | null,
+          workspaceId: ctx.workspaceId,
+          podUrl,
+          dockerCommand: entry.buildDockerCommand({
+            podUrl,
+            workspaceId: ctx.workspaceId,
+            agentUserId: existing.id,
+            apiKey: "<use-rotateAgentKey-to-get-a-new-credential>",
+          }),
+        };
+      }
+
+      // Create agent user
+      const agentId = randomUUID();
+      const shortId = agentId.slice(0, 8);
+      const email = `agent-${input.serviceType}-${shortId}@synap.agent`;
+
+      await db.insert(users).values({
+        id: agentId,
+        email,
+        name: `${entry.displayName} Agent`,
+        emailVerified: true,
+        userType: "agent",
+        agentMetadata: {
+          agentType: input.serviceType,
+          description: entry.description,
+          createdByUserId: ctx.userId,
+          capabilities: entry.agentCapabilities,
+        } as any,
+        timezone: "UTC",
+        locale: "en",
+      });
+
+      // Add to workspace with the catalog-specified role
+      await db.insert(workspaceMembers).values({
+        workspaceId: ctx.workspaceId,
+        userId: agentId,
+        role: entry.agentRole,
+        invitedBy: ctx.userId,
+      });
+
+      // Create Hub Protocol API key
+      const keyPrefix =
+        process.env.NODE_ENV === "production" ? "synap_hub_live_" : "synap_hub_test_";
+      const plainKey = generateApiKey(keyPrefix);
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      await apiKeyRepo.create(
+        {
+          keyName: `${entry.displayName} — workspace ${ctx.workspaceId}`,
+          keyPrefix,
+          key: plainKey,
+          scope: entry.defaultScopes,
+          userId: agentId,
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "agent_user",
+        action: "create",
+        phase: "completed",
+        subjectId: agentId,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { agentType: input.serviceType, email },
+      });
+
+      logger.info(
+        { workspaceId: ctx.workspaceId, agentUserId: agentId, serviceType: input.serviceType },
+        "Agent provisioned"
+      );
+
+      const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+      return {
+        status: "provisioned" as const,
+        agentUserId: agentId,
+        agentEmail: email,
+        /** Plaintext key — shown ONCE. Store it securely. */
+        apiKey: plainKey as string | null,
+        workspaceId: ctx.workspaceId,
+        podUrl,
+        dockerCommand: entry.buildDockerCommand({
+          podUrl,
+          workspaceId: ctx.workspaceId,
+          agentUserId: agentId,
+          apiKey: plainKey,
+        }),
+      };
+    }),
+
+  /**
+   * Deprovision an agent service from this workspace.
+   *
+   * Revokes all Hub Protocol API keys, removes workspace membership, and deletes
+   * the agent user record. The intelligence service registration (if any) is left
+   * intact — the service deregisters itself on shutdown.
+   */
+  deprovisionAgent: workspaceProcedure
+    .input(z.object({ serviceType: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: ctx.workspaceId },
+        requiredPermission: "manage",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: perm.reason || "Owner or admin role required to deprovision agent services",
+        });
+      }
+
+      // Validate service type (throws on unknown)
+      getServiceEntry(input.serviceType);
+
+      const agent = await findProvisionedAgent(ctx.workspaceId, input.serviceType);
+      if (!agent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `${input.serviceType} is not provisioned for this workspace`,
+        });
+      }
+
+      // 1. Revoke all API keys
+      await db
+        .update(apiKeys)
+        .set({
+          isActive: false,
+          revokedAt: new Date(),
+          revokedReason: `Deprovisioned by user ${ctx.userId}`,
+        })
+        .where(eq(apiKeys.userId, agent.id));
+
+      // 2. Remove workspace membership
+      await db
+        .delete(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.userId, agent.id),
+            eq(workspaceMembers.workspaceId, ctx.workspaceId)
+          )
+        );
+
+      // 3. Delete agent user record
+      await db.delete(users).where(eq(users.id, agent.id));
+
+      auditLog({
+        subjectType: "agent_user",
+        action: "delete",
+        phase: "completed",
+        subjectId: agent.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { agentType: input.serviceType },
+      });
+
+      logger.info(
+        { workspaceId: ctx.workspaceId, agentUserId: agent.id, serviceType: input.serviceType, revokedBy: ctx.userId },
+        "Agent deprovisioned"
+      );
+
+      return { status: "deprovisioned" as const };
+    }),
+
+  /**
+   * Rotate the Hub Protocol API key for a provisioned agent service.
+   *
+   * Revokes all existing keys and issues a new one. The new plaintext key is
+   * returned ONCE — update the container's SYNAP_HUB_API_KEY.
+   */
+  rotateAgentKey: workspaceProcedure
+    .input(z.object({ serviceType: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: ctx.workspaceId },
+        requiredPermission: "manage",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: perm.reason || "Owner or admin role required to rotate agent keys",
+        });
+      }
+
+      const entry = getServiceEntry(input.serviceType);
+
+      const agent = await findProvisionedAgent(ctx.workspaceId, input.serviceType);
+      if (!agent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `${input.serviceType} is not provisioned for this workspace`,
+        });
+      }
+
+      // Revoke existing keys
+      await db
+        .update(apiKeys)
+        .set({
+          isActive: false,
+          revokedAt: new Date(),
+          revokedReason: `Key rotated by user ${ctx.userId}`,
+        })
+        .where(eq(apiKeys.userId, agent.id));
+
+      // Issue new key
+      const keyPrefix =
+        process.env.NODE_ENV === "production" ? "synap_hub_live_" : "synap_hub_test_";
+      const plainKey = generateApiKey(keyPrefix);
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      await apiKeyRepo.create(
+        {
+          keyName: `${entry.displayName} — workspace ${ctx.workspaceId} (rotated)`,
+          keyPrefix,
+          key: plainKey,
+          scope: entry.defaultScopes,
+          userId: agent.id,
+        },
+        ctx.userId
+      );
+
+      logger.info(
+        { workspaceId: ctx.workspaceId, agentUserId: agent.id, serviceType: input.serviceType, rotatedBy: ctx.userId },
+        "Agent Hub Protocol API key rotated"
+      );
+
+      const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+      return {
+        status: "rotated" as const,
+        /** New plaintext key — shown ONCE. Update your container. */
+        apiKey: plainKey,
+        dockerCommand: entry.buildDockerCommand({
+          podUrl,
+          workspaceId: ctx.workspaceId,
+          agentUserId: agent.id,
+          apiKey: plainKey,
+        }),
+      };
+    }),
+
+  /**
+   * Get provisioning and registration status for an agent service type.
+   *
+   * Returns whether the agent user exists, whether the intelligence service has
+   * self-registered, and the non-secret configuration.
+   */
+  getAgentStatus: workspaceProcedure
+    .input(z.object({ serviceType: z.string().min(1) }))
+    .query(async ({ input, ctx }) => {
+      const entry = getServiceEntry(input.serviceType);
+
+      const [agent, service] = await Promise.all([
+        findProvisionedAgent(ctx.workspaceId, input.serviceType),
+        entry.matchCapability ? findRegisteredService(entry.matchCapability) : Promise.resolve(undefined),
+      ]);
+
+      const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+
+      if (!agent) {
+        return {
+          provisioned: false as const,
+          serviceRegistered: false,
+          mcpEndpoint: null as string | null,
+          mcpApproved: false,
+          agentUserId: null as string | null,
+          agentEmail: null as string | null,
+          podUrl,
+          workspaceId: ctx.workspaceId,
+        };
+      }
+
+      return {
+        provisioned: true as const,
+        serviceRegistered: !!service,
+        mcpEndpoint: service?.mcpEndpoint ?? null,
+        mcpApproved: service?.mcpApproved ?? false,
+        agentUserId: agent.id,
+        agentEmail: agent.email,
+        podUrl,
+        workspaceId: ctx.workspaceId,
+      };
+    }),
 });
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+function generateApiKey(prefix: string): string {
+  return `${prefix}${randomBytes(32).toString("hex")}`;
+}
+
+/**
+ * Find an existing provisioned agent user of a given service type in a workspace.
+ */
+async function findProvisionedAgent(workspaceId: string, serviceType: string) {
+  const [row] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      agentMetadata: users.agentMetadata,
+      role: workspaceMembers.role,
+    })
+    .from(users)
+    .innerJoin(
+      workspaceMembers,
+      and(
+        eq(workspaceMembers.userId, users.id),
+        eq(workspaceMembers.workspaceId, workspaceId)
+      )
+    )
+    .where(
+      and(
+        eq(users.userType, "agent"),
+        drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+      )
+    )
+    .limit(1);
+
+  return row;
+}
+
+/**
+ * Find the active intelligence service registration for a given capability.
+ * Only matches services registered via Hub Protocol.
+ */
+async function findRegisteredService(matchCapability: string) {
+  return db.query.intelligenceServices.findFirst({
+    where: and(
+      eq(intelligenceServices.status, "active"),
+      drizzleSql`${intelligenceServices.capabilities} @> ${JSON.stringify([matchCapability])}::jsonb`,
+      drizzleSql`${intelligenceServices.metadata}->>'registeredVia' = 'hub-protocol'`
+    ),
+  });
+}

@@ -288,7 +288,6 @@ registerRouter("secretsVault", secretsVaultRouter, {
   source: "core",
   description: "Encrypted secrets vault for passwords and API keys",
 });
-
 import { coreRouter } from "./root.js";
 export type { AppRouter } from "./root.js";
 export { coreRouter };

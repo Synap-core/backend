@@ -354,6 +354,7 @@ cmd_install() {
     local INTELLIGENCE_KEY=""
     local REPO_URL="https://github.com/synap-core/backend.git"
     local INTERACTIVE=true
+    local WITH_OPENCLAW=false
     
     # Auto-detect if we're in a git repo
     local IN_GIT_REPO=false
@@ -416,6 +417,10 @@ cmd_install() {
                 INTERACTIVE=false
                 shift
                 ;;
+            --with-openclaw)
+                WITH_OPENCLAW=true
+                shift
+                ;;
             --help|-h)
                 cat << EOF
 ${BLUE}Synap Install${NC}
@@ -439,6 +444,7 @@ ${YELLOW}Options:${NC}
   
   ${GREEN}--intelligence-url <url>${NC} URL of Intelligence Service (e.g. http://localhost:3001)
   ${GREEN}--intelligence-key <key>${NC} Hub Protocol API Key for Intelligence Service
+  ${GREEN}--with-openclaw${NC}        Provision OpenClaw agent automatically after install
 
 ${YELLOW}Examples:${NC}
   # In git repo: build from source (default)
@@ -449,6 +455,9 @@ ${YELLOW}Examples:${NC}
 
   # With Intelligence Service config
   synap install --domain localhost --intelligence-url http://localhost:3001 --intelligence-key my-secret-key
+
+  # Provision OpenClaw during install
+  synap install --domain example.com --with-openclaw
 
 EOF
                 exit 0
@@ -814,13 +823,25 @@ EOF
     # Start services
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
     docker compose up -d
-    
+
+    # Provision agent services requested at install time
+    if [ "$WITH_OPENCLAW" = "true" ]; then
+        echo ""
+        echo -e "${BLUE}🤖 Provisioning OpenClaw agent...${NC}"
+        cmd_services add "openclaw" || {
+            echo -e "${YELLOW}⚠️  OpenClaw provisioning failed. Run 'synap services add openclaw' manually after startup.${NC}"
+        }
+    fi
+
     echo -e "${GREEN}✅ Installation complete!${NC}"
     echo ""
     echo "Management commands:"
     echo "  ./synap health    # Check status"
     echo "  ./synap logs      # View logs"
     echo "  ./synap update    # Update to latest"
+    if [ "$WITH_OPENCLAW" = "true" ]; then
+        echo "  ./synap services status openclaw  # Check OpenClaw status"
+    fi
 }
 
 
@@ -1710,19 +1731,156 @@ cmd_exec() {
         echo -e "${RED}Error: Not in Synap installation directory${NC}"
         exit 1
     fi
-    
+
     cd "$deploy_dir"
-    
+
     local service=$1
     shift
-    
+
     if [ -z "$service" ] || [ $# -eq 0 ]; then
         echo "Usage: synap exec <service> <command> [args...]"
         echo "Example: synap exec backend node --version"
         exit 1
     fi
-    
+
     docker compose exec "$service" "$@"
+}
+
+# ============================================================================
+# SERVICES COMMAND
+# Manages external agent service provisioning (OpenClaw, ZeroClaw, etc.)
+# ============================================================================
+
+cmd_services() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+
+    cd "$deploy_dir"
+
+    local subcommand="${1:-help}"
+    shift || true
+
+    case "$subcommand" in
+        list)
+            echo -e "${BLUE}🤖 Listing provisioned agent services...${NC}"
+            docker compose exec -T backend \
+                node -e "
+                  const { getDb, drizzleSql } = require('@synap/database');
+                  const { users, workspaceMembers } = require('@synap/database/schema');
+                  const { eq } = require('@synap/database');
+                  getDb().then(db => db.select({ id: users.id, email: users.email, agentMetadata: users.agentMetadata }).from(users).innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id)).where(eq(users.userType, 'agent'))).then(rows => { console.log(JSON.stringify(rows, null, 2)); process.exit(0); }).catch(e => { console.error(e.message); process.exit(1); });
+                " 2>/dev/null || {
+                    echo -e "${YELLOW}Tip: ensure the backend container is running (synap start)${NC}"
+                }
+            ;;
+
+        add)
+            local service_type="${1:-}"
+            if [ -z "$service_type" ]; then
+                echo -e "${RED}Usage: synap services add <type>${NC}"
+                echo "Known types: openclaw, zeroclaw"
+                exit 1
+            fi
+
+            echo -e "${BLUE}🤖 Provisioning ${service_type} agent...${NC}"
+
+            # Look up WORKSPACE_ID from .env if set, otherwise leave blank (script falls back to ADMIN_EMAIL)
+            local workspace_id=""
+            if [ -f ".env" ]; then
+                workspace_id=$(grep "^WORKSPACE_ID=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+            fi
+
+            local admin_email=""
+            if [ -f ".env" ]; then
+                admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+            fi
+
+            docker compose exec -T backend \
+                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} node dist/scripts/provision-agent.js"
+            ;;
+
+        remove)
+            local service_type="${1:-}"
+            if [ -z "$service_type" ]; then
+                echo -e "${RED}Usage: synap services remove <type>${NC}"
+                exit 1
+            fi
+
+            echo -e "${YELLOW}⚠️  This will revoke all API keys and delete the ${service_type} agent user.${NC}"
+            read -p "Continue? (y/N): " confirm
+            if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                echo "Cancelled."
+                exit 0
+            fi
+
+            echo -e "${BLUE}🗑️  Deprovisioning ${service_type} agent...${NC}"
+            docker compose exec -T backend \
+                sh -c "SERVICE_TYPE=${service_type} ACTION=remove node dist/scripts/provision-agent.js"
+            ;;
+
+        status)
+            local service_type="${1:-}"
+            if [ -z "$service_type" ]; then
+                echo -e "${RED}Usage: synap services status <type>${NC}"
+                exit 1
+            fi
+
+            echo -e "${BLUE}🔍 Checking ${service_type} status...${NC}"
+            docker compose exec -T backend \
+                sh -c "SERVICE_TYPE=${service_type} ACTION=status node dist/scripts/provision-agent.js"
+            ;;
+
+        rotate)
+            local service_type="${1:-}"
+            if [ -z "$service_type" ]; then
+                echo -e "${RED}Usage: synap services rotate <type>${NC}"
+                exit 1
+            fi
+
+            echo -e "${YELLOW}⚠️  This will revoke the existing API key and issue a new one.${NC}"
+            read -p "Continue? (y/N): " confirm
+            if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                echo "Cancelled."
+                exit 0
+            fi
+
+            echo -e "${BLUE}🔑 Rotating ${service_type} API key...${NC}"
+            docker compose exec -T backend \
+                sh -c "SERVICE_TYPE=${service_type} ACTION=rotate node dist/scripts/provision-agent.js"
+            ;;
+
+        help|--help|-h|"")
+            cat << EOF
+${BLUE}Synap Services${NC} — Manage external agent service provisioning
+
+${YELLOW}Usage:${NC}
+  synap services list              List all provisioned agent users
+  synap services add <type>        Provision a new agent service
+  synap services remove <type>     Deprovision (revoke keys + delete agent user)
+  synap services status <type>     Check provisioned + registered status
+  synap services rotate <type>     Rotate the Hub Protocol API key
+
+${YELLOW}Known service types:${NC}
+  openclaw    World-interface agent (shell, browser, filesystem, messaging)
+  zeroclaw    LLM inference agent
+
+${YELLOW}Examples:${NC}
+  synap services add openclaw
+  synap services status openclaw
+  synap services rotate openclaw
+  synap services remove openclaw
+EOF
+            ;;
+
+        *)
+            echo -e "${RED}Unknown services subcommand: $subcommand${NC}"
+            echo "Run 'synap services help' for usage"
+            exit 1
+            ;;
+    esac
 }
 
 cmd_help() {
@@ -1749,6 +1907,7 @@ ${YELLOW}Management:${NC}
   synap clean [type]             Clean Docker resources (interactive if no type)
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
+  synap services <sub> [type]    Manage external agent services (OpenClaw, ZeroClaw, etc.)
 
 ${YELLOW}Examples:${NC}
   # Install (auto-detects: clone if not in repo, use image by default)
@@ -1784,6 +1943,10 @@ ${YELLOW}Examples:${NC}
   synap shell backend           # Open shell in backend
   synap exec backend node --version # Execute command in backend
   synap config list
+  synap services add openclaw   # Provision OpenClaw agent
+  synap services status openclaw # Check OpenClaw status
+  synap services rotate openclaw # Rotate OpenClaw API key
+  synap services remove openclaw # Remove OpenClaw agent
 
 ${YELLOW}For detailed help:${NC}
   synap install --help
@@ -1856,6 +2019,10 @@ case "${1:-help}" in
     exec)
         shift
         cmd_exec "$@"
+        ;;
+    services)
+        shift
+        cmd_services "$@"
         ;;
     help|--help|-h)
         cmd_help
