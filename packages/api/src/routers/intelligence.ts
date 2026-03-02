@@ -489,6 +489,26 @@ export const intelligenceRouter = router({
       };
     }),
 
+  // ── Agent Definitions Proxy ───────────────────────────────────────────────
+
+  /**
+   * List agent definitions from the connected intelligence service.
+   * Proxies to hub GET /api/agent-definitions — gracefully returns [] if
+   * the hub is unreachable (service not yet connected).
+   */
+  agentDefinitions: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    try {
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch("/agent-definitions", endpoint);
+      const data = (await res.json()) as { agents?: unknown[] };
+      return { agents: Array.isArray(data.agents) ? data.agents : [] };
+    } catch {
+      // Hub unreachable or no service configured — show empty state
+      return { agents: [] };
+    }
+  }),
+
   // ── Memory Proxy ─────────────────────────────────────────────────────────
 
   /** List memory facts for current user */

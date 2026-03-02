@@ -38,6 +38,7 @@ import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
+import { agentConfigsRouter } from "./routers/agent-configs.js";
 
 /**
  * Core API Router
@@ -83,6 +84,7 @@ export const coreRouter = router({
   profileRelations: profileRelationsRouter,
   agentUsers: agentUsersRouter,
   mcpServers: mcpServersRouter,
+  agentConfigs: agentConfigsRouter,
 });
 
 export type AppRouter = typeof coreRouter;

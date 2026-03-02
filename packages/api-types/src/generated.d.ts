@@ -885,6 +885,20 @@ declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	dialect: "pg";
 }>;
 export type MessageLink = typeof messageLinks.$inferSelect;
+/**
+ * MCP Servers Schema
+ *
+ * Workspace-level MCP (Model Context Protocol) server configurations.
+ * Promoted from workspaces.settings.mcpServers[] (JSONB array) to a
+ * proper table for per-server status tracking, approval gating, and
+ * efficient queries.
+ *
+ * An MCP server exposes tools that AI agents can call. Each server must
+ * be explicitly approved by a workspace owner before its tools are injected
+ * into LLM requests.
+ */
+export type McpTransport = "stdio" | "http" | "sse";
+export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
 declare enum PropertyValueType {
 	STRING = "string",
 	NUMBER = "number",
@@ -7044,6 +7058,177 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				status: "removed";
+			};
+			meta: object;
+		}>;
+	}>>;
+	mcpServers: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				servers: {
+					name: string;
+					workspaceId: string;
+					id: string;
+					errorMessage: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: Record<string, unknown>;
+					status: McpStatus;
+					description: string | null;
+					url: string | null;
+					enabled: boolean;
+					slug: string;
+					transport: McpTransport;
+					command: string | null;
+					args: string[];
+					env: Record<string, string>;
+					approved: boolean;
+					lastPingAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				slug: string;
+				name: string;
+				transport: "sse" | "stdio" | "http";
+				description?: string | undefined;
+				command?: string | undefined;
+				args?: string[] | undefined;
+				url?: string | undefined;
+				env?: Record<string, string> | undefined;
+			};
+			output: {
+				server: {
+					name: string;
+					workspaceId: string;
+					id: string;
+					errorMessage: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: Record<string, unknown>;
+					status: McpStatus;
+					description: string | null;
+					url: string | null;
+					enabled: boolean;
+					slug: string;
+					transport: McpTransport;
+					command: string | null;
+					args: string[];
+					env: Record<string, string>;
+					approved: boolean;
+					lastPingAt: Date | null;
+				};
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				enabled?: boolean | undefined;
+				slug?: string | undefined;
+				name?: string | undefined;
+				description?: string | undefined;
+				transport?: "sse" | "stdio" | "http" | undefined;
+				command?: string | undefined;
+				args?: string[] | undefined;
+				url?: string | undefined;
+				env?: Record<string, string> | undefined;
+			};
+			output: {
+				server: {
+					id: string;
+					workspaceId: string;
+					slug: string;
+					name: string;
+					description: string | null;
+					transport: McpTransport;
+					command: string | null;
+					args: string[];
+					url: string | null;
+					env: Record<string, string>;
+					enabled: boolean;
+					approved: boolean;
+					status: McpStatus;
+					lastPingAt: Date | null;
+					errorMessage: string | null;
+					metadata: Record<string, unknown>;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+			};
+			meta: object;
+		}>;
+		setApproved: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				approved: boolean;
+			};
+			output: {
+				server: {
+					id: string;
+					workspaceId: string;
+					slug: string;
+					name: string;
+					description: string | null;
+					transport: McpTransport;
+					command: string | null;
+					args: string[];
+					url: string | null;
+					env: Record<string, string>;
+					enabled: boolean;
+					approved: boolean;
+					status: McpStatus;
+					lastPingAt: Date | null;
+					errorMessage: string | null;
+					metadata: Record<string, unknown>;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+			};
+			meta: object;
+		}>;
+		ping: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				server: {
+					id: string;
+					workspaceId: string;
+					slug: string;
+					name: string;
+					description: string | null;
+					transport: McpTransport;
+					command: string | null;
+					args: string[];
+					url: string | null;
+					env: Record<string, string>;
+					enabled: boolean;
+					approved: boolean;
+					status: McpStatus;
+					lastPingAt: Date | null;
+					errorMessage: string | null;
+					metadata: Record<string, unknown>;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
 			};
 			meta: object;
 		}>;
