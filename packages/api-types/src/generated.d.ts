@@ -4174,13 +4174,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		semantic: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				query: string;
-				type?: "note" | "task" | "document" | "project" | undefined;
+				type?: string | undefined;
 				limit?: number | undefined;
 				threshold?: number | undefined;
 			};
 			output: {
-				entities: never[];
-				message: string;
+				entities: {
+					id: any;
+					type: any;
+					title: any;
+					preview: any;
+					similarity: number;
+					createdAt: any;
+				}[];
 			};
 			meta: object;
 		}>;
