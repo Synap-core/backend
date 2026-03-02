@@ -61,6 +61,7 @@ export const FieldRendererTypeSchema = z.enum([
   "number",
   "currency",
   "relations",
+  "tag",
 ]);
 
 export const FieldRendererConfigSchema = z.object({
