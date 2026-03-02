@@ -1763,6 +1763,14 @@ cmd_services() {
     local subcommand="${1:-help}"
     shift || true
 
+    # Resolve workspace context for all subcommands that need it
+    local workspace_id=""
+    local admin_email=""
+    if [ -f ".env" ]; then
+        workspace_id=$(grep "^WORKSPACE_ID=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+        admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
+    fi
+
     case "$subcommand" in
         list)
             echo -e "${BLUE}🤖 Listing provisioned agent services...${NC}"
@@ -1786,18 +1794,6 @@ cmd_services() {
             fi
 
             echo -e "${BLUE}🤖 Provisioning ${service_type} agent...${NC}"
-
-            # Look up WORKSPACE_ID from .env if set, otherwise leave blank (script falls back to ADMIN_EMAIL)
-            local workspace_id=""
-            if [ -f ".env" ]; then
-                workspace_id=$(grep "^WORKSPACE_ID=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-            fi
-
-            local admin_email=""
-            if [ -f ".env" ]; then
-                admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-            fi
-
             docker compose exec -T backend \
                 sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} node dist/scripts/provision-agent.js"
             ;;
@@ -1818,7 +1814,7 @@ cmd_services() {
 
             echo -e "${BLUE}🗑️  Deprovisioning ${service_type} agent...${NC}"
             docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} ACTION=remove node dist/scripts/provision-agent.js"
+                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} ACTION=remove node dist/scripts/provision-agent.js"
             ;;
 
         status)
@@ -1830,7 +1826,7 @@ cmd_services() {
 
             echo -e "${BLUE}🔍 Checking ${service_type} status...${NC}"
             docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} ACTION=status node dist/scripts/provision-agent.js"
+                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} ACTION=status node dist/scripts/provision-agent.js"
             ;;
 
         rotate)
@@ -1849,7 +1845,7 @@ cmd_services() {
 
             echo -e "${BLUE}🔑 Rotating ${service_type} API key...${NC}"
             docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} ACTION=rotate node dist/scripts/provision-agent.js"
+                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} ACTION=rotate node dist/scripts/provision-agent.js"
             ;;
 
         help|--help|-h|"")
