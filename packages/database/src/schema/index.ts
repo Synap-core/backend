@@ -82,6 +82,12 @@ export * from "./provisioning-tokens.js";
 // NEW: Message Links (universal linking system)
 export * from "./message-links.js";
 
+// NEW: Agent Configs (centralised user preferences for AI agent behaviour)
+export * from "./agent-configs.js";
+
+// NEW: MCP Servers (workspace-level Model Context Protocol server registry)
+export * from "./mcp-servers.js";
+
 // NEW: Dynamic Schema System (Profiles + Properties + Relation Definitions)
 export * from "./property-defs.js";
 export * from "./profiles.js";

@@ -7,8 +7,7 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { db, eq, desc, and, sql } from "@synap/database";
-import { documents } from "@synap/database/schema";
+import { sql } from "@synap/database";
 import { intelligenceHubClient } from "../../clients/intelligence-hub.js";
 
 export const searchRouter = router({
@@ -141,7 +140,7 @@ export const searchRouter = router({
     }),
 
   /**
-   * Search documents (simple text search)
+   * Search documents via Typesense (full-text search with relevance ranking)
    * Requires: hub-protocol.read scope
    */
   searchDocuments: scopedProcedure(["hub-protocol.read"])
@@ -154,22 +153,34 @@ export const searchRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const { sqlTemplate: sql } = await import("@synap/database");
+      const { searchService } = await import("@synap/search");
 
-      // Simple ILIKE search on document titles
-      const results = await db.query.documents.findMany({
-        where: and(
-          eq(documents.userId, input.userId),
-          input.type ? eq(documents.type, input.type) : undefined,
-          sql`${documents.title} ILIKE ${`%${input.query}%`}`
-        ),
-        orderBy: [desc(documents.updatedAt)],
-        limit: input.limit,
-      });
+      const searchResults = await searchService.searchCollection(
+        "documents",
+        input.query,
+        {
+          userId: input.userId,
+          limit: input.limit,
+        }
+      );
 
-      // Return metadata only (no content)
+      let docs = searchResults.results
+        .map((r) => r.document)
+        .filter(Boolean) as Array<{
+        id: string;
+        title: string;
+        type: string;
+        language?: string;
+        updatedAt: string;
+        createdAt: string;
+      }>;
+
+      if (input.type) {
+        docs = docs.filter((d) => d.type === input.type);
+      }
+
       return {
-        documents: results.map((d) => ({
+        documents: docs.map((d) => ({
           id: d.id,
           title: d.title,
           type: d.type,

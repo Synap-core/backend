@@ -28,6 +28,8 @@ export const skillsRouter = router({
       z
         .object({
           workspaceId: z.string().uuid().optional(),
+          kind: z.enum(["instruction", "code"]).optional(),
+          scope: z.enum(["user", "workspace"]).optional(),
           status: z.enum(["active", "inactive", "error", "all"]).optional(),
           limit: z.number().min(1).max(100).default(50),
           offset: z.number().min(0).default(0),
@@ -40,6 +42,14 @@ export const skillsRouter = router({
 
       if (input?.workspaceId) {
         conditions.push(eq(skills.workspaceId, input.workspaceId));
+      }
+
+      if (input?.kind) {
+        conditions.push(eq(skills.kind, input.kind));
+      }
+
+      if (input?.scope) {
+        conditions.push(eq(skills.scope, input.scope));
       }
 
       if (input?.status && input.status !== "all") {
@@ -88,6 +98,9 @@ export const skillsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
+        kind: z.enum(["instruction", "code"]).default("code"),
+        scope: z.enum(["user", "workspace"]).default("workspace"),
+        agentTypes: z.array(z.string()).optional(),
         name: z.string().min(1).max(255),
         description: z.string().optional(),
         code: z.string().min(1),
@@ -128,6 +141,9 @@ export const skillsRouter = router({
           id: skillId,
           userId,
           workspaceId: input.workspaceId,
+          kind: input.kind,
+          scope: input.scope,
+          agentTypes: input.agentTypes ?? null,
           name: input.name,
           description: input.description,
           code: input.code,
@@ -172,6 +188,9 @@ export const skillsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
+        kind: z.enum(["instruction", "code"]).optional(),
+        scope: z.enum(["user", "workspace"]).optional(),
+        agentTypes: z.array(z.string()).nullable().optional(),
         name: z.string().min(1).max(255).optional(),
         description: z.string().optional(),
         code: z.string().min(1).optional(),
@@ -319,6 +338,100 @@ export const skillsRouter = router({
     }),
 
   /**
+   * Execute a skill by ID
+   *
+   * Delegates execution to the Intelligence Hub which has the sandboxed
+   * executor. Updates execution metadata (count + lastTestedAt) on success.
+   */
+  execute: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        /** Free-form parameter map passed to the skill's code */
+        input: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      // Verify skill exists and belongs to user
+      const skill = await ctx.db.query.skills.findFirst({
+        where: and(eq(skills.id, input.id), eq(skills.userId, userId)),
+      });
+
+      if (!skill) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+      }
+
+      if (skill.status !== "active") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Skill is not active (status: ${skill.status})`,
+        });
+      }
+
+      // Delegate execution to Intelligence Hub
+      const hubUrl =
+        process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
+      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+
+      let result: {
+        success: boolean;
+        result?: unknown;
+        error?: string;
+        executionTimeMs: number;
+      };
+
+      try {
+        const response = await fetch(`${hubUrl}/api/skills/execute`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": hubApiKey,
+          },
+          body: JSON.stringify({
+            skillId: input.id,
+            userId,
+            parameters: input.input ?? {},
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(`Hub returned ${response.status}: ${text}`);
+        }
+
+        result = (await response.json()) as typeof result;
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Skill execution failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+
+      // Update execution metadata on success
+      if (result.success) {
+        const currentMeta =
+          (skill.metadata as Record<string, unknown> | null) ?? {};
+        const execCount =
+          ((currentMeta.executionCount as number | undefined) ?? 0) + 1;
+        await db
+          .update(skills)
+          .set({
+            metadata: {
+              ...currentMeta,
+              executionCount: execCount,
+              lastTestedAt: new Date().toISOString(),
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(skills.id, input.id));
+      }
+
+      return result;
+    }),
+
+  /**
    * Install a skill from a URL (SKILL.md or SKILL.toml format)
    *
    * Supports:
@@ -429,13 +542,15 @@ export const skillsRouter = router({
 
       const skillId = randomUUID();
 
-      // Store skill — instructions go in `code` field; skillType in metadata
+      // Store skill — instructions go in `code` field; kind='instruction' tells hub to inject into prompt
       const [skill] = await db
         .insert(skills)
         .values({
           id: skillId,
           userId,
           workspaceId: input.workspaceId,
+          kind: "instruction",
+          scope: "workspace",
           name: parsed.name,
           description: parsed.description,
           code: parsed.instructions, // instructions text, not executable code
@@ -443,7 +558,6 @@ export const skillsRouter = router({
           executionMode: "sync",
           status: "active",
           metadata: {
-            skillType: parsed.skillType,
             source: parsed.source,
             version: parsed.version,
             installedFromUrl: input.url,
@@ -462,7 +576,7 @@ export const skillsRouter = router({
         data: {
           name: parsed.name,
           source: parsed.source,
-          skillType: parsed.skillType,
+          kind: "instruction",
         },
       });
 
@@ -470,7 +584,7 @@ export const skillsRouter = router({
         id: skill.id,
         name: skill.name,
         status: "installed" as const,
-        skillType: parsed.skillType,
+        kind: "instruction" as const,
         source: parsed.source,
         version: parsed.version,
       };

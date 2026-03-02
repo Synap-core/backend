@@ -48,6 +48,7 @@ import jwt from "jsonwebtoken";
 import {
   getCorsOrigins,
   rateLimitMiddleware,
+  aiRateLimitMiddleware,
   requestSizeLimit,
 } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
@@ -121,16 +122,9 @@ app.use(
   "*",
   cors({
     origin: (origin) => {
-      // Accept any origin when credentials are required
-      // Browser requires specific origin (not wildcard) when credentials: true
-      // So we return the requesting origin if present
-      if (!origin) {
-        // Same-origin request (no Origin header) - allow by returning null
-        return null;
-      }
-      // Return the requesting origin (allows any origin)
-      // Security is handled by authentication, not CORS
-      return origin;
+      if (!origin) return null;
+      const allowed = getCorsOrigins();
+      return allowed.includes(origin) ? origin : null;
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -542,6 +536,10 @@ app.route("/api/hub-protocol", hubProtocolRestApp);
 // Auth: Hub Protocol API key via Authorization: Bearer <key>
 // Protocol: JSON-RPC 2.0 over HTTP POST
 app.route("/mcp", mcpHttpApp);
+
+// AI rate limiting for chat/send message path
+app.use("/trpc/chat.sendMessage", aiRateLimitMiddleware);
+app.use("/trpc/channels.sendMessage", aiRateLimitMiddleware);
 
 // tRPC endpoint
 app.use(

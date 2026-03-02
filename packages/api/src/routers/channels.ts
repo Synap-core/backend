@@ -883,19 +883,36 @@ export const channelsRouter = router({
           userId: ctx.userId,
         });
 
-        hubResponse = await resolvedService.client.sendMessage({
-          query: content,
-          threadId: channelId,
-          userId: ctx.userId,
-          agentId: channel.agentId ?? "orchestrator",
-          agentType: effectiveAgentType,
-          workspaceId,
-          sourceMessageId: userMessageId,
-          agentUserId: agentUserId ?? resolvedService.agentUserId,
-          mcpServers,
-        });
+        try {
+          hubResponse = await resolvedService.client.sendMessage({
+            query: content,
+            threadId: channelId,
+            userId: ctx.userId,
+            agentId: channel.agentId ?? "orchestrator",
+            agentType: effectiveAgentType,
+            workspaceId,
+            sourceMessageId: userMessageId,
+            agentUserId: agentUserId ?? resolvedService.agentUserId,
+            mcpServers,
+          });
+        } catch (fallbackError) {
+          // Both stream and non-streaming fallback failed — Intelligence Hub is down
+          // Save a service-unavailable message so the user isn't left with an orphaned user message
+          fullContent =
+            "The AI service is temporarily unavailable. Please try again in a moment.";
+          emitChatEvent({
+            event: "chat:stream:error",
+            data: {
+              threadId: channelId,
+              error: "AI service unavailable",
+              fallback: false,
+            },
+            workspaceId: workspaceId ?? null,
+            userId: ctx.userId,
+          });
+        }
 
-        fullContent = hubResponse.content || "";
+        fullContent = hubResponse?.content || fullContent || "";
 
         // Recover any proposals created during the (failed) stream or fallback response
         const fallbackProposals = hubResponse.createdProposals ?? [];

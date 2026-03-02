@@ -20,8 +20,11 @@ export const rateLimitMiddleware = rateLimiter({
   limit: 500, // Max 500 requests per window
   standardHeaders: "draft-7", // Use standard RateLimit headers
   keyGenerator: (c) => {
-    // Bypass for test user
-    if (c.req.header("x-test-user-id")) {
+    // Bypass for test user (development only)
+    if (
+      process.env.NODE_ENV === "development" &&
+      c.req.header("x-test-user-id")
+    ) {
       return "test-bypass-" + Math.random(); // Unique key every time to avoid hitting limit
     }
 
@@ -70,8 +73,11 @@ export const aiRateLimitMiddleware = rateLimiter({
   limit: 20, // Max 20 requests per window (stricter limit)
   standardHeaders: "draft-7",
   keyGenerator: (c) => {
-    // Bypass for test user
-    if (c.req.header("x-test-user-id")) {
+    // Bypass for test user (development only)
+    if (
+      process.env.NODE_ENV === "development" &&
+      c.req.header("x-test-user-id")
+    ) {
       return "test-bypass-" + Math.random(); // Unique key every time
     }
 

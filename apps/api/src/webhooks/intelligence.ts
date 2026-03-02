@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { publishEvent, createInboxItemAnalyzedEvent } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+import { db, inboxItems, eq } from "@synap/database";
 import { z } from "zod";
 
 const logger = createLogger({ module: "intelligence-webhooks" });
@@ -43,6 +44,12 @@ intelligenceWebhookRouter.post("/callback", async (c) => {
 
     logger.info({ requestId, itemId }, "Received intelligence callback");
 
+    // Look up the inbox item to get the real userId for the event
+    const inboxItem = await db.query.inboxItems.findFirst({
+      where: eq(inboxItems.id, itemId),
+      columns: { userId: true },
+    });
+
     // ✅ Type-safe event publishing
     const event = createInboxItemAnalyzedEvent(itemId, {
       requestId,
@@ -50,7 +57,7 @@ intelligenceWebhookRouter.post("/callback", async (c) => {
     });
 
     await publishEvent(event, {
-      userId: "system", // TODO: Look up userId from inbox item
+      userId: inboxItem?.userId ?? "system",
       source: "intelligence-callback",
     });
 

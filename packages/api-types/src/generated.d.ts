@@ -580,11 +580,26 @@ export interface InputOverride {
  * - Team (multiple users with roles)
  * - Enterprise (advanced features)
  */
+export interface WorkspaceSidebarItem {
+	kind: "app" | "view" | "external";
+	/** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
+	appId?: string;
+	/** View name for kind='view' — resolved lazily at click time */
+	viewName?: string;
+	/** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
+	url?: string;
+	/** Display label shown in the sidebar */
+	label?: string;
+	/** Lucide icon name override */
+	icon?: string;
+}
 export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
 	sidebarApps?: string[];
 	defaultView?: string;
 	theme?: string;
+	/** Ordered list of sidebar items. When set, replaces the generic app list. */
+	sidebarItems?: WorkspaceSidebarItem[];
 }
 /**
  * MCP server configuration — stored per workspace.
@@ -639,6 +654,12 @@ export interface WorkspaceSettings {
 	templateName?: string;
 	/** Slug of the control plane package used to create this workspace. */
 	packageSlug?: string;
+	/**
+	 * System-reserved slug identifying built-in workspaces created by the backend.
+	 * Used for idempotent re-creation (e.g. 'pod-admin').
+	 * Never set by users.
+	 */
+	systemSlug?: string;
 	/** Version of the package at time of creation. */
 	packageVersion?: string;
 	/** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
@@ -3641,8 +3662,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				serviceType: string;
 			};
 			output: {
-				status: "provisioned" | "already_provisioned";
+				status: "already_provisioned";
 				agentUserId: string;
+				agentEmail: string;
+				apiKey: string | null;
+				workspaceId: string;
+				podUrl: string;
+				dockerCommand: string;
+			} | {
+				status: "provisioned";
+				agentUserId: `${string}-${string}-${string}-${string}-${string}`;
 				agentEmail: string;
 				apiKey: string | null;
 				workspaceId: string;
@@ -3676,12 +3705,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				serviceType: string;
 			};
 			output: {
-				provisioned: boolean;
+				provisioned: false;
 				serviceRegistered: boolean;
 				mcpEndpoint: string | null;
 				mcpApproved: boolean;
 				agentUserId: string | null;
 				agentEmail: string | null;
+				podUrl: string;
+				workspaceId: string;
+			} | {
+				provisioned: true;
+				serviceRegistered: boolean;
+				mcpEndpoint: string | null;
+				mcpApproved: boolean;
+				agentUserId: string;
+				agentEmail: string;
 				podUrl: string;
 				workspaceId: string;
 			};
@@ -4231,6 +4269,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				type?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				relations: {
+					workspaceId: string;
+					userId: string;
+					id: string;
+					createdAt: Date;
+					type: string;
+					metadata: unknown;
+					sourceEntityId: string;
+					targetEntityId: string;
+				}[];
+			};
+			meta: object;
+		}>;
 		listTypes: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
@@ -4837,6 +4895,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						sidebarApps?: string[] | undefined;
 						defaultView?: string | undefined;
 						theme?: string | undefined;
+						sidebarItems?: {
+							kind: "view" | "external" | "app";
+							appId?: string | undefined;
+							viewName?: string | undefined;
+							url?: string | undefined;
+							label?: string | undefined;
+							icon?: string | undefined;
+						}[] | undefined;
 					} | undefined;
 					entityLinks?: {
 						sourceProfileSlug: string;
@@ -4855,6 +4921,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileIds: string[];
 				viewIds: string[];
 				entityIds: string[];
+			};
+			meta: object;
+		}>;
+		ensurePodAdminWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				workspaceId: string;
+				created: boolean;
 			};
 			meta: object;
 		}>;

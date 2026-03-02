@@ -1,8 +1,13 @@
 /**
  * Skills Schema
  *
- * User-created skills/tools that extend the AI's capabilities.
- * Skills are stored in the backend, executed in the Intelligence Service.
+ * User-created extensions that augment AI capabilities.
+ * Two kinds — stored in the same table, differentiated by `kind`:
+ *
+ *   instruction — text injected into the agent system prompt (always-on knowledge/methodology)
+ *   code        — JS function executed in the Intelligence Hub sandbox (callable tool)
+ *
+ * Both kinds are stored in the backend and read by intelligence services via Hub Protocol.
  */
 
 import {
@@ -17,51 +22,97 @@ import {
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
+export type SkillKind = "instruction" | "code";
+export type SkillScope = "user" | "workspace";
+
 export const skills = pgTable(
   "skills",
   {
     id: uuid("id").defaultRandom().primaryKey(),
 
-    // Ownership
+    // ── Ownership ────────────────────────────────────────────────────────
+
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
 
-    // Skill Definition
+    // ── Classification ───────────────────────────────────────────────────
+
+    /**
+     * instruction — text appended to the agent system prompt
+     * code        — JS/TS function executed in the sandbox
+     */
+    kind: text("kind", { enum: ["instruction", "code"] })
+      .notNull()
+      .default("code")
+      .$type<SkillKind>(),
+
+    /**
+     * user      — visible only to the owning user
+     * workspace — visible to all members of the workspace
+     */
+    scope: text("scope", { enum: ["user", "workspace"] })
+      .notNull()
+      .default("workspace")
+      .$type<SkillScope>(),
+
+    /**
+     * Which agent types this skill applies to.
+     * NULL = applies to all agents.
+     * e.g. ["assistant", "research"]
+     */
+    agentTypes: jsonb("agent_types").$type<string[] | null>(),
+
+    // ── Definition ───────────────────────────────────────────────────────
+
     name: text("name").notNull(),
     description: text("description"),
-    code: text("code").notNull(), // TypeScript/JavaScript code for the skill
-    parameters: jsonb("parameters"), // Zod schema for parameters
-    category: text("category"), // 'action', 'context', 'investigation', etc.
 
-    // Execution
+    /**
+     * For kind='instruction': the instruction text injected into the system prompt.
+     * For kind='code':        the JavaScript/TypeScript function body.
+     */
+    code: text("code").notNull(),
+
+    /** Parameter schema (code skills only) — describes callable arguments */
+    parameters: jsonb("parameters"),
+
+    category: text("category"), // e.g. 'action', 'context', 'crm', 'research'
+
+    // ── Execution (code skills only) ─────────────────────────────────────
+
     executionMode: text("execution_mode", {
       enum: ["sync", "async"],
     })
       .notNull()
       .default("sync"),
+
     timeoutSeconds: integer("timeout_seconds").default(30),
 
-    // Status
+    // ── Status ───────────────────────────────────────────────────────────
+
     status: text("status", {
       enum: ["active", "inactive", "error"],
     })
       .notNull()
       .default("active"),
-    errorMessage: text("error_message"), // Last error if status is 'error'
 
-    // Metadata
-    metadata: jsonb("metadata").default("{}").notNull(),
-    // {
-    //   version: 1,
-    //   lastTestedAt: '2025-01-XX',
-    //   executionCount: 10,
-    //   averageExecutionTime: 150,
-    //   tags: ['calendar', 'automation']
-    // }
+    errorMessage: text("error_message"),
 
-    // Timestamps
+    // ── Metadata ─────────────────────────────────────────────────────────
+
+    /**
+     * Free-form metadata:
+     * { executionCount, lastTestedAt, installedFromUrl, source, version, skillType (legacy) }
+     */
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+
+    // ── Timestamps ───────────────────────────────────────────────────────
+
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -73,6 +124,7 @@ export const skills = pgTable(
     userIdIdx: index("skills_user_id_idx").on(table.userId),
     workspaceIdIdx: index("skills_workspace_id_idx").on(table.workspaceId),
     statusIdx: index("skills_status_idx").on(table.status),
+    kindIdx: index("skills_kind_idx").on(table.kind),
     nameIdx: index("skills_name_idx").on(table.name),
   })
 );
@@ -80,6 +132,5 @@ export const skills = pgTable(
 export type Skill = typeof skills.$inferSelect;
 export type NewSkill = typeof skills.$inferInsert;
 
-// Zod Schemas
 export const insertSkillSchema = createInsertSchema(skills);
 export const selectSkillSchema = createSelectSchema(skills);

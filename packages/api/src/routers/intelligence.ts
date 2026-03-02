@@ -489,82 +489,6 @@ export const intelligenceRouter = router({
       };
     }),
 
-  // ── Agent Management Proxy ───────────────────────────────────────────────
-
-  /** List all agent definitions from intelligence service */
-  agentDefinitions: workspaceProcedure
-    .input(z.object({}))
-    .query(async ({ ctx }) => {
-      const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await apiProxyFetch("/agent-definitions", endpoint);
-      const data = (await res.json()) as { agents: unknown[] };
-      return { agents: data.agents };
-    }),
-
-  /** List all tool definitions from intelligence service */
-  toolDefinitions: workspaceProcedure
-    .input(z.object({}))
-    .query(async ({ ctx }) => {
-      const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await apiProxyFetch("/tool-definitions", endpoint);
-      const data = (await res.json()) as { tools: unknown[] };
-      return { tools: data.tools };
-    }),
-
-  /** Get user's agent config for a specific agent type */
-  agentConfig: workspaceProcedure
-    .input(z.object({ agentType: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await apiProxyFetch(
-        `/agent-configs/${encodeURIComponent(userId)}/${encodeURIComponent(input.agentType)}`,
-        endpoint
-      );
-      const data = (await res.json()) as { config: unknown };
-      return { config: data.config };
-    }),
-
-  /** Save user's agent config (prompt append, tool overrides, etc.) */
-  saveAgentConfig: workspaceProcedure
-    .input(
-      z.object({
-        agentType: z.string(),
-        promptAppend: z.string().nullable().optional(),
-        extraToolIds: z.array(z.string()).optional(),
-        disabledToolIds: z.array(z.string()).optional(),
-        maxStepsOverride: z.number().nullable().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const { agentType, ...config } = input;
-      const res = await apiProxyFetch(
-        `/agent-configs/${encodeURIComponent(userId)}/${encodeURIComponent(agentType)}`,
-        endpoint,
-        { method: "PUT", body: JSON.stringify(config) }
-      );
-      const data = (await res.json()) as { config: unknown };
-      return { config: data.config };
-    }),
-
-  /** Delete user's agent config (reset to defaults) */
-  deleteAgentConfig: workspaceProcedure
-    .input(z.object({ agentType: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      await apiProxyFetch(
-        `/agent-configs/${encodeURIComponent(userId)}/${encodeURIComponent(input.agentType)}`,
-        endpoint,
-        { method: "DELETE" }
-      );
-      return { success: true };
-    }),
-
   // ── Memory Proxy ─────────────────────────────────────────────────────────
 
   /** List memory facts for current user */
@@ -635,41 +559,6 @@ export const intelligenceRouter = router({
         method: "DELETE",
       });
       return { success: true };
-    }),
-
-  // ── Skills Proxy ─────────────────────────────────────────────────────────
-
-  /** List user skills */
-  skills: workspaceProcedure.input(z.object({})).query(async ({ ctx }) => {
-    const userId = requireUserId(ctx.userId);
-    const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-    const res = await hubProxyFetch(
-      `/skills/getSkills?userId=${encodeURIComponent(userId)}`,
-      endpoint
-    );
-    const skills = await res.json();
-    return { skills: Array.isArray(skills) ? skills : [] };
-  }),
-
-  /** Create a user skill (Claude-generated code) */
-  createSkill: workspaceProcedure
-    .input(
-      z.object({
-        name: z.string().min(1),
-        description: z.string().min(1),
-        parameters: z.record(z.string(), z.string()).optional(),
-        category: z.enum(["context", "action"]).optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await hubProxyFetch("/skills/createSkill", endpoint, {
-        method: "POST",
-        body: JSON.stringify({ ...input, userId }),
-      });
-      const skill = await res.json();
-      return { skill };
     }),
 
   // ── Executions Proxy ─────────────────────────────────────────────────────

@@ -88,6 +88,8 @@ import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { secretsVaultRouter } from "./routers/secrets-vault.js";
 import { usersRouter } from "./routers/users.js";
+import { agentConfigsRouter } from "./routers/agent-configs.js";
+import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -293,6 +295,16 @@ registerRouter("users", usersRouter, {
   version: "1.0.0",
   source: "core",
   description: "Current user identity and profile API",
+});
+registerRouter("agentConfigs", agentConfigsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Per-user agent configuration overrides (prompt, tools, model)",
+});
+registerRouter("mcpServers", mcpServersRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Workspace-level MCP server registry and health tracking",
 });
 
 import { coreRouter } from "./root.js";

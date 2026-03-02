@@ -619,6 +619,16 @@ export const proposalsRouter = router({
           },
           source: "api",
         });
+      } else {
+        // Payload doesn't match request shape — approve silently.
+        // Log so we can detect unexpected proposal types in the wild.
+        console.warn(
+          "[proposals] Approved proposal with unrecognized payload shape — no .validated event emitted",
+          {
+            proposalId: input.proposalId,
+            payloadKeys: payload ? Object.keys(payload) : [],
+          }
+        );
       }
 
       await db
