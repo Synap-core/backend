@@ -571,7 +571,9 @@ export const intelligenceRegistryRouter = router({
       if (!perm.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: perm.reason || "Owner or admin role required to provision agent services",
+          message:
+            perm.reason ||
+            "Owner or admin role required to provision agent services",
         });
       }
 
@@ -579,10 +581,17 @@ export const intelligenceRegistryRouter = router({
       const entry = getServiceEntry(input.serviceType);
 
       // Check for existing agent user of this type
-      const existing = await findProvisionedAgent(ctx.workspaceId, input.serviceType);
+      const existing = await findProvisionedAgent(
+        ctx.workspaceId,
+        input.serviceType
+      );
       if (existing) {
         logger.info(
-          { workspaceId: ctx.workspaceId, agentUserId: existing.id, serviceType: input.serviceType },
+          {
+            workspaceId: ctx.workspaceId,
+            agentUserId: existing.id,
+            serviceType: input.serviceType,
+          },
           "Agent already provisioned for workspace — returning existing info"
         );
         const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
@@ -633,7 +642,9 @@ export const intelligenceRegistryRouter = router({
 
       // Create Hub Protocol API key
       const keyPrefix =
-        process.env.NODE_ENV === "production" ? "synap_hub_live_" : "synap_hub_test_";
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
       const plainKey = generateApiKey(keyPrefix);
 
       const database = await getDb();
@@ -662,7 +673,11 @@ export const intelligenceRegistryRouter = router({
       });
 
       logger.info(
-        { workspaceId: ctx.workspaceId, agentUserId: agentId, serviceType: input.serviceType },
+        {
+          workspaceId: ctx.workspaceId,
+          agentUserId: agentId,
+          serviceType: input.serviceType,
+        },
         "Agent provisioned"
       );
 
@@ -703,14 +718,19 @@ export const intelligenceRegistryRouter = router({
       if (!perm.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: perm.reason || "Owner or admin role required to deprovision agent services",
+          message:
+            perm.reason ||
+            "Owner or admin role required to deprovision agent services",
         });
       }
 
       // Validate service type (throws on unknown)
       getServiceEntry(input.serviceType);
 
-      const agent = await findProvisionedAgent(ctx.workspaceId, input.serviceType);
+      const agent = await findProvisionedAgent(
+        ctx.workspaceId,
+        input.serviceType
+      );
       if (!agent) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -752,7 +772,12 @@ export const intelligenceRegistryRouter = router({
       });
 
       logger.info(
-        { workspaceId: ctx.workspaceId, agentUserId: agent.id, serviceType: input.serviceType, revokedBy: ctx.userId },
+        {
+          workspaceId: ctx.workspaceId,
+          agentUserId: agent.id,
+          serviceType: input.serviceType,
+          revokedBy: ctx.userId,
+        },
         "Agent deprovisioned"
       );
 
@@ -777,13 +802,17 @@ export const intelligenceRegistryRouter = router({
       if (!perm.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: perm.reason || "Owner or admin role required to rotate agent keys",
+          message:
+            perm.reason || "Owner or admin role required to rotate agent keys",
         });
       }
 
       const entry = getServiceEntry(input.serviceType);
 
-      const agent = await findProvisionedAgent(ctx.workspaceId, input.serviceType);
+      const agent = await findProvisionedAgent(
+        ctx.workspaceId,
+        input.serviceType
+      );
       if (!agent) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -803,7 +832,9 @@ export const intelligenceRegistryRouter = router({
 
       // Issue new key
       const keyPrefix =
-        process.env.NODE_ENV === "production" ? "synap_hub_live_" : "synap_hub_test_";
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
       const plainKey = generateApiKey(keyPrefix);
 
       const database = await getDb();
@@ -822,7 +853,12 @@ export const intelligenceRegistryRouter = router({
       );
 
       logger.info(
-        { workspaceId: ctx.workspaceId, agentUserId: agent.id, serviceType: input.serviceType, rotatedBy: ctx.userId },
+        {
+          workspaceId: ctx.workspaceId,
+          agentUserId: agent.id,
+          serviceType: input.serviceType,
+          rotatedBy: ctx.userId,
+        },
         "Agent Hub Protocol API key rotated"
       );
 
@@ -853,7 +889,9 @@ export const intelligenceRegistryRouter = router({
 
       const [agent, service] = await Promise.all([
         findProvisionedAgent(ctx.workspaceId, input.serviceType),
-        entry.matchCapability ? findRegisteredService(entry.matchCapability) : Promise.resolve(undefined),
+        entry.matchCapability
+          ? findRegisteredService(entry.matchCapability)
+          : Promise.resolve(undefined),
       ]);
 
       const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";

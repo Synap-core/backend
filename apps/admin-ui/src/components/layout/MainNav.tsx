@@ -78,7 +78,9 @@ export default function MainNav({ onNavigate }: MainNavProps) {
     if (path === "/") {
       return location.pathname === "/" || location.pathname === "/health";
     }
-    return location.pathname === path || location.pathname.startsWith(path + "/");
+    return (
+      location.pathname === path || location.pathname.startsWith(path + "/")
+    );
   };
 
   return (
@@ -111,7 +113,13 @@ export default function MainNav({ onNavigate }: MainNavProps) {
           </div>
 
           {/* Section items */}
-          <div style={{ display: "flex", flexDirection: "column", gap: spacing[1] }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: spacing[1],
+            }}
+          >
             {section.items.map((item) => {
               const Icon = item.icon;
               const active = isActive(item.path);

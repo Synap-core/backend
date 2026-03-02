@@ -18,7 +18,15 @@
 
 import "dotenv/config";
 import { randomUUID, randomBytes } from "crypto";
-import { getDb, EventRepository, ApiKeyRepository, sql, drizzleSql, and, eq } from "@synap/database";
+import {
+  getDb,
+  EventRepository,
+  ApiKeyRepository,
+  sql,
+  drizzleSql,
+  and,
+  eq,
+} from "@synap/database";
 import { users, workspaceMembers, apiKeys, workspaces } from "@synap/database/schema";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 
@@ -38,7 +46,9 @@ if (!serviceType) {
     "  SERVICE_TYPE=openclaw ADMIN_EMAIL=admin@example.com node dist/scripts/provision-agent.js"
   );
   console.error("");
-  console.error(`Known service types: ${Object.keys(SERVICE_CATALOG).join(", ")}`);
+  console.error(
+    `Known service types: ${Object.keys(SERVICE_CATALOG).join(", ")}`
+  );
   process.exit(1);
 }
 
@@ -49,12 +59,11 @@ if (!entry) {
   process.exit(1);
 }
 
-if (!workspaceIdEnv && !adminEmail) {
-  console.error("❌ ERROR: Either WORKSPACE_ID or ADMIN_EMAIL must be provided");
-  process.exit(1);
-}
+// WORKSPACE_ID or ADMIN_EMAIL are optional — falls back to first workspace in DB
 
-async function resolveWorkspaceId(db: Awaited<ReturnType<typeof getDb>>): Promise<string> {
+async function resolveWorkspaceId(
+  db: Awaited<ReturnType<typeof getDb>>
+): Promise<string> {
   if (workspaceIdEnv) return workspaceIdEnv;
 
   // Try ADMIN_EMAIL lookup first (user must have logged in at least once)
@@ -90,7 +99,10 @@ async function resolveWorkspaceId(db: Awaited<ReturnType<typeof getDb>>): Promis
   return first.id;
 }
 
-async function findAgent(db: Awaited<ReturnType<typeof getDb>>, workspaceId: string) {
+async function findAgent(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string
+) {
   const [row] = await db
     .select({ id: users.id, email: users.email })
     .from(users)
@@ -120,7 +132,9 @@ async function run() {
   if (action === "status") {
     const agent = await findAgent(db, workspaceId);
     if (!agent) {
-      console.log(`${entry.displayName}: NOT provisioned in workspace ${workspaceId}`);
+      console.log(
+        `${entry.displayName}: NOT provisioned in workspace ${workspaceId}`
+      );
     } else {
       console.log(`${entry.displayName}: provisioned`);
       console.log(`   Agent User ID: ${agent.id}`);
@@ -134,13 +148,19 @@ async function run() {
   if (action === "remove") {
     const agent = await findAgent(db, workspaceId);
     if (!agent) {
-      console.error(`❌ ${entry.displayName} is not provisioned in workspace ${workspaceId}`);
+      console.error(
+        `❌ ${entry.displayName} is not provisioned in workspace ${workspaceId}`
+      );
       process.exit(1);
     }
 
     await db
       .update(apiKeys)
-      .set({ isActive: false, revokedAt: new Date(), revokedReason: "Deprovisioned via CLI" })
+      .set({
+        isActive: false,
+        revokedAt: new Date(),
+        revokedReason: "Deprovisioned via CLI",
+      })
       .where(eq(apiKeys.userId, agent.id));
 
     await db
@@ -162,17 +182,25 @@ async function run() {
   if (action === "rotate") {
     const agent = await findAgent(db, workspaceId);
     if (!agent) {
-      console.error(`❌ ${entry.displayName} is not provisioned in workspace ${workspaceId}`);
+      console.error(
+        `❌ ${entry.displayName} is not provisioned in workspace ${workspaceId}`
+      );
       process.exit(1);
     }
 
     await db
       .update(apiKeys)
-      .set({ isActive: false, revokedAt: new Date(), revokedReason: "Key rotated via CLI" })
+      .set({
+        isActive: false,
+        revokedAt: new Date(),
+        revokedReason: "Key rotated via CLI",
+      })
       .where(eq(apiKeys.userId, agent.id));
 
     const keyPrefix =
-      process.env.NODE_ENV === "production" ? "synap_hub_live_" : "synap_hub_test_";
+      process.env.NODE_ENV === "production"
+        ? "synap_hub_live_"
+        : "synap_hub_test_";
     const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
 
     const eventRepo = new EventRepository(sql);
@@ -193,7 +221,14 @@ async function run() {
     console.log(`   New SYNAP_HUB_API_KEY="${plainKey}"`);
     console.log("");
     console.log("Docker run command:");
-    console.log(entry.buildDockerCommand({ podUrl, workspaceId, agentUserId: agent.id, apiKey: plainKey }));
+    console.log(
+      entry.buildDockerCommand({
+        podUrl,
+        workspaceId,
+        agentUserId: agent.id,
+        apiKey: plainKey,
+      })
+    );
     console.log("");
     console.log("⚠️  The new key is shown ONCE. Store it securely.");
     process.exit(0);
@@ -240,7 +275,9 @@ async function run() {
   });
 
   const keyPrefix =
-    process.env.NODE_ENV === "production" ? "synap_hub_live_" : "synap_hub_test_";
+    process.env.NODE_ENV === "production"
+      ? "synap_hub_live_"
+      : "synap_hub_test_";
   const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
 
   const eventRepo = new EventRepository(sql);
@@ -266,7 +303,14 @@ async function run() {
   console.log(`  SYNAP_AGENT_USER_ID="${agentId}"`);
   console.log("");
   console.log("Docker run command:");
-  console.log(entry.buildDockerCommand({ podUrl, workspaceId, agentUserId: agentId, apiKey: plainKey }));
+  console.log(
+    entry.buildDockerCommand({
+      podUrl,
+      workspaceId,
+      agentUserId: agentId,
+      apiKey: plainKey,
+    })
+  );
   console.log("");
   console.log("⚠️  The API key above is shown ONCE. Store it securely.");
   process.exit(0);

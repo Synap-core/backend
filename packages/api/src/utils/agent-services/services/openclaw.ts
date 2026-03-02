@@ -14,7 +14,13 @@ export const openclawEntry: ServiceCatalogEntry = {
     "mcp.write",
   ],
   matchCapability: "channels",
-  agentCapabilities: ["shell", "browser", "filesystem", "messaging", "channels"],
+  agentCapabilities: [
+    "shell",
+    "browser",
+    "filesystem",
+    "messaging",
+    "channels",
+  ],
   buildDockerCommand({ podUrl, workspaceId, agentUserId, apiKey }) {
     const shortId = workspaceId.slice(0, 8);
     return [

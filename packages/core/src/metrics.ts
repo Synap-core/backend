@@ -179,7 +179,7 @@ export const websocketBroadcastDuration = new client.Histogram({
 });
 
 /**
- * Inngest / Background Job Metrics
+ * pg-boss / Background Job Metrics
  */
 
 // Jobs processed

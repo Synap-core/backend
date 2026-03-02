@@ -2,7 +2,7 @@
  * Domain Event Types
  *
  * Type definitions for Socket.IO domain events.
- * These are emitted by Inngest workers via the realtime bridge
+ * These are emitted by pg-boss workers via the realtime bridge
  * to notify clients about data changes.
  *
  * SINGLE SOURCE OF TRUTH - Frontend imports from here.

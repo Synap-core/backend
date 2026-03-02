@@ -95,6 +95,10 @@ try {
     apiLogger.info("AI configuration validated");
   }
 
+  // Validate Intelligence Hub config (warns in dev, throws in production if missing)
+  validateConfig("intelligenceHub");
+  apiLogger.info("Intelligence Hub configuration validated");
+
   // Validate Ory Stack (Kratos + Hydra) auth config
   validateConfig("ory");
   apiLogger.info("Ory Stack configuration validated");

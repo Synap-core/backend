@@ -69,6 +69,40 @@ const DirectionSchema = z.enum(["source", "target", "both"]).default("both");
 
 export const relationsRouter = router({
   /**
+   * List all semantic relations in the current workspace.
+   *
+   * Used for bulk loading the knowledge graph, exports, and workspace-level
+   * relation summaries. For per-entity traversal use get() / getRelated().
+   */
+  list: protectedProcedure
+    .input(
+      z.object({
+        type: z.string().optional(),
+        limit: z.number().min(1).max(500).default(100),
+        offset: z.number().min(0).default(0),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      if (!ctx.workspaceId) {
+        return { relations: [] };
+      }
+
+      const whereClause = and(
+        eq(relations.workspaceId, ctx.workspaceId),
+        input.type ? eq(relations.type, input.type) : undefined
+      );
+
+      const results = await db.query.relations.findMany({
+        where: whereClause,
+        orderBy: [desc(relations.createdAt)],
+        limit: input.limit,
+        offset: input.offset,
+      });
+
+      return { relations: results };
+    }),
+
+  /**
    * List all available relation types with metadata
    *
    * Returns all relation definitions from the workspace's relation_defs table.

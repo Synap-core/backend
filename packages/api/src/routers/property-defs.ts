@@ -12,7 +12,10 @@ import {
   PropertyDefRepository,
   ProfileRepository,
   PropertyValueType,
+  eq,
+  drizzleSql,
 } from "@synap/database";
+import { entityPropertyIndex } from "@synap/database/schema";
 // PropertySlugConflictError not used, removed
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -226,7 +229,18 @@ export const propertyDefsRouter = router({
         });
       }
 
-      // TODO: Check if property is used by any profiles (prevent deletion if in use)
+      // Prevent deletion if any entity is still using this property
+      const usageResult = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(entityPropertyIndex)
+        .where(eq(entityPropertyIndex.propertyDefId, input.id));
+      const usageCount = usageResult[0]?.count ?? 0;
+      if (usageCount > 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Cannot delete property definition: it is used by ${usageCount} entity record(s). Remove those values first.`,
+        });
+      }
 
       await propertyDefRepo.delete(input.id);
 

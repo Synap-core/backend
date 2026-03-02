@@ -5,7 +5,7 @@
  * - HTTP/HTTPS (incoming and outgoing requests)
  * - Hono (web framework)
  * - PostgreSQL (pg driver)
- * - Inngest (background jobs)
+ * - pg-boss (background jobs)
  * - DNS, Net, FS (I/O operations)
  *
  * IMPORTANT: This must be imported BEFORE any other application code

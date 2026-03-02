@@ -64,27 +64,43 @@ export default function WorkspaceDetailPage() {
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<"viewer" | "editor" | "admin">("editor");
+  const [inviteRole, setInviteRole] = useState<"viewer" | "editor" | "admin">(
+    "editor"
+  );
 
   // Agent creation state
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [agentName, setAgentName] = useState("");
   const [agentType, setAgentType] = useState("assistant");
-  const [agentRole, setAgentRole] = useState<"viewer" | "editor" | "admin">("editor");
+  const [agentRole, setAgentRole] = useState<"viewer" | "editor" | "admin">(
+    "editor"
+  );
   const [agentDescription, setAgentDescription] = useState("");
   const [agentCapabilities, setAgentCapabilities] = useState<string[]>([]);
 
-  const { data: workspace, isLoading: wsLoading, refetch: refetchWs } =
-    trpc.workspaces.get.useQuery({ id: workspaceId });
+  const {
+    data: workspace,
+    isLoading: wsLoading,
+    refetch: refetchWs,
+  } = trpc.workspaces.get.useQuery({ id: workspaceId });
 
-  const { data: members, isLoading: membersLoading, refetch: refetchMembers } =
-    trpc.workspaces.listMembers.useQuery({ workspaceId });
+  const {
+    data: members,
+    isLoading: membersLoading,
+    refetch: refetchMembers,
+  } = trpc.workspaces.listMembers.useQuery({ workspaceId });
 
-  const { data: invites, isLoading: invitesLoading, refetch: refetchInvites } =
-    trpc.workspaces.listInvites.useQuery({ workspaceId });
+  const {
+    data: invites,
+    isLoading: invitesLoading,
+    refetch: refetchInvites,
+  } = trpc.workspaces.listInvites.useQuery({ workspaceId });
 
-  const { data: agents, isLoading: agentsLoading, refetch: refetchAgents } =
-    trpc.agentUsers.list.useQuery({ workspaceId });
+  const {
+    data: agents,
+    isLoading: agentsLoading,
+    refetch: refetchAgents,
+  } = trpc.agentUsers.list.useQuery({ workspaceId });
 
   const removeMemberMutation = trpc.workspaces.removeMember.useMutation({
     onSuccess: () => {
@@ -158,7 +174,10 @@ export default function WorkspaceDetailPage() {
     if (!workspace) return;
     updateMutation.mutate({
       id: workspaceId,
-      settings: { ...(workspace.settings as Record<string, unknown>), [key]: value },
+      settings: {
+        ...(workspace.settings as Record<string, unknown>),
+        [key]: value,
+      },
     });
   }
 
@@ -202,7 +221,11 @@ export default function WorkspaceDetailPage() {
             <Badge size="xs" variant="light" color="gray">
               {workspace.type}
             </Badge>
-            <Badge size="xs" variant="outline" color={ROLE_COLORS[workspace.role] ?? "gray"}>
+            <Badge
+              size="xs"
+              variant="outline"
+              color={ROLE_COLORS[workspace.role] ?? "gray"}
+            >
               {workspace.role}
             </Badge>
           </Group>
@@ -346,7 +369,8 @@ export default function WorkspaceDetailPage() {
                 No AI agents in this workspace yet.
               </Text>
               <Text size="xs" c={colors.text.tertiary}>
-                Create an agent to automate tasks with workspace-scoped permissions.
+                Create an agent to automate tasks with workspace-scoped
+                permissions.
               </Text>
             </Card>
           ) : (
@@ -387,14 +411,24 @@ export default function WorkspaceDetailPage() {
                     </Table.Td>
                     <Table.Td>
                       <Group gap={4}>
-                        {agent.agentMetadata?.capabilities?.slice(0, 3).map((cap) => (
-                          <Badge key={cap} size="xs" variant="light" color="cyan">
-                            {cap}
-                          </Badge>
-                        ))}
-                        {(agent.agentMetadata?.capabilities?.length ?? 0) > 3 && (
+                        {agent.agentMetadata?.capabilities
+                          ?.slice(0, 3)
+                          .map((cap) => (
+                            <Badge
+                              key={cap}
+                              size="xs"
+                              variant="light"
+                              color="cyan"
+                            >
+                              {cap}
+                            </Badge>
+                          ))}
+                        {(agent.agentMetadata?.capabilities?.length ?? 0) >
+                          3 && (
                           <Badge size="xs" variant="light" color="gray">
-                            +{(agent.agentMetadata?.capabilities?.length ?? 0) - 3}
+                            +
+                            {(agent.agentMetadata?.capabilities?.length ?? 0) -
+                              3}
                           </Badge>
                         )}
                       </Group>
@@ -490,7 +524,9 @@ export default function WorkspaceDetailPage() {
               label="AI Enabled"
               description="Allow AI features in this workspace"
               checked={Boolean(settings.aiEnabled)}
-              onChange={(e) => handleSettingChange("aiEnabled", e.currentTarget.checked)}
+              onChange={(e) =>
+                handleSettingChange("aiEnabled", e.currentTarget.checked)
+              }
             />
             <Switch
               label="External Sharing"
@@ -521,8 +557,8 @@ export default function WorkspaceDetailPage() {
           <Stack gap={spacing[3]} maw={560}>
             <Text fw={600}>External Agent Services</Text>
             <Text size="sm" c="dimmed">
-              Provision Docker-based agent containers (OpenClaw, ZeroClaw, …) that connect to this
-              workspace via Hub Protocol.
+              Provision Docker-based agent containers (OpenClaw, ZeroClaw, …)
+              that connect to this workspace via Hub Protocol.
             </Text>
             <Button
               component={Link}
@@ -585,7 +621,9 @@ export default function WorkspaceDetailPage() {
             label="Role"
             data={ROLE_OPTIONS}
             value={inviteRole}
-            onChange={(v) => setInviteRole((v as typeof inviteRole) ?? "editor")}
+            onChange={(v) =>
+              setInviteRole((v as typeof inviteRole) ?? "editor")
+            }
           />
           <Button
             onClick={() =>
@@ -661,7 +699,8 @@ export default function WorkspaceDetailPage() {
                 agentType,
                 role: agentRole,
                 description: agentDescription || undefined,
-                capabilities: agentCapabilities.length > 0 ? agentCapabilities : undefined,
+                capabilities:
+                  agentCapabilities.length > 0 ? agentCapabilities : undefined,
               })
             }
             loading={createAgentMutation.isPending}

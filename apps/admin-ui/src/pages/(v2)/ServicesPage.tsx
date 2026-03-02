@@ -103,7 +103,13 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   return (
     <Group justify="space-between" gap={spacing[2]} align="flex-start">
       <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-        <Text size="xs" c="dimmed" fw={500} tt="uppercase" style={{ letterSpacing: "0.05em" }}>
+        <Text
+          size="xs"
+          c="dimmed"
+          fw={500}
+          tt="uppercase"
+          style={{ letterSpacing: "0.05em" }}
+        >
           {label}
         </Text>
         <Code
@@ -168,8 +174,8 @@ function CredentialsModal({
           variant="light"
           title="Save your API key now"
         >
-          The API key below is shown <strong>only once</strong>. It cannot be retrieved
-          again — use Rotate Key if you lose it.
+          The API key below is shown <strong>only once</strong>. It cannot be
+          retrieved again — use Rotate Key if you lose it.
         </Alert>
 
         {/* Environment variables */}
@@ -198,7 +204,9 @@ function CredentialsModal({
                 <Button
                   variant="subtle"
                   size="xs"
-                  leftSection={copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                  leftSection={
+                    copied ? <IconCheck size={12} /> : <IconCopy size={12} />
+                  }
                   color={copied ? "teal" : "gray"}
                   onClick={copy}
                 >
@@ -255,34 +263,40 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
     { retry: false }
   );
 
-  const provisionMutation = trpc.intelligenceRegistry.provisionAgent.useMutation({
-    onSuccess: (data) => {
-      statusQuery.refetch();
-      if (data.status === "already_provisioned") {
-        showSuccessNotification({ message: `${meta.displayName} is already provisioned` });
-        return;
-      }
-      if (data.apiKey) {
-        setRevealed({
-          agentUserId: data.agentUserId,
-          apiKey: data.apiKey,
-          podUrl: data.podUrl,
-          dockerCommand: data.dockerCommand,
-          workspaceId: data.workspaceId,
-        });
-        setCredentialsOpen(true);
-      }
-    },
-    onError: (err) => showErrorNotification({ message: err.message }),
-  });
+  const provisionMutation =
+    trpc.intelligenceRegistry.provisionAgent.useMutation({
+      onSuccess: (data) => {
+        statusQuery.refetch();
+        if (data.status === "already_provisioned") {
+          showSuccessNotification({
+            message: `${meta.displayName} is already provisioned`,
+          });
+          return;
+        }
+        if (data.apiKey) {
+          setRevealed({
+            agentUserId: data.agentUserId,
+            apiKey: data.apiKey,
+            podUrl: data.podUrl,
+            dockerCommand: data.dockerCommand,
+            workspaceId: data.workspaceId,
+          });
+          setCredentialsOpen(true);
+        }
+      },
+      onError: (err) => showErrorNotification({ message: err.message }),
+    });
 
-  const deprovisionMutation = trpc.intelligenceRegistry.deprovisionAgent.useMutation({
-    onSuccess: () => {
-      statusQuery.refetch();
-      showSuccessNotification({ message: `${meta.displayName} deprovisioned` });
-    },
-    onError: (err) => showErrorNotification({ message: err.message }),
-  });
+  const deprovisionMutation =
+    trpc.intelligenceRegistry.deprovisionAgent.useMutation({
+      onSuccess: () => {
+        statusQuery.refetch();
+        showSuccessNotification({
+          message: `${meta.displayName} deprovisioned`,
+        });
+      },
+      onError: (err) => showErrorNotification({ message: err.message }),
+    });
 
   const rotateMutation = trpc.intelligenceRegistry.rotateAgentKey.useMutation({
     onSuccess: (data) => {
@@ -302,7 +316,9 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
   const status = statusQuery.data;
   const isLoading = statusQuery.isLoading;
   const isMutating =
-    provisionMutation.isPending || deprovisionMutation.isPending || rotateMutation.isPending;
+    provisionMutation.isPending ||
+    deprovisionMutation.isPending ||
+    rotateMutation.isPending;
 
   const Icon = meta.icon;
 
@@ -310,16 +326,32 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
   let statusBadge: React.ReactNode;
   let statusIcon: React.ReactNode;
   if (isLoading) {
-    statusBadge = <Badge size="sm" color="gray">Checking…</Badge>;
+    statusBadge = (
+      <Badge size="sm" color="gray">
+        Checking…
+      </Badge>
+    );
     statusIcon = <IconCircleDashed size={16} color={colors.text.tertiary} />;
   } else if (!status?.provisioned) {
-    statusBadge = <Badge size="sm" color="gray" variant="outline">Not provisioned</Badge>;
+    statusBadge = (
+      <Badge size="sm" color="gray" variant="outline">
+        Not provisioned
+      </Badge>
+    );
     statusIcon = <IconCircleX size={16} color={colors.text.tertiary} />;
   } else if (status.serviceRegistered) {
-    statusBadge = <Badge size="sm" color="teal">Connected</Badge>;
+    statusBadge = (
+      <Badge size="sm" color="teal">
+        Connected
+      </Badge>
+    );
     statusIcon = <IconCircleCheck size={16} color="teal" />;
   } else {
-    statusBadge = <Badge size="sm" color="blue" variant="light">Provisioned</Badge>;
+    statusBadge = (
+      <Badge size="sm" color="blue" variant="light">
+        Provisioned
+      </Badge>
+    );
     statusIcon = <IconCircleCheck size={16} color="dodgerblue" />;
   }
 
@@ -387,7 +419,10 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
                 <Text size="xs" c="dimmed" fw={500}>
                   Agent ID
                 </Text>
-                <Text size="xs" style={{ fontFamily: typography.fontFamily.mono }}>
+                <Text
+                  size="xs"
+                  style={{ fontFamily: typography.fontFamily.mono }}
+                >
                   {status.agentUserId?.slice(0, 16)}…
                 </Text>
               </div>
@@ -396,7 +431,10 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
                   <Text size="xs" c="dimmed" fw={500}>
                     MCP endpoint
                   </Text>
-                  <Text size="xs" style={{ fontFamily: typography.fontFamily.mono }}>
+                  <Text
+                    size="xs"
+                    style={{ fontFamily: typography.fontFamily.mono }}
+                  >
                     {status.mcpEndpoint}
                   </Text>
                 </div>
@@ -416,7 +454,9 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
               leftSection={<IconPlug size={14} />}
               loading={provisionMutation.isPending}
               disabled={isMutating || isLoading}
-              onClick={() => provisionMutation.mutate({ serviceType: meta.serviceType })}
+              onClick={() =>
+                provisionMutation.mutate({ serviceType: meta.serviceType })
+              }
             >
               Provision
             </Button>
@@ -430,7 +470,9 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
                   leftSection={<IconRefresh size={14} />}
                   loading={rotateMutation.isPending}
                   disabled={isMutating}
-                  onClick={() => rotateMutation.mutate({ serviceType: meta.serviceType })}
+                  onClick={() =>
+                    rotateMutation.mutate({ serviceType: meta.serviceType })
+                  }
                 >
                   Rotate Key
                 </Button>
@@ -449,7 +491,9 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
                         `Deprovision ${meta.displayName}? This will revoke all API keys and delete the agent user.`
                       )
                     ) {
-                      deprovisionMutation.mutate({ serviceType: meta.serviceType });
+                      deprovisionMutation.mutate({
+                        serviceType: meta.serviceType,
+                      });
                     }
                   }}
                 >
@@ -509,7 +553,8 @@ export default function ServicesPage() {
             External Services
           </Text>
           <Text size="sm" c="dimmed">
-            Provision and manage agent containers that connect to this workspace via Hub Protocol.
+            Provision and manage agent containers that connect to this workspace
+            via Hub Protocol.
           </Text>
         </div>
       </Group>
@@ -524,9 +569,10 @@ export default function ServicesPage() {
         mb={spacing[5]}
         title="How it works"
       >
-        Provisioning creates a dedicated AI agent user + Hub Protocol API key for the service.
-        Copy the generated credentials into your container's environment variables.
-        The container will self-register its capabilities once it starts.
+        Provisioning creates a dedicated AI agent user + Hub Protocol API key
+        for the service. Copy the generated credentials into your container's
+        environment variables. The container will self-register its capabilities
+        once it starts.
       </Alert>
 
       {/* Service cards — 2-column grid */}
@@ -538,7 +584,11 @@ export default function ServicesPage() {
         }}
       >
         {SERVICE_META.map((meta) => (
-          <ServiceCard key={meta.serviceType} meta={meta} workspaceId={workspaceId} />
+          <ServiceCard
+            key={meta.serviceType}
+            meta={meta}
+            workspaceId={workspaceId}
+          />
         ))}
       </div>
     </div>
