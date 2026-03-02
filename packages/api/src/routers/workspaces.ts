@@ -54,7 +54,7 @@ export const workspacesRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        name: z.string().min(1).max(100),
+        name: z.string().trim().min(1).max(100),
         description: z.string().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
         type: z.enum(["personal", "team", "enterprise"]).default("personal"),
@@ -321,7 +321,7 @@ export const workspacesRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        name: z.string().min(1).max(100).optional(),
+        name: z.string().trim().min(1).max(100).optional(),
         description: z.string().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
       })
