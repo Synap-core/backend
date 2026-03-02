@@ -90,6 +90,9 @@ import { secretsVaultRouter } from "./routers/secrets-vault.js";
 import { usersRouter } from "./routers/users.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
+import { relationDefsRouter } from "./routers/relation-defs.js";
+import { profileRelationsRouter } from "./routers/profile-relations.js";
+import { agentUsersRouter } from "./routers/agent-users.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -200,6 +203,21 @@ registerRouter("relations", relationsRouter, {
   version: "1.0.0",
   source: "core",
   description: "Entity relationship management",
+});
+registerRouter("relationDefs", relationDefsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Custom relation type definition management",
+});
+registerRouter("profileRelations", profileRelationsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Profile-to-profile relation management (dynamic schema system)",
+});
+registerRouter("agentUsers", agentUsersRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "AI agent user management",
 });
 registerRouter("graph", graphRouter, {
   version: "1.0.0",

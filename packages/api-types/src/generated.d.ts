@@ -595,7 +595,6 @@ export interface WorkspaceSidebarItem {
 }
 export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
-	sidebarApps?: string[];
 	defaultView?: string;
 	theme?: string;
 	/** Ordered list of sidebar items. When set, replaces the generic app list. */
@@ -1388,7 +1387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				data: Record<string, unknown>;
 				version: number;
 				metadata?: Record<string, unknown> | undefined;
-				source?: "sync" | "system" | "api" | "automation" | "migration" | undefined;
+				source?: "system" | "sync" | "api" | "automation" | "migration" | undefined;
 				causationId?: string | undefined;
 				correlationId?: string | undefined;
 			};
@@ -2429,7 +2428,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				data: Record<string, unknown>;
 				userId: string;
 				subjectId?: string | undefined;
-				source?: "sync" | "system" | "api" | "automation" | "migration" | undefined;
+				source?: "system" | "sync" | "api" | "automation" | "migration" | undefined;
 				correlationId?: string | undefined;
 				causationId?: string | undefined;
 			};
@@ -3948,51 +3947,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		agentDefinitions: import("@trpc/server").TRPCQueryProcedure<{
-			input: Record<string, never>;
-			output: {
-				agents: unknown[];
-			};
-			meta: object;
-		}>;
-		toolDefinitions: import("@trpc/server").TRPCQueryProcedure<{
-			input: Record<string, never>;
-			output: {
-				tools: unknown[];
-			};
-			meta: object;
-		}>;
-		agentConfig: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				agentType: string;
-			};
-			output: {
-				config: unknown;
-			};
-			meta: object;
-		}>;
-		saveAgentConfig: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				agentType: string;
-				promptAppend?: string | null | undefined;
-				extraToolIds?: string[] | undefined;
-				disabledToolIds?: string[] | undefined;
-				maxStepsOverride?: number | null | undefined;
-			};
-			output: {
-				config: unknown;
-			};
-			meta: object;
-		}>;
-		deleteAgentConfig: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				agentType: string;
-			};
-			output: {
-				success: boolean;
-			};
-			meta: object;
-		}>;
 		memoryFacts: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
@@ -4031,25 +3985,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		skills: import("@trpc/server").TRPCQueryProcedure<{
-			input: Record<string, never>;
-			output: {
-				skills: any[];
-			};
-			meta: object;
-		}>;
-		createSkill: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				name: string;
-				description: string;
-				parameters?: Record<string, string> | undefined;
-				category?: "context" | "action" | undefined;
-			};
-			output: {
-				skill: any;
-			};
-			meta: object;
-		}>;
 		executionStats: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				since?: string | undefined;
@@ -4082,7 +4017,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		proposals: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				status?: "denied" | "pending" | "approved" | undefined;
+				status?: "approved" | "denied" | "pending" | undefined;
 			};
 			output: {
 				proposals: any[];
@@ -4892,7 +4827,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					layoutConfig?: {
 						pinnedApps?: string[] | undefined;
-						sidebarApps?: string[] | undefined;
 						defaultView?: string | undefined;
 						theme?: string | undefined;
 						sidebarItems?: {
@@ -5903,7 +5837,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "relations" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
+								type: "number" | "date" | "relations" | "tag" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -6017,7 +5951,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "relations" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
+								type: "number" | "date" | "relations" | "tag" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -6195,6 +6129,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
+				kind?: "code" | "instruction" | undefined;
+				scope?: "workspace" | "user" | undefined;
 				status?: "error" | "active" | "inactive" | "all" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
@@ -6218,6 +6154,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				code: string;
 				workspaceId?: string | undefined;
+				kind?: "code" | "instruction" | undefined;
+				scope?: "workspace" | "user" | undefined;
+				agentTypes?: string[] | undefined;
 				description?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				category?: string | undefined;
@@ -6238,6 +6177,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				kind?: "code" | "instruction" | undefined;
+				scope?: "workspace" | "user" | undefined;
+				agentTypes?: string[] | null | undefined;
 				name?: string | undefined;
 				description?: string | undefined;
 				code?: string | undefined;
@@ -6268,6 +6210,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		execute: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				input?: Record<string, unknown> | undefined;
+			};
+			output: {
+				success: boolean;
+				result?: unknown;
+				error?: string;
+				executionTimeMs: number;
+			};
+			meta: object;
+		}>;
 		installFromUrl: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				url: string;
@@ -6277,7 +6232,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				name: string;
 				status: "installed";
-				skillType: "instruction";
+				kind: "instruction";
 				source: "custom" | "clawhub" | "zeroclaw";
 				version: string;
 			};

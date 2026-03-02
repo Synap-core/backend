@@ -822,7 +822,7 @@ EOF
     
     # Start services
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
-    docker compose up -d
+    docker compose up -d --remove-orphans
 
     # Provision agent services requested at install time
     if [ "$WITH_OPENCLAW" = "true" ]; then
@@ -1140,7 +1140,7 @@ cmd_update() {
     
     # Restart services
     echo -e "${BLUE}🔄 Restarting services...${NC}"
-    docker compose up -d backend
+    docker compose up -d --remove-orphans backend
     
     echo -e "${GREEN}✅ Update complete!${NC}"
 }
@@ -1238,10 +1238,10 @@ cmd_start() {
     
     if [ -z "$service" ]; then
         echo -e "${BLUE}🚀 Starting all services...${NC}"
-        docker compose up -d
+        docker compose up -d --remove-orphans
     else
         echo -e "${BLUE}🚀 Starting $service...${NC}"
-        docker compose up -d "$service"
+        docker compose up -d --remove-orphans "$service"
     fi
     
     echo -e "${GREEN}✅ Services started!${NC}"
@@ -1382,7 +1382,7 @@ cmd_restore() {
     cp "$temp_dir"/*.env .env
     rm -rf "$temp_dir"
     
-    docker compose up -d
+    docker compose up -d --remove-orphans
     
     echo -e "${GREEN}✅ Restore complete!${NC}"
 }
@@ -1523,12 +1523,12 @@ cmd_rebuild() {
         echo -e "${BLUE}🔨 Rebuilding all services...${NC}"
         eval "$build_cmd"
         echo -e "${BLUE}🔄 Restarting services...${NC}"
-        docker compose up -d
+        docker compose up -d --remove-orphans
     else
         echo -e "${BLUE}🔨 Rebuilding $service...${NC}"
         eval "$build_cmd $service"
         echo -e "${BLUE}🔄 Restarting $service...${NC}"
-        docker compose up -d "$service"
+        docker compose up -d --remove-orphans "$service"
     fi
     
     echo -e "${GREEN}✅ Rebuild complete!${NC}"
