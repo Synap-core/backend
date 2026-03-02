@@ -1,16 +1,11 @@
 /**
- * Chat Router - TEMPORARILY DISABLED
+ * Chat Router
  *
- * This router depends on @synap/domain which has been removed.
+ * Re-exports the channels router under the legacy "chat" name.
+ * The full implementation lives in channels.ts.
  *
- * TODO: Refactor to use repositories directly from @synap/database
- * - conversationRepository.getThreadHistory()
- * - conversationRepository.appendMessage()
- * - etc.
+ * The tRPC key "chat" is preserved for backward compatibility with all
+ * frontend hooks that use trpc.chat.* (sendMessage, getMessages, etc.)
  */
 
-import { router } from "../trpc.js";
-
-export const chatRouter = router({
-  // All endpoints temporarily disabled - refactor needed
-});
+export { channelsRouter as chatRouter } from "./channels.js";

@@ -1160,6 +1160,18 @@ export const workspacesRouter = router({
                 sidebarApps: z.array(z.string()).optional(),
                 defaultView: z.string().optional(),
                 theme: z.string().optional(),
+                sidebarItems: z
+                  .array(
+                    z.object({
+                      kind: z.enum(["app", "view", "external"]),
+                      appId: z.string().optional(),
+                      viewName: z.string().optional(),
+                      url: z.string().optional(),
+                      label: z.string().optional(),
+                      icon: z.string().optional(),
+                    })
+                  )
+                  .optional(),
               })
               .optional(),
             entityLinks: z
@@ -1288,6 +1300,83 @@ export const workspacesRouter = router({
         entityIds: result.entityIds,
       };
     }),
+
+  /**
+   * Idempotently create the Pod Administration workspace.
+   *
+   * Called by the browser immediately after connecting to a pod (when the
+   * connected user has pod-admin rights). Safe to call on every reconnect —
+   * returns the existing workspace ID if one already exists.
+   *
+   * The workspace is identified by settings.systemSlug = 'pod-admin' so it
+   * survives pod migrations and workspace ID changes.
+   */
+  ensurePodAdminWorkspace: protectedProcedure.mutation(async ({ ctx }) => {
+    const {
+      POD_ADMIN_DEFINITION,
+      POD_ADMIN_SYSTEM_SLUG,
+      POD_ADMIN_WORKSPACE_NAME,
+    } = await import("../system-templates/pod-admin.js");
+
+    // Check if the pod-admin workspace already exists for this user.
+    // EXISTS subquery avoids loading all workspace IDs into JS.
+    const [existing] = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(
+        and(
+          drizzleSql`EXISTS (
+            SELECT 1 FROM workspace_members
+            WHERE workspace_id = ${workspaces.id}
+              AND user_id = ${ctx.userId}
+          )`,
+          drizzleSql`${workspaces.settings}->>'systemSlug' = ${POD_ADMIN_SYSTEM_SLUG}`
+        )
+      )
+      .limit(1);
+
+    if (existing) {
+      return { workspaceId: existing.id, created: false };
+    }
+
+    // Create the pod-admin workspace from the system template
+    const result = await createWorkspaceFromDefinition({
+      definition: POD_ADMIN_DEFINITION,
+      userId: ctx.userId,
+      workspaceName: POD_ADMIN_WORKSPACE_NAME,
+      createdBy: "provisioning",
+    });
+
+    // Stamp the systemSlug so future calls can find this workspace
+    await db
+      .update(workspaces)
+      .set({
+        settings: drizzleSql`${workspaces.settings} || jsonb_build_object('systemSlug', ${POD_ADMIN_SYSTEM_SLUG}::text)`,
+      })
+      .where(eq(workspaces.id, result.workspaceId));
+
+    // Enqueue workspace-init for default whiteboard/commands (skip default views)
+    try {
+      const boss = getBoss();
+      await boss.send("workspace-init", {
+        workspaceId: result.workspaceId,
+        userId: ctx.userId,
+        packageSlug: POD_ADMIN_SYSTEM_SLUG, // signals: skip ensureDefaultViews
+      });
+    } catch (err) {
+      logger.warn(
+        { err, workspaceId: result.workspaceId },
+        "Failed to enqueue workspace-init for pod-admin (non-fatal)"
+      );
+    }
+
+    logger.info(
+      { userId: ctx.userId, workspaceId: result.workspaceId },
+      "Pod admin workspace created"
+    );
+
+    return { workspaceId: result.workspaceId, created: true };
+  }),
 
   /**
    * Seed a plugin workspace (provisioning-level auth via token header)

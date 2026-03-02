@@ -11,11 +11,27 @@ import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
+export interface WorkspaceSidebarItem {
+  kind: "app" | "view" | "external";
+  /** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
+  appId?: string;
+  /** View name for kind='view' — resolved lazily at click time */
+  viewName?: string;
+  /** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
+  url?: string;
+  /** Display label shown in the sidebar */
+  label?: string;
+  /** Lucide icon name override */
+  icon?: string;
+}
+
 export interface WorkspaceLayoutConfig {
   pinnedApps?: string[]; // App IDs in order
   sidebarApps?: string[]; // Which apps show in sidebar
   defaultView?: string; // Default view when entering workspace
   theme?: string; // Per-workspace theme override
+  /** Ordered list of sidebar items. When set, replaces the generic app list. */
+  sidebarItems?: WorkspaceSidebarItem[];
 }
 
 /**
@@ -91,6 +107,12 @@ export interface WorkspaceSettings {
   templateName?: string;
   /** Slug of the control plane package used to create this workspace. */
   packageSlug?: string;
+  /**
+   * System-reserved slug identifying built-in workspaces created by the backend.
+   * Used for idempotent re-creation (e.g. 'pod-admin').
+   * Never set by users.
+   */
+  systemSlug?: string;
   /** Version of the package at time of creation. */
   packageVersion?: string;
 

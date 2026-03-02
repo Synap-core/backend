@@ -110,7 +110,8 @@ declare enum ChannelType {
 	DOCUMENT_REVIEW = "document_review",
 	VIEW_DISCUSSION = "view_discussion",
 	DIRECT = "direct",
-	EXTERNAL_IMPORT = "external_import"
+	EXTERNAL_IMPORT = "external_import",
+	A2AI = "a2ai"
 }
 declare enum ChannelStatus {
 	ACTIVE = "active",
@@ -225,7 +226,8 @@ declare const channels: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				ChannelType.DOCUMENT_REVIEW,
 				ChannelType.VIEW_DISCUSSION,
 				ChannelType.DIRECT,
-				ChannelType.EXTERNAL_IMPORT
+				ChannelType.EXTERNAL_IMPORT,
+				ChannelType.A2AI
 			];
 			baseColumn: never;
 			identity: undefined;
@@ -672,7 +674,9 @@ export interface WorkspaceSettings {
 declare enum ProposalStatus {
 	PENDING = "pending",
 	APPROVED = "approved",
-	REJECTED = "rejected"
+	REJECTED = "rejected",
+	/** Action was on the autoApproveFor whitelist — executed immediately, audited here for traceability. */
+	AUTO_APPROVED = "auto_approved"
 }
 declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "message_links";
@@ -1160,7 +1164,9 @@ declare enum AgentType {
 	KNOWLEDGE_SEARCH = "knowledge-search",
 	CODE = "code",
 	WRITING = "writing",
-	ACTION = "action"
+	ACTION = "action",
+	ONBOARDING = "onboarding",
+	WORKSPACE_CREATION = "workspace-creation"
 }
 /**
  * Agent type as string literal union (for flexibility)
@@ -1250,6 +1256,11 @@ export type BranchNodeResult = {
 	messageCount: number;
 	lastActivity: Date;
 	depth: number;
+};
+/** Recursive node returned by getBranchTree — mirrors the frontend BranchNode shape */
+export type BranchTreeNode = {
+	channel: Channel;
+	children: BranchTreeNode[];
 };
 /**
  * @synap/events - Schema-Driven Event Generator
@@ -1673,6 +1684,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		setEntityViewMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				mode: "document" | "bento";
+			};
+			output: {
+				status: string;
+				viewMode: "document" | "bento";
+				bentoViewId: string | null;
+			};
+			meta: object;
+		}>;
 	}>>;
 	chat: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -1721,6 +1744,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				status?: undefined;
 				message?: undefined;
+			};
+			meta: object;
+		}>;
+		createExternalChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				externalSource: string;
+				externalChannelId: string;
+				title: string;
+				externalParticipants?: string[] | undefined;
+				initialMessage?: string | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				channelId: string;
+				status: "exists";
+			} | {
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
+				status: "created";
+			};
+			meta: object;
+		}>;
+		createA2AIChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				topic: string;
+				visibility?: "open" | "closed" | undefined;
+				participants?: string[] | undefined;
+				agentType?: "code" | "action" | "meta" | "default" | "prompting" | "knowledge-search" | "writing" | undefined;
+				title?: string | undefined;
+			};
+			output: {
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
+				status: "created";
 			};
 			meta: object;
 		}>;
@@ -2043,10 +2098,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rootThreadId: string;
 			};
 			output: {
-				tree: {
-					channel: Channel;
-					children: any[];
-				} | null;
+				tree: BranchTreeNode | null;
 				flatBranches: {
 					workspaceId: string | null;
 					userId: string;
@@ -2989,7 +3041,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lastSavedVersion: number;
 					workingState: string | null;
 					workingStateUpdatedAt: Date | null;
-					entityId: string | null;
 					metadata: unknown;
 					createdAt: Date;
 					updatedAt: Date;
@@ -3127,7 +3178,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lastSavedVersion: number;
 					workingState: string | null;
 					workingStateUpdatedAt: Date | null;
-					entityId: string | null;
 					metadata: unknown;
 					createdAt: Date;
 					updatedAt: Date;
@@ -3417,7 +3467,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				apiKey: string;
 				pricing: string | null;
 				enabled: boolean;
+				mcpApproved: boolean;
 				lastHealthCheck: Date | null;
+				lastHealthStatus: string | null;
 			};
 			meta: object;
 		}>;
@@ -3460,7 +3512,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				mcpEndpoint: string | null;
 				pricing: string | null;
 				enabled: boolean;
+				mcpApproved: boolean;
 				lastHealthCheck: Date | null;
+				lastHealthStatus: string | null;
 			};
 			meta: object;
 		}>;
@@ -3489,10 +3543,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pricing: string | null;
 				status: string;
 				enabled: boolean;
+				mcpApproved: boolean;
 				metadata: Record<string, unknown> | null;
 				createdAt: Date;
 				updatedAt: Date;
 				lastHealthCheck: Date | null;
+				lastHealthStatus: string | null;
 			};
 			meta: object;
 		}>;
@@ -3538,6 +3594,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		approveMcp: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+			};
+			output: {
+				success: boolean;
+				serviceId: string;
+			};
+			meta: object;
+		}>;
+		revokeMcp: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 		findByCapability: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				capability: string;
@@ -3549,6 +3624,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilities: string[];
 				webhookUrl: string;
 			}[];
+			meta: object;
+		}>;
+		getMcpStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				serviceId: string;
+			};
+			output: {
+				mcpEndpoint: string | null;
+				mcpApproved: boolean;
+			};
 			meta: object;
 		}>;
 	}>>;
@@ -3981,16 +4066,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: string | null;
 					webhookUrl: string | null;
 					lastHealthCheck: Date | null;
+					lastHealthStatus: any;
 				}[];
-			};
-			meta: object;
-		}>;
-		hasCapability: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				capability: string;
-			};
-			output: {
-				available: boolean;
 			};
 			meta: object;
 		}>;
@@ -4019,6 +4096,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				since: string;
 				days: number;
+			};
+			meta: object;
+		}>;
+		hasCapability: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				capability: string;
+			};
+			output: {
+				available: boolean;
 			};
 			meta: object;
 		}>;
@@ -4749,6 +4835,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | null;
 			meta: object;
 		}>;
+		getMcpServers: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: McpServerConfig[];
+			meta: object;
+		}>;
+		updateMcpServers: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				servers: {
+					id: string;
+					name: string;
+					transport: "stdio" | "http";
+					command?: string | undefined;
+					args?: string[] | undefined;
+					url?: string | undefined;
+					env?: Record<string, string> | undefined;
+					enabled?: boolean | undefined;
+				}[];
+			};
+			output: {
+				count: number;
+			};
+			meta: object;
+		}>;
 	}>>;
 	views: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -4759,7 +4871,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				name: string;
-				type: "calendar" | "list" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "flow" | "bento";
+				type: "calendar" | "list" | "bento" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "flow";
 				workspaceId?: string | undefined;
 				description?: string | undefined;
 				scopeProfileIds?: string[] | undefined;
@@ -4782,7 +4894,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				view: any;
-				documentId: any;
+				documentId: null;
 				status: string;
 				message: string;
 				proposalId: string;
@@ -4813,7 +4925,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					snapshotUpdatedAt: Date | null;
 					embeddedViewIds: string[] | null;
 				};
-				documentId: string;
+				documentId: string | null;
 				status: string;
 				message?: undefined;
 				proposalId?: undefined;
@@ -5049,7 +5161,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				embeddedViewIds?: string[] | undefined;
 				schemaSnapshot?: Record<string, any> | undefined;
 				snapshotUpdatedAt?: Date | undefined;
-				type?: "calendar" | "list" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "flow" | "bento" | undefined;
+				type?: "calendar" | "list" | "bento" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "flow" | undefined;
 			};
 			output: {
 				status: string;
@@ -6283,6 +6395,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				}[];
 			};
 			meta: object;
@@ -6305,6 +6418,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				};
 				effectiveProperties: EffectiveProperty[];
 			};
@@ -6316,6 +6430,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				displayName: string;
 				parentProfileId?: string | undefined;
 				uiHints?: Record<string, unknown> | undefined;
+				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "workspace" | "user" | "shared" | "system" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
 				source?: "user" | "system" | "intelligence" | "ai" | undefined;
@@ -6336,6 +6451,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				};
 				existing: boolean;
 				status?: undefined;
@@ -6361,6 +6477,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				};
 				existing?: undefined;
 				status?: undefined;
@@ -6375,6 +6492,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				displayName?: string | undefined;
 				parentProfileId?: string | null | undefined;
 				uiHints?: Record<string, unknown> | undefined;
+				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "workspace" | "user" | "shared" | "system" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
 			};
@@ -6392,6 +6510,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				};
 			};
 			meta: object;
@@ -6432,6 +6551,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				}[];
 			};
 			meta: object;
@@ -6464,6 +6584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					uiHints: unknown;
 					displayName: string;
 					parentProfileId: string | null;
+					defaultValues: unknown;
 				}[];
 			};
 			meta: object;

@@ -133,8 +133,13 @@ export const typesenseRouter = router({
   /**
    * Initialize collections (admin only)
    */
-  initializeCollections: protectedProcedure.mutation(async () => {
-    // TODO: Check if user is system admin
+  initializeCollections: protectedProcedure.mutation(async ({ ctx }) => {
+    if (!["admin", "owner"].includes(ctx.workspaceRole ?? "")) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Only workspace admins can initialize search collections.",
+      });
+    }
 
     await collectionService.initializeCollections();
 

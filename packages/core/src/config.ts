@@ -107,12 +107,6 @@ const ServerConfigSchema = z.object({
   controlPlaneInternalKey: z.string().min(32).optional(),
 });
 
-const InngestConfigSchema = z.object({
-  eventKey: z.string().optional(),
-  signingKey: z.string().optional(),
-  baseUrl: z.string().optional(),
-});
-
 const Mem0ConfigSchema = z.object({
   apiUrl: z.string().optional(),
   apiKey: z.string().optional(),
@@ -126,7 +120,6 @@ const ConfigSchema = z.object({
   ai: AIConfigSchema,
   auth: AuthConfigSchema,
   server: ServerConfigSchema,
-  inngest: InngestConfigSchema,
   mem0: Mem0ConfigSchema,
 });
 
@@ -142,7 +135,6 @@ export type StorageConfig = Omit<
 export type AIConfig = z.infer<typeof AIConfigSchema>;
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
-export type InngestConfig = z.infer<typeof InngestConfigSchema>;
 export type Mem0Config = z.infer<typeof Mem0ConfigSchema>;
 
 // ============================================================================
@@ -257,11 +249,6 @@ function loadConfig(): Config {
         controlPlaneUrl: process.env.CONTROL_PLANE_URL,
         controlPlaneInternalKey: process.env.CONTROL_PLANE_INTERNAL_KEY,
       },
-      inngest: {
-        eventKey: process.env.INNGEST_EVENT_KEY,
-        signingKey: process.env.INNGEST_SIGNING_KEY,
-        baseUrl: process.env.INNGEST_BASE_URL,
-      },
       mem0: {
         apiUrl: process.env.MEM0_API_URL,
         apiKey: process.env.MEM0_API_KEY,
@@ -345,7 +332,7 @@ if (typeof globalThis !== "undefined") {
  * ```
  */
 export function validateConfig(
-  feature: "r2" | "ory" | "ai" | "postgres" | "mem0"
+  feature: "r2" | "ory" | "ai" | "postgres" | "mem0" | "intelligenceHub"
 ): void {
   switch (feature) {
     case "r2":
@@ -421,5 +408,31 @@ export function validateConfig(
         throw new Error("Mem0 requires MEM0_API_URL environment variable");
       }
       break;
+
+    case "intelligenceHub": {
+      const hubUrl = process.env.INTELLIGENCE_HUB_URL;
+      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY;
+
+      if (!hubUrl) {
+        configLogger.warn(
+          "INTELLIGENCE_HUB_URL is not set — AI routing will fall back to http://localhost:3002. " +
+            "Set this in production to route agent requests to the correct intelligence service."
+        );
+      }
+
+      if (!hubApiKey) {
+        configLogger.warn(
+          "INTELLIGENCE_HUB_API_KEY is not set — embedding workers and default intelligence routing " +
+            "will send unauthenticated requests to the hub. Set this in production."
+        );
+      }
+
+      if (config.server.nodeEnv === "production" && (!hubUrl || !hubApiKey)) {
+        throw new Error(
+          "Production requires INTELLIGENCE_HUB_URL and INTELLIGENCE_HUB_API_KEY environment variables"
+        );
+      }
+      break;
+    }
   }
 }

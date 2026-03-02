@@ -87,6 +87,7 @@ import { messageLinksRouter } from "./routers/message-links.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { secretsVaultRouter } from "./routers/secrets-vault.js";
+import { usersRouter } from "./routers/users.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -287,6 +288,11 @@ registerRouter("secretsVault", secretsVaultRouter, {
   version: "1.0.0",
   source: "core",
   description: "Encrypted secrets vault for passwords and API keys",
+});
+registerRouter("users", usersRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Current user identity and profile API",
 });
 
 import { coreRouter } from "./root.js";

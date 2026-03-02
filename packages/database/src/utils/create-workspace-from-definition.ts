@@ -96,6 +96,14 @@ export interface WorkspaceDefinitionInput {
     sidebarApps?: string[];
     defaultView?: string;
     theme?: string;
+    sidebarItems?: Array<{
+      kind: "app" | "view" | "external";
+      appId?: string;
+      viewName?: string;
+      url?: string;
+      label?: string;
+      icon?: string;
+    }>;
   };
   /** Schema-level links between entity types (profiles). Creates relation_defs + profile_relations. */
   entityLinks?: Array<{

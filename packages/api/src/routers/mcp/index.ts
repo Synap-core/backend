@@ -47,9 +47,17 @@ export function createMCPServer() {
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    // TODO: Extract userId and scopes from MCP authentication context
-    const userId = process.env.MCP_USER_ID || "placeholder";
-    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") || ["mcp.read"];
+    // Stdio transport does not carry HTTP headers, so auth must come from env.
+    // In production this server should not run — use the HTTP MCP endpoint at
+    // POST /mcp which enforces full API-key auth via apiKeyService.validateApiKey().
+    if (process.env.NODE_ENV === "production" && !process.env.MCP_USER_ID) {
+      throw new Error(
+        "MCP stdio server requires MCP_USER_ID in production. " +
+          "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
+      );
+    }
+    const userId = process.env.MCP_USER_ID ?? "dev-placeholder";
+    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") ?? ["mcp.read"];
 
     return await resources.read(request.params.uri, userId, apiKeyScopes);
   });
@@ -62,10 +70,17 @@ export function createMCPServer() {
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    // TODO: Extract userId and scopes from MCP authentication context
-    // For now, this is a placeholder - MCP auth will be implemented separately
-    const userId = process.env.MCP_USER_ID || "placeholder";
-    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") || [
+    // Stdio transport does not carry HTTP headers, so auth must come from env.
+    // In production this server should not run — use the HTTP MCP endpoint at
+    // POST /mcp which enforces full API-key auth via apiKeyService.validateApiKey().
+    if (process.env.NODE_ENV === "production" && !process.env.MCP_USER_ID) {
+      throw new Error(
+        "MCP stdio server requires MCP_USER_ID in production. " +
+          "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
+      );
+    }
+    const userId = process.env.MCP_USER_ID ?? "dev-placeholder";
+    const apiKeyScopes = process.env.MCP_SCOPES?.split(",") ?? [
       "mcp.read",
       "mcp.write",
     ];
