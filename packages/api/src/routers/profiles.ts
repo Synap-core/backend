@@ -12,6 +12,12 @@ import {
   ProfileRepository,
   ProfileResolutionService,
   ProfileScope,
+  ViewRepository,
+  WorkspaceRepository,
+  EventRepository,
+  workspaces,
+  eq,
+  sql,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -235,6 +241,126 @@ export const profilesRouter = router({
           if (wsId !== ctx.workspaceId) {
             await profileRepo.grantAccess(profile.id, wsId);
           }
+        }
+      }
+
+      // Side effects for workspace-scoped profiles: auto-create bento view + sidebar item
+      if (input.scope === "workspace") {
+        try {
+          const eventRepo = new EventRepository(sql);
+          const viewRepo = new ViewRepository(db, eventRepo);
+          const workspaceRepo = new WorkspaceRepository(db, eventRepo);
+
+          // Build default bento layout for this profile
+          const icon = input.uiHints?.icon as string | undefined;
+          const color =
+            (input.uiHints?.color as string | undefined) ?? "#6366F1";
+          const iconPascal = icon
+            ? icon
+                .split("-")
+                .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
+                .join("")
+            : "Database";
+          const slug = input.slug;
+          const blocks = [
+            {
+              id: `${slug}-header`,
+              kind: "widget",
+              widgetType: "section-header",
+              pos: { x: 0, y: 0, w: 12, h: 2 },
+              config: {
+                title: input.displayName,
+                icon: iconPascal,
+                profileSlug: slug,
+                color,
+              },
+            },
+            {
+              id: `${slug}-count`,
+              kind: "widget",
+              widgetType: "stat-card",
+              pos: { x: 0, y: 2, w: 3, h: 3 },
+              config: {
+                label: `Total ${input.displayName}s`,
+                aggregation: "count",
+                profileSlug: slug,
+                icon: iconPascal,
+                color,
+              },
+            },
+            {
+              id: `${slug}-table`,
+              kind: "widget",
+              widgetType: "view-table",
+              pos: { x: 0, y: 5, w: 12, h: 9 },
+              config: { profileSlug: slug },
+            },
+          ];
+
+          await viewRepo.create(
+            {
+              name: input.displayName,
+              type: "bento" as any,
+              workspaceId: ctx.workspaceId,
+              userId: ctx.userId,
+              scopeProfileIds: [profile.id],
+              config: { layout: "bento", blocks },
+            },
+            ctx.userId
+          );
+
+          // Append sidebar item to workspace settings.layout
+          const workspace = await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, ctx.workspaceId),
+          });
+          if (workspace) {
+            const currentSettings = (workspace.settings || {}) as Record<
+              string,
+              unknown
+            >;
+            const currentLayout = (currentSettings.layout || {}) as Record<
+              string,
+              unknown
+            >;
+            const existingItems = (currentLayout.sidebarItems as any[]) ?? [];
+            // Only append if not already present (idempotent)
+            const alreadyPresent = existingItems.some(
+              (item: any) =>
+                item.viewName === input.displayName && item.profileSlug === slug
+            );
+            if (!alreadyPresent) {
+              const newItem = {
+                kind: "view",
+                viewName: input.displayName,
+                profileSlug: slug,
+                label: input.displayName,
+                icon,
+              };
+              const mergedLayout = {
+                ...currentLayout,
+                sidebarItems: [...existingItems, newItem],
+              };
+              await workspaceRepo.update(
+                ctx.workspaceId,
+                {
+                  name: workspace.name,
+                  settings: { ...currentSettings, layout: mergedLayout },
+                },
+                ctx.userId
+              );
+            }
+          }
+
+          logger.info(
+            { profileId: profile.id, slug },
+            "Auto-created bento view and sidebar item for profile"
+          );
+        } catch (sideEffectErr) {
+          // Non-fatal — profile was created successfully; log and continue
+          logger.warn(
+            { err: sideEffectErr, profileId: profile.id },
+            "Failed to auto-create bento view or sidebar item (non-fatal)"
+          );
         }
       }
 
