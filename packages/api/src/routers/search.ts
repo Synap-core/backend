@@ -110,7 +110,7 @@ export const searchRouter = router({
       const embeddingStr = `[${embedding.join(",")}]`;
 
       // pgvector cosine similarity search against entity_vectors
-      const results = await sql`
+      const results = await db.execute(sql`
         SELECT
           ev.title,
           ev.preview,
@@ -126,7 +126,7 @@ export const searchRouter = router({
           AND 1 - (ev.embedding <=> ${embeddingStr}::vector) >= ${input.threshold}
         ORDER BY similarity DESC
         LIMIT ${input.limit}
-      `;
+      `);
 
       return {
         entities: (results as any[]).map((r) => ({
