@@ -153,7 +153,7 @@ export const viewsRouter = router({
       });
 
       // Compute category from view type
-      const category = getViewCategory(input.type as ViewType);
+      const category = getViewCategory(input.type);
 
       // Validate scopeProfileIds for structured views
       if (category === "structured") {
@@ -198,7 +198,7 @@ export const viewsRouter = router({
 
       // Audit: log the requested event
       await ViewEvents.createRequested(ctx.userId, {
-        type: input.type as ViewType,
+        type: input.type,
         name: input.name as string,
         workspaceId: effectiveWorkspaceId,
       });
@@ -518,7 +518,7 @@ export const viewsRouter = router({
           message: permResult.reason || "Insufficient permissions",
         });
 
-      const category = getViewCategory(view.type as ViewType);
+      const category = getViewCategory(view.type);
 
       // Canvas views: Return document content
       if (category === "canvas") {
@@ -772,7 +772,7 @@ export const viewsRouter = router({
       }
 
       // Ensure content category matches view type
-      const expectedCategory = getViewCategory(view.type as ViewType);
+      const expectedCategory = getViewCategory(view.type);
       if ((parseResult.data as any).category !== expectedCategory) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -911,7 +911,7 @@ export const viewsRouter = router({
       }
 
       // Validate config against view type schema (use input.type or existing view.type)
-      const viewType = (input.type || view.type) as ViewType;
+      const viewType = input.type || view.type;
       if (input.config) {
         const validation = validateViewConfig(viewType, input.config);
         if (!validation.valid) {

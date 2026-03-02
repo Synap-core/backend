@@ -25,7 +25,7 @@ import type { ViewType } from "./index.js";
 /**
  * Map view types to their categories
  */
-export const VIEW_TYPE_CATEGORIES: Record<ViewType, ViewCategory> = {
+export const VIEW_TYPE_CATEGORIES: Record<string, ViewCategory> = {
   // Structured (query-based, interchangeable layouts)
   table: "structured",
   kanban: "structured",
@@ -52,7 +52,7 @@ export const VIEW_TYPE_CATEGORIES: Record<ViewType, ViewCategory> = {
  * @param type - The view type
  * @returns The category of the view type
  */
-export function getViewCategory(type: ViewType): ViewCategory {
+export function getViewCategory(type: string): ViewCategory {
   return VIEW_TYPE_CATEGORIES[type] || "structured"; // Default fallback
 }
 
@@ -203,6 +203,6 @@ export function isCanvasContent(
 /**
  * Get content type for view type
  */
-export function getContentCategoryForViewType(type: ViewType): ViewCategory {
-  return VIEW_TYPE_CATEGORIES[type];
+export function getContentCategoryForViewType(type: string): ViewCategory {
+  return VIEW_TYPE_CATEGORIES[type] || "structured";
 }

@@ -50,7 +50,7 @@ import type { EntityQuery } from "./query.js";
 
 export interface CreateViewInput {
   workspaceId?: string;
-  type: ViewType;
+  type: string;
   name: string;
   description?: string;
   // NEW: Scope profiles (required for structured views)

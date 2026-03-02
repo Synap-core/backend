@@ -28,11 +28,13 @@ export type ViewType =
   | "timeline"
   | "mindmap"
   | "graph"
-  | "bento";
+  | "flow"
+  | "bento"
+  | (string & {});
 
 export interface CreateViewInput {
   id?: string;
-  type: ViewType;
+  type: string;
   name: string;
   description?: string;
   documentId?: string | null;

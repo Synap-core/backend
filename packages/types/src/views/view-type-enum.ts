@@ -28,24 +28,10 @@ export const VIEW_TYPES: ViewType[] = [
 ];
 
 /**
- * Zod enum for view types (for API validation)
- * Generated from ViewType to ensure consistency
+ * Zod validator for view types (open string — accepts any non-empty type)
+ * Known types are in VIEW_TYPES; unknown types are accepted and default to "structured" category.
  */
-export const ViewTypeEnum = z.enum([
-  "whiteboard",
-  "table",
-  "kanban",
-  "list",
-  "grid",
-  "gallery",
-  "calendar",
-  "gantt",
-  "timeline",
-  "mindmap",
-  "graph",
-  "flow",
-  "bento",
-]);
+export const ViewTypeEnum = z.string().min(1);
 
 /**
  * Type guard: Check if a string is a valid ViewType
