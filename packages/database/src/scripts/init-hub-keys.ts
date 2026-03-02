@@ -9,8 +9,8 @@
  * IMPORTANT: This script is idempotent - safe to run multiple times
  */
 
-import { sql } from "../src/client-pg.js";
-import * as bcrypt from "bcryptjs";
+import { sql } from "../client-pg.js";
+import bcrypt from "bcrypt";
 
 interface HubKey {
   rawKey: string;
