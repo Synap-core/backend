@@ -13,7 +13,7 @@ import {
   ProfileRepository,
   PropertyValueType,
   eq,
-  sql,
+  drizzleSql,
 } from "@synap/database";
 import { entityPropertyIndex } from "@synap/database/schema";
 // PropertySlugConflictError not used, removed
@@ -230,9 +230,8 @@ export const propertyDefsRouter = router({
       }
 
       // Prevent deletion if any entity is still using this property
-      const db = await getDb();
       const usageResult = await db
-        .select({ count: sql<number>`count(*)::int` })
+        .select({ count: drizzleSql<number>`count(*)::int` })
         .from(entityPropertyIndex)
         .where(eq(entityPropertyIndex.propertyDefId, input.id));
       const usageCount = usageResult[0]?.count ?? 0;

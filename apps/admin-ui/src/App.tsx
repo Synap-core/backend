@@ -18,6 +18,7 @@ import IntelligencePage from "./pages/(v2)/IntelligencePage";
 // Developer Pages
 import TestingPage from "./pages/(v2)/TestingPage";
 import SubscribersPage from "./pages/(v2)/SubscribersPage";
+import ServicesPage from "./pages/(v2)/ServicesPage";
 
 // Other Pages
 import MemoryPage from "./pages/(v2)/MemoryPage";
@@ -50,6 +51,7 @@ function App() {
         <Route path="testing" element={<TestingPage />} />
         <Route path="automation" element={<SubscribersPage />} />
         <Route path="flow" element={<FlowPageV3 />} />
+        <Route path="services" element={<ServicesPage />} />
 
         {/* Legacy route redirects */}
         <Route path="investigate" element={<InvestigatePage />} />

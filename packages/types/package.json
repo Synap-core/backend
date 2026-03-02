@@ -20,6 +20,10 @@
   ],
   "author": "Synap Team",
   "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

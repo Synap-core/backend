@@ -16,6 +16,9 @@ RUN pnpm install --no-frozen-lockfile
 # Build the API package (sequential to avoid worker OOM on constrained hosts)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build --filter=api --concurrency=1
 
+# Build provision-agent script separately (standalone bundle, not affected by turbo cache)
+RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts
+
 # Build admin-ui SPA
 RUN cd apps/admin-ui && npx vite build
 
@@ -54,6 +57,36 @@ COPY --chown=nodejs:nodejs hydra ./hydra
 # Copy migrations (SQL files not included in pnpm deploy)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
 COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
+
+# pnpm deploy doesn't include apps/api/dist (gitignored, no "files" field)
+# Copy the built server dist from the builder stage
+COPY --from=builder --chown=nodejs:nodejs /app/apps/api/dist ./dist/
+
+# Copy the provision-agent script (built from packages/api by the separate tsup step)
+COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./dist/scripts/
+
+# pnpm deploy --legacy doesn't create top-level symlinks for all packages.
+# Shamefully hoist: for each .pnpm entry, link its main package to the top level if missing.
+USER root
+RUN pnpm_dir=/app/node_modules/.pnpm; \
+    ls "$pnpm_dir" | while read entry; do \
+      # Derive the package path from the .pnpm entry name
+      # Scoped: @scope+name@version... → @scope/name
+      # Unscoped: name@version... → name
+      if echo "$entry" | grep -q "^@"; then \
+        scope_part=$(echo "$entry" | sed 's/+[^@]*@.*//'); \
+        name_part=$(echo "$entry" | sed 's/^[^+]*+//' | sed 's/@.*//'); \
+        pkg_path="$scope_part/$name_part"; \
+      else \
+        pkg_path=$(echo "$entry" | sed 's/@.*//'); \
+      fi; \
+      target="/app/node_modules/$pkg_path"; \
+      src="$pnpm_dir/$entry/node_modules/$pkg_path"; \
+      if [ ! -e "$target" ] && [ -d "$src" ]; then \
+        mkdir -p "$(dirname "$target")" && ln -snf "$src" "$target"; \
+      fi; \
+    done
+USER nodejs
 
 # Copy admin-ui static build
 COPY --from=builder --chown=nodejs:nodejs /app/apps/admin-ui/dist ./admin-ui/
