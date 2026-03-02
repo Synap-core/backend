@@ -213,6 +213,8 @@ async function run() {
         key: plainKey,
         scope: entry.defaultScopes,
         userId: agent.id,
+        keyType: "hub_inbound",
+        description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
       },
       "system"
     );
@@ -290,6 +292,8 @@ async function run() {
       key: plainKey,
       scope: entry.defaultScopes,
       userId: agentId,
+      keyType: "hub_inbound",
+      description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
     },
     "system"
   );

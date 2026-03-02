@@ -15,10 +15,20 @@ const ALGORITHM = "aes-256-gcm";
 
 /** Derive a 32-byte AES key from the env-provided secret. */
 function getEncryptionKey(): Buffer {
-  const raw =
-    process.env.SYNAP_SERVICE_ENCRYPTION_KEY ||
-    process.env.HUB_PROTOCOL_API_KEY ||
-    "";
+  const dedicated = process.env.SYNAP_SERVICE_ENCRYPTION_KEY;
+  const fallback = process.env.HUB_PROTOCOL_API_KEY;
+
+  const raw = dedicated || fallback || "";
+
+  if (!dedicated && fallback) {
+    // Log once — using HUB_PROTOCOL_API_KEY as encryption key is a security smell.
+    // Set SYNAP_SERVICE_ENCRYPTION_KEY to a dedicated random secret to eliminate this warning.
+    console.warn(
+      "[service-key-crypto] WARNING: SYNAP_SERVICE_ENCRYPTION_KEY is not set. " +
+      "Falling back to HUB_PROTOCOL_API_KEY for service credential encryption. " +
+      "This dual-use is discouraged — set a dedicated SYNAP_SERVICE_ENCRYPTION_KEY."
+    );
+  }
 
   if (!raw) {
     throw new Error(

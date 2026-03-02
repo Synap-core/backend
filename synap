@@ -1879,6 +1879,89 @@ EOF
     esac
 }
 
+cmd_reset() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+
+    cd "$deploy_dir"
+
+    local keep_kratos="${1:-}"
+
+    echo -e "${RED}⚠️  WARNING: This will permanently delete all workspace data!${NC}"
+    echo ""
+    echo "What will be deleted:"
+    echo "  - All workspaces, users, and workspace members"
+    echo "  - All documents, channels, messages, entities, relations"
+    echo "  - All API keys, agent users, intelligence services"
+    echo "  - All MinIO stored files (documents, attachments)"
+    echo ""
+    echo "What will be KEPT:"
+    echo "  - Kratos identities (login accounts remain intact)"
+    echo "  - Database schema and migrations"
+    echo "  - Configuration (.env)"
+    echo ""
+    read -p "Type 'yes' to confirm data reset: " confirm
+    if [ "$confirm" != "yes" ]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}🗑️  Resetting workspace data...${NC}"
+
+    # 1. Truncate all workspace data from PostgreSQL
+    echo "  Clearing PostgreSQL workspace data..."
+    docker compose exec -T postgres psql -U synap -d synap -c "
+        TRUNCATE TABLE
+            workspace_members, users, workspaces,
+            api_keys, events,
+            documents, document_versions, document_sessions,
+            channels, channel_context_items, messages, message_links,
+            entities, entity_relationships, entity_tags, entity_enrichments,
+            entity_property_index, entity_templates, entity_vectors,
+            knowledge_facts,
+            profiles, profile_properties, profile_relations, profile_workspace_access,
+            proposals, reasoning_traces,
+            relations, relation_defs, property_defs,
+            resource_shares, roles, skills, tags, views,
+            inbox_items, user_entity_state, user_preferences,
+            agents, ai_suggestions, command_runs,
+            intelligence_commands, intelligence_services,
+            background_tasks, admin_invitations,
+            webhook_deliveries, webhook_subscriptions, workspace_invites,
+            provisioning_tokens,
+            secrets, secret_tags, secret_shares, secret_vault_keys, secret_audit_log
+        CASCADE;
+        DELETE FROM system_settings WHERE key = 'event_processor_watermark';
+        SELECT 'PostgreSQL cleared' as status;
+    " 2>&1 | grep -v "^$" | sed 's/^/    /'
+
+    # 2. Clear MinIO bucket
+    echo "  Clearing MinIO storage..."
+    local minio_key=$(grep "^MINIO_ACCESS_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "minioadmin")
+    local minio_secret=$(grep "^MINIO_SECRET_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "minioadmin")
+    docker compose exec -T minio sh -c "
+        mc alias set local http://localhost:9000 ${minio_key} ${minio_secret} 2>/dev/null
+        mc rm --recursive --force local/synap-storage/ 2>/dev/null || true
+        echo 'MinIO cleared'
+    " 2>&1 | grep -v "^$" | sed 's/^/    /'
+
+    # 3. Restart backend to re-initialize
+    echo "  Restarting backend..."
+    docker start synap-backend-backend-1 2>/dev/null || docker compose restart backend 2>/dev/null || true
+    sleep 3
+
+    echo ""
+    echo -e "${GREEN}✅ Data reset complete!${NC}"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Log in via the UI — a new workspace will be created automatically"
+    echo "  2. Run 'synap services add <type>' to reprovision agent services"
+}
+
 cmd_help() {
     cat << EOF
 ${BLUE}Synap - Unified CLI${NC}
@@ -1904,6 +1987,7 @@ ${YELLOW}Management:${NC}
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
   synap services <sub> [type]    Manage external agent services (OpenClaw, ZeroClaw, etc.)
+  synap reset                    Reset all workspace data (keeps Kratos identities)
 
 ${YELLOW}Examples:${NC}
   # Install (auto-detects: clone if not in repo, use image by default)
@@ -2019,6 +2103,10 @@ case "${1:-help}" in
     services)
         shift
         cmd_services "$@"
+        ;;
+    reset)
+        shift
+        cmd_reset "$@"
         ;;
     help|--help|-h)
         cmd_help
