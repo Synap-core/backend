@@ -4957,7 +4957,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				name: string;
-				type: "calendar" | "list" | "bento" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "flow";
+				type: string;
 				workspaceId?: string | undefined;
 				description?: string | undefined;
 				scopeProfileIds?: string[] | undefined;
@@ -5247,7 +5247,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				embeddedViewIds?: string[] | undefined;
 				schemaSnapshot?: Record<string, any> | undefined;
 				snapshotUpdatedAt?: Date | undefined;
-				type?: "calendar" | "list" | "bento" | "table" | "whiteboard" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | "flow" | undefined;
+				type?: string | undefined;
 			};
 			output: {
 				status: string;
