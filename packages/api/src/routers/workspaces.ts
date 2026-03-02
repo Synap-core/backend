@@ -1157,7 +1157,6 @@ export const workspacesRouter = router({
             layoutConfig: z
               .object({
                 pinnedApps: z.array(z.string()).optional(),
-                sidebarApps: z.array(z.string()).optional(),
                 defaultView: z.string().optional(),
                 theme: z.string().optional(),
                 sidebarItems: z
@@ -1463,7 +1462,6 @@ export const workspacesRouter = router({
           settings: {
             layout: {
               pinnedApps: ["home", "data", "views", "intelligence"],
-              sidebarApps: ["home", "data", "views", "intelligence"],
               defaultView: "home",
             },
             createdBy: "provisioning",

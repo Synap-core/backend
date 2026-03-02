@@ -93,7 +93,6 @@ export interface WorkspaceDefinitionInput {
   }>;
   layoutConfig?: {
     pinnedApps?: string[];
-    sidebarApps?: string[];
     defaultView?: string;
     theme?: string;
     sidebarItems?: Array<{

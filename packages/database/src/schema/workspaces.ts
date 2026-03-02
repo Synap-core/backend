@@ -26,8 +26,7 @@ export interface WorkspaceSidebarItem {
 }
 
 export interface WorkspaceLayoutConfig {
-  pinnedApps?: string[]; // App IDs in order
-  sidebarApps?: string[]; // Which apps show in sidebar
+  pinnedApps?: string[]; // App IDs pinned to the top of the activity bar
   defaultView?: string; // Default view when entering workspace
   theme?: string; // Per-workspace theme override
   /** Ordered list of sidebar items. When set, replaces the generic app list. */
