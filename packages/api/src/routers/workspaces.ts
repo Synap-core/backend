@@ -1070,7 +1070,9 @@ export const workspacesRouter = router({
             views: z
               .array(
                 z.object({
-                  name: z.string(),
+                  // Accept both "name" (proposal format) and "displayName" (registry format)
+                  name: z.string().optional(),
+                  displayName: z.string().optional(),
                   type: z.string(),
                   scopeProfileSlug: z.string().optional(),
                   scopeProfileSlugs: z.array(z.string()).optional(),
@@ -1147,9 +1149,12 @@ export const workspacesRouter = router({
                 sidebarItems: z
                   .array(
                     z.object({
-                      kind: z.enum(["app", "view", "external"]),
+                      // "profile" = navigate to profile bento view (new)
+                      // "external" = third-party URL (legacy)
+                      kind: z.enum(["app", "view", "profile", "external"]),
                       appId: z.string().optional(),
                       viewName: z.string().optional(),
+                      profileSlug: z.string().optional(),
                       url: z.string().optional(),
                       label: z.string().optional(),
                       icon: z.string().optional(),
@@ -1157,6 +1162,10 @@ export const workspacesRouter = router({
                   )
                   .optional(),
               })
+              .optional(),
+            /** Per-profile default entity bento layout; stored in workspace.settings */
+            profileEntityBentoTemplates: z
+              .record(z.object({ blocks: z.array(z.record(z.unknown())) }))
               .optional(),
             entityLinks: z
               .array(

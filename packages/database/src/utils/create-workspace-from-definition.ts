@@ -108,7 +108,9 @@ export interface WorkspaceDefinitionInput {
     }>;
   }>;
   views?: Array<{
-    name: string;
+    /** View name in proposal format. Accepts both 'name' and 'displayName' (registry format). */
+    name?: string;
+    displayName?: string;
     type: string;
     scopeProfileSlug?: string;
     scopeProfileSlugs?: string[];
@@ -400,18 +402,25 @@ export async function createWorkspaceFromDefinition(
 
   // 6. Create non-bento, non-flow views first so viewMap is fully populated
   //    before bento views reference them by name.
+  //
+  // Normalize views: accept both 'name' (proposal format) and 'displayName'
+  // (registry format returned by control plane API). Skip views with no name.
+  const normalizedViews = (definition.views ?? [])
+    .map((v) => ({ ...v, name: v.name ?? v.displayName ?? "" }))
+    .filter((v) => v.name.length > 0);
+
   const viewRepo = new ViewRepository(dbConn, eventRepo);
-  const flowViews: typeof definition.views = [];
-  const bentoViews: typeof definition.views = [];
+  const flowViews: Array<(typeof normalizedViews)[number]> = [];
+  const bentoViews: Array<(typeof normalizedViews)[number]> = [];
   const viewMap: Record<string, string> = {};
 
-  for (const view of definition.views ?? []) {
+  for (const view of normalizedViews) {
     if (view.type === "flow") {
-      flowViews!.push(view);
+      flowViews.push(view);
       continue;
     }
     if (view.type === "bento") {
-      bentoViews!.push(view);
+      bentoViews.push(view);
       continue;
     }
 
@@ -479,7 +488,7 @@ export async function createWorkspaceFromDefinition(
   // Process explicit bento views from the template
   const profilesWithExplicitBento = new Set<string>();
 
-  for (const view of bentoViews ?? []) {
+  for (const view of bentoViews) {
     // Resolve effective profile slug from either singular or plural form
     const scopeProfileSlug =
       view.scopeProfileSlug ??
@@ -655,7 +664,7 @@ export async function createWorkspaceFromDefinition(
   }
 
   // 9. Create flow views (need entity IDs for node configs)
-  for (const view of flowViews ?? []) {
+  for (const view of flowViews) {
     const scopeProfileIds = view.scopeProfileSlugs
       ? view.scopeProfileSlugs.map((s) => profileMap[s]).filter(Boolean)
       : view.scopeProfileSlug
