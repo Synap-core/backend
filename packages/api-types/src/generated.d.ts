@@ -1364,6 +1364,39 @@ export interface WorkerMetadata {
 	category: "table" | "shared" | "ai";
 }
 /**
+ * Intelligence Router
+ *
+ * Commands (Raycast-style), runs (audit), effective service (manifest),
+ * and proxy procedures for intelligence service management APIs
+ * (agents, tools, memory, skills, executions, proposals).
+ */
+export interface ToolLog {
+	id?: string;
+	toolName?: string;
+	tool_name?: string;
+	durationMs?: number;
+	error?: string;
+	input?: Record<string, unknown>;
+	output?: unknown;
+}
+export interface ExecutionRecord {
+	id: string;
+	agentType?: string;
+	status?: string;
+	durationMs?: number;
+	createdAt?: string;
+	completedAt?: string;
+	messageCount?: number;
+	[key: string]: unknown;
+}
+export interface ExecutionStats {
+	totalRuns?: number;
+	successRate?: number;
+	avgDurationMs?: number;
+	toolCallCount?: number;
+	[key: string]: unknown;
+}
+/**
  * Core API Router
  */
 export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
@@ -1737,9 +1770,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
-		createThread: import("@trpc/server").TRPCMutationProcedure<{
+		createChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				parentThreadId?: string | undefined;
+				parentChannelId?: string | undefined;
 				branchPurpose?: string | undefined;
 				agentId?: string | undefined;
 				agentType?: "code" | "action" | "meta" | "default" | "prompting" | "knowledge-search" | "writing" | "onboarding" | undefined;
@@ -1747,13 +1780,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inheritContext?: boolean | undefined;
 			};
 			output: {
-				threadId: `${string}-${string}-${string}-${string}-${string}`;
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
 				status: string;
 				message: string;
-				thread?: undefined;
+				channel?: undefined;
 			} | {
-				threadId: string;
-				thread: {
+				channelId: string;
+				channel: {
 					workspaceId: string | null;
 					userId: string;
 					id: string;
@@ -1823,7 +1856,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				content: string;
 			};
 			output: {
-				threadId: `${string}-${string}-${string}-${string}-${string}`;
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
 			};
 			meta: object;
@@ -1834,7 +1867,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				content: string;
 			};
 			output: {
-				threadId: `${string}-${string}-${string}-${string}-${string}`;
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
 			};
 			meta: object;
@@ -1842,14 +1875,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		sendMessage: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				content: string;
-				threadId?: string | undefined;
+				channelId?: string | undefined;
 				workspaceId?: string | undefined;
 				agentType?: "code" | "action" | "meta" | "default" | "prompting" | "knowledge-search" | "writing" | "onboarding" | undefined;
 				agentHandle?: string | undefined;
 				parentChannelId?: string | undefined;
 			};
 			output: {
-				threadId: string;
+				channelId: string;
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
 				content: string;
 				entities: {
@@ -1963,16 +1996,53 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		listThreads: import("@trpc/server").TRPCQueryProcedure<{
+		listChannels: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				threadType?: "main" | "branch" | "ai_thread" | undefined;
+				channelType?: "main" | "branch" | "ai_thread" | undefined;
 				limit?: number | undefined;
 				contextObjectId?: string | undefined;
 				contextObjectType?: "entity" | "view" | "document" | undefined;
 			};
 			output: {
-				threads: {
+				channels: {
+					hasAssistantMessage: boolean;
+					origin: string;
+					workspaceId: string | null;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					title: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
+					branchedFromMessageId: string | null;
+					branchPurpose: string | null;
+					agentId: string;
+					agentType: ChannelAgentType;
+					agentConfig: unknown;
+					contextSummary: string | null;
+					externalChannelId: string | null;
+					mergedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				channelType?: "main" | "branch" | "ai_thread" | undefined;
+				limit?: number | undefined;
+				contextObjectId?: string | undefined;
+				contextObjectType?: "entity" | "view" | "document" | undefined;
+			};
+			output: {
+				channels: {
 					hasAssistantMessage: boolean;
 					origin: string;
 					workspaceId: string | null;
@@ -2002,7 +2072,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getBranches: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				parentThreadId: string;
+				parentChannelId: string;
 			};
 			output: {
 				branches: {
@@ -2038,8 +2108,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				roots: BranchNodeResult[];
 				stats: {
-					totalThreads: number;
-					activeThreads: number;
+					totalChannels: number;
+					activeChannels: number;
 					pendingProposalsTotal: number;
 				};
 				proposalCounts: Record<string, number>;
@@ -2057,14 +2127,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		getThread: import("@trpc/server").TRPCQueryProcedure<{
+		getChannel: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				threadId: string;
+				channelId: string;
 				includeContext?: boolean | undefined;
 				includeBranches?: boolean | undefined;
 			};
 			output: {
-				thread: {
+				channel: {
 					workspaceId: string | null;
 					userId: string;
 					id: string;
@@ -2103,9 +2173,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		updateThread: import("@trpc/server").TRPCMutationProcedure<{
+		updateChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				threadId: string;
+				channelId: string;
 				title?: string | undefined;
 				agentId?: string | undefined;
 				agentType?: "code" | "action" | "meta" | "default" | "prompting" | "knowledge-search" | "writing" | "onboarding" | undefined;
@@ -2113,23 +2183,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				status: string;
-				threadId: string;
+				channelId: string;
 			};
 			meta: object;
 		}>;
-		archiveThread: import("@trpc/server").TRPCMutationProcedure<{
+		archiveChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				threadId: string;
+				channelId: string;
 			};
 			output: {
 				status: string;
-				threadId: string;
+				channelId: string;
 			};
 			meta: object;
 		}>;
 		getBranchTree: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				rootThreadId: string;
+				rootChannelId: string;
 			};
 			output: {
 				tree: BranchTreeNode | null;
@@ -2205,9 +2275,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		getThreadContext: import("@trpc/server").TRPCQueryProcedure<{
+		getChannelContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				threadId: string;
+				channelId: string;
 				objectTypes?: ("entity" | "proposal" | "view" | "inbox_item" | "document")[] | undefined;
 				relationshipTypes?: ("created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent")[] | undefined;
 			};
@@ -3678,18 +3748,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "already_provisioned";
 				agentUserId: string;
 				agentEmail: string;
-				apiKey: string | null;
 				workspaceId: string;
 				podUrl: string;
-				dockerCommand: string;
+				configUrl: string;
+				serviceId?: undefined;
+				apiKey?: undefined;
 			} | {
 				status: "provisioned";
 				agentUserId: `${string}-${string}-${string}-${string}-${string}`;
 				agentEmail: string;
-				apiKey: string | null;
+				serviceId: string;
 				workspaceId: string;
 				podUrl: string;
-				dockerCommand: string;
+				configUrl: string;
+				apiKey: string | null;
 			};
 			meta: object;
 		}>;
@@ -3708,8 +3780,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				status: "rotated";
+				serviceId: string;
+				configUrl: string;
 				apiKey: string;
-				dockerCommand: string;
 			};
 			meta: object;
 		}>;
@@ -3735,6 +3808,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentEmail: string;
 				podUrl: string;
 				workspaceId: string;
+			};
+			meta: object;
+		}>;
+		getServiceConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: Record<string, string>;
+			meta: object;
+		}>;
+		storeServiceSecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+				config: Record<string, unknown>;
+			};
+			output: {
+				stored: boolean;
+				secretId: string;
 			};
 			meta: object;
 		}>;
@@ -4011,7 +4100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				since?: string | undefined;
 			};
 			output: {
-				stats: unknown;
+				stats: ExecutionStats;
 			};
 			meta: object;
 		}>;
@@ -4022,7 +4111,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentType?: string | undefined;
 			};
 			output: {
-				executions: unknown[];
+				executions: ExecutionRecord[];
 			};
 			meta: object;
 		}>;
@@ -4031,8 +4120,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				execution: unknown;
-				toolLogs: unknown[];
+				execution: ExecutionRecord;
+				toolLogs: ToolLog[];
 			};
 			meta: object;
 		}>;
@@ -5021,7 +5110,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceIds?: string[] | undefined;
-				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "grid" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
 			};
 			output: {
 				name: string;

@@ -204,10 +204,13 @@ export async function checkPermissionOrPropose(
 
         const settings = ws?.settings as WorkspaceSettings | undefined;
 
-        // Default whitelist: read-only + safe context-tracking operations.
+        // Default whitelist: read-only + safe context-tracking + schema evolution operations.
         // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
         // "filesystem.read" is safe — agents can read files without proposals.
         // "filesystem.write_workspace" is safe — OpenClaw's own ~/openclaw/workspace/ directory.
+        // "view.create" — agents create views freely; view.update requires proposal.
+        // "profile.create/update" — schema evolution is non-destructive and reversible.
+        // "property_def.create/update" — adding/renaming fields is safe; no delete exposed.
         const DEFAULT_AUTO_APPROVE = [
           "search.*",
           "memory.recall",
@@ -216,6 +219,11 @@ export async function checkPermissionOrPropose(
           "context.*",
           "filesystem.read",
           "filesystem.write_workspace",
+          "view.create",
+          "profile.create",
+          "profile.update",
+          "property_def.create",
+          "property_def.update",
         ];
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;

@@ -1290,4 +1290,412 @@ app.get("/agent-users", async (c) => {
   }
 });
 
+// =============================================================================
+// Views
+// =============================================================================
+
+/**
+ * GET /views?userId=...&workspaceId=...&type=...&profileId=...
+ */
+app.get("/views", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).views.listViews({
+      userId,
+      workspaceId,
+      type: c.req.query("type"),
+      profileId: c.req.query("profileId"),
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "listViews failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /views
+ */
+app.post("/views", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId: string;
+    name: string;
+    type: string;
+    profileId?: string;
+    config?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    agentUserId?: string;
+    reasoning?: string;
+    sourceMessageId?: string;
+  };
+  if (!body.workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  try {
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).views.createView({
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      name: body.name,
+      type: body.type,
+      profileId: body.profileId,
+      config: body.config,
+      metadata: body.metadata,
+      agentUserId: body.agentUserId,
+      reasoning: body.reasoning,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "createView failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * PATCH /views/:viewId
+ */
+app.patch("/views/:viewId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const viewId = c.req.param("viewId");
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId?: string;
+    name?: string;
+    config?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    agentUserId?: string;
+    reasoning?: string;
+    sourceMessageId?: string;
+  };
+  try {
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).views.updateView({
+      userId: body.userId,
+      viewId,
+      workspaceId: body.workspaceId,
+      name: body.name,
+      config: body.config,
+      metadata: body.metadata,
+      agentUserId: body.agentUserId,
+      reasoning: body.reasoning,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, viewId }, "updateView failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+// =============================================================================
+// Profiles & Property Defs
+// =============================================================================
+
+/**
+ * GET /profiles?userId=...&workspaceId=...
+ */
+app.get("/profiles", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).profiles.listProfiles({
+      userId,
+      workspaceId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "listProfiles failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /profiles
+ */
+app.post("/profiles", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId: string;
+    slug: string;
+    displayName: string;
+    description?: string;
+    defaultValues?: Record<string, unknown>;
+    agentUserId?: string;
+    sourceMessageId?: string;
+  };
+  try {
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).profiles.createProfile({
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      slug: body.slug,
+      displayName: body.displayName,
+      description: body.description,
+      defaultValues: body.defaultValues,
+      agentUserId: body.agentUserId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "createProfile failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /property-defs?userId=...&workspaceId=...&profileId=...
+ */
+app.get("/property-defs", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).profiles.listPropertyDefs({
+      userId,
+      workspaceId,
+      profileId: c.req.query("profileId"),
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "listPropertyDefs failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /property-defs
+ */
+app.post("/property-defs", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId: string;
+    profileId?: string;
+    slug: string;
+    valueType: string;
+    constraints?: Record<string, unknown>;
+    uiHints?: Record<string, unknown>;
+    agentUserId?: string;
+    sourceMessageId?: string;
+  };
+  try {
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).profiles.createPropertyDef({
+      userId: body.userId,
+      profileId: body.profileId,
+      slug: body.slug,
+      valueType: body.valueType,
+      constraints: body.constraints,
+      uiHints: body.uiHints,
+      agentUserId: body.agentUserId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "createPropertyDef failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+// =============================================================================
+// Relations
+// =============================================================================
+
+/**
+ * GET /relations?userId=...&workspaceId=...&entityId=...&type=...
+ */
+app.get("/relations", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).relations.listRelations({
+      userId,
+      workspaceId,
+      entityId: c.req.query("entityId"),
+      type: c.req.query("type"),
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "listRelations failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /relations
+ */
+app.post("/relations", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId: string;
+    sourceEntityId: string;
+    targetEntityId: string;
+    type: string;
+    metadata?: Record<string, unknown>;
+    agentUserId?: string;
+    reasoning?: string;
+    sourceMessageId?: string;
+  };
+  try {
+    const actorId = body.agentUserId || body.userId;
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).relations.createRelation({
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      sourceEntityId: body.sourceEntityId,
+      targetEntityId: body.targetEntityId,
+      type: body.type,
+      metadata: body.metadata,
+      agentUserId: body.agentUserId,
+      reasoning: body.reasoning,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "createRelation failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * DELETE /relations/:relationId
+ */
+app.delete("/relations/:relationId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const relationId = c.req.param("relationId");
+  const body = (await c.req.json().catch(() => ({}))) as {
+    userId?: string;
+    workspaceId?: string;
+    agentUserId?: string;
+    reasoning?: string;
+    sourceMessageId?: string;
+  };
+  const userId = body.userId ?? c.req.query("userId") ?? "";
+  try {
+    const actorId = body.agentUserId || userId;
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).relations.deleteRelation({
+      userId,
+      workspaceId: body.workspaceId,
+      relationId,
+      agentUserId: body.agentUserId,
+      reasoning: body.reasoning,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, relationId }, "deleteRelation failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
 export const hubProtocolRestApp = app;

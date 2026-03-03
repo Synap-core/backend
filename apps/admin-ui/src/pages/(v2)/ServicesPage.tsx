@@ -23,7 +23,6 @@ import {
   ThemeIcon,
   CopyButton,
   Code,
-  ScrollArea,
 } from "@mantine/core";
 import {
   IconAlertCircle,
@@ -37,6 +36,8 @@ import {
   IconCircleCheck,
   IconCircleDashed,
   IconCircleX,
+  IconLock,
+  IconDownload,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
 import { useWorkspace } from "../../lib/workspace";
@@ -87,16 +88,14 @@ const SERVICE_META: ServiceMeta[] = [
 // Credential reveal modal (shown once after provision or key rotation)
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface CredentialsModalProps {
+interface VaultCredentialsModalProps {
   opened: boolean;
   onClose: () => void;
-  serviceType: string;
   displayName: string;
+  /** Bootstrap API key — shown once, needed only if container can't reach configUrl */
   apiKey: string;
-  agentUserId: string;
-  workspaceId: string;
-  podUrl: string;
-  dockerCommand: string;
+  /** URL the service calls on startup to pull full config from vault */
+  configUrl: string;
 }
 
 function CopyRow({ label, value }: { label: string; value: string }) {
@@ -143,16 +142,13 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CredentialsModal({
+function VaultCredentialsModal({
   opened,
   onClose,
   displayName,
   apiKey,
-  agentUserId,
-  workspaceId,
-  podUrl,
-  dockerCommand,
-}: CredentialsModalProps) {
+  configUrl,
+}: VaultCredentialsModalProps) {
   return (
     <Modal
       opened={opened}
@@ -168,69 +164,77 @@ function CredentialsModal({
       size="lg"
     >
       <Stack gap={spacing[4]}>
+        {/* Vault confirmation */}
         <Alert
-          icon={<IconAlertCircle size={16} />}
-          color="orange"
+          icon={<IconLock size={16} />}
+          color="teal"
           variant="light"
-          title="Save your API key now"
+          title="Credentials secured in your vault"
         >
-          The API key below is shown <strong>only once</strong>. It cannot be
-          retrieved again — use Rotate Key if you lose it.
+          All configuration has been stored in your workspace vault and
+          encrypted at rest. The service will pull its full config automatically
+          on startup — no manual copy-paste required.
         </Alert>
 
-        {/* Environment variables */}
+        {/* Bootstrap vars (only two needed) */}
         <div>
-          <Text fw={600} size="sm" mb={spacing[3]}>
-            Environment variables
+          <Text fw={600} size="sm" mb={4}>
+            Bootstrap environment variables
+          </Text>
+          <Text size="xs" c="dimmed" mb={spacing[3]}>
+            Set these two variables in your container. The service fetches all
+            remaining config from the vault via{" "}
+            <Code style={{ fontSize: typography.fontSize.xs }}>
+              SYNAP_CONFIG_URL
+            </Code>{" "}
+            on startup.
           </Text>
           <Stack gap={spacing[2]}>
-            <CopyRow label="SYNAP_POD_URL" value={podUrl} />
             <CopyRow label="SYNAP_HUB_API_KEY" value={apiKey} />
-            <CopyRow label="SYNAP_WORKSPACE_ID" value={workspaceId} />
-            <CopyRow label="SYNAP_AGENT_USER_ID" value={agentUserId} />
+            <CopyRow label="SYNAP_CONFIG_URL" value={configUrl} />
           </Stack>
         </div>
 
         <Divider />
 
-        {/* Docker command */}
+        {/* What the service fetches automatically */}
         <div>
-          <Group justify="space-between" mb={spacing[2]}>
+          <Group gap={spacing[2]} mb={spacing[2]}>
+            <IconDownload size={14} color={colors.text.tertiary} />
             <Text fw={600} size="sm">
-              Docker run command
+              Auto-fetched from vault on startup
             </Text>
-            <CopyButton value={dockerCommand} timeout={1500}>
-              {({ copied, copy }) => (
-                <Button
-                  variant="subtle"
-                  size="xs"
-                  leftSection={
-                    copied ? <IconCheck size={12} /> : <IconCopy size={12} />
-                  }
-                  color={copied ? "teal" : "gray"}
-                  onClick={copy}
-                >
-                  {copied ? "Copied!" : "Copy command"}
-                </Button>
-              )}
-            </CopyButton>
           </Group>
-          <ScrollArea>
-            <Code
-              block
-              style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: typography.fontSize.xs,
-                whiteSpace: "pre",
-              }}
-            >
-              {dockerCommand}
+          <Text size="xs" c="dimmed" style={{ lineHeight: 1.6 }}>
+            <Code style={{ fontSize: typography.fontSize.xs }}>
+              SYNAP_POD_URL
             </Code>
-          </ScrollArea>
+            ,{" "}
+            <Code style={{ fontSize: typography.fontSize.xs }}>
+              SYNAP_WORKSPACE_ID
+            </Code>
+            ,{" "}
+            <Code style={{ fontSize: typography.fontSize.xs }}>
+              SYNAP_AGENT_USER_ID
+            </Code>{" "}
+            — no longer needed in your environment.
+          </Text>
         </div>
 
+        {/* One-time key warning */}
+        <Alert
+          icon={<IconAlertCircle size={16} />}
+          color="orange"
+          variant="light"
+          title="Save SYNAP_HUB_API_KEY now"
+        >
+          The API key above is shown <strong>only once</strong>. Use{" "}
+          <strong>Rotate Key</strong> if you lose it. The config URL can be
+          retrieved again from the vault.
+        </Alert>
+
         <Button onClick={onClose} fullWidth variant="light">
-          Done — I've saved my credentials
+          Done
         </Button>
       </Stack>
     </Modal>
@@ -242,11 +246,8 @@ function CredentialsModal({
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ProvisionedInfo {
-  agentUserId: string;
   apiKey: string;
-  podUrl: string;
-  dockerCommand: string;
-  workspaceId: string;
+  configUrl: string;
 }
 
 interface ServiceCardProps {
@@ -275,11 +276,8 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
         }
         if (data.apiKey) {
           setRevealed({
-            agentUserId: data.agentUserId,
             apiKey: data.apiKey,
-            podUrl: data.podUrl,
-            dockerCommand: data.dockerCommand,
-            workspaceId: data.workspaceId,
+            configUrl: data.configUrl ?? "",
           });
           setCredentialsOpen(true);
         }
@@ -302,11 +300,8 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
     onSuccess: (data) => {
       statusQuery.refetch();
       setRevealed({
-        agentUserId: statusQuery.data?.agentUserId ?? "",
         apiKey: data.apiKey,
-        podUrl: statusQuery.data?.podUrl ?? "",
-        dockerCommand: data.dockerCommand,
-        workspaceId,
+        configUrl: data.configUrl ?? "",
       });
       setCredentialsOpen(true);
     },
@@ -507,19 +502,15 @@ function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
 
       {/* Credentials modal (shown once after provision or rotate) */}
       {revealed && (
-        <CredentialsModal
+        <VaultCredentialsModal
           opened={credentialsOpen}
           onClose={() => {
             setCredentialsOpen(false);
             setRevealed(null);
           }}
-          serviceType={meta.serviceType}
           displayName={meta.displayName}
           apiKey={revealed.apiKey}
-          agentUserId={revealed.agentUserId}
-          workspaceId={revealed.workspaceId}
-          podUrl={revealed.podUrl}
-          dockerCommand={revealed.dockerCommand}
+          configUrl={revealed.configUrl}
         />
       )}
     </>
@@ -563,16 +554,18 @@ export default function ServicesPage() {
 
       {/* How it works */}
       <Alert
-        icon={<IconTerminal2 size={16} />}
+        icon={<IconLock size={16} />}
         color="blue"
         variant="light"
         mb={spacing[5]}
         title="How it works"
       >
-        Provisioning creates a dedicated AI agent user + Hub Protocol API key
-        for the service. Copy the generated credentials into your container's
-        environment variables. The container will self-register its capabilities
-        once it starts.
+        Provisioning creates a dedicated AI agent user + Hub Protocol API key,
+        then stores all configuration encrypted in your workspace vault. Set
+        just two bootstrap variables (
+        <Code style={{ fontSize: "0.75rem" }}>SYNAP_HUB_API_KEY</Code> +{" "}
+        <Code style={{ fontSize: "0.75rem" }}>SYNAP_CONFIG_URL</Code>) in your
+        container — the service pulls the rest automatically on startup.
       </Alert>
 
       {/* Service cards — 2-column grid */}

@@ -23,7 +23,13 @@ import {
   sql,
   drizzleSql,
 } from "@synap/database";
-import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
+import {
+  users,
+  workspaceMembers,
+  apiKeys,
+  secrets,
+} from "@synap/database/schema";
+import { isNull } from "@synap/database";
 import { verifyPermission } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -31,6 +37,13 @@ import { randomUUID, randomBytes } from "crypto";
 import { encryptServiceKey } from "../utils/service-key-crypto.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getServiceEntry } from "../utils/agent-services/index.js";
+import { scopedProcedure } from "../middleware/api-key-auth.js";
+import { SecretsVaultRepository } from "@synap/database";
+import {
+  encryptConfig,
+  decryptConfig,
+  isServerVaultAvailable,
+} from "../utils/server-vault.js";
 
 const logger = createLogger({ module: "intelligence-registry" });
 
@@ -606,15 +619,9 @@ export const intelligenceRegistryRouter = router({
           status: "already_provisioned" as const,
           agentUserId: existing.id,
           agentEmail: existing.email,
-          apiKey: null as string | null,
           workspaceId: ctx.workspaceId,
           podUrl,
-          dockerCommand: entry.buildDockerCommand({
-            podUrl,
-            workspaceId: ctx.workspaceId,
-            agentUserId: existing.id,
-            apiKey: "<use-rotateAgentKey-to-get-a-new-credential>",
-          }),
+          configUrl: `${podUrl}/trpc/intelligenceRegistry.getServiceConfig`,
         };
       }
 
@@ -691,20 +698,70 @@ export const intelligenceRegistryRouter = router({
       );
 
       const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+      const serviceId = `${input.serviceType}-${agentId.slice(0, 8)}`;
+      const configUrl = `${podUrl}/trpc/intelligenceRegistry.getServiceConfig`;
+
+      // Store service bootstrap credentials in the vault (server-side encrypted).
+      // This replaces the "copy dockerCommand" UX: the service pulls its config
+      // on startup via getServiceConfig using its Hub Protocol key.
+      if (isServerVaultAvailable()) {
+        try {
+          const database = await getDb();
+          const vaultRepo = new SecretsVaultRepository(
+            database,
+            new EventRepository(sql)
+          );
+          const blob = encryptConfig({
+            SYNAP_POD_URL: podUrl,
+            SYNAP_HUB_API_KEY: plainKey,
+            SYNAP_WORKSPACE_ID: ctx.workspaceId,
+            SYNAP_AGENT_USER_ID: agentId,
+            SYNAP_CONFIG_URL: configUrl,
+          });
+          await vaultRepo.upsertServerSide(
+            {
+              userId: agentId,
+              serviceId,
+              name: `${entry.displayName} — Service Config`,
+              type: "api_key",
+              category: "intelligence-services",
+              description: `Bootstrap credentials for ${entry.displayName}. Fetched automatically on startup via Hub Protocol.`,
+              ...blob,
+            },
+            ctx.userId
+          );
+          logger.info(
+            { agentId, serviceId },
+            "Service config stored in vault (server-side)"
+          );
+        } catch (err) {
+          // Non-fatal: provisioning succeeds even if vault write fails.
+          // The hub API key is still returned in the response as fallback.
+          logger.warn(
+            { err },
+            "Failed to store service config in vault — returning plaintext key as fallback"
+          );
+        }
+      } else {
+        logger.warn(
+          "VAULT_SERVER_KEY not configured — service credentials will not be stored in vault. Set VAULT_SERVER_KEY to enable automatic config pull."
+        );
+      }
+
       return {
         status: "provisioned" as const,
         agentUserId: agentId,
         agentEmail: email,
-        /** Plaintext key — shown ONCE. Store it securely. */
-        apiKey: plainKey as string | null,
+        serviceId,
         workspaceId: ctx.workspaceId,
         podUrl,
-        dockerCommand: entry.buildDockerCommand({
-          podUrl,
-          workspaceId: ctx.workspaceId,
-          agentUserId: agentId,
-          apiKey: plainKey,
-        }),
+        configUrl,
+        /**
+         * Hub Protocol API key — still returned so the caller can bootstrap
+         * the service if VAULT_SERVER_KEY is not configured. When the vault is
+         * available the service should use configUrl instead.
+         */
+        apiKey: plainKey as string | null,
       };
     }),
 
@@ -874,16 +931,47 @@ export const intelligenceRegistryRouter = router({
       );
 
       const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+      const serviceId = `${input.serviceType}-${agent.id.slice(0, 8)}`;
+      const configUrl = `${podUrl}/trpc/intelligenceRegistry.getServiceConfig`;
+
+      // Re-encrypt and overwrite vault entry with fresh key
+      if (isServerVaultAvailable()) {
+        try {
+          const database = await getDb();
+          const vaultRepo = new SecretsVaultRepository(
+            database,
+            new EventRepository(sql)
+          );
+          const blob = encryptConfig({
+            SYNAP_POD_URL: podUrl,
+            SYNAP_HUB_API_KEY: plainKey,
+            SYNAP_WORKSPACE_ID: ctx.workspaceId,
+            SYNAP_AGENT_USER_ID: agent.id,
+            SYNAP_CONFIG_URL: configUrl,
+          });
+          await vaultRepo.upsertServerSide(
+            {
+              userId: agent.id,
+              serviceId,
+              name: `${entry.displayName} — Service Config`,
+              type: "api_key",
+              category: "intelligence-services",
+              description: `Bootstrap credentials for ${entry.displayName} (rotated).`,
+              ...blob,
+            },
+            ctx.userId
+          );
+        } catch (err) {
+          logger.warn({ err }, "Failed to update vault after key rotation");
+        }
+      }
+
       return {
         status: "rotated" as const,
-        /** New plaintext key — shown ONCE. Update your container. */
+        serviceId,
+        configUrl,
+        /** New plaintext key — returned as fallback when vault is unavailable. */
         apiKey: plainKey,
-        dockerCommand: entry.buildDockerCommand({
-          podUrl,
-          workspaceId: ctx.workspaceId,
-          agentUserId: agent.id,
-          apiKey: plainKey,
-        }),
       };
     }),
 
@@ -930,6 +1018,148 @@ export const intelligenceRegistryRouter = router({
         podUrl,
         workspaceId: ctx.workspaceId,
       };
+    }),
+
+  /**
+   * Service Config Pull — called by intelligence services (OpenClaw, ZeroClaw, …) on startup.
+   *
+   * The service authenticates with its Hub Protocol API key (the key created during
+   * provisionAgent). This endpoint decrypts and returns the service's bootstrap
+   * environment variables so the container only needs SYNAP_HUB_API_KEY to start.
+   *
+   * Auth: Hub Protocol API key (hub-protocol.read scope)
+   */
+  getServiceConfig: scopedProcedure(["hub-protocol.read"]).query(
+    async ({ ctx }) => {
+      // ctx.userId is the agent user (the Hub Protocol key belongs to the agent)
+      const agentUserId = ctx.userId;
+      if (!agentUserId)
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Hub Protocol key required.",
+        });
+
+      if (!isServerVaultAvailable()) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "VAULT_SERVER_KEY is not configured on this server. Service config pull is unavailable.",
+        });
+      }
+
+      const database = await getDb();
+      const vaultRepo = new SecretsVaultRepository(
+        database,
+        new EventRepository(sql)
+      );
+
+      // Find the most recent server-side secret for this agent user.
+      // The agent only knows its Hub Protocol key (not its serviceId), so we
+      // query by userId + encryptionMode and take the first non-deleted result.
+      const secret = await database.query.secrets.findFirst({
+        where: and(
+          eq(secrets.userId, agentUserId),
+          eq(secrets.encryptionMode, "server"),
+          isNull(secrets.deletedAt)
+        ),
+        orderBy: (t, { desc }) => [desc(t.createdAt)],
+      });
+
+      if (!secret) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            "No service config found for this Hub Protocol key. The service may not have been provisioned via intelligenceRegistry.provisionAgent, or VAULT_SERVER_KEY may have changed.",
+        });
+      }
+
+      const config = decryptConfig({
+        encryptedData: secret.encryptedData,
+        iv: secret.iv,
+        authTag: secret.authTag,
+      });
+
+      if (!config) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to decrypt service config. Check VAULT_SERVER_KEY.",
+        });
+      }
+
+      // Log access for audit trail
+      await vaultRepo.logAudit(secret.id, agentUserId, "read");
+
+      logger.info(
+        { agentUserId, secretId: secret.id },
+        "Service config pulled via Hub Protocol"
+      );
+
+      return config;
+    }
+  ),
+
+  /**
+   * Store Service Secret — called by the control plane after provisioning a
+   * cloud-managed intelligence service. Stores the Hub Protocol API key and
+   * bootstrap config in the vault (server-side encrypted) so the service can
+   * pull it via getServiceConfig.
+   *
+   * Auth: Hub Protocol API key with hub-protocol.write scope.
+   *   The control plane uses the pod's intelligenceApiKey which has this scope.
+   */
+  storeServiceSecret: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        /** Registered service ID, e.g. "openclaw-abc12345" */
+        serviceId: z.string().min(1),
+        /** The full config map to encrypt and store */
+        config: z.record(z.string(), z.unknown()),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // ctx.userId is the agent user — the Hub Protocol key issued during provisioning
+      // belongs to the agent. No need to pass agentUserId separately.
+      const agentUserId = ctx.userId;
+      if (!agentUserId)
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Hub Protocol key required.",
+        });
+
+      if (!isServerVaultAvailable()) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "VAULT_SERVER_KEY is not configured — cannot store service secret.",
+        });
+      }
+
+      const blob = encryptConfig(input.config as Record<string, string>);
+      const database = await getDb();
+      const vaultRepo = new SecretsVaultRepository(
+        database,
+        new EventRepository(sql)
+      );
+
+      const secret = await vaultRepo.upsertServerSide(
+        {
+          userId: agentUserId,
+          serviceId: input.serviceId,
+          name: `${input.serviceId} — Service Config`,
+          type: "api_key",
+          category: "intelligence-services",
+          description: `Bootstrap credentials for service ${input.serviceId}. Stored by control plane provisioning.`,
+          ...blob,
+        },
+        agentUserId
+      );
+
+      logger.info(
+        { serviceId: input.serviceId, agentUserId, secretId: secret.id },
+        "Service secret stored by control plane"
+      );
+
+      return { stored: true, secretId: secret.id };
     }),
 });
 

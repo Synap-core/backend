@@ -30,6 +30,37 @@ import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { channelsRouter } from "./channels.js";
 
+// ── Shared proxy response types ───────────────────────────────────────────
+
+export interface ToolLog {
+  id?: string;
+  toolName?: string;
+  tool_name?: string;
+  durationMs?: number;
+  error?: string;
+  input?: Record<string, unknown>;
+  output?: unknown;
+}
+
+export interface ExecutionRecord {
+  id: string;
+  agentType?: string;
+  status?: string;
+  durationMs?: number;
+  createdAt?: string;
+  completedAt?: string;
+  messageCount?: number;
+  [key: string]: unknown;
+}
+
+export interface ExecutionStats {
+  totalRuns?: number;
+  successRate?: number;
+  avgDurationMs?: number;
+  toolCallCount?: number;
+  [key: string]: unknown;
+}
+
 // ── Intelligence Service Proxy Helpers ─────────────────────────────────────
 
 /** Fetch from the intelligence service Hub API (e.g. /api/hub/memory) */
@@ -364,7 +395,7 @@ export const intelligenceRouter = router({
       try {
         const chatCaller = channelsRouter.createCaller(ctx as any);
         await chatCaller.sendMessage({
-          threadId: thread.id,
+          channelId: thread.id,
           content: compiledPrompt,
           workspaceId,
         });
@@ -593,7 +624,7 @@ export const intelligenceRouter = router({
         ? `?since=${encodeURIComponent(input.since)}`
         : "";
       const res = await apiProxyFetch(`/executions/stats${params}`, endpoint);
-      const data = (await res.json()) as { stats: unknown };
+      const data = (await res.json()) as { stats: ExecutionStats };
       return { stats: data.stats };
     }),
 
@@ -616,7 +647,7 @@ export const intelligenceRouter = router({
       });
       if (input.agentType) params.set("agentType", input.agentType);
       const res = await apiProxyFetch(`/executions?${params}`, endpoint);
-      const data = (await res.json()) as { executions: unknown[] };
+      const data = (await res.json()) as { executions: ExecutionRecord[] };
       return { executions: data.executions };
     }),
 
@@ -631,8 +662,8 @@ export const intelligenceRouter = router({
         endpoint
       );
       const data = (await res.json()) as {
-        execution: unknown;
-        toolLogs: unknown[];
+        execution: ExecutionRecord;
+        toolLogs: ToolLog[];
       };
       return data;
     }),

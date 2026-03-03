@@ -31,7 +31,7 @@ export const branchesRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        parentThreadId: z.string().uuid(),
+        parentChannelId: z.string().uuid(),
         branchPurpose: z.string(),
         agentId: z.string().optional(),
         agentType: z
@@ -58,14 +58,14 @@ export const branchesRouter = router({
 
       // Resolve workspaceId from the parent thread
       const parentChannel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.parentThreadId),
+        where: eq(channels.id, input.parentChannelId),
         columns: { workspaceId: true },
       });
 
       if (!parentChannel) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Parent thread not found",
+          message: "Parent channel not found",
         });
       }
 
@@ -83,7 +83,7 @@ export const branchesRouter = router({
           input.reasoning ??
           `AI proposes creating branch: ${input.branchPurpose}`,
         data: {
-          parentThreadId: input.parentThreadId,
+          parentChannelId: input.parentChannelId,
           branchPurpose: input.branchPurpose,
           agentId: input.agentId,
           agentType: input.agentType,
@@ -99,7 +99,7 @@ export const branchesRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          threadId: null,
+          channelId: null,
           proposalId: perm.proposalId,
           message: "Branch creation proposed, awaiting approval",
         };
@@ -115,8 +115,8 @@ export const branchesRouter = router({
         workspaceId
       );
       const caller = channelsRouter.createCaller(callerContext);
-      const result = await caller.createThread({
-        parentThreadId: input.parentThreadId,
+      const result = await caller.createChannel({
+        parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
         agentId: input.agentId,
         agentType: input.agentType,
@@ -126,7 +126,7 @@ export const branchesRouter = router({
 
       return {
         status: result.status,
-        threadId: result.threadId,
+        channelId: result.channelId,
         proposalId: null,
         message: result.message || "Branch created",
       };

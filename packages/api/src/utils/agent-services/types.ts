@@ -31,6 +31,11 @@ export interface ServiceCatalogEntry {
   matchCapability?: string;
   /** Capabilities to store in the agent user's agentMetadata */
   agentCapabilities: string[];
-  /** Build the docker run command string for this service type */
-  buildDockerCommand: (opts: DockerCommandOpts) => string;
+  /**
+   * Build the docker run command string for this service type.
+   * @deprecated Use vault-based config pull (intelligenceRegistry.getServiceConfig) instead.
+   * Only two env vars are needed for bootstrap: SYNAP_HUB_API_KEY + SYNAP_CONFIG_URL.
+   * This remains for backward compat / fallback display when VAULT_SERVER_KEY is unset.
+   */
+  buildDockerCommand?: (opts: DockerCommandOpts) => string;
 }

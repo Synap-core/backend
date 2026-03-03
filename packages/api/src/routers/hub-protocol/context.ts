@@ -60,9 +60,9 @@ export const contextRouter = router({
       const chatCaller = channelsRouter.createCaller(callerContext);
       const entitiesCaller = entitiesRouter.createCaller(callerContext);
 
-      // Get thread with context (includes thread_entities and thread_documents rows)
-      const threadResult = await chatCaller.getThread({
-        threadId: input.threadId,
+      // Get channel with context (includes channel_context_items rows)
+      const threadResult = await chatCaller.getChannel({
+        channelId: input.threadId,
         includeContext: true,
         includeBranches: false,
       });
@@ -119,10 +119,10 @@ export const contextRouter = router({
 
       return {
         thread: {
-          id: threadResult.thread.id,
-          userId: threadResult.thread.userId,
+          id: threadResult.channel.id,
+          userId: threadResult.channel.userId,
           projectId: undefined,
-          agentId: threadResult.thread.agentId || undefined,
+          agentId: threadResult.channel.agentId || undefined,
         },
         contextSummary: thread?.contextSummary ?? null,
         metadata: thread?.metadata ?? null,
@@ -180,8 +180,8 @@ export const contextRouter = router({
         limit: 20,
       });
 
-      // Get recent threads
-      const threadsResult = await chatCaller.listThreads({
+      // Get recent channels
+      const threadsResult = await chatCaller.listChannels({
         limit: 5,
       });
 
@@ -194,10 +194,10 @@ export const contextRouter = router({
             timestamp: e.createdAt,
             data: { entityId: e.id, entityType: e.type },
           })),
-          ...threadsResult.threads.map((t) => ({
-            type: "thread_updated",
+          ...threadsResult.channels.map((t) => ({
+            type: "channel_updated",
             timestamp: t.updatedAt,
-            data: { threadId: t.id },
+            data: { channelId: t.id },
           })),
         ]
           .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())

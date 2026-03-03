@@ -59,7 +59,6 @@ import {
   type EntityFilter,
   type SortRule,
   type EntityQuery,
-  type ViewType,
 } from "@synap-core/types";
 
 export const viewsRouter = router({

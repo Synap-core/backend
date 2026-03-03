@@ -25,6 +25,9 @@ import { backgroundTasksRouter } from "./background-tasks.js";
 import { proposalsRouter } from "./proposals.js";
 import { channelsRouter as hubChannelsRouter } from "./channels.js";
 import { servicesRouter } from "./services.js";
+import { hubViewsRouter } from "./views.js";
+import { hubProfilesRouter } from "./profiles.js";
+import { hubRelationsRouter } from "./relations.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -46,4 +49,7 @@ export const hubProtocolRouter = router({
   backgroundTasks: backgroundTasksRouter,
   proposals: proposalsRouter,
   services: servicesRouter,
+  views: hubViewsRouter,
+  profiles: hubProfilesRouter,
+  relations: hubRelationsRouter,
 });

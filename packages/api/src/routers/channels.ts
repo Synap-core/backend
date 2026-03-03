@@ -192,10 +192,10 @@ export const channelsRouter = router({
    * Create a new channel.
    * When parentChannelId is provided, creates a branch channel.
    */
-  createThread: workspaceProcedure
+  createChannel: workspaceProcedure
     .input(
       z.object({
-        parentThreadId: z.string().uuid().optional(),
+        parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().optional(),
         agentId: z.string().optional(),
         agentType: z
@@ -218,9 +218,9 @@ export const channelsRouter = router({
       const workspaceId = ctx.workspaceId;
 
       // If branching, verify parent channel is in same workspace
-      if (input.parentThreadId) {
+      if (input.parentChannelId) {
         const parentChannel = await db.query.channels.findFirst({
-          where: eq(channels.id, input.parentThreadId),
+          where: eq(channels.id, input.parentChannelId),
         });
 
         if (!parentChannel) {
@@ -232,7 +232,7 @@ export const channelsRouter = router({
       }
 
       // Branch channel
-      if (input.parentThreadId) {
+      if (input.parentChannelId) {
         const branchChannelId = randomUUID();
 
         await db
@@ -241,7 +241,7 @@ export const channelsRouter = router({
             id: branchChannelId,
             userId: ctx.userId,
             workspaceId: workspaceId ?? null,
-            parentChannelId: input.parentThreadId,
+            parentChannelId: input.parentChannelId,
             branchPurpose: input.branchPurpose,
             agentId: input.agentId || "orchestrator",
             agentType: input.agentType
@@ -258,14 +258,14 @@ export const channelsRouter = router({
           data: {
             channelId: branchChannelId,
             userId: ctx.userId,
-            parentChannelId: input.parentThreadId,
+            parentChannelId: input.parentChannelId,
           },
           workspaceId: workspaceId ?? null,
           userId: ctx.userId,
         });
 
         return {
-          threadId: branchChannelId,
+          channelId: branchChannelId,
           status: "created",
           message: "Branch created",
         };
@@ -295,7 +295,7 @@ export const channelsRouter = router({
         userId: ctx.userId,
       });
 
-      return { threadId: channelId, thread: channel };
+      return { channelId, channel };
     }),
 
   /**
@@ -523,7 +523,7 @@ export const channelsRouter = router({
         userId: ctx.userId,
       });
 
-      return { threadId: channelId, messageId: userMessageId };
+      return { channelId, messageId: userMessageId };
     }),
 
   /**
@@ -592,7 +592,7 @@ export const channelsRouter = router({
         userId: ctx.userId,
       });
 
-      return { threadId: channelId, messageId: userMessageId };
+      return { channelId, messageId: userMessageId };
     }),
 
   /**
@@ -603,7 +603,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         /** When omitted, backend creates a new channel and returns its id. */
-        threadId: z.string().uuid().optional(),
+        channelId: z.string().uuid().optional(),
         content: z.string().min(1),
         workspaceId: z.string().uuid().optional(),
         agentType: z
@@ -625,7 +625,7 @@ export const channelsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      let channelId = input.threadId;
+      let channelId = input.channelId;
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const requestedAgentType = input.agentType;
@@ -1116,7 +1116,7 @@ export const channelsRouter = router({
         .where(eq(channels.id, channelId));
 
       return {
-        threadId: channelId,
+        channelId,
         messageId: assistantMessageId,
         content: fullContent,
         entities: createdEntities,
@@ -1186,11 +1186,11 @@ export const channelsRouter = router({
   /**
    * List channels (optionally filtered by workspace)
    */
-  listThreads: protectedProcedure
+  listChannels: protectedProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        threadType: z.enum(["main", "branch", "ai_thread"]).optional(),
+        channelType: z.enum(["main", "branch", "ai_thread"]).optional(),
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(["entity", "document", "view"]).optional(),
@@ -1203,12 +1203,12 @@ export const channelsRouter = router({
         conditions.push(eq(channels.workspaceId, input.workspaceId));
       }
 
-      if (input.threadType) {
-        const channelType =
-          input.threadType === "branch"
+      if (input.channelType) {
+        const ct =
+          input.channelType === "branch"
             ? ChannelType.BRANCH
             : ChannelType.AI_THREAD;
-        conditions.push(eq(channels.channelType, channelType));
+        conditions.push(eq(channels.channelType, ct));
       }
 
       if (input.contextObjectId !== undefined) {
@@ -1228,7 +1228,7 @@ export const channelsRouter = router({
       });
 
       if (allChannels.length === 0) {
-        return { threads: [] };
+        return { channels: [] };
       }
 
       const channelIds = allChannels.map((c) => c.id);
@@ -1245,23 +1245,23 @@ export const channelsRouter = router({
         rowsWithAssistant.map((r) => r.channelId)
       );
 
-      const threadsWithFlags = allChannels.map((c) => ({
+      const channelsWithFlags = allChannels.map((c) => ({
         ...c,
         hasAssistantMessage: channelIdsWithAssistant.has(c.id),
         origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
       }));
 
-      return { threads: threadsWithFlags };
+      return { channels: channelsWithFlags };
     }),
 
   /**
-   * Backward-compat alias for listThreads (used by Electron client).
+   * Backward-compat alias for listChannels (used by Electron client).
    */
   list: protectedProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        threadType: z.enum(["main", "branch", "ai_thread"]).optional(),
+        channelType: z.enum(["main", "branch", "ai_thread"]).optional(),
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(["entity", "document", "view"]).optional(),
@@ -1274,12 +1274,12 @@ export const channelsRouter = router({
         conditions.push(eq(channels.workspaceId, input.workspaceId));
       }
 
-      if (input.threadType) {
-        const channelType =
-          input.threadType === "branch"
+      if (input.channelType) {
+        const ct =
+          input.channelType === "branch"
             ? ChannelType.BRANCH
             : ChannelType.AI_THREAD;
-        conditions.push(eq(channels.channelType, channelType));
+        conditions.push(eq(channels.channelType, ct));
       }
 
       if (input.contextObjectId !== undefined) {
@@ -1299,7 +1299,7 @@ export const channelsRouter = router({
       });
 
       if (allChannels.length === 0) {
-        return { threads: [] };
+        return { channels: [] };
       }
 
       const channelIds = allChannels.map((c) => c.id);
@@ -1316,13 +1316,13 @@ export const channelsRouter = router({
         rowsWithAssistant.map((r) => r.channelId)
       );
 
-      const threadsWithFlags = allChannels.map((c) => ({
+      const channelsWithFlags = allChannels.map((c) => ({
         ...c,
         hasAssistantMessage: channelIdsWithAssistant.has(c.id),
         origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
       }));
 
-      return { threads: threadsWithFlags };
+      return { channels: channelsWithFlags };
     }),
 
   /**
@@ -1331,12 +1331,12 @@ export const channelsRouter = router({
   getBranches: protectedProcedure
     .input(
       z.object({
-        parentThreadId: z.string().uuid(),
+        parentChannelId: z.string().uuid(),
       })
     )
     .query(async ({ input }) => {
       const branches = await db.query.channels.findMany({
-        where: eq(channels.parentChannelId, input.parentThreadId),
+        where: eq(channels.parentChannelId, input.parentChannelId),
         orderBy: [desc(channels.createdAt)],
       });
 
@@ -1366,8 +1366,8 @@ export const channelsRouter = router({
         return {
           roots: [],
           stats: {
-            totalThreads: 0,
-            activeThreads: 0,
+            totalChannels: 0,
+            activeChannels: 0,
             pendingProposalsTotal: 0,
           },
           proposalCounts: {},
@@ -1441,8 +1441,8 @@ export const channelsRouter = router({
       return {
         roots,
         stats: {
-          totalThreads: allChannels.length,
-          activeThreads: activeChannels,
+          totalChannels: allChannels.length,
+          activeChannels: activeChannels,
           pendingProposalsTotal,
         },
         proposalCounts,
@@ -1504,10 +1504,10 @@ export const channelsRouter = router({
   /**
    * Get single channel with optional context and branches
    */
-  getThread: protectedProcedure
+  getChannel: protectedProcedure
     .input(
       z.object({
-        threadId: z.string().uuid(),
+        channelId: z.string().uuid(),
         includeContext: z.boolean().default(true),
         includeBranches: z.boolean().default(false),
       })
@@ -1515,7 +1515,7 @@ export const channelsRouter = router({
     .query(async ({ input, ctx }) => {
       const channel = await db.query.channels.findFirst({
         where: and(
-          eq(channels.id, input.threadId),
+          eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId)
         ),
       });
@@ -1542,7 +1542,7 @@ export const channelsRouter = router({
 
       if (input.includeContext) {
         contextItems = await db.query.channelContextItems.findMany({
-          where: eq(channelContextItems.channelId, input.threadId),
+          where: eq(channelContextItems.channelId, input.channelId),
         });
       }
 
@@ -1551,16 +1551,16 @@ export const channelsRouter = router({
       if (input.includeBranches) {
         const allBranches = await db.query.channels.findMany({
           where: or(
-            eq(channels.id, input.threadId),
-            eq(channels.parentChannelId, input.threadId)
+            eq(channels.id, input.channelId),
+            eq(channels.parentChannelId, input.channelId)
           ),
         });
 
-        branchTree = buildBranchTree(allBranches, input.threadId);
+        branchTree = buildBranchTree(allBranches, input.channelId);
       }
 
       return {
-        thread: channel,
+        channel,
         contextItems: input.includeContext ? contextItems : undefined,
         branchTree: input.includeBranches ? branchTree : undefined,
       };
@@ -1569,10 +1569,10 @@ export const channelsRouter = router({
   /**
    * Update channel metadata
    */
-  updateThread: protectedProcedure
+  updateChannel: protectedProcedure
     .input(
       z.object({
-        threadId: z.string().uuid(),
+        channelId: z.string().uuid(),
         title: z.string().optional(),
         agentId: z.string().optional(),
         agentType: z
@@ -1593,7 +1593,7 @@ export const channelsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const channel = await db.query.channels.findFirst({
         where: and(
-          eq(channels.id, input.threadId),
+          eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId)
         ),
       });
@@ -1616,34 +1616,34 @@ export const channelsRouter = router({
           agentConfig: input.agentConfig,
           updatedAt: new Date(),
         })
-        .where(eq(channels.id, input.threadId));
+        .where(eq(channels.id, input.channelId));
 
       emitChatEvent({
         event: "channel:updated",
-        data: { channelId: input.threadId, userId: ctx.userId },
+        data: { channelId: input.channelId, userId: ctx.userId },
         workspaceId: channel.workspaceId ?? ctx.workspaceId ?? null,
         userId: ctx.userId,
       });
 
       return {
         status: "updated",
-        threadId: input.threadId,
+        channelId: input.channelId,
       };
     }),
 
   /**
    * Archive channel (soft delete)
    */
-  archiveThread: protectedProcedure
+  archiveChannel: protectedProcedure
     .input(
       z.object({
-        threadId: z.string().uuid(),
+        channelId: z.string().uuid(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const channel = await db.query.channels.findFirst({
         where: and(
-          eq(channels.id, input.threadId),
+          eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId)
         ),
       });
@@ -1661,18 +1661,18 @@ export const channelsRouter = router({
           status: ChannelStatus.ARCHIVED,
           updatedAt: new Date(),
         })
-        .where(eq(channels.id, input.threadId));
+        .where(eq(channels.id, input.channelId));
 
       emitChatEvent({
         event: "channel:archived",
-        data: { channelId: input.threadId, userId: ctx.userId },
+        data: { channelId: input.channelId, userId: ctx.userId },
         workspaceId: channel.workspaceId ?? ctx.workspaceId ?? null,
         userId: ctx.userId,
       });
 
       return {
         status: "archived",
-        threadId: input.threadId,
+        channelId: input.channelId,
       };
     }),
 
@@ -1682,21 +1682,21 @@ export const channelsRouter = router({
   getBranchTree: protectedProcedure
     .input(
       z.object({
-        rootThreadId: z.string().uuid(),
+        rootChannelId: z.string().uuid(),
       })
     )
     .query(async ({ input, ctx }) => {
       const allChannels = await db.query.channels.findMany({
         where: and(
           or(
-            eq(channels.id, input.rootThreadId),
-            eq(channels.parentChannelId, input.rootThreadId)
+            eq(channels.id, input.rootChannelId),
+            eq(channels.parentChannelId, input.rootChannelId)
           ),
           eq(channels.userId, ctx.userId)
         ),
       });
 
-      const tree = buildBranchTree(allChannels, input.rootThreadId);
+      const tree = buildBranchTree(allChannels, input.rootChannelId);
 
       const activeBranches = allChannels.filter(
         (c) => c.status === "active" && c.channelType === "branch"
@@ -1716,10 +1716,10 @@ export const channelsRouter = router({
   /**
    * Get channel context items (replaces getThreadContext — supports unified entity+document+view queries)
    */
-  getThreadContext: protectedProcedure
+  getChannelContext: protectedProcedure
     .input(
       z.object({
-        threadId: z.string().uuid(),
+        channelId: z.string().uuid(),
         objectTypes: z
           .array(
             z.enum(["entity", "document", "view", "proposal", "inbox_item"])
@@ -1741,7 +1741,7 @@ export const channelsRouter = router({
     .query(async ({ input, ctx }) => {
       const channel = await db.query.channels.findFirst({
         where: and(
-          eq(channels.id, input.threadId),
+          eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId)
         ),
       });
@@ -1754,7 +1754,7 @@ export const channelsRouter = router({
       }
 
       const conditions: any[] = [
-        eq(channelContextItems.channelId, input.threadId),
+        eq(channelContextItems.channelId, input.channelId),
       ];
 
       if (input.objectTypes?.length) {

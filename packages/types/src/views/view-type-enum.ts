@@ -25,6 +25,7 @@ export const VIEW_TYPES: ViewType[] = [
   "graph",
   "flow",
   "bento",
+  "branch_tree",
 ];
 
 /**

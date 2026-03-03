@@ -27,7 +27,12 @@ import {
   and,
   eq,
 } from "@synap/database";
-import { users, workspaceMembers, apiKeys, workspaces } from "@synap/database/schema";
+import {
+  users,
+  workspaceMembers,
+  apiKeys,
+  workspaces,
+} from "@synap/database/schema";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 
 const serviceType = process.env.SERVICE_TYPE;
@@ -76,13 +81,17 @@ async function resolveWorkspaceId(
       .limit(1);
 
     if (member) {
-      console.log(`ℹ️  Resolved workspace: ${member.workspaceId} (from user ${adminEmail})`);
+      console.log(
+        `ℹ️  Resolved workspace: ${member.workspaceId} (from user ${adminEmail})`
+      );
       return member.workspaceId;
     }
 
     // On fresh installs the admin user is in Kratos but not yet in the local DB
     // (they appear after first login). Fall through to first-workspace fallback.
-    console.warn(`⚠️  User "${adminEmail}" not found in local DB (not logged in yet). Falling back to first workspace.`);
+    console.warn(
+      `⚠️  User "${adminEmail}" not found in local DB (not logged in yet). Falling back to first workspace.`
+    );
   }
 
   // Last resort: pick the first workspace in the DB (single-tenant self-hosted)
@@ -92,10 +101,14 @@ async function resolveWorkspaceId(
     .limit(1);
 
   if (!first) {
-    console.error("❌ ERROR: No workspaces found in database. Run the backend at least once to create the default workspace.");
+    console.error(
+      "❌ ERROR: No workspaces found in database. Run the backend at least once to create the default workspace."
+    );
     process.exit(1);
   }
-  console.log(`ℹ️  Resolved workspace: ${first.id} ("${first.name}") — first workspace fallback`);
+  console.log(
+    `ℹ️  Resolved workspace: ${first.id} ("${first.name}") — first workspace fallback`
+  );
   return first.id;
 }
 
@@ -222,16 +235,18 @@ async function run() {
     console.log(`✅ ${entry.displayName} API key rotated`);
     console.log(`   New SYNAP_HUB_API_KEY="${plainKey}"`);
     console.log("");
-    console.log("Docker run command:");
-    console.log(
-      entry.buildDockerCommand({
-        podUrl,
-        workspaceId,
-        agentUserId: agent.id,
-        apiKey: plainKey,
-      })
-    );
-    console.log("");
+    if (entry.buildDockerCommand) {
+      console.log("Docker run command:");
+      console.log(
+        entry.buildDockerCommand({
+          podUrl,
+          workspaceId,
+          agentUserId: agent.id,
+          apiKey: plainKey,
+        })
+      );
+      console.log("");
+    }
     console.log("⚠️  The new key is shown ONCE. Store it securely.");
     process.exit(0);
   }
@@ -306,16 +321,18 @@ async function run() {
   console.log(`  SYNAP_WORKSPACE_ID="${workspaceId}"`);
   console.log(`  SYNAP_AGENT_USER_ID="${agentId}"`);
   console.log("");
-  console.log("Docker run command:");
-  console.log(
-    entry.buildDockerCommand({
-      podUrl,
-      workspaceId,
-      agentUserId: agentId,
-      apiKey: plainKey,
-    })
-  );
-  console.log("");
+  if (entry.buildDockerCommand) {
+    console.log("Docker run command:");
+    console.log(
+      entry.buildDockerCommand({
+        podUrl,
+        workspaceId,
+        agentUserId: agentId,
+        apiKey: plainKey,
+      })
+    );
+    console.log("");
+  }
   console.log("⚠️  The API key above is shown ONCE. Store it securely.");
   process.exit(0);
 }

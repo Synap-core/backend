@@ -84,6 +84,16 @@ export const secrets = pgTable(
     iv: text("iv").notNull(), // Initialization vector (base64)
     authTag: text("auth_tag").notNull(), // GCM authentication tag (base64)
 
+    // Encryption mode:
+    //   'client' (default) — zero-knowledge, encrypted by the client with user's master key
+    //   'server'           — encrypted by the server using VAULT_SERVER_KEY; readable server-side
+    //                        Used for service bootstrap credentials (Hub Protocol API keys, etc.)
+    encryptionMode: text("encryption_mode").notNull().default("client"),
+
+    // Optional: links this secret to a registered intelligence service (e.g. "openclaw-abc12345").
+    // Used by getServiceConfig to fetch credentials by serviceId without scanning all user secrets.
+    serviceId: text("service_id"),
+
     // Organization
     isFavorite: boolean("is_favorite").notNull().default(false),
     sortOrder: integer("sort_order").default(0),
@@ -125,6 +135,14 @@ export const secrets = pgTable(
     deletedAtIdx: index("idx_secrets_deleted_at").on(table.deletedAt),
     // Compound index for common list query
     userTypeIdx: index("idx_secrets_user_type").on(table.userId, table.type),
+    serviceIdIdx: index("idx_secrets_service_id").on(table.serviceId),
+    encryptionModeIdx: index("idx_secrets_encryption_mode").on(
+      table.encryptionMode
+    ),
+    userServiceIdx: index("idx_secrets_user_service").on(
+      table.userId,
+      table.serviceId
+    ),
   })
 );
 

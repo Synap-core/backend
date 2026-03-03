@@ -5,16 +5,17 @@ description: >
   relay external messages (Telegram, WhatsApp, etc.) into Synap channels,
   communicate with the Synap AI through A2AI channels, and execute governed workspace
   actions through Synap's proposal and approval system.
-version: 1.1.0
+version: 1.2.0
 metadata:
   openclaw:
     requires:
       env:
-        - SYNAP_POD_URL
         - SYNAP_HUB_API_KEY
+        - SYNAP_CONFIG_URL
+      optional_env:
+        - SYNAP_POD_URL
         - SYNAP_WORKSPACE_ID
         - SYNAP_AGENT_USER_ID
-      optional_env:
         - SYNAP_DEFAULT_CHANNEL_ID
     primaryEnv: SYNAP_HUB_API_KEY
     homepage: https://synap.live/openclaw
@@ -45,11 +46,37 @@ channels** and through **Hub Protocol API calls**.
 
 ## Setup
 
-Set these environment variables once in your OpenClaw configuration:
+### Automatic setup (recommended)
+
+When provisioned via the Synap admin panel or control plane, only two bootstrap
+variables are needed. All other configuration is pulled automatically from your
+workspace vault on startup:
 
 ```
-SYNAP_POD_URL        = https://pod.synap.live        # Your Synap pod URL
+SYNAP_HUB_API_KEY   = hub_xxxx                                         # Hub Protocol API key (shown once at provision)
+SYNAP_CONFIG_URL    = https://pod.synap.live/trpc/intelligenceRegistry.getServiceConfig  # Config pull endpoint
+```
+
+OpenClaw fetches its full config on startup:
+
+```bash
+# Called automatically by the skill on boot — no manual step needed
+curl -X POST "$SYNAP_CONFIG_URL" \
+  -H "Authorization: Bearer $SYNAP_HUB_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# Returns: { "result": { "data": { "json": { "SYNAP_POD_URL": "...", "SYNAP_WORKSPACE_ID": "...", "SYNAP_AGENT_USER_ID": "..." } } } }
+```
+
+The response is merged into the runtime environment — no restart required.
+
+### Manual setup
+
+If installing without the provisioning flow, set all variables explicitly:
+
+```
 SYNAP_HUB_API_KEY    = hub_xxxx                      # Hub Protocol API key
+SYNAP_POD_URL        = https://pod.synap.live        # Your Synap pod URL
 SYNAP_WORKSPACE_ID   = <uuid>                        # Your workspace ID
 SYNAP_AGENT_USER_ID  = <uuid>                        # Your agent user ID in Synap
 ```
@@ -518,4 +545,4 @@ curl "$SYNAP_POD_URL/trpc/hubProtocol.channels.pollA2AIChannel?input=%7B%22chann
 
 ---
 
-_synap-os skill v1.1.0 — maintained at github.com/synap-app/synap-backend/tree/main/skills/synap-os_
+_synap-os skill v1.2.0 — maintained at github.com/synap-app/synap-backend/tree/main/skills/synap-os_

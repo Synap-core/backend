@@ -209,6 +209,106 @@ export class SecretsVaultRepository extends BaseRepository<
     return secret;
   }
 
+  // ==========================================================================
+  // Server-Side Encrypted Secrets (service bootstrap credentials)
+  // ==========================================================================
+
+  /**
+   * Store a server-side encrypted secret (encryptionMode = 'server').
+   *
+   * The caller is responsible for encrypting `encryptedData`/`iv`/`authTag`
+   * with the server key (see server-vault.ts). This method only inserts the
+   * already-encrypted blob — it never handles plaintext.
+   *
+   * Idempotent: if a server-side secret for this userId + serviceId already
+   * exists it is replaced (upsert on conflict).
+   */
+  async upsertServerSide(
+    data: {
+      userId: string;
+      serviceId: string;
+      name: string;
+      type: SecretType;
+      category?: string;
+      description?: string;
+      encryptedData: string;
+      iv: string;
+      authTag: string;
+    },
+    actorUserId: string
+  ): Promise<Secret> {
+    // Soft-delete any existing server-side secret for this service
+    await this.db
+      .update(secrets)
+      .set({ deletedAt: new Date(), deletedBy: actorUserId })
+      .where(
+        and(
+          eq(secrets.userId, data.userId),
+          eq(secrets.serviceId, data.serviceId),
+          eq(secrets.encryptionMode, "server"),
+          isNull(secrets.deletedAt)
+        )
+      );
+
+    const [secret] = await this.db
+      .insert(secrets)
+      .values({
+        userId: data.userId,
+        name: data.name,
+        type: data.type,
+        category: data.category ?? "intelligence-services",
+        description: data.description,
+        encryptedData: data.encryptedData,
+        iv: data.iv,
+        authTag: data.authTag,
+        encryptionVersion: 1,
+        encryptionMode: "server",
+        serviceId: data.serviceId,
+      })
+      .returning();
+
+    await this.logAudit(secret.id, actorUserId, "created");
+    return secret;
+  }
+
+  /**
+   * Find the server-side encrypted secret for a given agent user + serviceId.
+   * Returns null if not found or already soft-deleted.
+   */
+  async findServerSide(
+    userId: string,
+    serviceId: string
+  ): Promise<Secret | null> {
+    const result = await this.db.query.secrets.findFirst({
+      where: and(
+        eq(secrets.userId, userId),
+        eq(secrets.serviceId, serviceId),
+        eq(secrets.encryptionMode, "server"),
+        isNull(secrets.deletedAt)
+      ),
+    });
+    return result ?? null;
+  }
+
+  /**
+   * Soft-delete all server-side secrets for a given agent user (on deprovision).
+   */
+  async deleteServerSideForUser(
+    userId: string,
+    actorUserId: string
+  ): Promise<void> {
+    await this.db
+      .update(secrets)
+      .set({ deletedAt: new Date(), deletedBy: actorUserId })
+      .where(
+        and(
+          eq(secrets.userId, userId),
+          eq(secrets.encryptionMode, "server"),
+          isNull(secrets.deletedAt)
+        )
+      );
+  }
+
   /**
    * Update an existing secret
    */

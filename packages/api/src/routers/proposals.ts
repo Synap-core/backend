@@ -324,8 +324,8 @@ export const proposalsRouter = router({
           workspaceRole: membership.role,
         };
         const caller = channelsRouter.createCaller(branchCallerCtx);
-        await caller.createThread({
-          parentThreadId: data.parentThreadId as string,
+        await caller.createChannel({
+          parentChannelId: data.parentChannelId as string,
           branchPurpose: data.branchPurpose as string,
           agentId: data.agentId as string | undefined,
           agentType: data.agentType as
@@ -620,15 +620,12 @@ export const proposalsRouter = router({
           source: "api",
         });
       } else {
-        // Payload doesn't match request shape — approve silently.
-        // Log so we can detect unexpected proposal types in the wild.
-        console.warn(
-          "[proposals] Approved proposal with unrecognized payload shape — no .validated event emitted",
-          {
-            proposalId: input.proposalId,
-            payloadKeys: payload ? Object.keys(payload) : [],
-          }
-        );
+        // Payload doesn't match any known request shape and targetType was not
+        // handled by a specific branch above — throw rather than silently succeed.
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message: `Proposal approval for type '${proposal.targetType}' is not yet implemented`,
+        });
       }
 
       await db
