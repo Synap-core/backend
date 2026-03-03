@@ -51,6 +51,11 @@ export const entities = pgTable("entities", {
   // Validated against profile property definitions
   properties: jsonb("properties").default("{}").notNull(),
 
+  // System data (JSONB) - System-managed state, separate from user properties
+  // Stores: viewMode ('document' | 'bento'), bentoViewId (uuid of entity bento view)
+  // Never shown in property editors; not validated against profile schema.
+  systemData: jsonb("system_data").default("{}").notNull(),
+
   // Optimistic locking
   version: integer("version").default(1).notNull(),
 

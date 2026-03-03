@@ -215,6 +215,7 @@ export async function checkPermissionOrPropose(
           "search.*",
           "memory.recall",
           "entity.read",
+          "bento.arrange",
           "document.read",
           "context.*",
           "filesystem.read",
@@ -224,6 +225,11 @@ export async function checkPermissionOrPropose(
           "profile.update",
           "property_def.create",
           "property_def.update",
+          "entity.create", // AI creates entities during workspace setup
+          "entity.update", // AI updates entity schemas/properties
+          "document.create", // AI creates documents
+          "relation.create", // AI creates relations between entities
+          "channel.create", // AI creates AI thread channels
         ];
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;

@@ -244,7 +244,7 @@ export const profilesRouter = router({
         }
       }
 
-      // Side effects for workspace-scoped profiles: auto-create bento view + sidebar item
+      // Side effects for workspace-scoped profiles: auto-create bento view + register in settings
       if (input.scope === "workspace") {
         try {
           const eventRepo = new EventRepository(sql);
@@ -297,7 +297,7 @@ export const profilesRouter = router({
             },
           ];
 
-          await viewRepo.create(
+          const bentoView = await viewRepo.create(
             {
               name: input.displayName,
               type: "bento" as any,
@@ -305,46 +305,46 @@ export const profilesRouter = router({
               userId: ctx.userId,
               scopeProfileIds: [profile.id],
               config: { layout: "bento", blocks },
+              metadata: { isProfileBento: true, profileSlug: slug },
             },
             ctx.userId
           );
 
-          // Append sidebar item to workspace settings.layout
+          // Store bentoViewId in workspace.settings.profileBentoViewIds (atomic patch)
+          await workspaceRepo.mergeSettings(
+            ctx.workspaceId,
+            { profileBentoViewIds: { [slug]: bentoView.id } },
+            ctx.userId
+          );
+
+          // Append sidebar item (kind:'profile') — needs a read to check idempotency and append to array
           const workspace = await db.query.workspaces.findFirst({
             where: eq(workspaces.id, ctx.workspaceId),
           });
           if (workspace) {
-            const currentSettings = (workspace.settings || {}) as Record<
-              string,
-              unknown
-            >;
-            const currentLayout = (currentSettings.layout || {}) as Record<
-              string,
-              unknown
-            >;
+            const currentLayout = ((workspace.settings as any)?.layout ??
+              {}) as Record<string, unknown>;
             const existingItems = (currentLayout.sidebarItems as any[]) ?? [];
-            // Only append if not already present (idempotent)
             const alreadyPresent = existingItems.some(
               (item: any) =>
-                item.viewName === input.displayName && item.profileSlug === slug
+                item.kind === "profile" && item.profileSlug === slug
             );
             if (!alreadyPresent) {
-              const newItem = {
-                kind: "view",
-                viewName: input.displayName,
-                profileSlug: slug,
-                label: input.displayName,
-                icon,
-              };
-              const mergedLayout = {
-                ...currentLayout,
-                sidebarItems: [...existingItems, newItem],
-              };
-              await workspaceRepo.update(
+              await workspaceRepo.mergeSettings(
                 ctx.workspaceId,
                 {
-                  name: workspace.name,
-                  settings: { ...currentSettings, layout: mergedLayout },
+                  layout: {
+                    ...currentLayout,
+                    sidebarItems: [
+                      ...existingItems,
+                      {
+                        kind: "profile",
+                        profileSlug: slug,
+                        label: input.displayName,
+                        icon,
+                      },
+                    ],
+                  },
                 },
                 ctx.userId
               );
@@ -352,7 +352,7 @@ export const profilesRouter = router({
           }
 
           logger.info(
-            { profileId: profile.id, slug },
+            { profileId: profile.id, slug, bentoViewId: bentoView.id },
             "Auto-created bento view and sidebar item for profile"
           );
         } catch (sideEffectErr) {

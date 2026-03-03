@@ -581,11 +581,17 @@ export interface InputOverride {
  * - Enterprise (advanced features)
  */
 export interface WorkspaceSidebarItem {
-	kind: "app" | "view" | "external";
+	kind: "app" | "view" | "profile" | "external";
 	/** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
 	appId?: string;
 	/** View name for kind='view' — resolved lazily at click time */
 	viewName?: string;
+	/**
+	 * Profile slug for kind='profile'.
+	 * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,
+	 * or lazily creates one via ensureProfileBento if not yet set.
+	 */
+	profileSlug?: string;
 	/** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
 	url?: string;
 	/** Display label shown in the sidebar */
@@ -596,6 +602,12 @@ export interface WorkspaceSidebarItem {
 export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
 	defaultView?: string;
+	/**
+	 * Default app view to navigate to when a workspace is first opened (browser only).
+	 * Applied once per profile switch by useTemplateIntegration.
+	 * Valid values: 'browser' | 'dashboard' | 'data' | 'intelligence' | 'terminal' | …
+	 */
+	defaultApp?: string;
 	theme?: string;
 	/** Ordered list of sidebar items. When set, replaces the generic app list. */
 	sidebarItems?: WorkspaceSidebarItem[];
@@ -626,7 +638,32 @@ export interface WorkspaceSettings {
 	/** External MCP servers whose tools will be available to AI agents in this workspace */
 	mcpServers?: McpServerConfig[];
 	layout?: WorkspaceLayoutConfig;
+	/**
+	 * Maps profile slug → bento dashboard view ID for this workspace.
+	 * Each entry is the "home page" view for all entities of that profile type.
+	 * Stored here (not on the profile row) so system/shared profiles can have
+	 * different bento views per workspace.
+	 * Populated on workspace creation and lazily via ensureProfileBento.
+	 * Example: { "deal": "uuid-deal-bento", "contact": "uuid-contact-bento" }
+	 */
+	profileBentoViewIds?: Record<string, string>;
+	/**
+	 * Per-profile default bento layout for entity instance dashboards.
+	 * When a user opens a single entity in bento mode for the first time,
+	 * this template is used to seed the bento view (instead of the generic default).
+	 * Populated from the workspace template at creation time.
+	 * Example: { "deal": { blocks: [...] }, "contact": { blocks: [...] } }
+	 */
+	profileEntityBentoTemplates?: Record<string, {
+		blocks: Array<Record<string, unknown>>;
+	}>;
+	/** UUID of the main whiteboard view for this workspace */
 	mainWhiteboardId?: string;
+	/**
+	 * Home dashboard view ID (type='bento', metadata.homeScope='workspace').
+	 * Stored here for O(1) lookup on workspace open.
+	 */
+	homeDashboardViewId?: string;
 	intelligenceServiceId?: string;
 	intelligenceServiceOverrides?: {
 		chat?: string;
@@ -1554,6 +1591,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
 				};
 				proposalId?: undefined;
 			};
@@ -1585,6 +1623,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
 				}[];
 			};
 			meta: object;
@@ -1614,6 +1653,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
 				}[];
 			};
 			meta: object;
@@ -1645,6 +1685,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
 				}[];
 			};
 			meta: object;
@@ -1686,6 +1727,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
 				}[];
 			};
 			meta: object;
@@ -2318,6 +2360,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationshipType: ChannelContextRelationshipType;
 					conflictStatus: ChannelContextConflictStatus;
 				}[];
+			};
+			meta: object;
+		}>;
+		addContextItem: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				objectType: "entity" | "view" | "document";
+				objectId: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		removeContextItem: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				objectId: string;
+				objectType: "entity" | "view" | "document";
+			};
+			output: {
+				ok: boolean;
 			};
 			meta: object;
 		}>;
@@ -3995,7 +4059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					status: "completed" | "running" | "failed";
+					status: "completed" | "failed" | "running";
 					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
@@ -4021,7 +4085,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				status: "completed" | "running" | "failed";
+				status: "completed" | "failed" | "running";
 				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
@@ -4297,6 +4361,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
 				}[];
@@ -4395,6 +4460,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
 				}[];
@@ -4452,6 +4518,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						preview: string | null;
 						documentId: string | null;
 						properties: unknown;
+						systemData: unknown;
 						version: number;
 						deletedAt: Date | null;
 					} | null;
@@ -4515,6 +4582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
 				};
@@ -4534,6 +4602,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
 				};
@@ -4576,6 +4645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
 				}[];
@@ -4894,8 +4964,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 					}[] | undefined;
 					views?: {
-						name: string;
 						type: string;
+						name?: string | undefined;
+						displayName?: string | undefined;
 						scopeProfileSlug?: string | undefined;
 						scopeProfileSlugs?: string[] | undefined;
 						config?: Record<string, unknown> | undefined;
@@ -4946,14 +5017,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						defaultView?: string | undefined;
 						theme?: string | undefined;
 						sidebarItems?: {
-							kind: "view" | "external" | "app";
+							kind: "view" | "external" | "profile" | "app";
 							appId?: string | undefined;
 							viewName?: string | undefined;
+							profileSlug?: string | undefined;
 							url?: string | undefined;
 							label?: string | undefined;
 							icon?: string | undefined;
 						}[] | undefined;
 					} | undefined;
+					profileEntityBentoTemplates?: Record<string, {
+						blocks: Record<string, unknown>[];
+					}> | undefined;
 					entityLinks?: {
 						sourceProfileSlug: string;
 						targetProfileSlug: string;
@@ -5286,6 +5361,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					createdAt: Date;
 					updatedAt: Date;
@@ -5399,6 +5475,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				columns: ViewColumn[];
+			};
+			meta: object;
+		}>;
+		ensureProfileBento: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				profileSlug: string;
+			};
+			output: {
+				viewId: string;
 			};
 			meta: object;
 		}>;
@@ -5722,6 +5807,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					preview: string | null;
 					documentId: string | null;
 					properties: unknown;
+					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
 				} | {

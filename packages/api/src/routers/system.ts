@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { publicProcedure, protectedProcedure, podAdminProcedure, router } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes } from "@synap/events";
@@ -21,7 +22,13 @@ import { createSynapEvent } from "@synap-core/core";
 import { eventRepository } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
 import { db, eq, sqlDrizzle } from "@synap/database";
-import { users, workspaces, entities, documents, workspaceMembers } from "@synap/database/schema";
+import {
+  users,
+  workspaces,
+  entities,
+  documents,
+  workspaceMembers,
+} from "@synap/database/schema";
 import { count } from "drizzle-orm";
 
 /**
@@ -345,7 +352,10 @@ export const systemRouter = router({
       const event = await eventRepository.findById(input.eventId);
 
       if (!event) {
-        throw new Error(`Event ${input.eventId} not found`);
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Event ${input.eventId} not found`,
+        });
       }
 
       // 2. Get related events if correlation ID exists
@@ -459,9 +469,10 @@ export const systemRouter = router({
       const tool = dynamicToolRegistry.getTool(input.toolName);
 
       if (!tool) {
-        throw new Error(
-          `Tool "${input.toolName}" not found. Available tools: ${dynamicToolRegistry.getToolNames().join(", ")}`
-        );
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Tool "${input.toolName}" not found. Available tools: ${dynamicToolRegistry.getToolNames().join(", ")}`,
+        });
       }
 
       const metadata = dynamicToolRegistry.getToolMetadata(input.toolName);
@@ -644,7 +655,10 @@ export const systemRouter = router({
         (t: any) => t.table_name === input.tableName
       );
       if (!isValid) {
-        throw new Error(`Invalid table name: ${input.tableName}`);
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Invalid table name: ${input.tableName}`,
+        });
       }
 
       // Safe query using sql.raw is risky if input is not validated, but we validated it against the schema above.
@@ -789,9 +803,7 @@ export const systemRouter = router({
     const [workspaceResult] = await db
       .select({ value: count() })
       .from(workspaces);
-    const [entityResult] = await db
-      .select({ value: count() })
-      .from(entities);
+    const [entityResult] = await db.select({ value: count() }).from(entities);
     const [documentResult] = await db
       .select({ value: count() })
       .from(documents);
@@ -821,7 +833,8 @@ export const systemRouter = router({
     )
     .query(async ({ input }) => {
       // Build query with optional type filter
-      const conditions = input.type !== "all" ? eq(users.userType, input.type) : undefined;
+      const conditions =
+        input.type !== "all" ? eq(users.userType, input.type) : undefined;
 
       const userList = await db.query.users.findMany({
         where: conditions,

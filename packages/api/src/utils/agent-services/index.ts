@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { openclawEntry } from "./services/openclaw.js";
 import { zeroclawEntry } from "./services/zeroclaw.js";
 import type { ServiceCatalogEntry } from "./types.js";
@@ -17,9 +18,10 @@ export function getServiceEntry(serviceType: string): ServiceCatalogEntry {
   const entry = SERVICE_CATALOG[serviceType];
   if (!entry) {
     const known = Object.keys(SERVICE_CATALOG).join(", ");
-    throw new Error(
-      `Unknown service type "${serviceType}". Known types: ${known}`
-    );
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown service type "${serviceType}". Known types: ${known}`,
+    });
   }
   return entry;
 }

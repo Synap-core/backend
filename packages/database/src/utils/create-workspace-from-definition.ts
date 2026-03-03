@@ -108,7 +108,9 @@ export interface WorkspaceDefinitionInput {
     }>;
   }>;
   views?: Array<{
-    name: string;
+    /** View name in proposal format. Accepts both 'name' and 'displayName' (registry format). */
+    name?: string;
+    displayName?: string;
     type: string;
     scopeProfileSlug?: string;
     scopeProfileSlugs?: string[];
@@ -152,14 +154,25 @@ export interface WorkspaceDefinitionInput {
     defaultView?: string;
     theme?: string;
     sidebarItems?: Array<{
-      kind: "app" | "view" | "external";
+      kind: "app" | "view" | "profile" | "external";
       appId?: string;
       viewName?: string;
+      profileSlug?: string;
       url?: string;
       label?: string;
       icon?: string;
     }>;
   };
+  /**
+   * Per-profile default bento layout used when opening a single entity of that type.
+   * Stored in workspace.settings.profileEntityBentoTemplates.
+   * Example: { "deal": { blocks: [...] } }
+   */
+  profileEntityBentoTemplates?: Record<
+    string,
+    { blocks: Array<Record<string, unknown>> }
+  >;
+
   /** Schema-level links between entity types (profiles). Creates relation_defs + profile_relations. */
   entityLinks?: Array<{
     sourceProfileSlug: string;
@@ -225,8 +238,7 @@ export async function createWorkspaceFromDefinition(
     settings.layout = {
       ...(settings.layout ?? {}),
       sidebarItems: (definition.profiles ?? []).map((p) => ({
-        kind: "view",
-        viewName: p.displayName,
+        kind: "profile",
         profileSlug: p.slug,
         label: p.displayName,
         icon: p.icon,
@@ -394,14 +406,27 @@ export async function createWorkspaceFromDefinition(
     }
   }
 
-  // 6. Create standard views (non-flow)
+  // 6. Create non-bento, non-flow views first so viewMap is fully populated
+  //    before bento views reference them by name.
+  //
+  // Normalize views: accept both 'name' (proposal format) and 'displayName'
+  // (registry format returned by control plane API). Skip views with no name.
+  const normalizedViews = (definition.views ?? [])
+    .map((v) => ({ ...v, name: v.name ?? v.displayName ?? "" }))
+    .filter((v) => v.name.length > 0);
+
   const viewRepo = new ViewRepository(dbConn, eventRepo);
-  const flowViews: typeof definition.views = [];
+  const flowViews: Array<(typeof normalizedViews)[number]> = [];
+  const bentoViews: Array<(typeof normalizedViews)[number]> = [];
   const viewMap: Record<string, string> = {};
 
-  for (const view of definition.views ?? []) {
+  for (const view of normalizedViews) {
     if (view.type === "flow") {
-      flowViews!.push(view);
+      flowViews.push(view);
+      continue;
+    }
+    if (view.type === "bento") {
+      bentoViews.push(view);
       continue;
     }
 
@@ -427,14 +452,107 @@ export async function createWorkspaceFromDefinition(
     viewIds.push(viewResult.id);
   }
 
-  // 6b. Auto-create default bento view for each profile without an explicit one.
-  // The view is named after profile.displayName so sidebarItems can resolve it by name.
-  const profilesWithExplicitBento = new Set(
-    (definition.views ?? [])
-      .filter((v) => v.type === "bento" && v.scopeProfileSlug)
-      .map((v) => v.scopeProfileSlug!)
-  );
+  // 6b. Create bento views (explicit from template + auto-generated for remaining profiles).
+  //
+  // Explicit bento views (from definition.views with type="bento") are processed first.
+  // Their config.blocks may contain { kind:"view", viewName:"..." } entries — these are
+  // resolved to viewId using viewMap. Profile-scoped bentos are stamped with
+  // metadata.isProfileBento + profileSlug. All resulting viewIds are stored in
+  // workspace.settings.profileBentoViewIds (not on the profile row) so system/shared
+  // profiles can have different bento views per workspace.
+  //
+  // Any profile without an explicit bento view gets a default 3-block layout.
+  const profileBentoViewIds: Record<string, string> = {};
+  /** Resolve view-name references in a bento block list using the viewMap. */
+  function resolveBentoBlocks(
+    rawBlocks: Array<Record<string, unknown>>,
+    slugPrefix: string
+  ): Array<Record<string, unknown>> {
+    return rawBlocks
+      .map((block, idx) => {
+        if (block.kind !== "view") return block;
+        const viewName = block.viewName as string | undefined;
+        if (!viewName) return null;
+        const resolvedViewId = viewMap[viewName];
+        if (!resolvedViewId) {
+          logger.warn(
+            { viewName, slugPrefix },
+            "Bento block references unknown view — skipping"
+          );
+          return null;
+        }
+        return {
+          ...block,
+          viewId: resolvedViewId,
+          viewName: undefined,
+          id: block.id ?? `${slugPrefix}-v${idx}`,
+        };
+      })
+      .filter(Boolean) as Array<Record<string, unknown>>;
+  }
 
+  // Process explicit bento views from the template
+  const profilesWithExplicitBento = new Set<string>();
+
+  for (const view of bentoViews) {
+    // Resolve effective profile slug from either singular or plural form
+    const scopeProfileSlug =
+      view.scopeProfileSlug ??
+      (view.scopeProfileSlugs?.length === 1
+        ? view.scopeProfileSlugs[0]
+        : undefined);
+    const scopeProfileIds = view.scopeProfileSlugs
+      ? view.scopeProfileSlugs.map((s) => profileMap[s]).filter(Boolean)
+      : scopeProfileSlug
+        ? [profileMap[scopeProfileSlug]].filter(Boolean)
+        : undefined;
+
+    // Resolve view-name references in blocks if present
+    const rawBlocks =
+      (view.config?.blocks as Array<Record<string, unknown>> | undefined) ?? [];
+    const resolvedBlocks =
+      rawBlocks.length > 0
+        ? resolveBentoBlocks(rawBlocks, scopeProfileSlug ?? view.name)
+        : rawBlocks;
+
+    const resolvedConfig =
+      rawBlocks.length > 0
+        ? { ...view.config, blocks: resolvedBlocks }
+        : view.config;
+
+    // Stamp profile bento metadata when scoped to a single profile
+    const isProfileBento = !!scopeProfileSlug;
+    const metadata = isProfileBento
+      ? { isProfileBento: true, profileSlug: scopeProfileSlug }
+      : undefined;
+
+    const viewResult = await viewRepo.create(
+      {
+        name: view.name,
+        type: "bento" as any,
+        scopeProfileIds: scopeProfileIds?.length ? scopeProfileIds : undefined,
+        config: resolvedConfig,
+        metadata,
+        workspaceId,
+        userId,
+      },
+      userId
+    );
+
+    viewMap[view.name] = viewResult.id;
+    viewIds.push(viewResult.id);
+
+    if (scopeProfileSlug) {
+      profilesWithExplicitBento.add(scopeProfileSlug);
+      profileBentoViewIds[scopeProfileSlug] = viewResult.id;
+      logger.debug(
+        { profileSlug: scopeProfileSlug, viewId: viewResult.id },
+        "Created explicit profile bento view"
+      );
+    }
+  }
+
+  // Auto-create default bento for profiles that don't have an explicit one
   for (const profile of definition.profiles ?? []) {
     if (profilesWithExplicitBento.has(profile.slug)) continue;
     const scopeProfileId = profileMap[profile.slug];
@@ -446,17 +564,36 @@ export async function createWorkspaceFromDefinition(
         type: "bento" as any,
         scopeProfileIds: scopeProfileId ? [scopeProfileId] : undefined,
         config: { layout: "bento", blocks },
+        metadata: { isProfileBento: true, profileSlug: profile.slug },
         workspaceId,
         userId,
       },
       userId
     );
     viewMap[profile.displayName] = viewResult.id;
+    profileBentoViewIds[profile.slug] = viewResult.id;
     viewIds.push(viewResult.id);
     logger.debug(
       { profileSlug: profile.slug, viewId: viewResult.id },
-      "Auto-created profile bento view"
+      "Auto-created default profile bento view"
     );
+  }
+
+  // Persist profileBentoViewIds (+ optional profileEntityBentoTemplates) into workspace settings
+  const settingsPatch: Partial<WorkspaceSettings> = {};
+  if (Object.keys(profileBentoViewIds).length > 0) {
+    settingsPatch.profileBentoViewIds = profileBentoViewIds;
+  }
+  if (
+    definition.profileEntityBentoTemplates &&
+    Object.keys(definition.profileEntityBentoTemplates).length > 0
+  ) {
+    settingsPatch.profileEntityBentoTemplates =
+      definition.profileEntityBentoTemplates;
+  }
+  if (Object.keys(settingsPatch).length > 0) {
+    const workspaceRepo2 = new WorkspaceRepository(dbConn, eventRepo);
+    await workspaceRepo2.mergeSettings(workspaceId, settingsPatch, userId);
   }
 
   // 7. Create bento home dashboard
@@ -533,7 +670,7 @@ export async function createWorkspaceFromDefinition(
   }
 
   // 9. Create flow views (need entity IDs for node configs)
-  for (const view of flowViews ?? []) {
+  for (const view of flowViews) {
     const scopeProfileIds = view.scopeProfileSlugs
       ? view.scopeProfileSlugs.map((s) => profileMap[s]).filter(Boolean)
       : view.scopeProfileSlug

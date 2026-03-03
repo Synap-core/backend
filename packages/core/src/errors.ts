@@ -14,17 +14,17 @@
  * ```
  */
 
-import { createLogger } from "./logger.js";
-
-const errorLogger = createLogger({ module: "errors" });
-
 /**
  * Base error class for all Synap errors
  *
  * Provides consistent error structure with:
  * - Error code for programmatic handling
  * - HTTP status code for API responses
- * - Structured logging
+ * - Optional context for debugging
+ *
+ * Logging is NOT done in the constructor — errors are logged once by the
+ * tRPC errorFormatter (or equivalent boundary) so caught-and-handled errors
+ * don't produce spurious log entries.
  */
 export class SynapError extends Error {
   public readonly code: string;
@@ -42,18 +42,6 @@ export class SynapError extends Error {
     this.code = code;
     this.statusCode = statusCode;
     this.context = context;
-
-    // Log error (without stack trace for known errors)
-    errorLogger.error(
-      {
-        code,
-        statusCode,
-        message,
-        context,
-        ...(statusCode >= 500 && { stack: this.stack }), // Only log stack for server errors
-      },
-      "Synap error occurred"
-    );
   }
 
   /**

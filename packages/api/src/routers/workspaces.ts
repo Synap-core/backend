@@ -456,25 +456,13 @@ export const workspacesRouter = router({
         }
       }
 
-      const currentSettings = (workspace.settings || {}) as Record<
-        string,
-        unknown
-      >;
-      const mergedSettings = {
-        ...currentSettings,
-        intelligenceServiceId: input.serviceId ?? undefined,
-      };
-
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
         subjectType: "workspaces",
         action: "update",
-        data: {
-          id: input.workspaceId,
-          settings: mergedSettings,
-        },
+        data: { id: input.workspaceId },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -488,17 +476,14 @@ export const workspacesRouter = router({
         };
       }
 
-      // 2. Direct DB operation
+      // 2. Atomic settings patch — no read needed
       const dbConn = await getDb();
       const eventRepo = new EventRepository(sql);
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
-      await workspaceRepo.update(
+      await workspaceRepo.mergeSettings(
         input.workspaceId,
-        {
-          name: workspace.name,
-          settings: mergedSettings,
-        },
+        { intelligenceServiceId: input.serviceId ?? undefined },
         ctx.userId
       );
 
@@ -512,7 +497,7 @@ export const workspacesRouter = router({
         workspaceId: input.workspaceId,
         data: {
           id: input.workspaceId,
-          settings: mergedSettings,
+          intelligenceServiceId: input.serviceId,
         },
       });
 
@@ -1085,7 +1070,9 @@ export const workspacesRouter = router({
             views: z
               .array(
                 z.object({
-                  name: z.string(),
+                  // Accept both "name" (proposal format) and "displayName" (registry format)
+                  name: z.string().optional(),
+                  displayName: z.string().optional(),
                   type: z.string(),
                   scopeProfileSlug: z.string().optional(),
                   scopeProfileSlugs: z.array(z.string()).optional(),
@@ -1162,9 +1149,12 @@ export const workspacesRouter = router({
                 sidebarItems: z
                   .array(
                     z.object({
-                      kind: z.enum(["app", "view", "external"]),
+                      // "profile" = navigate to profile bento view (new)
+                      // "external" = third-party URL (legacy)
+                      kind: z.enum(["app", "view", "profile", "external"]),
                       appId: z.string().optional(),
                       viewName: z.string().optional(),
+                      profileSlug: z.string().optional(),
                       url: z.string().optional(),
                       label: z.string().optional(),
                       icon: z.string().optional(),
@@ -1172,6 +1162,13 @@ export const workspacesRouter = router({
                   )
                   .optional(),
               })
+              .optional(),
+            /** Per-profile default entity bento layout; stored in workspace.settings */
+            profileEntityBentoTemplates: z
+              .record(
+                z.string(),
+                z.object({ blocks: z.array(z.record(z.string(), z.unknown())) })
+              )
               .optional(),
             entityLinks: z
               .array(

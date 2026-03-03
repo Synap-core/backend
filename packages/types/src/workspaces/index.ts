@@ -14,6 +14,10 @@ export type {
   NewWorkspaceMember,
   WorkspaceInvite,
   NewWorkspaceInvite,
+  // Workspace settings/layout types (canonical source of truth)
+  WorkspaceSidebarItem,
+  WorkspaceLayoutConfig,
+  McpServerConfig,
 } from "@synap/database";
 
 // Derived types for API convenience

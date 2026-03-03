@@ -9,6 +9,7 @@
 
 import { randomBytes } from "crypto";
 import bcrypt from "bcrypt";
+import { TRPCError } from "@trpc/server";
 import { db, sql as pgSql, drizzleSql as sql } from "@synap/database"; // pgSql = postgres.js, sql = Drizzle
 import {
   apiKeys,
@@ -219,11 +220,14 @@ export class ApiKeyService {
       .where(eq(apiKeys.id, keyId));
 
     if (!existingKey) {
-      throw new Error("API key not found");
+      throw new TRPCError({ code: "NOT_FOUND", message: "API key not found" });
     }
 
     if (!existingKey.isActive) {
-      throw new Error("Cannot rotate an inactive key");
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Cannot rotate an inactive key",
+      });
     }
 
     // 2. Generate new key with same properties
