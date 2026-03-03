@@ -33,8 +33,14 @@ export interface WorkspaceSidebarItem {
 
 export interface WorkspaceLayoutConfig {
   pinnedApps?: string[]; // App IDs pinned to the top of the activity bar
-  defaultView?: string; // Default view when entering workspace
-  theme?: string; // Per-workspace theme override
+  defaultView?: string; // Default view when entering workspace (web)
+  /**
+   * Default app view to navigate to when a workspace is first opened (browser only).
+   * Applied once per profile switch by useTemplateIntegration.
+   * Valid values: 'browser' | 'dashboard' | 'data' | 'intelligence' | 'terminal' | …
+   */
+  defaultApp?: string;
+  theme?: string; // Per-workspace theme override: 'dark' | 'light'
   /** Ordered list of sidebar items. When set, replaces the generic app list. */
   sidebarItems?: WorkspaceSidebarItem[];
 }

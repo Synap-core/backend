@@ -1165,7 +1165,10 @@ export const workspacesRouter = router({
               .optional(),
             /** Per-profile default entity bento layout; stored in workspace.settings */
             profileEntityBentoTemplates: z
-              .record(z.object({ blocks: z.array(z.record(z.unknown())) }))
+              .record(
+                z.string(),
+                z.object({ blocks: z.array(z.record(z.string(), z.unknown())) })
+              )
               .optional(),
             entityLinks: z
               .array(
