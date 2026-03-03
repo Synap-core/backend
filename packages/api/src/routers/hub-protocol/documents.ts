@@ -222,7 +222,10 @@ export const documentsRouter = router({
       });
 
       if (!doc) {
-        throw new Error("Document not found");
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found",
+        });
       }
 
       const entity = await db.query.entities.findFirst({
