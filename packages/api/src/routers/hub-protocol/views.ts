@@ -23,6 +23,22 @@ import { getDb } from "@synap/database";
 import { views } from "@synap/database/schema";
 import { and, eq } from "drizzle-orm";
 
+/** A single widget placement in the bento grid */
+const BentoWidgetInputSchema = z.object({
+  /** Cell key (e.g. "entity-detail", "channel-feed", "view") */
+  key: z.string().min(1),
+  /** Props forwarded to the cell (entityId, channelId, viewId, etc.) */
+  props: z.record(z.string(), z.unknown()).optional(),
+  /** Grid column (0-11, 12-column grid) */
+  x: z.number().int().min(0).max(11),
+  /** Grid row (0-based) */
+  y: z.number().int().min(0),
+  /** Width in grid columns (1-12) */
+  w: z.number().int().min(1).max(12),
+  /** Height in grid rows (row height = 60px) */
+  h: z.number().int().min(1),
+});
+
 export const hubViewsRouter = router({
   /**
    * List views in a workspace
@@ -185,5 +201,85 @@ export const hubViewsRouter = router({
       });
 
       return result;
+    }),
+
+  /**
+   * Arrange cells in a bento dashboard
+   * Requires: hub-protocol.write scope
+   * Governance: bento.arrange is AUTO-APPROVED — agents can freely arrange layouts.
+   *
+   * The 12-column grid uses a 60px row height. Cells are referenced by their
+   * registered cell key (entity-detail, channel-feed, view, document, agent-activity).
+   */
+  arrangeBento: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        /** Target bento view to update */
+        viewId: z.string().uuid(),
+        /** New widget layout — replaces existing bento blocks */
+        widgets: z.array(BentoWidgetInputSchema).min(1),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Permission check — bento.arrange is in DEFAULT_AUTO_APPROVE
+      const perm = await checkPermissionOrPropose({
+        userId: input.userId,
+        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        workspaceId: input.workspaceId,
+        subjectType: "bento",
+        action: "arrange",
+        source: "intelligence",
+        reasoning: input.reasoning,
+        sourceMessageId: ctx.sourceMessageId ?? undefined,
+        data: { viewId: input.viewId, widgetCount: input.widgets.length },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        // This shouldn't happen since bento.arrange is auto-approved,
+        // but handle gracefully if governance settings override the whitelist.
+        return {
+          status: "proposed" as const,
+          message: "Bento arrangement proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Build bento config from widget input
+      const blocks = input.widgets.map((w, i) => ({
+        id: `cell-${i}-${Date.now()}`,
+        kind: "widget" as const,
+        widgetType: w.key,
+        config: w.props ?? {},
+        pos: { x: w.x, y: w.y, w: w.w, h: w.h },
+      }));
+
+      // Update the view config
+      const db = await getDb();
+      await db
+        .update(views)
+        .set({
+          config: { blocks },
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(views.id, input.viewId),
+            eq(views.workspaceId, input.workspaceId)
+          )
+        );
+
+      return {
+        status: "ok" as const,
+        viewId: input.viewId,
+        widgetCount: blocks.length,
+        message: `Arranged ${blocks.length} cell${blocks.length !== 1 ? "s" : ""} in dashboard`,
+      };
     }),
 });

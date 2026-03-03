@@ -456,25 +456,13 @@ export const workspacesRouter = router({
         }
       }
 
-      const currentSettings = (workspace.settings || {}) as Record<
-        string,
-        unknown
-      >;
-      const mergedSettings = {
-        ...currentSettings,
-        intelligenceServiceId: input.serviceId ?? undefined,
-      };
-
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
         subjectType: "workspaces",
         action: "update",
-        data: {
-          id: input.workspaceId,
-          settings: mergedSettings,
-        },
+        data: { id: input.workspaceId },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -488,17 +476,14 @@ export const workspacesRouter = router({
         };
       }
 
-      // 2. Direct DB operation
+      // 2. Atomic settings patch — no read needed
       const dbConn = await getDb();
       const eventRepo = new EventRepository(sql);
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
-      await workspaceRepo.update(
+      await workspaceRepo.mergeSettings(
         input.workspaceId,
-        {
-          name: workspace.name,
-          settings: mergedSettings,
-        },
+        { intelligenceServiceId: input.serviceId ?? undefined },
         ctx.userId
       );
 
@@ -512,7 +497,7 @@ export const workspacesRouter = router({
         workspaceId: input.workspaceId,
         data: {
           id: input.workspaceId,
-          settings: mergedSettings,
+          intelligenceServiceId: input.serviceId,
         },
       });
 

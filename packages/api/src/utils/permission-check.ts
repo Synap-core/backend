@@ -215,6 +215,7 @@ export async function checkPermissionOrPropose(
           "search.*",
           "memory.recall",
           "entity.read",
+          "bento.arrange",
           "document.read",
           "context.*",
           "filesystem.read",

@@ -1422,6 +1422,48 @@ app.patch("/views/:viewId", async (c) => {
   }
 });
 
+/**
+ * POST /views/:viewId/arrange
+ */
+app.post("/views/:viewId/arrange", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const viewId = c.req.param("viewId");
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const actorId = c.get("userId") as string;
+  if (!actorId) return c.json({ error: "Unauthorized" }, 401);
+
+  try {
+    const caller = await getCaller(c, {
+      userId: actorId,
+      workspaceId: body.workspaceId,
+      sourceMessageId: body.sourceMessageId,
+    });
+    const result = await (caller as any).views.arrangeBento({
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      viewId,
+      widgets: body.widgets,
+      agentUserId: body.agentUserId,
+      reasoning: body.reasoning,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, viewId }, "arrangeBento failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
 // =============================================================================
 // Profiles & Property Defs
 // =============================================================================

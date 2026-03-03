@@ -15,7 +15,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { storage } from "@synap/storage";
 import {
   db,
@@ -40,6 +40,8 @@ import {
   getDb,
   EventRepository,
   ViewRepository,
+  WorkspaceRepository,
+  ProfileRepository,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -1196,6 +1198,127 @@ export const viewsRouter = router({
       );
 
       return { columns };
+    }),
+
+  /**
+   * Lazily create (or return existing) bento view for a profile.
+   *
+   * The viewId is stored in workspace.settings.profileBentoViewIds[profileSlug]
+   * (not on the profile row) so system/shared profiles can have different bento
+   * views per workspace. Uses mergeSettings for an atomic JSONB patch.
+   */
+  ensureProfileBento: workspaceProcedure
+    .input(z.object({ profileSlug: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(pgSql);
+
+      // 1. Check workspace settings for an existing bento view ID (O(1) lookup)
+      const workspace = await dbConn.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+      });
+      if (!workspace) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      }
+
+      const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+      const profileBentoViewIds = (settings.profileBentoViewIds ??
+        {}) as Record<string, string>;
+      const existingViewId = profileBentoViewIds[input.profileSlug];
+      if (existingViewId) {
+        return { viewId: existingViewId };
+      }
+
+      // 2. Find the profile
+      const profileRepo = new ProfileRepository(dbConn);
+      const profile = await profileRepo.getBySlugForWorkspace(
+        input.profileSlug,
+        ctx.workspaceId
+      );
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile '${input.profileSlug}' not found`,
+        });
+      }
+
+      // 3. Build default blocks and create bento view
+      const color =
+        ((profile.uiHints as Record<string, unknown>)?.color as
+          | string
+          | undefined) ?? "#6366F1";
+      const rawIcon = (profile.uiHints as Record<string, unknown>)?.icon as
+        | string
+        | undefined;
+      const icon = rawIcon
+        ? rawIcon
+            .split("-")
+            .map((s: string) => s.charAt(0).toUpperCase() + s.slice(1))
+            .join("")
+        : "Database";
+      const slug = profile.slug;
+
+      const blocks = [
+        {
+          id: `${slug}-header`,
+          kind: "widget",
+          widgetType: "section-header",
+          pos: { x: 0, y: 0, w: 12, h: 2 },
+          config: {
+            title: profile.displayName,
+            icon,
+            profileSlug: slug,
+            color,
+          },
+        },
+        {
+          id: `${slug}-count`,
+          kind: "widget",
+          widgetType: "stat-card",
+          pos: { x: 0, y: 2, w: 3, h: 3 },
+          config: {
+            label: `Total ${profile.displayName}s`,
+            aggregation: "count",
+            profileSlug: slug,
+            icon,
+            color,
+          },
+        },
+        {
+          id: `${slug}-table`,
+          kind: "widget",
+          widgetType: "view-table",
+          pos: { x: 0, y: 5, w: 12, h: 9 },
+          config: { profileSlug: slug },
+        },
+      ];
+
+      const viewRepo = new ViewRepository(dbConn, eventRepo);
+      const newView = await viewRepo.create(
+        {
+          name: profile.displayName,
+          type: "bento" as any,
+          scopeProfileIds: [profile.id],
+          config: { layout: "bento", blocks },
+          metadata: { isProfileBento: true, profileSlug: slug },
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+        },
+        ctx.userId
+      );
+
+      // 4. Atomically merge the new viewId into workspace settings
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+      await workspaceRepo.mergeSettings(
+        ctx.workspaceId,
+        { profileBentoViewIds: { ...profileBentoViewIds, [slug]: newView.id } },
+        ctx.userId
+      );
+
+      return { viewId: newView.id };
     }),
 });
 

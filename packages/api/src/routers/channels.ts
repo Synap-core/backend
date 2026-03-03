@@ -1789,6 +1789,66 @@ export const channelsRouter = router({
         documents,
       };
     }),
+
+  /**
+   * Explicitly attach a context item to a channel (user-driven, not AI-driven).
+   * Idempotent — repeated calls for the same (channelId, objectId, objectType) are no-ops.
+   */
+  addContextItem: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        objectType: z.enum(["entity", "document", "view"]),
+        objectId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.channelId),
+      });
+
+      await db
+        .insert(channelContextItems)
+        .values({
+          channelId: input.channelId,
+          objectType: input.objectType as ChannelContextObjectType,
+          objectId: input.objectId,
+          relationshipType: ChannelContextRelationshipType.USED_AS_CONTEXT,
+          userId: ctx.userId,
+          workspaceId: channel?.workspaceId ?? null,
+        })
+        .onConflictDoNothing();
+
+      return { ok: true };
+    }),
+
+  /**
+   * Remove a user-attached context item from a channel.
+   */
+  removeContextItem: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        objectId: z.string().uuid(),
+        objectType: z.enum(["entity", "document", "view"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await db
+        .delete(channelContextItems)
+        .where(
+          and(
+            eq(channelContextItems.channelId, input.channelId),
+            eq(channelContextItems.objectId, input.objectId),
+            eq(
+              channelContextItems.objectType,
+              input.objectType as ChannelContextObjectType
+            ),
+            eq(channelContextItems.userId, ctx.userId)
+          )
+        );
+      return { ok: true };
+    }),
 });
 
 /** Recursive node returned by getBranchTree — mirrors the frontend BranchNode shape */

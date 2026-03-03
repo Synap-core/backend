@@ -24,6 +24,8 @@ export const EntitySchema = z.object({
   documentId: z.string().uuid().nullable(),
   properties: z.record(z.string(), z.unknown()), // Validated properties (source of truth)
   // metadata field removed - use properties instead
+  /** System-managed state. Not validated against profile schema. Not shown in property editors. */
+  systemData: z.record(z.string(), z.unknown()).optional(),
   fileUrl: z.string().nullable(),
   filePath: z.string().nullable(),
   fileSize: z.number().nullable(),

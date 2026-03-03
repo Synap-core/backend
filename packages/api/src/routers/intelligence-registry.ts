@@ -19,6 +19,7 @@ import {
   and,
   getDb,
   EventRepository,
+  WorkspaceRepository,
   ApiKeyRepository,
   sql,
   drizzleSql,
@@ -310,47 +311,43 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
-      // Load current workspace to merge settings
-      const workspace = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, ctx.workspaceId),
-      });
-
-      if (!workspace) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Workspace not found",
-        });
-      }
-
-      const existing = (workspace.settings as Record<string, unknown>) ?? {};
-
-      let updatedSettings: Record<string, unknown>;
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
       if (input.capability) {
-        // Capability-specific override
+        // Capability-specific override — need to read existing overrides to merge sub-object
+        const workspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, ctx.workspaceId),
+        });
+        if (!workspace) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Workspace not found",
+          });
+        }
+        const existing = (workspace.settings as Record<string, unknown>) ?? {};
         const overrides =
           (existing.intelligenceServiceOverrides as
             | Record<string, string>
             | undefined) ?? {};
-        updatedSettings = {
-          ...existing,
-          intelligenceServiceOverrides: {
-            ...overrides,
-            [input.capability]: input.serviceId,
+        await workspaceRepo.mergeSettings(
+          ctx.workspaceId,
+          {
+            intelligenceServiceOverrides: {
+              ...overrides,
+              [input.capability]: input.serviceId,
+            },
           },
-        };
+          ctx.userId
+        );
       } else {
-        // Default service for the workspace
-        updatedSettings = {
-          ...existing,
-          intelligenceServiceId: input.serviceId,
-        };
+        // Default service — single key, atomic patch
+        await workspaceRepo.mergeSettings(
+          ctx.workspaceId,
+          { intelligenceServiceId: input.serviceId },
+          ctx.userId
+        );
       }
-
-      await db
-        .update(workspaces)
-        .set({ settings: updatedSettings, updatedAt: new Date() })
-        .where(eq(workspaces.id, ctx.workspaceId));
 
       logger.info(
         {
@@ -408,10 +405,14 @@ export const intelligenceRegistryRouter = router({
         updatedSettings = rest;
       }
 
-      await db
-        .update(workspaces)
-        .set({ settings: updatedSettings, updatedAt: new Date() })
-        .where(eq(workspaces.id, ctx.workspaceId));
+      // Disconnect removes a key — must use full settings replacement (not mergeSettings)
+      const disconnectEventRepo = new EventRepository(sql);
+      const wsRepo = new WorkspaceRepository(db, disconnectEventRepo);
+      await wsRepo.update(
+        ctx.workspaceId,
+        { settings: updatedSettings },
+        ctx.userId
+      );
 
       logger.info(
         {

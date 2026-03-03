@@ -12,11 +12,17 @@ import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
 export interface WorkspaceSidebarItem {
-  kind: "app" | "view" | "external";
+  kind: "app" | "view" | "profile" | "external";
   /** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
   appId?: string;
   /** View name for kind='view' — resolved lazily at click time */
   viewName?: string;
+  /**
+   * Profile slug for kind='profile'.
+   * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,
+   * or lazily creates one via ensureProfileBento if not yet set.
+   */
+  profileSlug?: string;
   /** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
   url?: string;
   /** Display label shown in the sidebar */
@@ -53,23 +59,52 @@ export interface McpServerConfig {
 }
 
 export interface WorkspaceSettings {
-  // Entity & UI Settings
+  // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
   theme?: string;
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
 
-  // MCP Server integrations
+  // ─── MCP Server integrations ─────────────────────────────────────────────────
   /** External MCP servers whose tools will be available to AI agents in this workspace */
   mcpServers?: McpServerConfig[];
 
-  // Per-workspace layout configuration
+  // ─── Per-workspace layout configuration ──────────────────────────────────────
   layout?: WorkspaceLayoutConfig;
 
-  // Main whiteboard reference
-  mainWhiteboardId?: string; // UUID of the main whiteboard view for this workspace
+  // ─── Per-workspace view ID cache ─────────────────────────────────────────────
+  /**
+   * Maps profile slug → bento dashboard view ID for this workspace.
+   * Each entry is the "home page" view for all entities of that profile type.
+   * Stored here (not on the profile row) so system/shared profiles can have
+   * different bento views per workspace.
+   * Populated on workspace creation and lazily via ensureProfileBento.
+   * Example: { "deal": "uuid-deal-bento", "contact": "uuid-contact-bento" }
+   */
+  profileBentoViewIds?: Record<string, string>;
 
-  // Intelligence service configuration
+  /**
+   * Per-profile default bento layout for entity instance dashboards.
+   * When a user opens a single entity in bento mode for the first time,
+   * this template is used to seed the bento view (instead of the generic default).
+   * Populated from the workspace template at creation time.
+   * Example: { "deal": { blocks: [...] }, "contact": { blocks: [...] } }
+   */
+  profileEntityBentoTemplates?: Record<
+    string,
+    { blocks: Array<Record<string, unknown>> }
+  >;
+
+  /** UUID of the main whiteboard view for this workspace */
+  mainWhiteboardId?: string;
+
+  /**
+   * Home dashboard view ID (type='bento', metadata.homeScope='workspace').
+   * Stored here for O(1) lookup on workspace open.
+   */
+  homeDashboardViewId?: string;
+
+  // ─── Intelligence service configuration ──────────────────────────────────────
   intelligenceServiceId?: string; // Default for workspace
   intelligenceServiceOverrides?: {
     chat?: string;

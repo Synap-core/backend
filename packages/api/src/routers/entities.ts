@@ -25,7 +25,7 @@ import {
   DocumentRepository,
   drizzleSql,
 } from "@synap/database";
-import { entities, documents, views } from "@synap/database/schema";
+import { entities, documents, views, workspaces } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -38,6 +38,7 @@ function toApiEntity(entity: any): Entity {
   return {
     ...entity,
     properties: entity.properties || {},
+    systemData: entity.systemData || {},
     fileUrl: null,
     filePath: null,
     fileSize: null,
@@ -830,9 +831,13 @@ export const entitiesRouter = router({
   /**
    * Set entity view mode: "document" (default) or "bento" (dashboard).
    *
-   * When switching to bento for the first time, automatically creates a
-   * dedicated bento view and stores its ID in entity properties (__bentoViewId).
-   * System keys use __ prefix to distinguish from user-defined properties.
+   * 3-level bento hierarchy for the initial layout:
+   *   1. workspace.settings.profileEntityBentoTemplates[profileSlug]  — template-defined default
+   *   2. Generic fallback (header + properties + content)
+   *
+   * State is stored in entity.systemData (not entity.properties) to avoid polluting
+   * user-defined fields and bypassing property validation.
+   * Any workspace member can set view mode (not just the entity creator).
    */
   setEntityViewMode: workspaceProcedure
     .input(
@@ -842,15 +847,14 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const database = await getDb();
-      const eventRepo = new EventRepository(sql);
-      const entityRepo = new EntityRepository(database, eventRepo);
-
-      // Fetch current entity
+      // Fetch entity — allow any workspace member (not just creator)
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.entityId),
-          eq(entities.userId, ctx.userId)
+          or(
+            eq(entities.workspaceId, ctx.workspaceId as any),
+            isNull(entities.workspaceId)
+          )
         ),
       });
 
@@ -858,29 +862,47 @@ export const entitiesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
 
-      const currentProperties =
-        (entity.properties as Record<string, unknown>) || {};
-      let bentoViewId = currentProperties.__bentoViewId as string | undefined;
+      const currentSystemData =
+        (entity.systemData as Record<string, unknown>) || {};
+      let bentoViewId = currentSystemData.bentoViewId as string | undefined;
 
       // Create bento view on first switch to bento mode
       if (input.mode === "bento" && !bentoViewId) {
-        const DEFAULT_ENTITY_BENTO_CONFIG = {
-          layout: "bento",
-          blocks: [
-            {
-              id: "entity-header",
-              kind: "widget",
-              widgetType: "entity-header",
-              pos: { x: 0, y: 0, w: 12, h: 2 },
-            },
-            {
-              id: "entity-props",
-              kind: "widget",
-              widgetType: "entity-properties",
-              pos: { x: 0, y: 2, w: 4, h: 6 },
-            },
-          ],
-        };
+        // Look up workspace settings for a profile-specific bento template
+        const workspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, ctx.workspaceId as string),
+        });
+
+        const profileSlug = entity.type; // entity.type === profile slug
+        const workspaceSettings =
+          (workspace?.settings as Record<string, unknown>) ?? {};
+        const profileTemplates =
+          workspaceSettings.profileEntityBentoTemplates as
+            | Record<string, { blocks: unknown[] }>
+            | undefined;
+
+        // Level 1: profile-specific template from workspace settings
+        // Level 2: generic 3-widget fallback
+        const blocks = profileTemplates?.[profileSlug]?.blocks ?? [
+          {
+            id: "entity-header",
+            kind: "widget",
+            widgetType: "entity-header",
+            pos: { x: 0, y: 0, w: 12, h: 2 },
+          },
+          {
+            id: "entity-props",
+            kind: "widget",
+            widgetType: "entity-properties",
+            pos: { x: 0, y: 2, w: 4, h: 6 },
+          },
+          {
+            id: "entity-content",
+            kind: "widget",
+            widgetType: "entity-content",
+            pos: { x: 4, y: 2, w: 8, h: 6 },
+          },
+        ];
 
         const newViewId = randomUUID();
         await db.insert(views).values({
@@ -890,24 +912,27 @@ export const entitiesRouter = router({
           type: "bento",
           category: "composite",
           name: `${entity.title || "Entity"} Dashboard`,
-          config: DEFAULT_ENTITY_BENTO_CONFIG,
-          metadata: { entityId: input.entityId, source: "entity-bento" },
+          config: { layout: "bento", blocks },
+          metadata: {
+            entityId: input.entityId,
+            source: "entity-bento",
+            profileSlug,
+          },
         });
         bentoViewId = newViewId;
       }
 
-      // Merge system keys into existing properties
-      const updatedProperties: Record<string, unknown> = {
-        ...currentProperties,
-        __viewMode: input.mode,
-        ...(bentoViewId ? { __bentoViewId: bentoViewId } : {}),
+      // Write to systemData column (not properties) — clean separation from user fields
+      const updatedSystemData: Record<string, unknown> = {
+        ...currentSystemData,
+        viewMode: input.mode,
+        ...(bentoViewId ? { bentoViewId } : {}),
       };
 
-      await entityRepo.update(
-        input.entityId,
-        { properties: updatedProperties },
-        ctx.userId
-      );
+      await db
+        .update(entities)
+        .set({ systemData: updatedSystemData, updatedAt: new Date() })
+        .where(eq(entities.id, input.entityId));
 
       return {
         status: "ok",

@@ -4,8 +4,8 @@
  * Handles all workspace CRUD operations with automatic event emission
  */
 
-import { eq } from "drizzle-orm";
-import { workspaces } from "../schema/workspaces.js";
+import { eq, sql } from "drizzle-orm";
+import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Workspace, NewWorkspace } from "../schema/workspaces.js";
@@ -78,6 +78,38 @@ export class WorkspaceRepository extends BaseRepository<
     // Emit completed event
     await this.emitCompleted("update", workspace, userId);
 
+    return workspace;
+  }
+
+  /**
+   * Shallow-merge a partial settings object into the workspace's existing settings.
+   * Uses Postgres `||` JSONB operator — atomic, no read-then-write needed.
+   * Top-level keys in `patch` overwrite the corresponding keys in settings.
+   * Keys not present in `patch` are preserved unchanged.
+   *
+   * For nested merges (e.g. updating one key inside profileBentoViewIds) the
+   * caller should build the merged sub-object and pass it as a single key:
+   *   mergeSettings(id, { profileBentoViewIds: { ...existing, deal: viewId } }, userId)
+   */
+  async mergeSettings(
+    id: string,
+    patch: Partial<WorkspaceSettings>,
+    userId: string
+  ): Promise<Workspace> {
+    const [workspace] = await this.db
+      .update(workspaces)
+      .set({
+        settings: sql`${workspaces.settings} || ${JSON.stringify(patch)}::jsonb`,
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(workspaces.id, id))
+      .returning();
+
+    if (!workspace) {
+      throw new Error("Workspace not found");
+    }
+
+    await this.emitCompleted("update", workspace, userId);
     return workspace;
   }
 
