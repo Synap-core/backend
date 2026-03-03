@@ -631,6 +631,16 @@ export async function createWorkspaceFromDefinition(
   );
   viewIds.push(homeView.id);
 
+  // Store homeDashboardViewId in workspace settings for O(1) lookup
+  {
+    const workspaceRepo3 = new WorkspaceRepository(dbConn, eventRepo);
+    await workspaceRepo3.mergeSettings(
+      workspaceId,
+      { homeDashboardViewId: homeView.id },
+      userId
+    );
+  }
+
   // 8. Create seed entities
   const entityRepo = new EntityRepository(dbConn, eventRepo);
   const entityRefMap: Record<string, string> = {};

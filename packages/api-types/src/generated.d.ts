@@ -1439,13 +1439,21 @@ export interface ExecutionStats {
 export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	ctx: Context;
 	meta: object;
-	errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+	errorShape: {
+		message: string;
+		code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		data: import("@trpc/server").TRPCDefaultErrorData;
+	};
 	transformer: true;
 }, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 	setup: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		status: import("@trpc/server").TRPCQueryProcedure<{
@@ -1460,7 +1468,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	events: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		log: import("@trpc/server").TRPCMutationProcedure<{
@@ -1520,7 +1532,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	capture: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		thought: import("@trpc/server").TRPCMutationProcedure<{
@@ -1545,7 +1561,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	entities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -1809,7 +1829,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	chat: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		createChannel: import("@trpc/server").TRPCMutationProcedure<{
@@ -2389,7 +2413,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	proposals: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -2502,13 +2530,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	suggestions: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{}>>;
 	system: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		getCapabilities: import("@trpc/server").TRPCQueryProcedure<{
@@ -2820,7 +2856,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	hub: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		generateAccessToken: import("@trpc/server").TRPCMutationProcedure<{
@@ -2885,7 +2925,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	apiKeys: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -3016,7 +3060,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	health: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		alive: import("@trpc/server").TRPCQueryProcedure<{
@@ -3075,7 +3123,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	integrations: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -3151,7 +3203,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	documents: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -3359,7 +3415,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	content: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		createFromText: import("@trpc/server").TRPCMutationProcedure<{
@@ -3398,7 +3458,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	storage: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		listBuckets: import("@trpc/server").TRPCQueryProcedure<{
@@ -3512,7 +3576,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	notifications: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		ingest: import("@trpc/server").TRPCMutationProcedure<{
@@ -3550,10 +3618,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				id: string;
 				data: unknown;
+				type: string;
 				updatedAt: Date;
 				createdAt: Date;
 				timestamp: Date;
-				type: string;
 				title: string;
 				preview: string | null;
 				status: string | null;
@@ -3604,7 +3672,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	intelligenceRegistry: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		register: import("@trpc/server").TRPCMutationProcedure<{
@@ -3622,12 +3694,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				id: string;
+				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				metadata: Record<string, unknown> | null;
 				version: string | null;
 				status: string;
-				description: string | null;
 				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
@@ -3668,12 +3740,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				id: string;
+				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				metadata: Record<string, unknown> | null;
 				version: string | null;
 				status: string;
-				description: string | null;
 				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
@@ -3895,7 +3967,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	intelligence: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		listCommands: import("@trpc/server").TRPCQueryProcedure<{
@@ -4240,7 +4316,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	capabilities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -4310,7 +4390,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	search: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		entities: import("@trpc/server").TRPCQueryProcedure<{
@@ -4353,9 +4437,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					id: string;
+					type: string;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -4382,7 +4466,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	relations: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -4396,8 +4484,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
-					createdAt: Date;
 					type: string;
+					createdAt: Date;
 					metadata: unknown;
 					sourceEntityId: string;
 					targetEntityId: string;
@@ -4431,8 +4519,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
-					createdAt: Date;
 					type: string;
+					createdAt: Date;
 					metadata: unknown;
 					sourceEntityId: string;
 					targetEntityId: string;
@@ -4452,9 +4540,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					id: string;
+					type: string;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -4510,9 +4598,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						workspaceId: string | null;
 						userId: string;
 						id: string;
+						type: string;
 						updatedAt: Date;
 						createdAt: Date;
-						type: string;
 						profileId: string | null;
 						title: string | null;
 						preview: string | null;
@@ -4559,7 +4647,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	graph: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		getNode: import("@trpc/server").TRPCQueryProcedure<{
@@ -4574,9 +4666,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					id: string;
+					type: string;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -4594,9 +4686,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					id: string;
+					type: string;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -4610,8 +4702,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
-					createdAt: Date;
 					type: string;
+					createdAt: Date;
 					metadata: unknown;
 					sourceEntityId: string;
 					targetEntityId: string;
@@ -4637,9 +4729,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					id: string;
+					type: string;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -4653,8 +4745,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
-					createdAt: Date;
 					type: string;
+					createdAt: Date;
 					metadata: unknown;
 					sourceEntityId: string;
 					targetEntityId: string;
@@ -4694,7 +4786,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	workspaces: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -4724,10 +4820,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				joinedAt: Date;
 				name: string;
 				id: string;
-				updatedAt: Date;
-				createdAt: Date;
 				type: string;
 				description: string | null;
+				updatedAt: Date;
+				createdAt: Date;
 				settings: WorkspaceSettings;
 				ownerId: string;
 				subscriptionTier: string | null;
@@ -4744,10 +4840,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				role: string;
 				name: string;
 				id: string;
-				updatedAt: Date;
-				createdAt: Date;
 				type: string;
 				description: string | null;
+				updatedAt: Date;
+				createdAt: Date;
 				settings: WorkspaceSettings;
 				ownerId: string;
 				subscriptionTier: string | null;
@@ -5115,7 +5211,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	views: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -5155,13 +5255,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5193,13 +5293,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				id: string;
 				query: unknown;
+				type: string;
+				description: string | null;
 				columns: unknown;
 				updatedAt: Date;
 				createdAt: Date;
-				type: string;
 				metadata: unknown;
 				documentId: string | null;
-				description: string | null;
 				category: string;
 				scopeProfileIds: string[] | null;
 				scopeMode: string | null;
@@ -5227,13 +5327,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5261,13 +5361,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5296,13 +5396,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5329,13 +5429,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5423,13 +5523,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5491,7 +5591,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	preferences: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
@@ -5658,7 +5762,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	roles: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -5669,9 +5777,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				workspaceId: string | null;
 				id: string;
+				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
-				description: string | null;
 				createdBy: string;
 				permissions: unknown;
 				filters: unknown;
@@ -5686,9 +5794,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				workspaceId: string | null;
 				id: string;
+				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
-				description: string | null;
 				createdBy: string;
 				permissions: unknown;
 				filters: unknown;
@@ -5750,7 +5858,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	sharing: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		createPublicLink: import("@trpc/server").TRPCMutationProcedure<{
@@ -5799,9 +5911,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					id: string;
+					type: string;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -5816,13 +5928,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					id: string;
 					query: unknown;
+					type: string;
+					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
-					type: string;
 					metadata: unknown;
 					documentId: string | null;
-					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5932,7 +6044,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	templates: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -6039,7 +6155,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "relations" | "tag" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
+								type: "number" | "date" | "link" | "relations" | "tag" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -6153,7 +6269,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "relations" | "tag" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
+								type: "number" | "date" | "link" | "relations" | "tag" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -6212,11 +6328,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				userId: string | null;
 				id: string;
+				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				version: number;
 				entityType: string | null;
-				description: string | null;
 				config: unknown;
 				targetType: string;
 				inboxItemType: string | null;
@@ -6239,7 +6355,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	whiteboards: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		saveVersion: import("@trpc/server").TRPCMutationProcedure<{
@@ -6325,7 +6445,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	skills: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -6444,7 +6568,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	backgroundTasks: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -6526,7 +6654,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	messageLinks: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -6658,7 +6790,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	profiles: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -6885,7 +7021,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	propertyDefs: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -6992,7 +7132,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	profileProperties: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		link: import("@trpc/server").TRPCMutationProcedure<{
@@ -7056,7 +7200,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	relationDefs: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -7066,9 +7214,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
+					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
-					description: string | null;
 					slug: string;
 					uiHints: unknown;
 					displayName: string;
@@ -7090,9 +7238,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
+					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
-					description: string | null;
 					slug: string;
 					uiHints: unknown;
 					displayName: string;
@@ -7114,9 +7262,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					id: string;
+					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
-					description: string | null;
 					slug: string;
 					uiHints: unknown;
 					displayName: string;
@@ -7138,7 +7286,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	profileRelations: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		link: import("@trpc/server").TRPCMutationProcedure<{
@@ -7190,7 +7342,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	agentUsers: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -7253,7 +7409,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	mcpServers: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -7264,11 +7424,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					id: string;
 					errorMessage: string | null;
+					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: Record<string, unknown>;
 					status: McpStatus;
-					description: string | null;
 					url: string | null;
 					enabled: boolean;
 					slug: string;
@@ -7299,11 +7459,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					id: string;
 					errorMessage: string | null;
+					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: Record<string, unknown>;
 					status: McpStatus;
-					description: string | null;
 					url: string | null;
 					enabled: boolean;
 					slug: string;
@@ -7424,7 +7584,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	agentConfigs: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
-		errorShape: import("@trpc/server").TRPCDefaultErrorShape;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
