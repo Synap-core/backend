@@ -86,6 +86,8 @@ export const POD_ADMIN_DEFINITION: WorkspaceDefinitionInput = {
     },
   ],
 
+  bentoViewName: "Admin Dashboard",
+
   layoutConfig: {
     pinnedApps: ["dashboard", "intelligence", "data", "browser"],
     defaultView: "dashboard",
@@ -99,21 +101,21 @@ export const POD_ADMIN_DEFINITION: WorkspaceDefinitionInput = {
         label: "Services",
         icon: "Sparkles",
       },
-      // All channels across the pod
+      // All channels across the pod — opens the Channels browser app
       {
-        kind: "view",
-        viewName: "All Channels",
+        kind: "app",
+        appId: "channels",
         label: "Channels",
         icon: "MessageSquare",
       },
-      // Governance proposals
+      // Governance proposals — opens the Proposals browser app
       {
-        kind: "view",
-        viewName: "Proposals",
+        kind: "app",
+        appId: "proposals",
         label: "Proposals",
         icon: "Inbox",
       },
-      // Workspace manager
+      // Workspace manager (data view scoped to workspaces profile)
       {
         kind: "view",
         viewName: "Workspaces",

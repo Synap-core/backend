@@ -125,6 +125,8 @@ export interface WorkspaceDefinitionInput {
     pos: { x: number; y: number; w: number; h: number };
     overrides?: Record<string, unknown>;
   }>;
+  /** Override the default "Home" name for the workspace home bento view */
+  bentoViewName?: string;
   suggestedEntities?: Array<{
     profileSlug: string;
     title: string;
@@ -472,7 +474,7 @@ export async function createWorkspaceFromDefinition(
 
   const homeView = await viewRepo.create(
     {
-      name: "Home",
+      name: definition.bentoViewName ?? "Home",
       type: "bento",
       config: {
         layout: "bento",
