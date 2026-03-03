@@ -1255,6 +1255,77 @@ export const channelsRouter = router({
     }),
 
   /**
+   * Backward-compat alias for listThreads (used by Electron client).
+   */
+  list: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        threadType: z.enum(["main", "branch", "ai_thread"]).optional(),
+        limit: z.number().min(1).max(100).default(20),
+        contextObjectId: z.string().uuid().optional(),
+        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const conditions: any[] = [eq(channels.userId, ctx.userId)];
+
+      if (input.workspaceId !== undefined) {
+        conditions.push(eq(channels.workspaceId, input.workspaceId));
+      }
+
+      if (input.threadType) {
+        const channelType =
+          input.threadType === "branch"
+            ? ChannelType.BRANCH
+            : ChannelType.AI_THREAD;
+        conditions.push(eq(channels.channelType, channelType));
+      }
+
+      if (input.contextObjectId !== undefined) {
+        conditions.push(eq(channels.contextObjectId, input.contextObjectId));
+      }
+
+      if (input.contextObjectType !== undefined) {
+        conditions.push(
+          eq(channels.contextObjectType, input.contextObjectType)
+        );
+      }
+
+      const allChannels = await db.query.channels.findMany({
+        where: and(...conditions),
+        orderBy: [desc(channels.updatedAt)],
+        limit: input.limit,
+      });
+
+      if (allChannels.length === 0) {
+        return { threads: [] };
+      }
+
+      const channelIds = allChannels.map((c) => c.id);
+      const rowsWithAssistant = await db
+        .select({ channelId: messages.channelId })
+        .from(messages)
+        .where(
+          and(
+            inArray(messages.channelId, channelIds),
+            eq(messages.role, MessageRole.ASSISTANT)
+          )
+        );
+      const channelIdsWithAssistant = new Set(
+        rowsWithAssistant.map((r) => r.channelId)
+      );
+
+      const threadsWithFlags = allChannels.map((c) => ({
+        ...c,
+        hasAssistantMessage: channelIdsWithAssistant.has(c.id),
+        origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
+      }));
+
+      return { threads: threadsWithFlags };
+    }),
+
+  /**
    * Get branch channels for a parent channel
    */
   getBranches: protectedProcedure
