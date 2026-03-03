@@ -30,6 +30,7 @@ import {
   asc,
   type SQL,
   views,
+  workspaces,
   documents,
   documentVersions,
   entities,

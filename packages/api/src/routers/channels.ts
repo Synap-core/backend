@@ -1807,6 +1807,13 @@ export const channelsRouter = router({
         where: eq(channels.id, input.channelId),
       });
 
+      if (!channel?.workspaceId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+
       await db
         .insert(channelContextItems)
         .values({
@@ -1815,7 +1822,7 @@ export const channelsRouter = router({
           objectId: input.objectId,
           relationshipType: ChannelContextRelationshipType.USED_AS_CONTEXT,
           userId: ctx.userId,
-          workspaceId: channel?.workspaceId ?? null,
+          workspaceId: channel.workspaceId,
         })
         .onConflictDoNothing();
 
