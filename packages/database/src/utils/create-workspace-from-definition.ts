@@ -176,6 +176,8 @@ export interface CreateFromDefinitionOptions {
   packageVersion?: string;
   workspaceName?: string;
   createdBy: "user" | "provisioning" | "plugin";
+  /** Optional system slug written atomically into settings on creation (e.g. "pod-admin"). */
+  systemSlug?: string;
 }
 
 export interface CreateFromDefinitionResult {
@@ -195,6 +197,7 @@ export async function createWorkspaceFromDefinition(
     packageVersion,
     workspaceName,
     createdBy,
+    systemSlug,
   } = opts;
   const { randomUUID } = await import("crypto");
 
@@ -240,6 +243,9 @@ export async function createWorkspaceFromDefinition(
   if (createdBy === "provisioning") {
     settings.provisionedAt = new Date().toISOString();
     settings.provisioningStatus = "active";
+  }
+  if (systemSlug) {
+    settings.systemSlug = systemSlug;
   }
 
   // 1. Create workspace

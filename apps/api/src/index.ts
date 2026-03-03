@@ -497,25 +497,17 @@ app.get("/api/events/stream", (c) => {
   });
 });
 
-// tRPC routes (protected by auth, except public routes)
+// tRPC routes — apply session auth for all routes except health.* and setup.*
+// system.* procedures enforce their own auth level (protectedProcedure / podAdminProcedure)
 app.use("/trpc/*", async (c, next) => {
   const path = c.req.path;
 
-  // Public routes that don't require authentication
-  const isHealthRoute = path.includes("health.");
-  const isSystemRoute = path.includes("system.");
-  const isSetupRoute = path.includes("setup.");
-  const isDev = config.server.nodeEnv === "development";
-
-  // In development, allow public access to system.* and health.* routes
-  // In production, health.* and setup.* routes are always public
-  if (isHealthRoute || isSetupRoute || (isSystemRoute && isDev)) {
-    apiLogger.debug({ path }, "Bypassing auth for public route");
+  // health.* and setup.* are always public (no session required)
+  if (path.includes("health.") || path.includes("setup.")) {
     return next();
   }
 
-  // Apply Kratos session-based auth middleware for all protected routes
-  // This validates the session cookie with Kratos and sets user context
+  // Everything else requires a valid Kratos session
   return authMiddleware(c, next);
 });
 

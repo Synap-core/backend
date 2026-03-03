@@ -32,6 +32,7 @@ import {
   workspaceMembers,
   apiKeys,
   workspaces,
+  intelligenceServices,
 } from "@synap/database/schema";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 
@@ -40,28 +41,32 @@ const workspaceIdEnv = process.env.WORKSPACE_ID;
 const adminEmail = process.env.ADMIN_EMAIL;
 const action = process.env.ACTION || "provision";
 
-if (!serviceType) {
-  console.error("❌ ERROR: SERVICE_TYPE environment variable is required");
-  console.error("");
-  console.error("Usage:");
-  console.error(
-    "  SERVICE_TYPE=openclaw WORKSPACE_ID=<uuid> node dist/scripts/provision-agent.js"
-  );
-  console.error(
-    "  SERVICE_TYPE=openclaw ADMIN_EMAIL=admin@example.com node dist/scripts/provision-agent.js"
-  );
-  console.error("");
-  console.error(
-    `Known service types: ${Object.keys(SERVICE_CATALOG).join(", ")}`
-  );
-  process.exit(1);
-}
+// "list" action doesn't need SERVICE_TYPE — validated below for other actions
+const entry = serviceType ? SERVICE_CATALOG[serviceType] : undefined;
 
-const entry = SERVICE_CATALOG[serviceType];
-if (!entry) {
-  console.error(`❌ ERROR: Unknown service type "${serviceType}"`);
-  console.error(`Known types: ${Object.keys(SERVICE_CATALOG).join(", ")}`);
-  process.exit(1);
+if (action !== "list") {
+  if (!serviceType) {
+    console.error("❌ ERROR: SERVICE_TYPE environment variable is required");
+    console.error("");
+    console.error("Usage:");
+    console.error(
+      "  SERVICE_TYPE=openclaw WORKSPACE_ID=<uuid> node dist/scripts/provision-agent.js"
+    );
+    console.error(
+      "  SERVICE_TYPE=openclaw ADMIN_EMAIL=admin@example.com node dist/scripts/provision-agent.js"
+    );
+    console.error("");
+    console.error(
+      `Known service types: ${Object.keys(SERVICE_CATALOG).join(", ")}`
+    );
+    process.exit(1);
+  }
+
+  if (!entry) {
+    console.error(`❌ ERROR: Unknown service type "${serviceType}"`);
+    console.error(`Known types: ${Object.keys(SERVICE_CATALOG).join(", ")}`);
+    process.exit(1);
+  }
 }
 
 // WORKSPACE_ID or ADMIN_EMAIL are optional — falls back to first workspace in DB
@@ -136,24 +141,188 @@ async function findAgent(
   return row;
 }
 
+const hr = "─".repeat(68);
+const check = (v: boolean) => (v ? "✅" : "❌");
+
 async function run() {
   const db = await getDb();
-  const workspaceId = await resolveWorkspaceId(db);
   const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+
+  // ── list ─────────────────────────────────────────────────────────────────
+  if (action === "list") {
+    const allAgents = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        agentMetadata: users.agentMetadata,
+        workspaceId: workspaceMembers.workspaceId,
+        role: workspaceMembers.role,
+      })
+      .from(users)
+      .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+      .where(eq(users.userType, "agent"));
+
+    if (allAgents.length === 0) {
+      console.log("No agent services provisioned.");
+      console.log(
+        `Known types: ${Object.keys(SERVICE_CATALOG).join(", ")}\n` +
+          `Run: synap services add <type>`
+      );
+      process.exit(0);
+    }
+
+    console.log(`\n${hr}`);
+    console.log(` Provisioned Agent Services (${allAgents.length})`);
+    console.log(hr);
+
+    for (const agent of allAgents) {
+      const meta = agent.agentMetadata as Record<string, unknown> | null;
+      const agentType = (meta?.agentType as string) || "unknown";
+      const catalogEntry = SERVICE_CATALOG[agentType];
+      const displayName = catalogEntry?.displayName ?? agentType;
+
+      const [keyRow] = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(apiKeys)
+        .where(and(eq(apiKeys.userId, agent.id), eq(apiKeys.isActive, true)));
+
+      const keyCount = keyRow?.count ?? 0;
+      const keyStatus = keyCount > 0 ? `${keyCount} active ✅` : "none ❌";
+
+      console.log(`\n  ${displayName}`);
+      console.log(`    Type:       ${agentType}`);
+      console.log(`    Agent ID:   ${agent.id}`);
+      console.log(`    Workspace:  ${agent.workspaceId}`);
+      console.log(`    Role:       ${agent.role}`);
+      console.log(`    API Keys:   ${keyStatus}`);
+    }
+
+    console.log(`\n${hr}\n`);
+    process.exit(0);
+  }
+
+  const workspaceId = await resolveWorkspaceId(db);
+  // At this point action is one of: status, remove, rotate, provision — all require entry
+  const e = entry!;
 
   // ── status ──────────────────────────────────────────────────────────────
   if (action === "status") {
     const agent = await findAgent(db, workspaceId);
     if (!agent) {
       console.log(
-        `${entry.displayName}: NOT provisioned in workspace ${workspaceId}`
+        `${entry!.displayName}: NOT provisioned in workspace ${workspaceId}`
       );
-    } else {
-      console.log(`${entry.displayName}: provisioned`);
-      console.log(`   Agent User ID: ${agent.id}`);
-      console.log(`   Agent Email:   ${agent.email}`);
-      console.log(`   Workspace ID:  ${workspaceId}`);
+      console.log(`  Run: synap services add ${serviceType}`);
+      process.exit(0);
     }
+
+    // Active API keys
+    const activeKeys = await db
+      .select({ id: apiKeys.id, keyName: apiKeys.keyName })
+      .from(apiKeys)
+      .where(and(eq(apiKeys.userId, agent.id), eq(apiKeys.isActive, true)));
+
+    // Intelligence service registration
+    let service:
+      | {
+          serviceId: string;
+          webhookUrl: string;
+          mcpEndpoint: string | null;
+          mcpApproved: boolean;
+          status: string;
+          lastHealthCheck: Date | null;
+          lastHealthStatus: string | null;
+        }
+      | undefined;
+
+    if (entry!.matchCapability) {
+      const [svc] = await db
+        .select({
+          serviceId: intelligenceServices.serviceId,
+          webhookUrl: intelligenceServices.webhookUrl,
+          mcpEndpoint: intelligenceServices.mcpEndpoint,
+          mcpApproved: intelligenceServices.mcpApproved,
+          status: intelligenceServices.status,
+          lastHealthCheck: intelligenceServices.lastHealthCheck,
+          lastHealthStatus: intelligenceServices.lastHealthStatus,
+        })
+        .from(intelligenceServices)
+        .where(
+          drizzleSql`${intelligenceServices.capabilities} @> ${JSON.stringify([entry!.matchCapability])}::jsonb`
+        )
+        .limit(1);
+      service = svc;
+    }
+
+    console.log(`\n${hr}`);
+    console.log(` ${entry!.displayName} — Status`);
+    console.log(hr);
+    console.log(`  Provisioned:    ✅`);
+    console.log(`  Agent ID:       ${agent.id}`);
+    console.log(`  Agent Email:    ${agent.email}`);
+    console.log(`  Workspace:      ${workspaceId}`);
+    console.log(
+      `  API Keys:       ${
+        activeKeys.length > 0
+          ? `${activeKeys.length} active ✅`
+          : `none ❌  →  run: synap services rotate ${serviceType}`
+      }`
+    );
+
+    console.log("");
+
+    if (service) {
+      const healthIcon =
+        service.lastHealthStatus === "healthy"
+          ? "✅"
+          : service.lastHealthStatus === "degraded"
+            ? "⚠️ "
+            : service.lastHealthStatus
+              ? "❌"
+              : "—";
+
+      let healthStr = "not yet checked";
+      if (service.lastHealthCheck) {
+        const ago = Math.round(
+          (Date.now() - new Date(service.lastHealthCheck).getTime()) /
+            1000 /
+            60
+        );
+        healthStr = `${service.lastHealthStatus || "unknown"} (checked ${ago}m ago)`;
+      }
+
+      console.log(`  Service Registration:`);
+      console.log(`    Connected:    ✅`);
+      console.log(`    Service ID:   ${service.serviceId}`);
+      console.log(`    Webhook:      ${service.webhookUrl}`);
+      console.log(
+        `    Status:       ${service.status === "active" ? "✅ active" : "⚠️  " + service.status}`
+      );
+      console.log(`    Health:       ${healthIcon} ${healthStr}`);
+      if (service.mcpEndpoint) {
+        console.log(`    MCP Endpoint: ${service.mcpEndpoint}`);
+        console.log(`    MCP Approved: ${check(service.mcpApproved)}`);
+        if (!service.mcpApproved) {
+          console.log(
+            `      → Approve via: synap services approve-mcp ${serviceType}`
+          );
+        }
+      } else {
+        console.log(`    MCP Endpoint: — (not registered)`);
+      }
+    } else {
+      console.log(`  Service Registration: ❌ not connected`);
+      console.log(
+        `    The ${entry!.displayName} container has not registered itself.`
+      );
+      console.log(
+        `    Ensure it is running with the correct SYNAP_POD_URL and SYNAP_HUB_API_KEY.`
+      );
+      console.log(`    Pod URL (current): ${podUrl}`);
+    }
+
+    console.log(`\n${hr}\n`);
     process.exit(0);
   }
 
@@ -162,7 +331,7 @@ async function run() {
     const agent = await findAgent(db, workspaceId);
     if (!agent) {
       console.error(
-        `❌ ${entry.displayName} is not provisioned in workspace ${workspaceId}`
+        `❌ ${e.displayName} is not provisioned in workspace ${workspaceId}`
       );
       process.exit(1);
     }
@@ -187,7 +356,7 @@ async function run() {
 
     await db.delete(users).where(eq(users.id, agent.id));
 
-    console.log(`✅ ${entry.displayName} agent deprovisioned`);
+    console.log(`✅ ${e.displayName} agent deprovisioned`);
     process.exit(0);
   }
 
@@ -196,7 +365,7 @@ async function run() {
     const agent = await findAgent(db, workspaceId);
     if (!agent) {
       console.error(
-        `❌ ${entry.displayName} is not provisioned in workspace ${workspaceId}`
+        `❌ ${e.displayName} is not provisioned in workspace ${workspaceId}`
       );
       process.exit(1);
     }
@@ -221,24 +390,24 @@ async function run() {
 
     await apiKeyRepo.create(
       {
-        keyName: `${entry.displayName} — workspace ${workspaceId} (rotated)`,
+        keyName: `${e.displayName} — workspace ${workspaceId} (rotated)`,
         keyPrefix,
         key: plainKey,
-        scope: entry.defaultScopes,
+        scope: e.defaultScopes,
         userId: agent.id,
         keyType: "hub_inbound",
-        description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
+        description: `Hub Protocol auth token for ${e.displayName} agent service. Used by the ${e.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
       },
       "system"
     );
 
-    console.log(`✅ ${entry.displayName} API key rotated`);
+    console.log(`✅ ${e.displayName} API key rotated`);
     console.log(`   New SYNAP_HUB_API_KEY="${plainKey}"`);
     console.log("");
-    if (entry.buildDockerCommand) {
+    if (e.buildDockerCommand) {
       console.log("Docker run command:");
       console.log(
-        entry.buildDockerCommand({
+        e.buildDockerCommand({
           podUrl,
           workspaceId,
           agentUserId: agent.id,
@@ -254,7 +423,7 @@ async function run() {
   // ── provision (default) ─────────────────────────────────────────────────
   const existing = await findAgent(db, workspaceId);
   if (existing) {
-    console.log(`ℹ️  ${entry.displayName} agent already provisioned`);
+    console.log(`ℹ️  ${e.displayName} agent already provisioned`);
     console.log(`   Agent User ID: ${existing.id}`);
     console.log(`   Agent Email:   ${existing.email}`);
     console.log(`   Workspace ID:  ${workspaceId}`);
@@ -271,14 +440,14 @@ async function run() {
   await db.insert(users).values({
     id: agentId,
     email,
-    name: `${entry.displayName} Agent`,
+    name: `${e.displayName} Agent`,
     emailVerified: true,
     userType: "agent",
     agentMetadata: {
       agentType: serviceType,
-      description: entry.description,
+      description: e.description,
       createdByUserId: "system",
-      capabilities: entry.agentCapabilities,
+      capabilities: e.agentCapabilities,
     } as any,
     timezone: "UTC",
     locale: "en",
@@ -287,7 +456,7 @@ async function run() {
   await db.insert(workspaceMembers).values({
     workspaceId,
     userId: agentId,
-    role: entry.agentRole,
+    role: e.agentRole,
     invitedBy: null,
   });
 
@@ -302,18 +471,18 @@ async function run() {
 
   await apiKeyRepo.create(
     {
-      keyName: `${entry.displayName} — workspace ${workspaceId}`,
+      keyName: `${e.displayName} — workspace ${workspaceId}`,
       keyPrefix,
       key: plainKey,
-      scope: entry.defaultScopes,
+      scope: e.defaultScopes,
       userId: agentId,
       keyType: "hub_inbound",
-      description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
+      description: `Hub Protocol auth token for ${e.displayName} agent service. Used by the ${e.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
     },
     "system"
   );
 
-  console.log(`✅ ${entry.displayName} agent provisioned`);
+  console.log(`✅ ${e.displayName} agent provisioned`);
   console.log("");
   console.log("Required environment variables:");
   console.log(`  SYNAP_POD_URL="${podUrl}"`);
@@ -321,10 +490,10 @@ async function run() {
   console.log(`  SYNAP_WORKSPACE_ID="${workspaceId}"`);
   console.log(`  SYNAP_AGENT_USER_ID="${agentId}"`);
   console.log("");
-  if (entry.buildDockerCommand) {
+  if (e.buildDockerCommand) {
     console.log("Docker run command:");
     console.log(
-      entry.buildDockerCommand({
+      e.buildDockerCommand({
         podUrl,
         workspaceId,
         agentUserId: agentId,

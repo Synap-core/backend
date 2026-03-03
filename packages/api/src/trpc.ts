@@ -14,8 +14,8 @@ import superjson from "superjson";
 import type { Context } from "./context.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
-import { db, eq, and } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
+import { db, eq, and, drizzleSql, inArray } from "@synap/database";
+import { workspaceMembers, workspaces } from "@synap/database/schema";
 import "@synap/database"; // Fix TS2742: inferred type portability
 
 const logger = createLogger({ module: "trpc" });
@@ -106,6 +106,48 @@ export const workspaceProcedure = protectedProcedure.use(async (opts) => {
       workspaceRole: membership.role, // Add role to context for convenience
     },
   });
+});
+
+/**
+ * Pod-admin procedure (auth + pod admin role required)
+ *
+ * Restricts access to users who are an admin or owner of the pod-admin
+ * workspace (the system workspace with settings.systemSlug = 'pod-admin').
+ * Used for sensitive system operations: raw DB access, tool execution, event injection.
+ */
+export const podAdminProcedure = protectedProcedure.use(async (opts) => {
+  const { ctx } = opts;
+
+  // Find the pod-admin workspace
+  const podAdminWorkspace = await db.query.workspaces.findFirst({
+    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+    columns: { id: true },
+  });
+
+  if (!podAdminWorkspace) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Pod administration workspace not found",
+    });
+  }
+
+  // Verify user is an admin or owner of that workspace
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+      eq(workspaceMembers.userId, ctx.userId),
+      inArray(workspaceMembers.role, ["admin", "owner"])
+    ),
+  });
+
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Pod admin access required",
+    });
+  }
+
+  return opts.next({ ctx });
 });
 
 export const router = t.router as typeof t.router;

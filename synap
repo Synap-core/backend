@@ -81,6 +81,7 @@ generate_and_create_env() {
     local KRATOS_COOKIE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
     local KRATOS_CIPHER=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
     local KRATOS_WEBHOOK=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local MINIO_ACCESS_KEY=$(openssl rand -hex 12)
     local MINIO_SECRET_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
     local TYPESENSE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
     local TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
@@ -126,7 +127,7 @@ JWT_SECRET=${JWT_SECRET}
 KRATOS_SECRETS_COOKIE=${KRATOS_COOKIE}
 KRATOS_SECRETS_CIPHER=${KRATOS_CIPHER}
 KRATOS_WEBHOOK_SECRET=${KRATOS_WEBHOOK}
-MINIO_ACCESS_KEY=minioadmin
+MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
 MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
 TYPESENSE_API_KEY=${TYPESENSE_KEY}
 TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
@@ -1775,12 +1776,7 @@ cmd_services() {
         list)
             echo -e "${BLUE}🤖 Listing provisioned agent services...${NC}"
             docker compose exec -T backend \
-                node -e "
-                  const { getDb, drizzleSql } = require('@synap/database');
-                  const { users, workspaceMembers } = require('@synap/database/schema');
-                  const { eq } = require('@synap/database');
-                  getDb().then(db => db.select({ id: users.id, email: users.email, agentMetadata: users.agentMetadata }).from(users).innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id)).where(eq(users.userType, 'agent'))).then(rows => { console.log(JSON.stringify(rows, null, 2)); process.exit(0); }).catch(e => { console.error(e.message); process.exit(1); });
-                " 2>/dev/null || {
+                sh -c "ACTION=list node dist/scripts/provision-agent.js" 2>/dev/null || {
                     echo -e "${YELLOW}Tip: ensure the backend container is running (synap start)${NC}"
                 }
             ;;

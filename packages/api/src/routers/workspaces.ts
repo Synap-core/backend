@@ -1338,21 +1338,16 @@ export const workspacesRouter = router({
       return { workspaceId: existing.id, created: false };
     }
 
-    // Create the pod-admin workspace from the system template
+    // Create the pod-admin workspace from the system template.
+    // systemSlug is written atomically into settings so the idempotency check
+    // above always finds it — even if workspace-init updates the row later.
     const result = await createWorkspaceFromDefinition({
       definition: POD_ADMIN_DEFINITION,
       userId: ctx.userId,
       workspaceName: POD_ADMIN_WORKSPACE_NAME,
       createdBy: "provisioning",
+      systemSlug: POD_ADMIN_SYSTEM_SLUG,
     });
-
-    // Stamp the systemSlug so future calls can find this workspace
-    await db
-      .update(workspaces)
-      .set({
-        settings: drizzleSql`${workspaces.settings} || jsonb_build_object('systemSlug', ${POD_ADMIN_SYSTEM_SLUG}::text)`,
-      })
-      .where(eq(workspaces.id, result.workspaceId));
 
     // Enqueue workspace-init for default whiteboard/commands (skip default views)
     try {

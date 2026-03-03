@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { publicProcedure, protectedProcedure, router } from "../trpc.js";
+import { publicProcedure, protectedProcedure, podAdminProcedure, router } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
@@ -214,12 +214,12 @@ export const systemRouter = router({
    * This procedure allows manual event publishing for testing and debugging.
    * The event is validated, stored in the event store, and dispatched to pg-boss workers.
    */
-  publishEvent: publicProcedure
+  publishEvent: podAdminProcedure
     .input(
       z.object({
         type: z.string().min(1),
         data: z.record(z.string(), z.unknown()),
-        userId: z.string().min(1),
+        userId: z.string().min(1).optional(), // Optional: defaults to authenticated user
         subjectId: z.string().uuid().optional(),
         source: z
           .enum(["api", "automation", "sync", "migration", "system"])
@@ -228,12 +228,14 @@ export const systemRouter = router({
         causationId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // Use authenticated user's ID unless explicitly overridden by pod admin
+      const eventUserId = input.userId || ctx.userId;
       // Create the event
       const event = createSynapEvent({
         type: input.type as any,
         data: input.data,
-        userId: input.userId,
+        userId: eventUserId,
         subjectId: input.subjectId,
         source: input.source || "system",
         correlationId: input.correlationId,
@@ -265,7 +267,7 @@ export const systemRouter = router({
    * Returns the most recent events from the event store.
    * Optimized for live event stream with minimal data and filtering.
    */
-  getRecentEvents: publicProcedure
+  getRecentEvents: protectedProcedure
     .input(
       z.object({
         limit: z.number().min(1).max(100).default(20),
@@ -304,7 +306,7 @@ export const systemRouter = router({
    * Returns all events that share the same correlation ID.
    * Useful for tracing workflows and debugging event chains.
    */
-  getTrace: publicProcedure
+  getTrace: protectedProcedure
     .input(
       z.object({
         correlationId: z.string().uuid(),
@@ -336,7 +338,7 @@ export const systemRouter = router({
    *
    * Finds the event, then fetches all related events with the same correlation ID.
    */
-  getEventTrace: publicProcedure
+  getEventTrace: protectedProcedure
     .input(z.object({ eventId: z.string().uuid() }))
     .query(async ({ input }) => {
       // 1. Get the main event
@@ -383,7 +385,7 @@ export const systemRouter = router({
    * Supports filtering by user, event type, aggregate, date range, etc.
    * Useful for the Event Store Advanced Search feature.
    */
-  searchEvents: publicProcedure
+  searchEvents: protectedProcedure
     .input(
       z.object({
         userId: z.string().optional(),
@@ -491,26 +493,24 @@ export const systemRouter = router({
    *
    * Allows testing tools in isolation without running the full AI agent.
    */
-  executeTool: publicProcedure
+  executeTool: podAdminProcedure
     .input(
       z.object({
         toolName: z.string(),
         parameters: z.record(z.string(), z.any()),
-        userId: z.string(),
         threadId: z.string().default("playground"),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const tool = dynamicToolRegistry.getTool(input.toolName);
 
       if (!tool) {
         throw new Error(`Tool "${input.toolName}" not found`);
       }
 
-      // Execute the tool with parameters
-      // Note: tool.execute expects (params, context?)
+      // Execute the tool with the authenticated user's ID
       const result = await tool.execute(input.parameters, {
-        userId: input.userId,
+        userId: ctx.userId,
         threadId: input.threadId,
       });
 
@@ -528,7 +528,7 @@ export const systemRouter = router({
    * Returns aggregated real-time metrics optimized for the Dashboard view.
    * Includes health status, throughput, latency, and key system statistics.
    */
-  getDashboardMetrics: publicProcedure.query(async () => {
+  getDashboardMetrics: protectedProcedure.query(async () => {
     // Get recent events for rate calculation (last 5 minutes)
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
     const recentEvents = await eventRepository.searchEvents({
@@ -607,7 +607,7 @@ export const systemRouter = router({
    *
    * Returns a list of all tables in the public schema with their row counts.
    */
-  getDatabaseTables: publicProcedure.query(async () => {
+  getDatabaseTables: podAdminProcedure.query(async () => {
     const tables = await db.execute(sqlDrizzle`
         SELECT
           table_name as name,
@@ -626,7 +626,7 @@ export const systemRouter = router({
    *
    * Returns raw data from a specific table with pagination.
    */
-  getDatabaseTableRows: publicProcedure
+  getDatabaseTableRows: podAdminProcedure
     .input(
       z.object({
         tableName: z.string(),
@@ -667,7 +667,7 @@ export const systemRouter = router({
    * - Hydra (OAuth Provider)
    * - Kratos (Identity Provider)
    */
-  getServiceHealth: publicProcedure.query(async () => {
+  getServiceHealth: protectedProcedure.query(async () => {
     const services: Array<{
       name: string;
       status: "healthy" | "unhealthy" | "degraded";
