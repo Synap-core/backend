@@ -7017,6 +7017,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		reorderProperties: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				profileId: string;
+				orderedPropertyDefIds: string[];
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 	}>>;
 	propertyDefs: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

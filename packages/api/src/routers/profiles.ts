@@ -10,6 +10,7 @@ import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
 import {
   getDb,
   ProfileRepository,
+  ProfilePropertyRepository,
   ProfileResolutionService,
   ProfileScope,
   ViewRepository,
@@ -782,6 +783,53 @@ export const profilesRouter = router({
           targetWorkspaceId: input.targetWorkspaceId,
         },
         "Profile access revoked"
+      );
+
+      return { success: true };
+    }),
+
+  /**
+   * Reorder the properties of a profile by updating their displayOrder.
+   * Accepts the full ordered list of property def IDs for the profile.
+   */
+  reorderProperties: workspaceProcedure
+    .input(
+      z.object({
+        profileId: z.string().uuid(),
+        /** Property def IDs in the desired display order */
+        orderedPropertyDefIds: z.array(z.string().uuid()),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+      const profilePropertyRepo = new ProfilePropertyRepository(db);
+
+      // Verify profile exists and is accessible
+      const profile = await profileRepo.getById(input.profileId);
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Profile not found",
+        });
+      }
+
+      // Update displayOrder for each property def link
+      for (let i = 0; i < input.orderedPropertyDefIds.length; i++) {
+        await profilePropertyRepo.link({
+          profileId: input.profileId,
+          propertyDefId: input.orderedPropertyDefIds[i],
+          displayOrder: i,
+        });
+      }
+
+      logger.info(
+        {
+          profileId: input.profileId,
+          count: input.orderedPropertyDefIds.length,
+          userId: ctx.userId,
+        },
+        "Profile properties reordered"
       );
 
       return { success: true };
