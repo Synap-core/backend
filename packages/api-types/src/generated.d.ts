@@ -602,6 +602,12 @@ export interface WorkspaceSidebarItem {
 export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
 	defaultView?: string;
+	/**
+	 * Default app view to navigate to when a workspace is first opened (browser only).
+	 * Applied once per profile switch by useTemplateIntegration.
+	 * Valid values: 'browser' | 'dashboard' | 'data' | 'intelligence' | 'terminal' | …
+	 */
+	defaultApp?: string;
 	theme?: string;
 	/** Ordered list of sidebar items. When set, replaces the generic app list. */
 	sidebarItems?: WorkspaceSidebarItem[];
@@ -4053,7 +4059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					status: "completed" | "running" | "failed";
+					status: "completed" | "failed" | "running";
 					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
@@ -4079,7 +4085,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				status: "completed" | "running" | "failed";
+				status: "completed" | "failed" | "running";
 				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
@@ -4958,8 +4964,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 					}[] | undefined;
 					views?: {
-						name: string;
 						type: string;
+						name?: string | undefined;
+						displayName?: string | undefined;
 						scopeProfileSlug?: string | undefined;
 						scopeProfileSlugs?: string[] | undefined;
 						config?: Record<string, unknown> | undefined;
@@ -5010,14 +5017,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						defaultView?: string | undefined;
 						theme?: string | undefined;
 						sidebarItems?: {
-							kind: "view" | "external" | "app";
+							kind: "view" | "external" | "profile" | "app";
 							appId?: string | undefined;
 							viewName?: string | undefined;
+							profileSlug?: string | undefined;
 							url?: string | undefined;
 							label?: string | undefined;
 							icon?: string | undefined;
 						}[] | undefined;
 					} | undefined;
+					profileEntityBentoTemplates?: Record<string, {
+						blocks: Record<string, unknown>[];
+					}> | undefined;
 					entityLinks?: {
 						sourceProfileSlug: string;
 						targetProfileSlug: string;
