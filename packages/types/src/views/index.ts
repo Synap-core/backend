@@ -40,7 +40,8 @@ export type ViewType =
   | "mindmap"
   | "graph"
   | "flow"
-  | "bento";
+  | "bento"
+  | "branch_tree";
 
 // =============================================================================
 // API Input Types
