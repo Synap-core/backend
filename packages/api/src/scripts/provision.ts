@@ -16,8 +16,6 @@
  *
  * Optional env vars:
  *   CP_URL       Control Plane URL (default: https://control.synap.live)
- *   POLL_INTERVAL_MS  Polling interval in ms (default: 5000)
- *   TIMEOUT_MS        Max wait time for device auth in ms (default: 900000 = 15 min)
  */
 
 import "dotenv/config";
@@ -27,13 +25,11 @@ import { workspaces } from "@synap/database/schema";
 const action = process.env.ACTION ?? "status";
 const cpUrl =
   process.env.CP_URL?.replace(/\/$/, "") ?? "https://control.synap.live";
-const pollInterval = parseInt(process.env.POLL_INTERVAL_MS ?? "5000", 10);
-const timeoutMs = parseInt(process.env.TIMEOUT_MS ?? "900000", 10);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function getWorkspace() {
-  const db = getDb();
+  const db = await getDb();
   const ws = await db.query.workspaces.findFirst();
   if (!ws) throw new Error("No workspace found on this pod");
   return ws;
@@ -44,10 +40,6 @@ function getControlPlaneSettings(
 ): Record<string, unknown> | undefined {
   const settings = (ws.settings as Record<string, unknown>) ?? {};
   return settings.controlPlane as Record<string, unknown> | undefined;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -162,7 +154,7 @@ async function runDisconnect() {
     return;
   }
 
-  const db = getDb();
+  const db = await getDb();
   const settings = (ws.settings as Record<string, unknown>) ?? {};
   const { controlPlane: _removed, ...rest } = settings;
 

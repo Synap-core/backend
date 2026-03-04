@@ -742,7 +742,7 @@ export const intelligenceRouter = router({
           "install_skill",
           "list_channels",
         ]),
-        payload: z.record(z.unknown()).optional(),
+        payload: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
