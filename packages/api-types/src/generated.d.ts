@@ -4291,6 +4291,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		relayToService: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+				command: "configure_channel" | "install_skill" | "list_channels";
+				payload?: Record<string, unknown> | undefined;
+			};
+			output: {
+				success: boolean;
+				pending: boolean;
+				data: any;
+				message?: undefined;
+			} | {
+				success: boolean;
+				pending: boolean;
+				message: string;
+				data?: undefined;
+			};
+			meta: object;
+		}>;
 		startAIChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				topic: string;

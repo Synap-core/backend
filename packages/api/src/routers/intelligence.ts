@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc } from "@synap/database";
+import { db, eq, and, desc, or, like } from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
@@ -747,8 +747,13 @@ export const intelligenceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireUserId(ctx.userId);
+      // Support both exact match and slug-prefix match.
+      // OpenClaw is registered as "openclaw-{userId}" but the frontend sends "openclaw".
       const service = await db.query.intelligenceServices.findFirst({
-        where: eq(intelligenceServices.serviceId, input.serviceId),
+        where: or(
+          eq(intelligenceServices.serviceId, input.serviceId),
+          like(intelligenceServices.serviceId, `${input.serviceId}-%`)
+        ),
       });
       if (!service || !service.enabled) {
         throw new TRPCError({
