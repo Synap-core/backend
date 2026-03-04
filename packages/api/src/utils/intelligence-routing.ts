@@ -226,7 +226,7 @@ function createClient(service: any): ResolvedService {
  * Create default client from environment
  */
 function createDefaultClient(): ResolvedService {
-  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
   const apiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
   return {
     serviceId: "default",

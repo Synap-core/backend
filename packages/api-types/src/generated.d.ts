@@ -2610,7 +2610,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				type: string;
 				data: Record<string, unknown>;
-				userId: string;
+				userId?: string | undefined;
 				subjectId?: string | undefined;
 				source?: "system" | "sync" | "api" | "automation" | "migration" | undefined;
 				correlationId?: string | undefined;
@@ -2749,7 +2749,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				toolName: string;
 				parameters: Record<string, any>;
-				userId: string;
 				threadId?: string | undefined;
 			};
 			output: {
@@ -4135,7 +4134,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					status: "completed" | "failed" | "running";
+					status: "completed" | "running" | "failed";
 					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
@@ -4161,7 +4160,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				status: "completed" | "failed" | "running";
+				status: "completed" | "running" | "failed";
 				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;

@@ -10,6 +10,10 @@ initializePlugins().catch((error) => {
   console.error("Failed to initialize plugins:", error);
 });
 export * from "./trpc.js";
+export {
+  encryptServiceKey,
+  resolveServiceKey,
+} from "./utils/service-key-crypto.js";
 export * from "./context.js";
 export { eventsRouter } from "./routers/events.js";
 export { captureRouter } from "./routers/capture.js";

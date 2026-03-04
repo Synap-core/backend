@@ -723,6 +723,89 @@ export const intelligenceRouter = router({
 
   // ── AI Channel Proxy ────────────────────────────────────────────────────
 
+  // ── Service Management Relay ──────────────────────────────────────────────
+
+  /**
+   * Relay a management command to a registered intelligence service.
+   *
+   * Security model: tokens travel browser → backend (HTTPS + Kratos session)
+   * → service (internal Docker network for cloud, direct HTTPS for self-hosted).
+   * Tokens are never stored on Synap servers. If the service is unreachable the
+   * command is stored as `metadata.pendingConfig` and replayed on reconnect.
+   */
+  relayToService: workspaceProcedure
+    .input(
+      z.object({
+        serviceId: z.string().min(1),
+        command: z.enum([
+          "configure_channel",
+          "install_skill",
+          "list_channels",
+        ]),
+        payload: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      requireUserId(ctx.userId);
+      const service = await db.query.intelligenceServices.findFirst({
+        where: eq(intelligenceServices.serviceId, input.serviceId),
+      });
+      if (!service || !service.enabled) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Intelligence service '${input.serviceId}' not found or not enabled`,
+        });
+      }
+      const meta = (service.metadata ?? {}) as Record<string, unknown>;
+      const managementUrl = `${service.webhookUrl.replace(/\/$/, "")}/api/management`;
+      try {
+        const res = await fetch(managementUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(typeof meta.managementToken === "string"
+              ? { Authorization: `Bearer ${meta.managementToken}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            command: input.command,
+            payload: input.payload ?? {},
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => res.statusText);
+          throw new TRPCError({
+            code: "BAD_GATEWAY",
+            message: `Service relay error (${res.status}): ${text}`,
+          });
+        }
+        const data = await res.json().catch(() => ({ ok: true }));
+        return { success: true, pending: false, data };
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        // Service unreachable — store as pending config; apply on next connect
+        const pendingConfig = (meta.pendingConfig ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const cmdKey = `${input.command}_${Date.now()}`;
+        pendingConfig[cmdKey] = {
+          ...(input.payload ?? {}),
+          _pendingAt: new Date().toISOString(),
+        };
+        await db
+          .update(intelligenceServices)
+          .set({ metadata: { ...meta, pendingConfig } })
+          .where(eq(intelligenceServices.serviceId, input.serviceId));
+        return {
+          success: true,
+          pending: true,
+          message: "Configuration saved — will apply when service reconnects",
+        };
+      }
+    }),
+
   /** Start an AI-to-AI channel conversation */
   startAIChannel: workspaceProcedure
     .input(

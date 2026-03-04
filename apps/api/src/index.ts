@@ -517,6 +517,10 @@ app.use("/trpc/*", async (c, next) => {
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);
 
+// Control Plane provisioning endpoint (token-auth via CONTROL_PLANE_JWT_SECRET)
+import { provisionRouter } from "./routers/provision.js";
+app.route("/api/provision", provisionRouter);
+
 // Webhook routes (before auth - uses webhook secret auth)
 import { webhookRouter } from "./webhooks/index.js";
 app.route("/webhooks", webhookRouter);
