@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql as drizzleSql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   channels,
@@ -205,6 +205,39 @@ export class ChannelRepository {
 
     await this.emitCompleted("update", branchId, userId);
     return channel;
+  }
+
+  /**
+   * Get or create the user's personal AI timeline for a workspace.
+   * Idempotent — returns existing channel if one already exists.
+   */
+  async ensurePersonalChannel(
+    userId: string,
+    workspaceId: string
+  ): Promise<Channel> {
+    const [existing] = await this.db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, userId),
+          eq(channels.workspaceId, workspaceId),
+          eq(channels.channelType, ChannelType.AI_THREAD),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+        )
+      )
+      .limit(1);
+
+    if (existing) return existing;
+
+    return this.create({
+      userId,
+      workspaceId,
+      channelType: ChannelType.AI_THREAD,
+      agentType: ChannelAgentType.META,
+      metadata: { isPersonal: true },
+    });
   }
 
   /**

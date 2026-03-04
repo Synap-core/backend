@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc, or, like } from "@synap/database";
+import { db, eq, and, desc, or, like, sql, drizzleSql } from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
@@ -18,9 +18,17 @@ import {
   ChannelStatus,
   ChannelAgentType,
   intelligenceServices,
+  users,
+  workspaceMembers,
+  apiKeys,
+  mcpServers,
   type NewIntelligenceCommand,
+  type AgentMetadata,
 } from "@synap/database/schema";
 import { workspaces } from "@synap/database/schema";
+import { EventRepository, ApiKeyRepository } from "@synap/database";
+import { randomUUID, randomBytes } from "crypto";
+import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 import {
   parseCommandTemplate,
   validateArgumentValues,
@@ -28,7 +36,7 @@ import {
 } from "../utils/command-template.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { channelsRouter } from "./channels.js";
+import { channelsRouter, invalidateMcpCache } from "./channels.js";
 
 // ── Shared proxy response types ───────────────────────────────────────────
 
@@ -845,5 +853,345 @@ export const intelligenceRouter = router({
         body: JSON.stringify({ userId, ...input }),
       });
       return res.json();
+    }),
+
+  /**
+   * getServiceCommands
+   *
+   * Returns previously stored Docker run commands for provisioned services.
+   * Allows wizards to show the command on re-open without regenerating credentials.
+   */
+  getServiceCommands: workspaceProcedure.query(async ({ ctx }) => {
+    const workspaceId = ctx.workspaceId!;
+    const [ws] = await db
+      .select({ settings: workspaces.settings })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    const commands = (ws?.settings as Record<string, unknown> | null)
+      ?.serviceCommands as Record<string, string> | undefined;
+    return { commands: commands ?? {} };
+  }),
+
+  /**
+   * provisionService
+   *
+   * Self-hosted equivalent of `./synap services add <serviceType>`.
+   * Creates an agent user + Hub Protocol API key for the given service type,
+   * and returns the Docker run command with credentials embedded.
+   *
+   * Called by the OpenClaw onboarding wizard instead of POST /openclaw/provision
+   * (cloud path). The result is shown to the user as a copy-paste Docker command.
+   * Once the container is started, it connects to the pod via Hub Protocol and
+   * self-registers as an intelligence service.
+   *
+   * Idempotent: if the agent already exists, returns its ID without a new API key
+   * (key is only shown once — user must rotate if lost).
+   */
+  provisionService: workspaceProcedure
+    .input(
+      z.object({
+        serviceType: z.enum(["openclaw"]),
+        /** Override the pod URL embedded in the Docker run command. Defaults to PUBLIC_URL env var. */
+        podUrlOverride: z.string().url().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { serviceType, podUrlOverride } = input;
+      const workspaceId = ctx.workspaceId!;
+
+      // Only workspace owners and admins can provision agent services
+      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only workspace owners and admins can provision intelligence services.",
+        });
+      }
+
+      const entry = SERVICE_CATALOG[serviceType];
+      if (!entry) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Unknown service type: ${serviceType}`,
+        });
+      }
+
+      // Check if agent already exists for this workspace
+      const [existing] = await db
+        .select({ id: users.id, email: users.email })
+        .from(users)
+        .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+        .where(
+          and(
+            eq(users.userType, "agent"),
+            eq(workspaceMembers.workspaceId, workspaceId),
+            drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+          )
+        )
+        .limit(1);
+
+      const podUrl =
+        podUrlOverride ?? process.env.PUBLIC_URL ?? "http://localhost:4000";
+
+      if (existing) {
+        // Idempotent — rotate key and return fresh docker command
+        await db
+          .update(apiKeys)
+          .set({
+            isActive: false,
+            revokedAt: new Date(),
+            revokedReason: "Re-provisioned via UI",
+          })
+          .where(
+            and(eq(apiKeys.userId, existing.id), eq(apiKeys.isActive, true))
+          );
+
+        const keyPrefix =
+          process.env.NODE_ENV === "production"
+            ? "synap_hub_live_"
+            : "synap_hub_test_";
+        const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
+
+        const eventRepo = new EventRepository(sql);
+        const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+        await apiKeyRepo.create(
+          {
+            keyName: `${entry.displayName} — workspace ${workspaceId} (rotated)`,
+            keyPrefix,
+            key: plainKey,
+            scope: entry.defaultScopes,
+            userId: existing.id,
+            keyType: "hub_inbound",
+            description: `Hub Protocol auth token for ${entry.displayName} agent service.`,
+          },
+          ctx.userId ?? "system"
+        );
+
+        const dockerRunCommand =
+          entry.buildDockerCommand?.({
+            podUrl,
+            workspaceId,
+            agentUserId: existing.id,
+            apiKey: plainKey,
+          }) ?? null;
+
+        // Persist docker command in workspace settings so wizard can show it after re-open.
+        // Path is hardcoded per serviceType (openclaw-only enum) — no interpolation needed.
+        if (dockerRunCommand) {
+          await db
+            .update(workspaces)
+            .set({
+              settings: drizzleSql`jsonb_set(coalesce(settings, '{}'), '{serviceCommands,openclaw}', ${JSON.stringify(dockerRunCommand)}::jsonb, true)`,
+            })
+            .where(eq(workspaces.id, workspaceId));
+        }
+
+        return {
+          alreadyProvisioned: true,
+          agentUserId: existing.id,
+          dockerRunCommand,
+          env: {
+            SYNAP_POD_URL: podUrl,
+            SYNAP_HUB_API_KEY: plainKey,
+            SYNAP_WORKSPACE_ID: workspaceId,
+            SYNAP_AGENT_USER_ID: existing.id,
+          },
+        };
+      }
+
+      // Create new agent user
+      const agentId = randomUUID();
+      const shortId = agentId.slice(0, 8);
+      const email = `agent-${serviceType}-${shortId}@synap.agent`;
+
+      await db.insert(users).values({
+        id: agentId,
+        email,
+        name: `${entry.displayName} Agent`,
+        emailVerified: true,
+        userType: "agent",
+        agentMetadata: {
+          agentType: serviceType,
+          description: entry.description,
+          createdByUserId: ctx.userId ?? "system",
+          capabilities: entry.agentCapabilities,
+        } satisfies AgentMetadata,
+        timezone: "UTC",
+        locale: "en",
+      });
+
+      await db.insert(workspaceMembers).values({
+        workspaceId,
+        userId: agentId,
+        role: entry.agentRole,
+        invitedBy: null,
+      });
+
+      const keyPrefix =
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
+      const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
+
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+      await apiKeyRepo.create(
+        {
+          keyName: `${entry.displayName} — workspace ${workspaceId}`,
+          keyPrefix,
+          key: plainKey,
+          scope: entry.defaultScopes,
+          userId: agentId,
+          keyType: "hub_inbound",
+          description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
+        },
+        ctx.userId ?? "system"
+      );
+
+      const dockerRunCommand =
+        entry.buildDockerCommand?.({
+          podUrl,
+          workspaceId,
+          agentUserId: agentId,
+          apiKey: plainKey,
+        }) ?? null;
+
+      // Persist docker command in workspace settings so wizard can show it after re-open.
+      // Path is hardcoded per serviceType (openclaw-only enum) — no interpolation needed.
+      if (dockerRunCommand) {
+        await db
+          .update(workspaces)
+          .set({
+            settings: drizzleSql`jsonb_set(coalesce(settings, '{}'), '{serviceCommands,openclaw}', ${JSON.stringify(dockerRunCommand)}::jsonb, true)`,
+          })
+          .where(eq(workspaces.id, workspaceId));
+      }
+
+      return {
+        alreadyProvisioned: false,
+        agentUserId: agentId,
+        dockerRunCommand,
+        env: {
+          SYNAP_POD_URL: podUrl,
+          SYNAP_HUB_API_KEY: plainKey,
+          SYNAP_WORKSPACE_ID: workspaceId,
+          SYNAP_AGENT_USER_ID: agentId,
+        },
+      };
+    }),
+
+  /**
+   * provisionMcpService
+   *
+   * Provision an MCP-only tool service (not a Hub Protocol agent).
+   * Currently supports: "firecrawl" — web scraping and content extraction.
+   *
+   * Unlike provisionService (which creates an agent user + Hub Protocol key),
+   * this just:
+   *   1. Creates an mcpServers row so the Intelligence Hub can connect to it
+   *   2. Returns the Docker run command for the user to run locally
+   *
+   * The npx firecrawl-mcp stdio transport reads FIRECRAWL_API_URL at startup,
+   * which points to the local Firecrawl Docker container on port 3002.
+   *
+   * Idempotent: calling again when already provisioned returns alreadyProvisioned=true
+   * and the same Docker command (no credentials to rotate — public container).
+   */
+  provisionMcpService: workspaceProcedure
+    .input(z.object({ serviceType: z.enum(["firecrawl"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const { serviceType } = input;
+      const workspaceId = ctx.workspaceId!;
+
+      // Only workspace owners and admins can provision MCP services
+      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only workspace owners and admins can provision MCP services.",
+        });
+      }
+
+      if (serviceType === "firecrawl") {
+        // Check idempotency — slug="firecrawl" is the stable key
+        const existing = await db.query.mcpServers.findFirst({
+          where: and(
+            eq(mcpServers.slug, "firecrawl"),
+            eq(mcpServers.workspaceId, workspaceId)
+          ),
+        });
+
+        if (!existing) {
+          // Register the firecrawl-mcp stdio server config.
+          // The Intelligence Hub spawns `npx firecrawl-mcp` on demand,
+          // pointing it at the local Firecrawl container via FIRECRAWL_API_URL.
+          await db.insert(mcpServers).values({
+            workspaceId,
+            slug: "firecrawl",
+            name: "Firecrawl",
+            description:
+              "Web scraping and content extraction — turns any URL into LLM-ready markdown, JSON, or structured data.",
+            transport: "stdio",
+            command: "npx",
+            args: ["-y", "firecrawl-mcp@latest"],
+            env: { FIRECRAWL_API_URL: "http://localhost:3002" },
+            approved: true, // auto-approved: user explicitly provisioned this service
+          });
+          // Bust the cache so the next message picks up the new server immediately
+          invalidateMcpCache(workspaceId);
+        }
+
+        const shortId = workspaceId.slice(0, 8);
+        const dockerRunCommand = [
+          "docker run -d",
+          `  --name synap-firecrawl-${shortId}`,
+          "  -p 3002:3002",
+          "  ghcr.io/mendableai/firecrawl:latest",
+        ].join(" \\\n");
+
+        // Persist docker command in workspace settings so wizard can show it after re-open
+        if (!existing) {
+          await db
+            .update(workspaces)
+            .set({
+              settings: drizzleSql`jsonb_set(coalesce(settings, '{}'), '{serviceCommands,firecrawl}', ${JSON.stringify(dockerRunCommand)}::jsonb, true)`,
+            })
+            .where(eq(workspaces.id, workspaceId));
+        }
+
+        // Fire-and-forget warmup ping: warms the Hub's MCP connection pool and
+        // catches config issues early. Non-critical — result is ignored.
+        if (!existing) {
+          const hubUrl =
+            process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
+          const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+          fetch(`${hubUrl}/api/mcp/ping`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": hubApiKey,
+            },
+            body: JSON.stringify({
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "firecrawl-mcp@latest"],
+              env: { FIRECRAWL_API_URL: "http://localhost:3002" },
+            }),
+          }).catch(() => {
+            // Hub may not be reachable — safe to ignore
+          });
+        }
+
+        return {
+          alreadyProvisioned: !!existing,
+          dockerRunCommand,
+        };
+      }
+
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Unknown MCP service type: ${serviceType}`,
+      });
     }),
 });

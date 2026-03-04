@@ -15,6 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { db, eq, and } from "@synap/database";
 import { mcpServers } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
+import { invalidateMcpCache } from "./channels.js";
 
 /** Require owner or admin role — throws FORBIDDEN otherwise */
 function requireAdminRole(role: string | undefined | null) {
@@ -34,7 +35,7 @@ const McpServerWriteSchema = z.object({
     .regex(/^[a-z0-9-]+$/),
   name: z.string().min(1).max(128),
   description: z.string().optional(),
-  transport: z.enum(["stdio", "http", "sse"]),
+  transport: z.enum(["stdio", "http"]),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   url: z.string().url().optional(),
@@ -70,7 +71,7 @@ export const mcpServersRouter = router({
           message: "stdio transport requires a command.",
         });
       }
-      if (["http", "sse"].includes(input.transport) && !input.url) {
+      if (input.transport === "http" && !input.url) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `${input.transport} transport requires a URL.`,
@@ -92,6 +93,7 @@ export const mcpServersRouter = router({
         })
         .returning();
 
+      invalidateMcpCache(ctx.workspaceId!);
       return { server };
     }),
 
@@ -132,6 +134,7 @@ export const mcpServersRouter = router({
         .where(eq(mcpServers.id, id))
         .returning();
 
+      invalidateMcpCache(ctx.workspaceId!);
       return { server: updated };
     }),
 
@@ -169,6 +172,7 @@ export const mcpServersRouter = router({
         .where(eq(mcpServers.id, input.id))
         .returning();
 
+      invalidateMcpCache(ctx.workspaceId!);
       return { server: updated };
     }),
 
@@ -241,6 +245,64 @@ export const mcpServersRouter = router({
     }),
 
   /**
+   * List the tools exposed by a specific MCP server.
+   * Delegates to the Intelligence Hub which manages live connections.
+   * Returns an empty array (not an error) when the Hub is unreachable or the server is offline.
+   */
+  listTools: workspaceProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const server = await db.query.mcpServers.findFirst({
+        where: and(
+          eq(mcpServers.id, input.id),
+          eq(mcpServers.workspaceId, ctx.workspaceId!)
+        ),
+      });
+
+      if (!server) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "MCP server not found.",
+        });
+      }
+
+      const hubUrl =
+        process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
+      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+
+      try {
+        const res = await fetch(`${hubUrl}/api/mcp/tools`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": hubApiKey,
+          },
+          body: JSON.stringify({
+            servers: [
+              {
+                id: server.slug,
+                name: server.name,
+                transport: server.transport,
+                command: server.command,
+                args: server.args,
+                url: server.url,
+                env: server.env,
+                enabled: server.enabled,
+              },
+            ],
+          }),
+        });
+        if (!res.ok) return { tools: [] };
+        const data = (await res.json()) as {
+          tools?: Array<{ name: string; description: string }>;
+        };
+        return { tools: data.tools ?? [] };
+      } catch {
+        return { tools: [] };
+      }
+    }),
+
+  /**
    * Delete an MCP server from the workspace.
    * Requires owner or admin.
    */
@@ -265,6 +327,7 @@ export const mcpServersRouter = router({
 
       await db.delete(mcpServers).where(eq(mcpServers.id, input.id));
 
+      invalidateMcpCache(ctx.workspaceId!);
       return { success: true };
     }),
 });
