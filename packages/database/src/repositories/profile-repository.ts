@@ -223,7 +223,7 @@ export class ProfileRepository {
           )
         )
       )
-      .orderBy(profiles.displayName);
+      .orderBy(profiles.id, profiles.displayName);
 
     return rows.map((r) => r.p);
   }
