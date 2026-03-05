@@ -76,18 +76,17 @@ generate_and_create_env() {
     # Generate secrets
     echo -e "${BLUE}🔐 Generating secrets...${NC}"
     
-    local POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local JWT_SECRET=$(openssl rand -base64 64 | tr -d "=+/" | cut -c1-64)
-    local KRATOS_COOKIE=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local KRATOS_CIPHER=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local KRATOS_WEBHOOK=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    # Use openssl hex output to avoid any base64 line-wrap issues (no newlines ever)
+    local POSTGRES_PASSWORD=$(openssl rand -hex 24)
+    local JWT_SECRET=$(openssl rand -hex 48)
+    local KRATOS_COOKIE=$(openssl rand -hex 24)
+    local KRATOS_CIPHER=$(openssl rand -hex 24)
+    local KRATOS_WEBHOOK=$(openssl rand -hex 24)
     local MINIO_ACCESS_KEY=$(openssl rand -hex 12)
-    local MINIO_SECRET_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local TYPESENSE_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local INNGEST_EVENT_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local INNGEST_SIGNING_KEY=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
-    local HYDRA_SECRETS_SYSTEM=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    local MINIO_SECRET_KEY=$(openssl rand -hex 24)
+    local TYPESENSE_KEY=$(openssl rand -hex 24)
+    local TYPESENSE_ADMIN_KEY=$(openssl rand -hex 24)
+    local HYDRA_SECRETS_SYSTEM=$(openssl rand -hex 24)
     
     local backend_version="latest"
     if [ "$from_source" = "true" ]; then
@@ -131,9 +130,11 @@ MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
 MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
 TYPESENSE_API_KEY=${TYPESENSE_KEY}
 TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
-INNGEST_EVENT_KEY=${INNGEST_EVENT_KEY}
-INNGEST_SIGNING_KEY=${INNGEST_SIGNING_KEY}
 ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
+
+# Allowed CORS origins (comma-separated frontend URLs)
+# Add your Electron app origin or web client URL here
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:3000
 EOF
     
     chmod 600 .env

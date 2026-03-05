@@ -122,7 +122,9 @@ app.use(
   "*",
   cors({
     origin: (origin) => {
-      if (!origin) return null;
+      // Electron desktop app (file:// or app://) sends no origin — allow it
+      // This is safe since we still require Kratos session auth for all protected routes
+      if (!origin) return "*";
       const allowed = getCorsOrigins();
       return allowed.includes(origin) ? origin : null;
     },

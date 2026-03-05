@@ -20,6 +20,7 @@ import {
   uuid,
   text,
   timestamp,
+  real,
   index,
   unique,
 } from "drizzle-orm/pg-core";
@@ -108,6 +109,11 @@ export const channelContextItems = pgTable(
       onDelete: "set null",
     }),
     // Note: sourceEventId omitted — events is a TimescaleDB hypertable (no FK support)
+
+    // Relevance score set during compaction (0.0–1.0)
+    // Used to determine which entities are important enough to include
+    // in the entityContextBlock of a compacted state
+    relevanceScore: real("relevance_score"),
 
     // Multi-tenant
     userId: text("user_id").notNull(),

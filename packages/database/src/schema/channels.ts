@@ -141,6 +141,12 @@ export const channels = pgTable(
     // Context (compressed summaries from merged branches)
     contextSummary: text("context_summary"),
 
+    // Branch result tracking (only populated for BRANCH channels)
+    // resultSummary: what the branch produced when it completed
+    resultSummary: text("result_summary"),
+    // mergedIntoStateId: which parent compacted state incorporated this branch's results
+    mergedIntoStateId: uuid("merged_into_state_id"), // FK to compacted_states (circular dep — set in migration)
+
     // External source (for EXTERNAL_IMPORT channels)
     externalSource: text("external_source"), // 'whatsapp' | 'slack' | 'gmail' | 'sms'
     externalChannelId: text("external_channel_id"), // ID of conversation in external system

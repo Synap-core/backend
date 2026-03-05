@@ -934,7 +934,7 @@ export type MessageLink = typeof messageLinks.$inferSelect;
  * be explicitly approved by a workspace owner before its tools are injected
  * into LLM requests.
  */
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
 declare enum PropertyValueType {
 	STRING = "string",
@@ -2136,6 +2136,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		getPersonalChannel: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: {
+				channel: {
+					workspaceId: string | null;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					title: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
+					branchedFromMessageId: string | null;
+					branchPurpose: string | null;
+					agentId: string;
+					agentType: ChannelAgentType;
+					agentConfig: unknown;
+					contextSummary: string | null;
+					externalChannelId: string | null;
+					mergedAt: Date | null;
+				};
+			};
+			meta: object;
+		}>;
 		getBranches: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				parentChannelId: string;
@@ -2406,37 +2437,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				ok: boolean;
-			};
-			meta: object;
-		}>;
-		getPersonalChannel: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				workspaceId: string;
-			};
-			output: {
-				channel: {
-					workspaceId: string | null;
-					userId: string;
-					id: string;
-					updatedAt: Date;
-					createdAt: Date;
-					metadata: unknown;
-					title: string | null;
-					externalSource: string | null;
-					status: ChannelStatus;
-					channelType: ChannelType;
-					contextObjectType: string | null;
-					contextObjectId: string | null;
-					parentChannelId: string | null;
-					branchedFromMessageId: string | null;
-					branchPurpose: string | null;
-					agentId: string;
-					agentType: ChannelAgentType;
-					agentConfig: unknown;
-					contextSummary: string | null;
-					externalChannelId: string | null;
-					mergedAt: Date | null;
-				};
 			};
 			meta: object;
 		}>;

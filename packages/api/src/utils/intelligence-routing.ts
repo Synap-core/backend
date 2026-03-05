@@ -67,7 +67,8 @@ export interface ResolvedService {
 }
 
 /**
- * Resolve which intelligence service to use
+ * Resolve which intelligence service (agent) to use.
+ * @alias resolveAgent
  */
 export async function resolveIntelligenceService(
   ctx: ServiceResolutionContext
@@ -222,12 +223,20 @@ function createClient(service: any): ResolvedService {
   };
 }
 
+/** @alias resolveIntelligenceService */
+export const resolveAgent = resolveIntelligenceService;
+
 /**
- * Create default client from environment
+ * Create default client from environment.
+ * Reads AGENT_HUB_URL first, falls back to INTELLIGENCE_HUB_URL for backward compat.
  */
 function createDefaultClient(): ResolvedService {
-  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
-  const apiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+  const baseUrl =
+    process.env.AGENT_HUB_URL ||
+    process.env.INTELLIGENCE_HUB_URL ||
+    "http://localhost:3001";
+  const apiKey =
+    process.env.AGENT_HUB_API_KEY || process.env.INTELLIGENCE_HUB_API_KEY || "";
   return {
     serviceId: "default",
     endpoint: baseUrl,
