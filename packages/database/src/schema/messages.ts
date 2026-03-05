@@ -25,6 +25,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { channels } from "./channels.js";
 import { inboxItems } from "./inbox-items.js";
+import { sessions } from "./sessions.js";
 
 /**
  * Message Roles
@@ -130,6 +131,12 @@ export const messages = pgTable(
     // Hash chain (blockchain-like integrity)
     previousHash: text("previous_hash"), // Hash of parent message
     hash: text("hash").notNull(), // SHA256 of this message
+
+    // Session linkage — which session this message was sent in
+    // Null for messages sent before session-scoped memory was introduced
+    sessionId: uuid("session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
 
     // Soft delete
     deletedAt: timestamp("deleted_at", { mode: "date", withTimezone: true }),

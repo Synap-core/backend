@@ -98,3 +98,9 @@ export * from "./profile-relations.js";
 
 // NEW: Secrets Vault (encrypted password/key storage)
 export * from "./secrets-vault.js";
+
+// NEW: Session-Scoped Memory System
+// Sessions group messages into bounded interaction periods.
+// CompactedStates are offline-produced structured memory snapshots.
+export * from "./sessions.js";
+export * from "./compacted-states.js";

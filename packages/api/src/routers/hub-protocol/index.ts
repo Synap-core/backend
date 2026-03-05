@@ -28,6 +28,8 @@ import { servicesRouter } from "./services.js";
 import { hubViewsRouter } from "./views.js";
 import { hubProfilesRouter } from "./profiles.js";
 import { hubRelationsRouter } from "./relations.js";
+import { sessionsRouter } from "./sessions.js";
+import { compactedStatesRouter } from "./compacted-states.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -52,4 +54,6 @@ export const hubProtocolRouter = router({
   views: hubViewsRouter,
   profiles: hubProfilesRouter,
   relations: hubRelationsRouter,
+  sessions: sessionsRouter,
+  compactedStates: compactedStatesRouter,
 });

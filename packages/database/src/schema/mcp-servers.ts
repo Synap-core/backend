@@ -23,7 +23,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
 
 export const mcpServers = pgTable(
@@ -44,7 +44,7 @@ export const mcpServers = pgTable(
 
     /** Transport mechanism */
     transport: text("transport", {
-      enum: ["stdio", "http", "sse"],
+      enum: ["stdio", "http"],
     })
       .notNull()
       .$type<McpTransport>(),

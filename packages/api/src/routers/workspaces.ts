@@ -41,6 +41,7 @@ import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
+import { ensurePersonalChannel } from "../utils/personal-channel.js";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -639,6 +640,14 @@ export const workspacesRouter = router({
           role: input.role,
           memberId: member.id,
         },
+      });
+
+      // 4. Auto-provision personal AI timeline for the new member (idempotent)
+      ensurePersonalChannel(input.userId, input.workspaceId).catch((err) => {
+        logger.warn(
+          { err },
+          "Failed to provision personal channel on workspace join"
+        );
       });
 
       return {

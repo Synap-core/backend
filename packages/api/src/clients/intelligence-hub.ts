@@ -69,6 +69,14 @@ export interface IntelligenceHubResponse extends HubResponse {
   // All fields inherited from HubResponse
 }
 
+// ── New naming aliases ────────────────────────────────────────────────────────
+
+/** @alias IntelligenceHubRequest */
+export type AgentHubRequest = IntelligenceHubRequest;
+
+/** @alias IntelligenceHubResponse */
+export type AgentHubResponse = IntelligenceHubResponse;
+
 // ── Circuit breaker ─────────────────────────────────────────────────────────
 
 interface CircuitState {
@@ -138,8 +146,15 @@ export class IntelligenceHubClient {
 
   constructor(baseUrl?: string, apiKey?: string) {
     this.baseUrl =
-      baseUrl || process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-    this.apiKey = apiKey || process.env.INTELLIGENCE_HUB_API_KEY || "";
+      baseUrl ||
+      process.env.AGENT_HUB_URL ||
+      process.env.INTELLIGENCE_HUB_URL ||
+      "http://localhost:3002";
+    this.apiKey =
+      apiKey ||
+      process.env.AGENT_HUB_API_KEY ||
+      process.env.INTELLIGENCE_HUB_API_KEY ||
+      "";
   }
 
   /**
@@ -364,3 +379,6 @@ export class IntelligenceHubClient {
 
 // Singleton instance
 export const intelligenceHubClient = new IntelligenceHubClient();
+
+/** @alias IntelligenceHubClient */
+export const AgentHubClient = IntelligenceHubClient;

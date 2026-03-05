@@ -41,11 +41,11 @@ import {
   ProposalStatus,
   users,
   workspaceMembers,
-  workspaces,
+  mcpServers,
 } from "@synap/database/schema";
-import type { WorkspaceSettings } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
+import { ensurePersonalChannel } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { MessageLinksRepository } from "@synap/database";
 import {
@@ -56,6 +56,64 @@ import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
+
+// ── MCP server list cache ────────────────────────────────────────────────────
+// Avoid a DB query on every message send. TTL = 30s (short enough to pick up
+// newly provisioned servers quickly; long enough to handle bursts).
+
+interface McpServerEntry {
+  id: string;
+  name: string;
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  enabled: boolean;
+}
+
+const MCP_CACHE_TTL_MS = 30_000;
+const mcpServerCache = new Map<
+  string,
+  { servers: McpServerEntry[]; expiresAt: number }
+>();
+
+export function invalidateMcpCache(workspaceId: string): void {
+  mcpServerCache.delete(workspaceId);
+}
+
+async function getMcpServersForWorkspace(
+  workspaceId: string
+): Promise<McpServerEntry[]> {
+  const cached = mcpServerCache.get(workspaceId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.servers;
+  }
+  const rows = await db.query.mcpServers.findMany({
+    where: and(
+      eq(mcpServers.workspaceId, workspaceId),
+      eq(mcpServers.approved, true),
+      eq(mcpServers.enabled, true)
+    ),
+  });
+  const servers: McpServerEntry[] = rows
+    .filter((r) => r.transport === "stdio" || r.transport === "http")
+    .map((r) => ({
+      id: r.slug,
+      name: r.name,
+      transport: r.transport as "stdio" | "http",
+      command: r.command ?? undefined,
+      args: r.args,
+      url: r.url ?? undefined,
+      env: r.env,
+      enabled: r.enabled,
+    }));
+  mcpServerCache.set(workspaceId, {
+    servers,
+    expiresAt: Date.now() + MCP_CACHE_TTL_MS,
+  });
+  return servers;
+}
 
 /**
  * Ensure a per-human AI agent user exists for the given (userId, workspaceId) pair.
@@ -635,7 +693,7 @@ export const channelsRouter = router({
         (input.agentHandle ? resolveAgentHandle(input.agentHandle) : null) ??
         extractMentionAgentType(content);
 
-      // Create channel when not provided
+      // Route to channel when not provided
       if (!channelId) {
         if (!workspaceId && requestedAgentType !== "onboarding") {
           throw new TRPCError({
@@ -644,44 +702,54 @@ export const channelsRouter = router({
               "workspaceId is required when sending a message without a thread",
           });
         }
-        // Verify workspace membership before creating a channel in it
-        if (workspaceId && requestedAgentType !== "onboarding") {
-          const membership = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, workspaceId),
-              eq(workspaceMembers.userId, ctx.userId)
-            ),
-          });
-          if (!membership) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "You are not a member of this workspace",
-            });
-          }
-        }
-        const channelAgentType = requestedAgentType
-          ? (requestedAgentType as ChannelAgentType)
-          : ChannelAgentType.DEFAULT;
-        const [channel] = await db
-          .insert(channels)
-          .values({
-            userId: ctx.userId,
+
+        if (requestedAgentType === "onboarding") {
+          // Onboarding flow: no workspace yet — create a dedicated ephemeral channel
+          const [channel] = await db
+            .insert(channels)
+            .values({
+              userId: ctx.userId,
+              workspaceId: workspaceId ?? null,
+              channelType: ChannelType.AI_THREAD,
+              status: ChannelStatus.ACTIVE,
+              agentId: "orchestrator",
+              agentType: ChannelAgentType.ONBOARDING,
+              parentChannelId: input.parentChannelId ?? null,
+            })
+            .returning();
+          channelId = channel.id;
+          emitChatEvent({
+            event: "channel:created",
+            data: { channelId, userId: ctx.userId },
             workspaceId: workspaceId ?? null,
-            channelType: ChannelType.AI_THREAD,
-            status: ChannelStatus.ACTIVE,
-            agentId: "orchestrator",
-            agentType: channelAgentType,
-            parentChannelId: input.parentChannelId ?? null,
-            title: input.agentHandle ? `@${input.agentHandle}` : undefined,
-          })
-          .returning();
-        channelId = channel.id;
-        emitChatEvent({
-          event: "channel:created",
-          data: { channelId, userId: ctx.userId },
-          workspaceId: workspaceId ?? null,
-          userId: ctx.userId,
-        });
+            userId: ctx.userId,
+          });
+        } else {
+          // All other cases: route to the user's personal AI timeline.
+          // ensurePersonalChannel is idempotent — creates the channel on first call,
+          // returns the existing one on all subsequent calls.
+          if (workspaceId) {
+            const membership = await db.query.workspaceMembers.findFirst({
+              where: and(
+                eq(workspaceMembers.workspaceId, workspaceId),
+                eq(workspaceMembers.userId, ctx.userId)
+              ),
+            });
+            if (!membership) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: "You are not a member of this workspace",
+              });
+            }
+          }
+          const personalChannel = await ensurePersonalChannel(
+            ctx.userId,
+            workspaceId!
+          );
+          channelId = personalChannel.id;
+          // No channel:created event — channel already exists (or was just created
+          // on workspace join). Either way the frontend already knows about it.
+        }
       }
 
       // Get channel
@@ -761,15 +829,15 @@ export const channelsRouter = router({
       const effectiveAgentType =
         mentionedAgentType ?? channel.agentType ?? "meta";
 
-      // Fetch workspace MCP server configs (non-blocking, degrade gracefully)
-      let mcpServers: WorkspaceSettings["mcpServers"] | undefined;
+      // Fetch workspace MCP server configs (cached 30s — avoids a DB hit on every message).
+      // Only approved + enabled servers are forwarded to Intelligence Hub.
+      let mcpServersList: McpServerEntry[] | undefined;
       if (workspaceId) {
         try {
-          const ws = await db.query.workspaces.findFirst({
-            where: eq(workspaces.id, workspaceId),
-            columns: { settings: true },
-          });
-          mcpServers = (ws?.settings as WorkspaceSettings)?.mcpServers;
+          const rows = await getMcpServersForWorkspace(workspaceId);
+          if (rows.length > 0) {
+            mcpServersList = rows;
+          }
         } catch {
           // Non-critical — agents still work without MCP servers
         }
@@ -785,9 +853,11 @@ export const channelsRouter = router({
           url: resolvedService.mcpEndpoint,
           enabled: true,
         };
-        mcpServers = mcpServers
+        mcpServersList = mcpServersList
           ? [
-              ...mcpServers.filter((s) => s.id !== resolvedService.serviceId),
+              ...mcpServersList.filter(
+                (s) => s.id !== resolvedService.serviceId
+              ),
               serviceMcpEntry,
             ]
           : [serviceMcpEntry];
@@ -806,7 +876,7 @@ export const channelsRouter = router({
           // Per-human AI agent user — enables full attribution for hub-protocol tool calls
           agentUserId: agentUserId ?? resolvedService.agentUserId,
           // MCP servers configured for this workspace
-          mcpServers,
+          mcpServers: mcpServersList,
         });
 
         for await (const chunk of stream) {
@@ -924,7 +994,7 @@ export const channelsRouter = router({
             workspaceId,
             sourceMessageId: userMessageId,
             agentUserId: agentUserId ?? resolvedService.agentUserId,
-            mcpServers,
+            mcpServers: mcpServersList,
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down
@@ -1323,6 +1393,21 @@ export const channelsRouter = router({
       }));
 
       return { channels: channelsWithFlags };
+    }),
+
+  /**
+   * Get or create the user's personal AI timeline for the given workspace.
+   * Returns the channel — creates it if it doesn't exist yet (idempotent).
+   * Used by command palette and any AI trigger that has no explicit channelId.
+   */
+  getPersonalChannel: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const channel = await ensurePersonalChannel(
+        ctx.userId,
+        input.workspaceId
+      );
+      return { channel };
     }),
 
   /**

@@ -934,7 +934,7 @@ export type MessageLink = typeof messageLinks.$inferSelect;
  * be explicitly approved by a workspace owner before its tools are injected
  * into LLM requests.
  */
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
 declare enum PropertyValueType {
 	STRING = "string",
@@ -2133,6 +2133,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
+			};
+			meta: object;
+		}>;
+		getPersonalChannel: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: {
+				channel: {
+					workspaceId: string | null;
+					userId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					title: string | null;
+					externalSource: string | null;
+					status: ChannelStatus;
+					channelType: ChannelType;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
+					branchedFromMessageId: string | null;
+					branchPurpose: string | null;
+					agentId: string;
+					agentType: ChannelAgentType;
+					agentConfig: unknown;
+					contextSummary: string | null;
+					externalChannelId: string | null;
+					mergedAt: Date | null;
+				};
 			};
 			meta: object;
 		}>;
@@ -4291,6 +4322,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		relayToService: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+				command: "configure_channel" | "install_skill" | "list_channels";
+				payload?: Record<string, unknown> | undefined;
+			};
+			output: {
+				success: boolean;
+				pending: boolean;
+				data: any;
+				message?: undefined;
+			} | {
+				success: boolean;
+				pending: boolean;
+				message: string;
+				data?: undefined;
+			};
+			meta: object;
+		}>;
 		startAIChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				topic: string;
@@ -4309,6 +4359,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialMessage?: string | undefined;
 			};
 			output: any;
+			meta: object;
+		}>;
+		getServiceCommands: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				commands: Record<string, string>;
+			};
+			meta: object;
+		}>;
+		provisionService: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceType: "openclaw";
+				podUrlOverride?: string | undefined;
+			};
+			output: {
+				alreadyProvisioned: boolean;
+				agentUserId: string;
+				dockerRunCommand: string | null;
+				env: {
+					SYNAP_POD_URL: string;
+					SYNAP_HUB_API_KEY: string;
+					SYNAP_WORKSPACE_ID: string;
+					SYNAP_AGENT_USER_ID: string;
+				};
+			};
+			meta: object;
+		}>;
+		provisionMcpService: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceType: "firecrawl";
+			};
+			output: {
+				alreadyProvisioned: boolean;
+				dockerRunCommand: string;
+			};
 			meta: object;
 		}>;
 	}>>;
@@ -7455,7 +7540,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				slug: string;
 				name: string;
-				transport: "sse" | "stdio" | "http";
+				transport: "stdio" | "http";
 				description?: string | undefined;
 				command?: string | undefined;
 				args?: string[] | undefined;
@@ -7493,7 +7578,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				slug?: string | undefined;
 				name?: string | undefined;
 				description?: string | undefined;
-				transport?: "sse" | "stdio" | "http" | undefined;
+				transport?: "stdio" | "http" | undefined;
 				command?: string | undefined;
 				args?: string[] | undefined;
 				url?: string | undefined;
@@ -7577,6 +7662,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					updatedAt: Date;
 				};
+			};
+			meta: object;
+		}>;
+		listTools: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				tools: {
+					name: string;
+					description: string;
+				}[];
 			};
 			meta: object;
 		}>;

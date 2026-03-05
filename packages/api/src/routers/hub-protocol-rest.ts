@@ -1700,6 +1700,277 @@ app.post("/relations", async (c) => {
   }
 });
 
+// ============================================================================
+// Sessions
+// ============================================================================
+
+/**
+ * POST /sessions/getOrCreate
+ * Body: { channelId, bootstrapStateId? }
+ */
+app.post("/sessions/getOrCreate", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as {
+    channelId?: string;
+    bootstrapStateId?: string;
+  };
+  if (!body.channelId) {
+    return c.json({ error: "channelId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).sessions.getOrCreate({
+      channelId: body.channelId,
+      bootstrapStateId: body.bootstrapStateId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "sessions.getOrCreate failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /sessions/active?channelId=...
+ */
+app.get("/sessions/active", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const channelId = c.req.query("channelId");
+  if (!channelId) {
+    return c.json({ error: "channelId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).sessions.getActive({ channelId });
+    return c.json(result ?? null);
+  } catch (err) {
+    logger.error({ err }, "sessions.getActive failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /sessions/:sessionId
+ */
+app.get("/sessions/:sessionId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const sessionId = c.req.param("sessionId");
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).sessions.get({ sessionId });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, sessionId }, "sessions.get failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+    );
+  }
+});
+
+/**
+ * GET /sessions?channelId=...&limit=...
+ */
+app.get("/sessions", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const channelId = c.req.query("channelId");
+  const limit = parseInt(c.req.query("limit") ?? "10", 10);
+  if (!channelId) {
+    return c.json({ error: "channelId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).sessions.list({ channelId, limit });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "sessions.list failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * PATCH /sessions/:sessionId
+ * Body: { status?, endedAt?, bootstrapStateId?, producedStateId?, totalTokensUsed?, messageCount?, compactionCount? }
+ */
+app.patch("/sessions/:sessionId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const sessionId = c.req.param("sessionId");
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).sessions.update({
+      sessionId,
+      ...body,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, sessionId }, "sessions.update failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+    );
+  }
+});
+
+/**
+ * POST /sessions/:sessionId/close
+ * Body: { producedStateId? }
+ */
+app.post("/sessions/:sessionId/close", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const sessionId = c.req.param("sessionId");
+  const body = (await c.req.json().catch(() => ({}))) as {
+    producedStateId?: string;
+  };
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).sessions.close({
+      sessionId,
+      producedStateId: body.producedStateId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, sessionId }, "sessions.close failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+    );
+  }
+});
+
+// ============================================================================
+// Compacted States
+// ============================================================================
+
+/**
+ * POST /compacted-states
+ * Body: { channelId, sessionId?, version?, identityBlock, userModelBlock, continuityBlock, activeGoalsBlock, entityContextBlock, rawTokenCount?, compressedTokenCount?, compactionModel?, metadata? }
+ */
+app.post("/compacted-states", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  if (!body.channelId) {
+    return c.json({ error: "channelId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).compactedStates.create(body);
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "compactedStates.create failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /compacted-states/latest?channelId=...
+ */
+app.get("/compacted-states/latest", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const channelId = c.req.query("channelId");
+  if (!channelId) {
+    return c.json({ error: "channelId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).compactedStates.getLatest({
+      channelId,
+    });
+    return c.json(result ?? null);
+  } catch (err) {
+    logger.error({ err }, "compactedStates.getLatest failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /compacted-states/:stateId
+ */
+app.get("/compacted-states/:stateId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const stateId = c.req.param("stateId");
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).compactedStates.get({ stateId });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, stateId }, "compactedStates.get failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+    );
+  }
+});
+
+/**
+ * GET /compacted-states?channelId=...&limit=...
+ */
+app.get("/compacted-states", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const channelId = c.req.query("channelId");
+  const limit = parseInt(c.req.query("limit") ?? "5", 10);
+  if (!channelId) {
+    return c.json({ error: "channelId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c);
+    const result = await (caller as any).compactedStates.list({
+      channelId,
+      limit,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "compactedStates.list failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+// ============================================================================
+
 /**
  * DELETE /relations/:relationId
  */
