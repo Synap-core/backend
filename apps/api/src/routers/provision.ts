@@ -10,14 +10,14 @@
  *   POST /api/provision/disconnect — Remove CP connection (admin only, uses CP JWT)
  *
  * Auth model:
- *   All mutating calls use a short-lived JWT signed with CONTROL_PLANE_JWT_SECRET.
- *   This is the same secret used by /api/handshake, so no extra env var required.
+ *   All mutating calls use a short-lived ES256 JWT signed by the Control Plane.
+ *   Pods verify via /.well-known/jwks.json — no shared secret required.
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
-import jwt from "jsonwebtoken";
-import { createLogger } from "@synap-core/core";
+import { createLogger, config } from "@synap-core/core";
+import { verifyCpJwt } from "@synap/api";
 import { getDb, eq } from "@synap/database";
 import { workspaces, intelligenceServices } from "@synap/database/schema";
 import { encryptServiceKey } from "@synap/api";
@@ -30,10 +30,16 @@ export const provisionRouter = new Hono();
 //
 // Called by the Control Plane (push flow) OR by the CLI after device auth.
 // Body: { token: string }
-// token is a JWT signed with CONTROL_PLANE_JWT_SECRET, claims:
-//   { type: "provision", podId, cpApiKey, controlPlaneUrl, iss: "synap-control-plane" }
+// token is a JWT signed with CP's ES256 private key; pod verifies via JWKS.
+// Claims: { type: "provision"|"tier_update", podId, controlPlaneUrl, tier?,
+//           intelligenceHubUrl?, intelligenceHubApiKey?,
+//           resendApiKey?, resendFromEmail?, appUrl? }
 //
-// On success, stores the connection in workspace.settings.controlPlane.
+// Accepted token types:
+//   "provision"    — full provisioning (CP connection + intelligence + tier + email config)
+//   "tier_update"  — lightweight tier push only (no intelligence re-registration)
+//
+// On success, stores data in workspace.settings.controlPlane.
 // Returns: { success: true }
 
 provisionRouter.post("/connect", async (c) => {
@@ -44,36 +50,50 @@ provisionRouter.post("/connect", async (c) => {
   }
   const { token } = parsed.data;
 
-  const secret = process.env.CONTROL_PLANE_JWT_SECRET;
-  if (!secret) {
-    logger.error("CONTROL_PLANE_JWT_SECRET not configured");
-    return c.json({ error: "Server configuration error" }, 500);
-  }
+  // Verify the JWT via CP JWKS (ES256). cpUrl may be baked into the JWT as
+  // controlPlaneUrl, but for the first-ever provision the pod uses the env var.
+  const cpUrl =
+    config.server.controlPlaneUrl ??
+    (() => {
+      // Try to decode without verifying to extract controlPlaneUrl for JWKS fetch.
+      // This is safe — we verify the full signature right after.
+      try {
+        const decoded = JSON.parse(
+          Buffer.from(token.split(".")[1], "base64url").toString("utf-8")
+        ) as { controlPlaneUrl?: string };
+        return decoded.controlPlaneUrl;
+      } catch {
+        return undefined;
+      }
+    })();
 
-  let payload: {
+  const payload = await verifyCpJwt<{
     type: string;
     podId: string;
-    cpApiKey: string;
     controlPlaneUrl: string;
-    iss: string;
     intelligenceHubUrl?: string;
     intelligenceHubApiKey?: string;
-  };
+    tier?: string;
+    resendApiKey?: string;
+    resendFromEmail?: string;
+    appUrl?: string;
+  }>(token, cpUrl);
 
-  try {
-    payload = jwt.verify(token, secret, {
-      issuer: "synap-control-plane",
-    }) as typeof payload;
-  } catch (err) {
-    logger.warn({ err }, "Provision token verification failed");
+  if (!payload) {
+    logger.warn({ cpUrl }, "Provision token verification failed");
     return c.json({ error: "Invalid or expired provision token" }, 401);
   }
 
-  if (payload.type !== "provision") {
-    return c.json({ error: "Invalid token type — expected 'provision'" }, 400);
-  }
+  const { type, podId, controlPlaneUrl } = payload;
 
-  const { podId, cpApiKey, controlPlaneUrl } = payload;
+  if (type !== "provision" && type !== "tier_update") {
+    return c.json(
+      {
+        error: `Invalid token type — expected 'provision' or 'tier_update', got '${type}'`,
+      },
+      400
+    );
+  }
 
   if (!podId || !controlPlaneUrl) {
     return c.json({ error: "Provision token missing required claims" }, 400);
@@ -87,21 +107,28 @@ provisionRouter.post("/connect", async (c) => {
     }
 
     const existing = (ws.settings as Record<string, unknown>) ?? {};
+    const existingCp = (existing.controlPlane as Record<string, unknown>) ?? {};
 
-    // Build the updated settings object.
-    // cpApiKey is optional: intelligence-only provision JWTs may omit it.
-    // Only update the controlPlane block when a real cpApiKey is present so we
-    // don't accidentally overwrite an existing CP connection with an empty key.
+    // Build the updated controlPlane settings block
     const updatedSettings: Record<string, unknown> = { ...existing };
-    if (cpApiKey) {
-      updatedSettings.controlPlane = {
-        url: controlPlaneUrl,
-        podId,
-        cpApiKey,
-        connectedAt: new Date().toISOString(),
-        lastPingAt: null,
-      };
-    }
+
+    // Always update the controlPlane block — at minimum update tier
+    updatedSettings.controlPlane = {
+      ...existingCp,
+      url: controlPlaneUrl,
+      podId,
+      connectedAt: existingCp.connectedAt ?? new Date().toISOString(),
+      lastPingAt: null,
+      // Tier from CP — stored locally; no CP round-trip needed on tier check
+      ...(payload.tier ? { tier: payload.tier } : {}),
+      // Email credentials — pod sends invite emails directly via Resend
+      ...(payload.resendApiKey ? { resendApiKey: payload.resendApiKey } : {}),
+      ...(payload.resendFromEmail
+        ? { resendFromEmail: payload.resendFromEmail }
+        : {}),
+      // App URL for invite deep-links (e.g. https://app.synap.live)
+      ...(payload.appUrl ? { appUrl: payload.appUrl } : {}),
+    };
 
     // Register the intelligence service in the services registry (not in workspace settings).
     // This integrates with resolveIntelligenceService() so all routing goes through
@@ -236,14 +263,9 @@ provisionRouter.post("/disconnect", async (c) => {
   }
   const { token } = parsed.data;
 
-  const secret = process.env.CONTROL_PLANE_JWT_SECRET;
-  if (!secret) {
-    return c.json({ error: "Server configuration error" }, 500);
-  }
-
-  try {
-    jwt.verify(token, secret, { issuer: "synap-control-plane" });
-  } catch {
+  const cpUrl = config.server.controlPlaneUrl;
+  const payload = await verifyCpJwt<{ type?: string }>(token, cpUrl);
+  if (!payload) {
     return c.json({ error: "Invalid or expired token" }, 401);
   }
 

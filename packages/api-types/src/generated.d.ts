@@ -429,6 +429,43 @@ declare const channels: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		resultSummary: import("drizzle-orm/pg-core").PgColumn<{
+			name: "result_summary";
+			tableName: "channels";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		mergedIntoStateId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "merged_into_state_id";
+			tableName: "channels";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		externalSource: import("drizzle-orm/pg-core").PgColumn<{
 			name: "external_source";
 			tableName: "channels";
@@ -1872,6 +1909,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				};
@@ -1977,6 +2016,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				} | undefined;
@@ -2056,6 +2097,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					inboxItemId: string | null;
 					previousHash: string | null;
 					hash: string;
+					sessionId: string | null;
 				}[];
 				nextCursor: string | undefined;
 				hasMore: boolean;
@@ -2093,6 +2135,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
@@ -2130,6 +2174,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
@@ -2161,6 +2207,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				};
@@ -2192,6 +2240,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
@@ -2251,6 +2301,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				};
@@ -2265,6 +2317,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
 					conflictStatus: ChannelContextConflictStatus;
+					relevanceScore: number | null;
 				}[] | undefined;
 				branchTree: any;
 			};
@@ -2320,6 +2373,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
@@ -2343,6 +2398,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
@@ -2366,6 +2423,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentType: ChannelAgentType;
 					agentConfig: unknown;
 					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
 					externalChannelId: string | null;
 					mergedAt: Date | null;
 				}[];
@@ -2390,6 +2449,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
 					conflictStatus: ChannelContextConflictStatus;
+					relevanceScore: number | null;
 				}[];
 				entities: {
 					workspaceId: string;
@@ -2402,6 +2462,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
 					conflictStatus: ChannelContextConflictStatus;
+					relevanceScore: number | null;
 				}[];
 				documents: {
 					workspaceId: string;
@@ -2414,6 +2475,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectId: string;
 					relationshipType: ChannelContextRelationshipType;
 					conflictStatus: ChannelContextConflictStatus;
+					relevanceScore: number | null;
 				}[];
 			};
 			meta: object;
@@ -4394,6 +4456,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				alreadyProvisioned: boolean;
 				dockerRunCommand: string;
 			};
+			meta: object;
+		}>;
+		getLatestMemoryState: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				version: number;
+				compactionModel: string | null;
+				createdAt: Date;
+				blocks: {
+					identity: string;
+					userModel: string;
+					continuity: string;
+					activeGoals: string;
+					entityContext: string;
+				};
+				metrics: {
+					rawTokenCount: number | null;
+					compressedTokenCount: number | null;
+					compressionRatio: number | null;
+				};
+			} | null;
 			meta: object;
 		}>;
 	}>>;

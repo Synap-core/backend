@@ -22,6 +22,7 @@ import {
   workspaceMembers,
   apiKeys,
   mcpServers,
+  compactedStates,
   type NewIntelligenceCommand,
   type AgentMetadata,
 } from "@synap/database/schema";
@@ -36,6 +37,7 @@ import {
 } from "../utils/command-template.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { ensurePersonalChannel } from "../utils/personal-channel.js";
 import { channelsRouter, invalidateMcpCache } from "./channels.js";
 
 // ── Shared proxy response types ───────────────────────────────────────────
@@ -1194,4 +1196,52 @@ export const intelligenceRouter = router({
         message: `Unknown MCP service type: ${serviceType}`,
       });
     }),
+
+  /**
+   * getLatestMemoryState
+   *
+   * Returns the latest compacted memory state for the user's personal AI timeline.
+   * Compacted states are written by any Hub Protocol service that implements the
+   * session-scoped memory protocol (currently Synap Agent Hub).
+   * Returns null if no state has been produced yet (new user or legacy service).
+   */
+  getLatestMemoryState: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    const workspaceId = ctx.workspaceId!;
+
+    const personalChannel = await ensurePersonalChannel(userId, workspaceId);
+
+    const [state] = await db
+      .select()
+      .from(compactedStates)
+      .where(eq(compactedStates.channelId, personalChannel.id))
+      .orderBy(desc(compactedStates.version))
+      .limit(1);
+
+    if (!state) return null;
+
+    return {
+      id: state.id,
+      version: state.version,
+      compactionModel: state.compactionModel,
+      createdAt: state.createdAt,
+      blocks: {
+        identity: state.identityBlock,
+        userModel: state.userModelBlock,
+        continuity: state.continuityBlock,
+        activeGoals: state.activeGoalsBlock,
+        entityContext: state.entityContextBlock,
+      },
+      metrics: {
+        rawTokenCount: state.rawTokenCount,
+        compressedTokenCount: state.compressedTokenCount,
+        compressionRatio:
+          state.rawTokenCount && state.compressedTokenCount
+            ? Math.round(
+                (1 - state.compressedTokenCount / state.rawTokenCount) * 100
+              )
+            : null,
+      },
+    };
+  }),
 });

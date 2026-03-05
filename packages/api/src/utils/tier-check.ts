@@ -1,48 +1,50 @@
 /**
  * Tier Check Utility
  *
- * Verifies that a user's subscription tier satisfies a package's requiredTier
- * by calling the Control Plane's internal endpoint.
+ * Reads the subscription tier from the pod's local workspace settings
+ * (workspace.settings.controlPlane.tier). The Control Plane pushes the tier
+ * in every provision JWT and re-pushes it on subscription changes — no
+ * runtime round-trip to the CP is ever needed.
  *
- * Used in workspace creation routes to enforce server-side tier gating before
- * a package-based workspace is created.
+ * For self-hosted pods (no CP configured), returns 'solo' as the safe default.
  *
- * Also exports `requireTier` — a tRPC middleware factory that gates individual
- * procedures behind a minimum subscription tier, with 5-minute caching and
- * fail-closed behavior when the Control Plane is unreachable.
+ * Exports:
+ *   requireTier       — tRPC middleware factory for per-procedure tier gates
+ *   assertPackageTierAccess — one-shot check used in workspace creation
  */
 
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { middleware } from "../trpc.js";
+import { getDb } from "@synap/database";
 
 const logger = createLogger({ module: "tier-check" });
 
 // ---------------------------------------------------------------------------
-// In-process tier cache (userId → { tier, expiresAt })
-// Avoids a CP round-trip on every tRPC call. Entries expire after 5 minutes.
+// In-process tier cache (TTL: 5 min — avoids DB read on every tRPC call)
 // ---------------------------------------------------------------------------
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheEntry {
   tier: string;
   expiresAt: number;
 }
 
-const tierCache = new Map<string, CacheEntry>();
+// Keyed by a fixed string — the tier is pod-level, same for all users
+const tierCache = new Map<"pod", CacheEntry>();
 
-function getCachedTier(userId: string): string | null {
-  const entry = tierCache.get(userId);
+function getCachedTier(): string | null {
+  const entry = tierCache.get("pod");
   if (!entry) return null;
   if (Date.now() > entry.expiresAt) {
-    tierCache.delete(userId);
+    tierCache.delete("pod");
     return null;
   }
   return entry.tier;
 }
 
-function setCachedTier(userId: string, tier: string): void {
-  tierCache.set(userId, { tier, expiresAt: Date.now() + CACHE_TTL_MS });
+function setCachedTier(tier: string): void {
+  tierCache.set("pod", { tier, expiresAt: Date.now() + CACHE_TTL_MS });
 }
 
 export const TIER_RANK: Record<string, number> = {
@@ -52,65 +54,42 @@ export const TIER_RANK: Record<string, number> = {
   enterprise: 4,
 };
 
+// ---------------------------------------------------------------------------
+// Core: read tier from workspace.settings.controlPlane.tier
+// ---------------------------------------------------------------------------
+
 /**
- * Fetch a user's subscription tier from the Control Plane via the internal API.
+ * Get the pod's subscription tier from the local workspace settings.
  *
- * Uses in-process caching (5 min TTL) to avoid a CP round-trip on every request.
- *
- * For the legacy `assertPackageTierAccess` path: returns 'solo' as a safe open
- * default when CP is unreachable (self-hosted pods may not have a CP at all).
- *
- * For the `requireTier` middleware path: pass `failClosed = true` to throw
- * SERVICE_UNAVAILABLE instead of defaulting to 'solo'.
+ * Returns 'solo' when:
+ *   - No CP is configured (self-hosted pod)
+ *   - No tier has been pushed yet (pod provisioned before this feature)
+ *   - DB read fails
  */
-async function fetchUserTierFromCP(
-  userId: string,
-  failClosed = false
-): Promise<string> {
-  const cached = getCachedTier(userId);
-  if (cached) return cached;
-
+async function getLocalTier(): Promise<string> {
   const cpUrl = config.server.controlPlaneUrl;
-  const cpKey = config.server.controlPlaneInternalKey;
-
-  if (!cpUrl || !cpKey) {
-    logger.debug("Control plane not configured — defaulting to 'solo' tier");
+  if (!cpUrl) {
+    // Self-hosted pod — no tier enforcement
     return "solo";
   }
 
+  const cached = getCachedTier();
+  if (cached) return cached;
+
   try {
-    const res = await fetch(`${cpUrl}/internal/users/${userId}/tier`, {
-      headers: { "X-Internal-Key": cpKey },
-      signal: AbortSignal.timeout(5000),
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
     });
 
-    if (!res.ok) {
-      logger.warn(
-        { userId, status: res.status },
-        "CP tier lookup returned non-OK"
-      );
-      if (failClosed) {
-        throw new TRPCError({
-          code: "SERVICE_UNAVAILABLE",
-          message: "Unable to verify subscription tier. Please try again.",
-        });
-      }
-      return "solo";
-    }
+    const settings = (ws?.settings as Record<string, unknown>) ?? {};
+    const cp = settings.controlPlane as { tier?: string } | undefined;
+    const tier = cp?.tier ?? "solo";
 
-    const data = (await res.json()) as { tier?: string };
-    const tier = data.tier ?? "solo";
-    setCachedTier(userId, tier);
+    setCachedTier(tier);
     return tier;
   } catch (err) {
-    if (err instanceof TRPCError) throw err;
-    logger.warn({ err, userId }, "CP tier lookup failed");
-    if (failClosed) {
-      throw new TRPCError({
-        code: "SERVICE_UNAVAILABLE",
-        message: "Unable to verify subscription tier. Please try again.",
-      });
-    }
+    logger.warn({ err }, "getLocalTier: DB read failed — defaulting to 'solo'");
     return "solo";
   }
 }
@@ -139,36 +118,36 @@ async function fetchPackageRequiredTier(slug: string): Promise<string | null> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
  * tRPC middleware that gates a procedure behind a minimum subscription tier.
  *
- * Fails closed: if the Control Plane is unreachable, throws SERVICE_UNAVAILABLE
- * instead of silently granting access.
+ * Reads the tier from local workspace settings — no CP round-trip.
+ * For self-hosted pods (no CP configured), all tiers are allowed.
  *
  * Usage:
  *   export const aiChatProcedure = protectedProcedure.use(requireTier("solo"));
  *   export const advancedViewProcedure = protectedProcedure.use(requireTier("pro"));
- *   export const multiWorkspaceProcedure = protectedProcedure.use(requireTier("team"));
  */
 export function requireTier(minTier: keyof typeof TIER_RANK) {
   return middleware(async (opts) => {
     const { ctx, next } = opts;
-    const userId = (ctx as { userId?: string }).userId;
-    if (!userId) {
-      throw new TRPCError({ code: "UNAUTHORIZED" });
-    }
-
     const cpUrl = config.server.controlPlaneUrl;
+
     if (!cpUrl) {
       // Self-hosted pod — no tier enforcement
       return next({ ctx });
     }
 
-    const userTier = await fetchUserTierFromCP(userId, true /* failClosed */);
+    const userTier = await getLocalTier();
     const userRank = TIER_RANK[userTier] ?? 1;
     const requiredRank = TIER_RANK[minTier];
 
     if (userRank < requiredRank) {
+      const userId = (ctx as { userId?: string }).userId;
       logger.warn(
         { userId, userTier, requiredTier: minTier },
         "requireTier: insufficient subscription"
@@ -185,7 +164,7 @@ export function requireTier(minTier: keyof typeof TIER_RANK) {
 
 /**
  * Assert that `userId` is allowed to install `packageSlug`.
- * Throws FORBIDDEN TRPCError if the user's tier is insufficient.
+ * Throws FORBIDDEN TRPCError if the pod's tier is insufficient.
  * No-ops silently when the CP is not configured (self-hosted pods).
  */
 export async function assertPackageTierAccess(
@@ -198,7 +177,7 @@ export async function assertPackageTierAccess(
   // Fetch both in parallel to minimize latency
   const [requiredTier, userTier] = await Promise.all([
     fetchPackageRequiredTier(packageSlug),
-    fetchUserTierFromCP(userId),
+    getLocalTier(),
   ]);
 
   if (!requiredTier) return; // Package has no tier requirement

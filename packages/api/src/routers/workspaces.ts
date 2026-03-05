@@ -878,40 +878,71 @@ export const workspacesRouter = router({
         role: invite.role,
       });
 
-      // Fire-and-forget email relay via Control Plane
-      const cpUrl = config.server.controlPlaneUrl;
-      const cpKey = config.server.controlPlaneInternalKey;
-      if (cpUrl && cpKey) {
-        const [workspace, inviter] = await Promise.all([
-          db.query.workspaces.findFirst({
-            where: eq(workspaces.id, input.workspaceId),
-            columns: { name: true },
-          }),
-          db.query.users.findFirst({
-            where: eq(users.id, ctx.userId),
-            columns: { name: true },
-          }),
-        ]);
-        const podSubdomain = (config.server as any).domain?.split(".")[0] ?? "";
-        fetch(`${cpUrl}/internal/workspace-invite-email`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-Key": cpKey,
-          },
-          body: JSON.stringify({
-            podSubdomain,
-            email: input.email,
-            inviterName: inviter?.name ?? "A teammate",
-            workspaceName: workspace?.name ?? "Synap Workspace",
-            inviteToken: token,
-          }),
-        }).catch((err) =>
-          logger.warn(
-            { err },
-            "[createInvite] Failed to relay invite email to CP"
-          )
-        );
+      // Fire-and-forget invite email — sent directly via Resend using credentials
+      // injected by the Control Plane during provisioning (workspace.settings.controlPlane).
+      // No CP round-trip needed.
+      {
+        const firstWs = await db.query.workspaces.findFirst({
+          columns: { settings: true },
+        });
+        const cpSettings = (firstWs?.settings as Record<string, unknown>)
+          ?.controlPlane as
+          | { resendApiKey?: string; resendFromEmail?: string; appUrl?: string }
+          | undefined;
+        const resendApiKey = cpSettings?.resendApiKey;
+        const fromEmail = cpSettings?.resendFromEmail ?? "noreply@synap.live";
+        const appUrl = cpSettings?.appUrl ?? "https://app.synap.live";
+
+        if (resendApiKey) {
+          const [workspace, inviter] = await Promise.all([
+            db.query.workspaces.findFirst({
+              where: eq(workspaces.id, input.workspaceId),
+              columns: { name: true },
+            }),
+            db.query.users.findFirst({
+              where: eq(users.id, ctx.userId),
+              columns: { name: true },
+            }),
+          ]);
+
+          const inviterName = inviter?.name ?? "A teammate";
+          const workspaceName = workspace?.name ?? "Synap Workspace";
+          const podDomain = (config.server as any).domain ?? "pod.synap.live";
+          const inviteUrl = `${appUrl}/workspace/invite?token=${token}&backend=${encodeURIComponent(`https://${podDomain}`)}`;
+
+          const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>You've been invited to join ${workspaceName}</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="text-align:center;margin-bottom:30px;"><h1 style="color:#000;margin:0;">Synap</h1></div>
+  <h2 style="color:#333;">You've been invited!</h2>
+  <p><strong>${inviterName}</strong> has invited you to join <strong>${workspaceName}</strong> on Synap.</p>
+  <div style="text-align:center;margin:30px 0;">
+    <a href="${inviteUrl}" style="background-color:#000;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:500;">Accept Invitation</a>
+  </div>
+  <p style="color:#666;font-size:14px;">This invitation will expire in 7 days.</p>
+</body>
+</html>`;
+
+          fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${resendApiKey}`,
+            },
+            body: JSON.stringify({
+              from: fromEmail,
+              to: input.email,
+              subject: `${inviterName} invited you to join ${workspaceName} on Synap`,
+              html,
+            }),
+          }).catch((err) =>
+            logger.warn(
+              { err },
+              "[createInvite] Failed to send invite email via Resend"
+            )
+          );
+        }
       }
 
       return invite;

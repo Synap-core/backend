@@ -44,6 +44,9 @@ export {
   createDefaultWorkspace,
 } from "./utils/kratos-sync.js";
 
+// Export JWKS client for CP JWT verification
+export { verifyCpJwt, clearJwksCache } from "./utils/jwks-client.js";
+
 // Export utilities for default whiteboard creation
 // Re-export ensureDefaultWhiteboard from @synap/database for convenience
 export { ensureDefaultWhiteboard } from "@synap/database";

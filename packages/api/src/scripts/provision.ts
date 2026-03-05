@@ -68,9 +68,8 @@ async function runConnect() {
 
   const cpApiKey = process.env.CP_API_KEY;
   const podId = process.env.POD_ID;
-  const secret = process.env.CONTROL_PLANE_JWT_SECRET;
 
-  if (!cpApiKey && !secret) {
+  if (!cpApiKey) {
     console.log("ℹ️   Two ways to connect:");
     console.log("");
     console.log("  Option 1 — Browser (recommended):");
@@ -88,13 +87,6 @@ async function runConnect() {
     );
     console.log("");
     return;
-  }
-
-  if (!cpApiKey) {
-    console.error(
-      "❌  CP_API_KEY environment variable is required for CLI connection."
-    );
-    process.exit(1);
   }
 
   if (!podId) {

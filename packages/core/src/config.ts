@@ -104,7 +104,6 @@ const ServerConfigSchema = z.object({
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
   controlPlaneUrl: z.string().url().optional(),
-  controlPlaneInternalKey: z.string().min(32).optional(),
 });
 
 const Mem0ConfigSchema = z.object({
@@ -247,7 +246,6 @@ function loadConfig(): Config {
         corsOrigins: process.env.CORS_ORIGINS,
         logLevel: process.env.LOG_LEVEL,
         controlPlaneUrl: process.env.CONTROL_PLANE_URL,
-        controlPlaneInternalKey: process.env.CONTROL_PLANE_INTERNAL_KEY,
       },
       mem0: {
         apiUrl: process.env.MEM0_API_URL,

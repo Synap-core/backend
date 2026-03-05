@@ -44,7 +44,7 @@ import {
   registerCronSchedules,
 } from "@synap/jobs";
 import crypto from "crypto";
-import jwt from "jsonwebtoken";
+import { verifyCpJwt } from "@synap/api";
 import {
   getCorsOrigins,
   rateLimitMiddleware,
@@ -279,14 +279,13 @@ app.post("/api/auth/token-exchange", async (c) => {
 });
 
 // Control Plane Handshake Endpoint
-// Accepts a short-lived JWT issued by the Synap Control Plane (PLATFORM_JWT_SECRET),
-// verifies it, then creates or finds a Kratos identity and issues a Kratos session.
+// Accepts a short-lived ES256 JWT issued by the Synap Control Plane.
+// Verifies via /.well-known/jwks.json (no shared secret required),
+// then creates or finds a Kratos identity and issues a Kratos session.
 // The session cookie is set in the response for browser-based auth.
 //
-// Env var required: CONTROL_PLANE_JWT_SECRET (must match control plane's PLATFORM_JWT_SECRET)
-//
 // Flow:
-//   Browser → POST /pods/handshake (control plane) → JWT
+//   Browser → POST /pods/handshake (control plane) → ES256 JWT
 //   Browser → POST ${podUrl}/api/handshake { token } (this endpoint) → Kratos session cookie
 app.post("/api/handshake", async (c) => {
   try {
@@ -297,28 +296,20 @@ app.post("/api/handshake", async (c) => {
       return c.json({ error: "token is required" }, 400);
     }
 
-    // Verify the handshake JWT
-    const secret = process.env.CONTROL_PLANE_JWT_SECRET;
-    if (!secret) {
-      apiLogger.error("CONTROL_PLANE_JWT_SECRET is not configured");
-      return c.json({ error: "Server configuration error" }, 500);
-    }
-
-    let payload: {
+    // Verify the handshake JWT via CP JWKS (ES256)
+    const cpUrl = config.server.controlPlaneUrl;
+    const payload = await verifyCpJwt<{
       sub: string;
       email: string;
       name?: string;
       aud: string;
-      iss: string;
       type: string;
-    };
+    }>(token, cpUrl);
 
-    try {
-      payload = jwt.verify(token, secret, {
-        issuer: "synap-control-plane",
-      }) as typeof payload;
-    } catch (jwtErr) {
-      apiLogger.warn({ err: jwtErr }, "Handshake token verification failed");
+    if (!payload) {
+      apiLogger.warn(
+        "Handshake token verification failed (null from verifyCpJwt)"
+      );
       return c.json({ error: "Invalid or expired handshake token" }, 401);
     }
 
@@ -517,7 +508,7 @@ app.use("/trpc/*", async (c, next) => {
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);
 
-// Control Plane provisioning endpoint (token-auth via CONTROL_PLANE_JWT_SECRET)
+// Control Plane provisioning endpoint (ES256 JWT, verified via JWKS)
 import { provisionRouter } from "./routers/provision.js";
 app.route("/api/provision", provisionRouter);
 
