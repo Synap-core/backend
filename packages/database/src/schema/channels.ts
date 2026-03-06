@@ -32,42 +32,52 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * EXTERNAL_IMPORT — imported conversation from an external platform (WhatsApp, Slack, Gmail, etc.)
  * A2AI            — agent-to-agent async communication channel; no human required as author
  */
-export enum ChannelType {
-  AI_THREAD = "ai_thread",
-  BRANCH = "branch",
-  ENTITY_COMMENTS = "entity_comments",
-  DOCUMENT_REVIEW = "document_review",
-  VIEW_DISCUSSION = "view_discussion",
-  DIRECT = "direct",
-  EXTERNAL_IMPORT = "external_import",
-  A2AI = "a2ai",
-}
+export const ChannelType = {
+  AI_THREAD: "ai_thread",
+  BRANCH: "branch",
+  ENTITY_COMMENTS: "entity_comments",
+  DOCUMENT_REVIEW: "document_review",
+  VIEW_DISCUSSION: "view_discussion",
+  DIRECT: "direct",
+  EXTERNAL_IMPORT: "external_import",
+  A2AI: "a2ai",
+} as const;
+export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 
 /**
  * Channel Status
  */
-export enum ChannelStatus {
-  ACTIVE = "active",
-  MERGED = "merged",
-  ARCHIVED = "archived",
-}
+export const ChannelStatus = {
+  ACTIVE: "active",
+  MERGED: "merged",
+  ARCHIVED: "archived",
+} as const;
+export type ChannelStatus = (typeof ChannelStatus)[keyof typeof ChannelStatus];
 
 /**
  * Channel Agent Types
  *
  * Determines which AI agent handles messages in this channel.
  */
-export enum ChannelAgentType {
-  DEFAULT = "default",
-  META = "meta",
-  PROMPTING = "prompting",
-  KNOWLEDGE_SEARCH = "knowledge-search",
-  CODE = "code",
-  WRITING = "writing",
-  ACTION = "action",
-  ONBOARDING = "onboarding",
-  WORKSPACE_CREATION = "workspace-creation",
-}
+export const ChannelAgentType = {
+  // Workspace-generalist co-founder AI (canonical alias: META)
+  ORCHESTRATOR: "orchestrator",
+  // "meta" is the public-facing name users/frontend see; both route to OrchestratorAgent
+  META: "meta",
+  // Personal assistant: user-centric, memory-first. Used for personal channels only.
+  PERSONAL: "personal",
+  PROMPTING: "prompting",
+  KNOWLEDGE_SEARCH: "knowledge-search",
+  CODE: "code",
+  WRITING: "writing",
+  ACTION: "action",
+  ONBOARDING: "onboarding",
+  WORKSPACE_CREATION: "workspace-creation",
+  // Legacy: pre-redesign channels. Routes to DefaultAgent (simple, read-only).
+  DEFAULT: "default",
+} as const;
+export type ChannelAgentType =
+  (typeof ChannelAgentType)[keyof typeof ChannelAgentType];
 
 export const channels = pgTable(
   "channels",
@@ -163,8 +173,37 @@ export const channels = pgTable(
   })
 );
 
-export type Channel = typeof channels.$inferSelect;
-export type NewChannel = typeof channels.$inferInsert;
+/** Channel row — explicit interface so consumers don't need drizzle-orm to resolve it. */
+export interface Channel {
+  id: string;
+  userId: string;
+  workspaceId: string | null;
+  title: string | null;
+  channelType: ChannelType;
+  contextObjectType: string | null;
+  contextObjectId: string | null;
+  parentChannelId: string | null;
+  branchedFromMessageId: string | null;
+  branchPurpose: string | null;
+  agentId: string;
+  status: ChannelStatus;
+  agentType: string;
+  agentConfig: unknown;
+  contextSummary: string | null;
+  resultSummary: string | null;
+  mergedIntoStateId: string | null;
+  externalSource: string | null;
+  externalChannelId: string | null;
+  metadata: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+  mergedAt: Date | null;
+}
+export type NewChannel = Partial<
+  Omit<Channel, "id" | "createdAt" | "updatedAt">
+> & {
+  userId: string;
+};
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer

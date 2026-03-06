@@ -125,10 +125,10 @@ export const branchesRouter = router({
       });
 
       return {
-        status: result.status,
+        status: "created" as const,
         channelId: result.channelId,
         proposalId: null,
-        message: result.message || "Branch created",
+        message: "Branch created",
       };
     }),
 

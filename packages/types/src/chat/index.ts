@@ -13,125 +13,58 @@ import type {
   MessageMetadata,
   CreatedProposal,
 } from "../hub-protocol/index.js";
-// =============================================================================
-// Database Types — Standalone interfaces (string literal unions, no DB enums)
-// =============================================================================
-
-/**
- * Channel (conversation container — was ChatThread)
- *
- * Standalone interface with string literal union types so frontend code
- * can use plain strings without importing TypeScript enums from @synap/database.
- */
-export interface Channel {
-  id: string;
-  userId: string;
-  workspaceId: string | null;
-  title: string | null;
-  channelType: ChannelTypeString;
-  contextObjectType: string | null;
-  contextObjectId: string | null;
-  parentChannelId: string | null;
-  branchedFromMessageId: string | null;
-  branchPurpose: string | null;
-  agentId: string;
-  status: ChannelStatusString;
-  agentType: string;
-  agentConfig: unknown;
-  contextSummary: string | null;
-  resultSummary: string | null;
-  mergedIntoStateId: string | null;
-  externalSource: string | null;
-  externalChannelId: string | null;
-  metadata: unknown;
-  createdAt: Date;
-  updatedAt: Date;
-  mergedAt: Date | null;
-}
-
-/** New channel input — most fields optional (DB provides defaults) */
-export type NewChannel = Partial<Channel> &
-  Pick<Channel, "userId" | "channelType">;
-
-/**
- * Message (was ChatMessage / ConversationMessageRow)
- *
- * Standalone interface with string literal union types so frontend code
- * can use `role: "user"` without importing MessageRole enum from @synap/database.
- */
-export interface ChatMessage {
-  id: string;
-  channelId: string;
-  parentId: string | null;
-  role: MessageRoleString;
-  authorType: MessageAuthorTypeString;
-  messageCategory: MessageCategoryString;
-  externalSource: string | null;
-  inboxItemId: string | null;
-  content: string;
-  metadata: unknown;
-  userId: string;
-  timestamp: Date;
-  previousHash: string | null;
-  hash: string;
-  sessionId: string | null;
-  deletedAt: Date | null;
-}
-
-/** New message input */
-export type NewChatMessage = Partial<ChatMessage> &
-  Pick<ChatMessage, "channelId" | "content" | "userId" | "role">;
-
-/**
- * Channel context item (replaces ThreadEntity + ThreadDocument)
- */
-export interface ChannelContextItem {
-  id: string;
-  channelId: string;
-  objectType: string;
-  objectId: string;
-  relationshipType: string;
-  userId: string;
-  workspaceId: string | null;
-  createdAt: Date;
-}
-
-export type NewChannelContextItem = Partial<ChannelContextItem> &
-  Pick<ChannelContextItem, "channelId" | "objectType" | "objectId">;
 
 // =============================================================================
-// Channel & Message Enum Types
+// Database Types — Re-exported from @synap/database (single source of truth)
 //
-// Single source of truth for all string unions derived from the DB schema enums.
-// Frontend imports these instead of redefining them locally.
+// @synap/database uses const objects instead of TypeScript enums, so these
+// types are plain string literal unions — "user" is directly assignable to
+// MessageRole, "active" to ChannelStatus, etc.
 // =============================================================================
 
-/** Channel type — maps to `channel_type` column */
-export type ChannelTypeString =
-  | "ai_thread"
-  | "branch"
-  | "entity_comments"
-  | "document_review"
-  | "view_discussion"
-  | "direct"
-  | "external_import"
-  | "a2ai";
+export type {
+  Channel,
+  NewChannel,
+  ChannelType,
+  ChannelStatus,
+  ChannelAgentType,
+} from "@synap/database";
 
-/** Channel status — maps to `status` column */
-export type ChannelStatusString = "active" | "merged" | "archived";
+export type {
+  MessageRow as ChatMessage,
+  NewMessageRow as NewChatMessage,
+  MessageRole,
+  MessageAuthorType,
+  MessageCategory,
+} from "@synap/database";
 
-/** Message role — maps to `role` column */
-export type MessageRoleString = "user" | "assistant" | "system";
+export type {
+  ChannelContextItem,
+  NewChannelContextItem,
+  ChannelContextObjectType,
+  ChannelContextRelationshipType,
+  ChannelContextConflictStatus,
+} from "@synap/database";
 
-/** Message author type — maps to `author_type` column */
-export type MessageAuthorTypeString = "human" | "ai_agent" | "external" | "bot";
+// =============================================================================
+// Backward-compatible string-union aliases
+// These alias the database types (now identical — string literal unions).
+// =============================================================================
 
-/** Message category — maps to `message_category` column */
-export type MessageCategoryString =
-  | "chat"
-  | "comment"
-  | "system_notification"
-  | "review";
+import type {
+  Channel,
+  ChannelType,
+  ChannelStatus,
+  MessageRole,
+  MessageAuthorType,
+  MessageCategory,
+} from "@synap/database";
+
+export type ChannelTypeString = ChannelType;
+export type ChannelStatusString = ChannelStatus;
+export type MessageRoleString = MessageRole;
+export type MessageAuthorTypeString = MessageAuthorType;
+export type MessageCategoryString = MessageCategory;
 
 // =============================================================================
 // UI State Types

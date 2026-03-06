@@ -20,7 +20,6 @@ import {
   and,
   asc,
   desc,
-  inArray,
   knowledgeRepository,
   drizzleSql,
   traverseEntityGraph,
@@ -994,7 +993,7 @@ app.get("/threads/:threadId/branches", async (c) => {
       .where(
         and(
           eq(channels.parentChannelId, threadId),
-          inArray(channels.status, ["active", "open"])
+          eq(channels.status, "active")
         )
       )
       .orderBy(asc(channels.createdAt));

@@ -108,16 +108,13 @@ async function runConnect() {
     error?: string;
   };
   try {
-    const res = await fetch(
-      `${cpUrl}/intelligence/provisioning/provision-pod/${podId}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${cpApiKey}`,
-        },
-      }
-    );
+    const res = await fetch(`${cpUrl}/intelligence/provision/${podId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${cpApiKey}`,
+      },
+    });
     provisionResp = (await res.json()) as typeof provisionResp;
     if (!res.ok) {
       throw new Error(provisionResp.error ?? `HTTP ${res.status}`);

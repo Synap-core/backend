@@ -15,13 +15,15 @@ import { messages } from "./messages.js";
 /**
  * Proposal Status
  */
-export enum ProposalStatus {
-  PENDING = "pending",
-  APPROVED = "approved",
-  REJECTED = "rejected",
+export const ProposalStatus = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
   /** Action was on the autoApproveFor whitelist — executed immediately, audited here for traceability. */
-  AUTO_APPROVED = "auto_approved",
-}
+  AUTO_APPROVED: "auto_approved",
+} as const;
+export type ProposalStatus =
+  (typeof ProposalStatus)[keyof typeof ProposalStatus];
 
 /**
  * Universal Proposals Table
@@ -126,8 +128,37 @@ export const proposals = pgTable(
   })
 );
 
-export type Proposal = typeof proposals.$inferSelect;
-export type NewProposal = typeof proposals.$inferInsert;
+/** Proposal row — explicit interface so consumers don't need drizzle-orm to resolve it. */
+export interface Proposal {
+  id: string;
+  workspaceId: string;
+  targetType: string;
+  targetId: string;
+  proposalType: string;
+  data: unknown;
+  status: ProposalStatus;
+  createdBy: string | null;
+  threadId: string | null;
+  commandRunId: string | null;
+  sourceMessageId: string | null;
+  agentUserId: string | null;
+  expiresAt: Date | null;
+  reviewedBy: string | null;
+  reviewedAt: Date | null;
+  rejectionReason: string | null;
+  comments: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}
+export type NewProposal = Partial<
+  Omit<Proposal, "id" | "createdAt" | "updatedAt">
+> & {
+  workspaceId: string;
+  targetType: string;
+  targetId: string;
+  proposalType: string;
+  data: unknown;
+};
 
 // Zod Schemas
 export const insertProposalSchema = createInsertSchema(proposals);

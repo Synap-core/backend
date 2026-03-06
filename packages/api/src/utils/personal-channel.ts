@@ -48,8 +48,8 @@ export async function ensurePersonalChannel(
       workspaceId,
       channelType: ChannelType.AI_THREAD,
       status: ChannelStatus.ACTIVE,
-      agentId: "orchestrator",
-      agentType: ChannelAgentType.META,
+      agentId: "personal",
+      agentType: ChannelAgentType.PERSONAL,
       metadata: { isPersonal: true },
     })
     .returning();

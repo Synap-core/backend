@@ -31,33 +31,39 @@ import { messages } from "./messages.js";
 /**
  * The type of object tracked in this context item.
  */
-export enum ChannelContextObjectType {
-  ENTITY = "entity",
-  DOCUMENT = "document",
-  VIEW = "view",
-  PROPOSAL = "proposal",
-  INBOX_ITEM = "inbox_item",
-}
+export const ChannelContextObjectType = {
+  ENTITY: "entity",
+  DOCUMENT: "document",
+  VIEW: "view",
+  PROPOSAL: "proposal",
+  INBOX_ITEM: "inbox_item",
+} as const;
+export type ChannelContextObjectType =
+  (typeof ChannelContextObjectType)[keyof typeof ChannelContextObjectType];
 
 /**
  * How the object relates to the channel.
  */
-export enum ChannelContextRelationshipType {
-  USED_AS_CONTEXT = "used_as_context",
-  CREATED = "created",
-  UPDATED = "updated",
-  REFERENCED = "referenced",
-  INHERITED_FROM_PARENT = "inherited_from_parent",
-}
+export const ChannelContextRelationshipType = {
+  USED_AS_CONTEXT: "used_as_context",
+  CREATED: "created",
+  UPDATED: "updated",
+  REFERENCED: "referenced",
+  INHERITED_FROM_PARENT: "inherited_from_parent",
+} as const;
+export type ChannelContextRelationshipType =
+  (typeof ChannelContextRelationshipType)[keyof typeof ChannelContextRelationshipType];
 
 /**
  * Conflict status (for parallel branch workflows).
  */
-export enum ChannelContextConflictStatus {
-  NONE = "none",
-  PENDING = "pending",
-  RESOLVED = "resolved",
-}
+export const ChannelContextConflictStatus = {
+  NONE: "none",
+  PENDING: "pending",
+  RESOLVED: "resolved",
+} as const;
+export type ChannelContextConflictStatus =
+  (typeof ChannelContextConflictStatus)[keyof typeof ChannelContextConflictStatus];
 
 export const channelContextItems = pgTable(
   "channel_context_items",
@@ -146,8 +152,30 @@ export const channelContextItems = pgTable(
   })
 );
 
-export type ChannelContextItem = typeof channelContextItems.$inferSelect;
-export type NewChannelContextItem = typeof channelContextItems.$inferInsert;
+/** Channel context item row — explicit interface so consumers don't need drizzle-orm. */
+export interface ChannelContextItem {
+  id: string;
+  channelId: string;
+  objectType: ChannelContextObjectType;
+  objectId: string;
+  relationshipType: ChannelContextRelationshipType;
+  conflictStatus: ChannelContextConflictStatus;
+  sourceMessageId: string | null;
+  relevanceScore: number | null;
+  userId: string;
+  workspaceId: string;
+  createdAt: Date;
+}
+export type NewChannelContextItem = Partial<
+  Omit<ChannelContextItem, "id" | "createdAt">
+> & {
+  channelId: string;
+  objectType: ChannelContextObjectType;
+  objectId: string;
+  relationshipType: ChannelContextRelationshipType;
+  userId: string;
+  workspaceId: string;
+};
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer

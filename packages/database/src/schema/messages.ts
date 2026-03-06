@@ -32,11 +32,12 @@ import { sessions } from "./sessions.js";
  *
  * Semantic role of the message author in the conversation.
  */
-export enum MessageRole {
-  USER = "user",
-  ASSISTANT = "assistant",
-  SYSTEM = "system",
-}
+export const MessageRole = {
+  USER: "user",
+  ASSISTANT: "assistant",
+  SYSTEM: "system",
+} as const;
+export type MessageRole = (typeof MessageRole)[keyof typeof MessageRole];
 
 /**
  * Message Author Types
@@ -48,24 +49,28 @@ export enum MessageRole {
  *   role=assistant + authorType=ai_agent → AI agent responded
  *   role=system    + authorType=bot  → automated system message
  */
-export enum MessageAuthorType {
-  HUMAN = "human",
-  AI_AGENT = "ai_agent",
-  EXTERNAL = "external", // message imported from external platform
-  BOT = "bot", // automated system/notification message
-}
+export const MessageAuthorType = {
+  HUMAN: "human",
+  AI_AGENT: "ai_agent",
+  EXTERNAL: "external", // message imported from external platform
+  BOT: "bot", // automated system/notification message
+} as const;
+export type MessageAuthorType =
+  (typeof MessageAuthorType)[keyof typeof MessageAuthorType];
 
 /**
  * Message Categories
  *
  * What kind of interaction this message represents.
  */
-export enum MessageCategory {
-  CHAT = "chat", // standard conversational message
-  COMMENT = "comment", // comment on an entity/document/view
-  SYSTEM_NOTIFICATION = "system_notification", // cross-channel update, conflict alerts, etc.
-  REVIEW = "review", // part of a document review flow
-}
+export const MessageCategory = {
+  CHAT: "chat", // standard conversational message
+  COMMENT: "comment", // comment on an entity/document/view
+  SYSTEM_NOTIFICATION: "system_notification", // cross-channel update, conflict alerts, etc.
+  REVIEW: "review", // part of a document review flow
+} as const;
+export type MessageCategory =
+  (typeof MessageCategory)[keyof typeof MessageCategory];
 
 export const messages = pgTable(
   "messages",
@@ -150,5 +155,31 @@ export const messages = pgTable(
   })
 );
 
-export type MessageRow = typeof messages.$inferSelect;
-export type NewMessageRow = typeof messages.$inferInsert;
+/** Message row — explicit interface so consumers don't need drizzle-orm to resolve it. */
+export interface MessageRow {
+  id: string;
+  channelId: string;
+  parentId: string | null;
+  role: MessageRole;
+  authorType: MessageAuthorType;
+  messageCategory: MessageCategory;
+  externalSource: string | null;
+  inboxItemId: string | null;
+  content: string;
+  /** Typed as unknown to avoid pulling in @synap-core/core across package boundaries. */
+  metadata: unknown;
+  userId: string;
+  timestamp: Date;
+  previousHash: string | null;
+  hash: string;
+  sessionId: string | null;
+  deletedAt: Date | null;
+}
+export type NewMessageRow = Partial<
+  Omit<MessageRow, "id" | "timestamp" | "hash">
+> & {
+  channelId: string;
+  content: string;
+  userId: string;
+  role: MessageRole;
+};
