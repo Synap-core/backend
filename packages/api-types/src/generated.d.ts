@@ -86,517 +86,40 @@ export interface AgentMetadata {
 	createdByUserId: string;
 	capabilities?: string[];
 }
-declare enum MessageRole {
-	USER = "user",
-	ASSISTANT = "assistant",
-	SYSTEM = "system"
+type MessageRole = "user" | "assistant" | "system";
+type MessageAuthorType = "human" | "ai_agent" | "external" | "bot";
+type MessageCategory = "chat" | "comment" | "system_notification" | "review";
+type ChannelType = "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+type ChannelStatus = "active" | "merged" | "archived";
+type ChannelAgentType = "default" | "meta" | "prompting" | "knowledge-search" | "code" | "writing" | "action" | "onboarding" | "workspace-creation";
+export interface Channel {
+	id: string;
+	userId: string;
+	workspaceId: string | null;
+	title: string | null;
+	channelType: ChannelType;
+	contextObjectType: string | null;
+	contextObjectId: string | null;
+	parentChannelId: string | null;
+	branchedFromMessageId: string | null;
+	branchPurpose: string | null;
+	agentId: string;
+	status: ChannelStatus;
+	agentType: ChannelAgentType;
+	agentConfig: unknown;
+	contextSummary: string | null;
+	resultSummary: string | null;
+	mergedIntoStateId: string | null;
+	externalSource: string | null;
+	externalChannelId: string | null;
+	metadata: unknown;
+	createdAt: Date;
+	updatedAt: Date;
+	mergedAt: Date | null;
 }
-declare enum MessageAuthorType {
-	HUMAN = "human",
-	AI_AGENT = "ai_agent",
-	EXTERNAL = "external",// message imported from external platform
-	BOT = "bot"
-}
-declare enum MessageCategory {
-	CHAT = "chat",// standard conversational message
-	COMMENT = "comment",// comment on an entity/document/view
-	SYSTEM_NOTIFICATION = "system_notification",// cross-channel update, conflict alerts, etc.
-	REVIEW = "review"
-}
-declare enum ChannelType {
-	AI_THREAD = "ai_thread",
-	BRANCH = "branch",
-	ENTITY_COMMENTS = "entity_comments",
-	DOCUMENT_REVIEW = "document_review",
-	VIEW_DISCUSSION = "view_discussion",
-	DIRECT = "direct",
-	EXTERNAL_IMPORT = "external_import",
-	A2AI = "a2ai"
-}
-declare enum ChannelStatus {
-	ACTIVE = "active",
-	MERGED = "merged",
-	ARCHIVED = "archived"
-}
-declare enum ChannelAgentType {
-	DEFAULT = "default",
-	META = "meta",
-	PROMPTING = "prompting",
-	KNOWLEDGE_SEARCH = "knowledge-search",
-	CODE = "code",
-	WRITING = "writing",
-	ACTION = "action",
-	ONBOARDING = "onboarding",
-	WORKSPACE_CREATION = "workspace-creation"
-}
-declare const channels: import("drizzle-orm/pg-core").PgTableWithColumns<{
-	name: "channels";
-	schema: undefined;
-	columns: {
-		id: import("drizzle-orm/pg-core").PgColumn<{
-			name: "id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: true;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		userId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "user_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "workspace_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		title: import("drizzle-orm/pg-core").PgColumn<{
-			name: "title";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		channelType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "channel_type";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: ChannelType;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				ChannelType.AI_THREAD,
-				ChannelType.BRANCH,
-				ChannelType.ENTITY_COMMENTS,
-				ChannelType.DOCUMENT_REVIEW,
-				ChannelType.VIEW_DISCUSSION,
-				ChannelType.DIRECT,
-				ChannelType.EXTERNAL_IMPORT,
-				ChannelType.A2AI
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		contextObjectType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "context_object_type";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		contextObjectId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "context_object_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		parentChannelId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "parent_channel_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		branchedFromMessageId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "branched_from_message_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		branchPurpose: import("drizzle-orm/pg-core").PgColumn<{
-			name: "branch_purpose";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		agentId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "agent_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		status: import("drizzle-orm/pg-core").PgColumn<{
-			name: "status";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: ChannelStatus;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				ChannelStatus.ACTIVE,
-				ChannelStatus.MERGED,
-				ChannelStatus.ARCHIVED
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		agentType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "agent_type";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: ChannelAgentType;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				ChannelAgentType.DEFAULT,
-				ChannelAgentType.META,
-				ChannelAgentType.PROMPTING,
-				ChannelAgentType.KNOWLEDGE_SEARCH,
-				ChannelAgentType.CODE,
-				ChannelAgentType.WRITING,
-				ChannelAgentType.ACTION,
-				ChannelAgentType.ONBOARDING,
-				ChannelAgentType.WORKSPACE_CREATION
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		agentConfig: import("drizzle-orm/pg-core").PgColumn<{
-			name: "agent_config";
-			tableName: "channels";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		contextSummary: import("drizzle-orm/pg-core").PgColumn<{
-			name: "context_summary";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		resultSummary: import("drizzle-orm/pg-core").PgColumn<{
-			name: "result_summary";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		mergedIntoStateId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "merged_into_state_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		externalSource: import("drizzle-orm/pg-core").PgColumn<{
-			name: "external_source";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		externalChannelId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "external_channel_id";
-			tableName: "channels";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		metadata: import("drizzle-orm/pg-core").PgColumn<{
-			name: "metadata";
-			tableName: "channels";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		createdAt: import("drizzle-orm/pg-core").PgColumn<{
-			name: "created_at";
-			tableName: "channels";
-			dataType: "date";
-			columnType: "PgTimestamp";
-			data: Date;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
-			name: "updated_at";
-			tableName: "channels";
-			dataType: "date";
-			columnType: "PgTimestamp";
-			data: Date;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		mergedAt: import("drizzle-orm/pg-core").PgColumn<{
-			name: "merged_at";
-			tableName: "channels";
-			dataType: "date";
-			columnType: "PgTimestamp";
-			data: Date;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-	};
-	dialect: "pg";
-}>;
-export type Channel = typeof channels.$inferSelect;
-declare enum ChannelContextObjectType {
-	ENTITY = "entity",
-	DOCUMENT = "document",
-	VIEW = "view",
-	PROPOSAL = "proposal",
-	INBOX_ITEM = "inbox_item"
-}
-declare enum ChannelContextRelationshipType {
-	USED_AS_CONTEXT = "used_as_context",
-	CREATED = "created",
-	UPDATED = "updated",
-	REFERENCED = "referenced",
-	INHERITED_FROM_PARENT = "inherited_from_parent"
-}
-declare enum ChannelContextConflictStatus {
-	NONE = "none",
-	PENDING = "pending",
-	RESOLVED = "resolved"
-}
+type ChannelContextObjectType = "entity" | "document" | "view" | "proposal" | "inbox_item";
+type ChannelContextRelationshipType = "used_as_context" | "created" | "updated" | "referenced" | "inherited_from_parent";
+type ChannelContextConflictStatus = "none" | "pending" | "resolved";
 export interface DerivedInput {
 	name: string;
 	label?: string;
@@ -741,6 +264,19 @@ export interface WorkspaceSettings {
 	provisionedAt?: string;
 	/** Current provisioning status */
 	provisioningStatus?: "pending" | "active" | "failed";
+	/**
+	 * Semantic type of this workspace within the pod.
+	 * - "personal"     — the user's curated space (default)
+	 * - "agent"        — the AI's staging area (drafts, research, branch outputs)
+	 * - "project"      — scoped context for a specific project
+	 * - "operational"  — system/admin workspace (e.g. pod-admin)
+	 */
+	workspaceType?: "personal" | "agent" | "project" | "operational";
+	/**
+	 * For agent workspaces: the userId (userType="agent") that owns this workspace.
+	 * Enables the intelligence service to know which staging area belongs to which agent.
+	 */
+	linkedAgentId?: string;
 	aiGovernance?: {
 		/**
 		 * Whitelist of event keys that AI agents may execute WITHOUT a proposal.
@@ -765,200 +301,19 @@ export interface WorkspaceSettings {
 		proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
 	};
 }
-declare enum ProposalStatus {
-	PENDING = "pending",
-	APPROVED = "approved",
-	REJECTED = "rejected",
-	/** Action was on the autoApproveFor whitelist — executed immediately, audited here for traceability. */
-	AUTO_APPROVED = "auto_approved"
+type ProposalStatus = "pending" | "approved" | "rejected" | "auto_approved";
+export interface MessageLink {
+	id: string;
+	messageId: string;
+	targetType: string;
+	targetId: string;
+	relationshipType: string;
+	position: unknown;
+	metadata: unknown;
+	userId: string;
+	workspaceId: string;
+	createdAt: Date;
 }
-declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
-	name: "message_links";
-	schema: undefined;
-	columns: {
-		id: import("drizzle-orm/pg-core").PgColumn<{
-			name: "id";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: true;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		messageId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "message_id";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		targetType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "target_type";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		targetId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "target_id";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		relationshipType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "relationship_type";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		position: import("drizzle-orm/pg-core").PgColumn<{
-			name: "position";
-			tableName: "message_links";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		metadata: import("drizzle-orm/pg-core").PgColumn<{
-			name: "metadata";
-			tableName: "message_links";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		userId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "user_id";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "workspace_id";
-			tableName: "message_links";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		createdAt: import("drizzle-orm/pg-core").PgColumn<{
-			name: "created_at";
-			tableName: "message_links";
-			dataType: "date";
-			columnType: "PgTimestamp";
-			data: Date;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-	};
-	dialect: "pg";
-}>;
-export type MessageLink = typeof messageLinks.$inferSelect;
 /**
  * MCP Servers Schema
  *
@@ -973,195 +328,18 @@ export type MessageLink = typeof messageLinks.$inferSelect;
  */
 export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
-declare enum PropertyValueType {
-	STRING = "string",
-	NUMBER = "number",
-	BOOLEAN = "boolean",
-	DATE = "date",
-	/**
-	 * A UUID reference to another entity in the same workspace.
-	 *
-	 * This is a STRUCTURAL LINK — part of the profile schema, not the graph.
-	 * When a property has this type, the value stored is the UUID of another entity.
-	 * It represents a modelled, schema-defined relationship (e.g. "this task's project",
-	 * "this deal's primary contact").
-	 *
-	 * These differ from semantic graph relations (`relations` table):
-	 * - Structural links (entity_id props) are schema-defined, form-based, one-directional
-	 * - Semantic relations are schema-free, emergent, bi-directional
-	 *
-	 * Use `entity_property_index.value_entity_id` for fast reverse-lookup:
-	 * "find all entities whose [property] points to entity X"
-	 *
-	 * @see /docs/docs/concepts/entity-connections.md — architecture decision doc
-	 */
-	ENTITY_ID = "entity_id",
-	ARRAY = "array",
-	OBJECT = "object",
-	SECRET = "secret"
+type PropertyValueType = "string" | "number" | "boolean" | "date" | "entity_id" | "array" | "object" | "secret";
+export interface PropertyDef {
+	id: string;
+	slug: string;
+	profileId: string | null;
+	valueType: PropertyValueType;
+	constraints: unknown;
+	uiHints: unknown;
+	createdAt: Date;
+	updatedAt: Date;
 }
-declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
-	name: "property_defs";
-	schema: undefined;
-	columns: {
-		id: import("drizzle-orm/pg-core").PgColumn<{
-			name: "id";
-			tableName: "property_defs";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: true;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		slug: import("drizzle-orm/pg-core").PgColumn<{
-			name: "slug";
-			tableName: "property_defs";
-			dataType: "string";
-			columnType: "PgText";
-			data: string;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		profileId: import("drizzle-orm/pg-core").PgColumn<{
-			name: "profile_id";
-			tableName: "property_defs";
-			dataType: "string";
-			columnType: "PgUUID";
-			data: string;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		valueType: import("drizzle-orm/pg-core").PgColumn<{
-			name: "value_type";
-			tableName: "property_defs";
-			dataType: "string";
-			columnType: "PgText";
-			data: PropertyValueType;
-			driverParam: string;
-			notNull: true;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				PropertyValueType.STRING,
-				PropertyValueType.NUMBER,
-				PropertyValueType.BOOLEAN,
-				PropertyValueType.DATE,
-				PropertyValueType.ENTITY_ID,
-				PropertyValueType.ARRAY,
-				PropertyValueType.OBJECT,
-				PropertyValueType.SECRET
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		constraints: import("drizzle-orm/pg-core").PgColumn<{
-			name: "constraints";
-			tableName: "property_defs";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		uiHints: import("drizzle-orm/pg-core").PgColumn<{
-			name: "ui_hints";
-			tableName: "property_defs";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		createdAt: import("drizzle-orm/pg-core").PgColumn<{
-			name: "created_at";
-			tableName: "property_defs";
-			dataType: "date";
-			columnType: "PgTimestamp";
-			data: Date;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
-			name: "updated_at";
-			tableName: "property_defs";
-			dataType: "date";
-			columnType: "PgTimestamp";
-			data: Date;
-			driverParam: string;
-			notNull: true;
-			hasDefault: true;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-	};
-	dialect: "pg";
-}>;
-export type PropertyDef = typeof propertyDefs.$inferSelect;
-declare enum ProfileScope {
-	SYSTEM = "system",// Available to all users (pod-wide)
-	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
-	WORKSPACE = "workspace",// Owned by a single workspace
-	USER = "user"
-}
+type ProfileScope = "system" | "shared" | "workspace" | "user";
 /**
  * EventRecord - Database representation of an event
  *
@@ -1265,28 +443,12 @@ export interface EntityQuery {
 	/** Group by field (for kanban, timeline) */
 	groupBy?: string;
 }
-declare enum AgentType {
-	DEFAULT = "default",
-	META = "meta",
-	PROMPTING = "prompting",
-	KNOWLEDGE_SEARCH = "knowledge-search",
-	CODE = "code",
-	WRITING = "writing",
-	ACTION = "action",
-	ONBOARDING = "onboarding",
-	WORKSPACE_CREATION = "workspace-creation"
-}
+type AgentType = "default" | "meta" | "prompting" | "knowledge-search" | "code" | "writing" | "action" | "onboarding" | "workspace-creation";
 /**
  * Agent type as string literal union (for flexibility)
  */
 export type AgentTypeString = `${AgentType}` | (string & {});
-declare enum AIStepType {
-	THINKING = "thinking",
-	TOOL_CALL = "tool_call",
-	TOOL_RESULT = "tool_result",
-	DECISION = "decision",
-	ERROR = "error"
-}
+type AIStepType = "thinking" | "tool_call" | "tool_result" | "decision" | "error";
 /**
  * AI step - shows what the AI is doing
  *
@@ -1321,39 +483,8 @@ export interface BranchDecision {
 	suggestedTitle?: string;
 	suggestedPurpose?: string;
 }
-declare enum MessageLinkTargetType {
-	ENTITY = "entity",
-	DOCUMENT = "document",
-	PROPOSAL = "proposal",
-	MESSAGE = "message",
-	EVENT = "event",
-	USER = "user",
-	WORKSPACE = "workspace",
-	VIEW = "view",
-	RELATION = "relation",
-	PROJECT = "project",
-	TAG = "tag",
-	ROLE = "role",
-	API_KEY = "apiKey",
-	SKILL = "skill",
-	BACKGROUND_TASK = "backgroundTask",
-	AGENT = "agent",
-	CHAT_THREAD = "chatThread",
-	TEMPLATE = "template",
-	INBOX_ITEM = "inboxItem"
-}
-declare enum MessageLinkRelationshipType {
-	CREATED = "created",// Message created this object
-	UPDATED = "updated",// Message updated this object
-	REFERENCES = "references",// Message references/mentions this object
-	APPROVES = "approves",// Message approves this proposal
-	REJECTS = "rejects",// Message rejects this proposal
-	COMMENTS = "comments",// Message is a comment on this object
-	REVIEWS = "reviews",// Message reviews this object
-	RESPONDS_TO = "responds_to",// Message responds to another message
-	QUOTES = "quotes",// Message quotes this object
-	CONTEXT = "context"
-}
+type MessageLinkTargetType = "entity" | "document" | "proposal" | "message" | "event" | "user" | "workspace" | "view" | "relation" | "project" | "tag" | "role" | "apiKey" | "skill" | "backgroundTask" | "agent" | "chatThread" | "template" | "inboxItem";
+type MessageLinkRelationshipType = "created" | "updated" | "references" | "approves" | "rejects" | "comments" | "reviews" | "responds_to" | "quotes" | "context";
 /**
  * Node shape for the workspace branch tree response.
  * Defined at module scope so tsc can include it in declaration output.
@@ -5303,6 +4434,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
 				workspaceName?: string | undefined;
+				workspaceType?: "project" | "agent" | "personal" | "operational" | undefined;
+				linkedAgentId?: string | undefined;
 			};
 			output: {
 				status: "created";

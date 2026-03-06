@@ -164,6 +164,22 @@ export interface WorkspaceSettings {
   /** Current provisioning status */
   provisioningStatus?: "pending" | "active" | "failed";
 
+  // ─── Agent Workspace Pair ────────────────────────────────────────────────────
+  /**
+   * Semantic type of this workspace within the pod.
+   * - "personal"     — the user's curated space (default)
+   * - "agent"        — the AI's staging area (drafts, research, branch outputs)
+   * - "project"      — scoped context for a specific project
+   * - "operational"  — system/admin workspace (e.g. pod-admin)
+   */
+  workspaceType?: "personal" | "agent" | "project" | "operational";
+
+  /**
+   * For agent workspaces: the userId (userType="agent") that owns this workspace.
+   * Enables the intelligence service to know which staging area belongs to which agent.
+   */
+  linkedAgentId?: string;
+
   // AI Governance Settings
   aiGovernance?: {
     /**

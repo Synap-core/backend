@@ -1225,6 +1225,10 @@ export const workspacesRouter = router({
         packageSlug: z.string().optional(),
         packageVersion: z.string().optional(),
         workspaceName: z.string().optional(),
+        workspaceType: z
+          .enum(["personal", "agent", "project", "operational"])
+          .optional(),
+        linkedAgentId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1241,6 +1245,8 @@ export const workspacesRouter = router({
         packageVersion: input.packageVersion,
         workspaceName: input.workspaceName,
         createdBy: "user",
+        workspaceType: input.workspaceType,
+        linkedAgentId: input.linkedAgentId,
       });
 
       // Create documents for entities with content

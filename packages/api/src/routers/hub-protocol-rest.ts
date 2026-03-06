@@ -20,6 +20,7 @@ import {
   and,
   asc,
   desc,
+  inArray,
   knowledgeRepository,
   drizzleSql,
   traverseEntityGraph,
@@ -937,20 +938,14 @@ app.post("/threads", async (c) => {
     agentType?: string;
     branchPurpose?: string;
   };
-  // Map agent type to valid DB enum (research maps to default — not in schema enum)
-  const VALID_AGENT_TYPES = new Set([
-    "default",
-    "meta",
-    "prompting",
-    "knowledge-search",
-    "code",
-    "writing",
-    "action",
-  ]);
+  const rawAgentType = body.agentType;
   const resolvedAgentType =
-    body.agentType && VALID_AGENT_TYPES.has(body.agentType)
-      ? (body.agentType as any)
-      : "default";
+    typeof rawAgentType === "string" &&
+    rawAgentType.length > 0 &&
+    rawAgentType.length <= 100 &&
+    /^[\w:.-]+$/.test(rawAgentType)
+      ? rawAgentType
+      : "meta";
   try {
     const { randomUUID } = await import("crypto");
     const threadId = randomUUID();
@@ -969,6 +964,43 @@ app.post("/threads", async (c) => {
     return c.json({ id: thread.id, title: thread.title });
   } catch (err) {
     logger.error({ err }, "createThread failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /threads/:threadId/branches
+ * Returns active child branches for a given thread (for bootstrap context injection).
+ */
+app.get("/threads/:threadId/branches", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const threadId = c.req.param("threadId");
+  try {
+    const branches = await db
+      .select({
+        channelId: channels.id,
+        branchPurpose: channels.branchPurpose,
+        status: channels.status,
+      })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.parentChannelId, threadId),
+          inArray(channels.status, ["active", "open"])
+        )
+      )
+      .orderBy(asc(channels.createdAt));
+    return c.json({ branches });
+  } catch (err) {
+    logger.error({ err, threadId }, "getBranches failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500
@@ -996,6 +1028,8 @@ app.get("/threads/:threadId/messages", async (c) => {
         content: messages.content,
         userId: messages.userId,
         timestamp: messages.timestamp,
+        sessionId: messages.sessionId,
+        metadata: messages.metadata,
       })
       .from(messages)
       .where(eq(messages.channelId, threadId))
@@ -1027,6 +1061,7 @@ app.post("/threads/:threadId/messages", async (c) => {
     role: "system" | "assistant";
     content: string;
     userId: string;
+    metadata?: Record<string, unknown>;
   };
   if (!body.role || !body.content || !body.userId) {
     return c.json({ error: "role, content, and userId are required" }, 400);
@@ -1045,6 +1080,7 @@ app.post("/threads/:threadId/messages", async (c) => {
       content: body.content,
       userId: body.userId,
       hash,
+      ...(body.metadata ? { metadata: body.metadata } : {}),
     });
     return c.json({ success: true });
   } catch (err) {

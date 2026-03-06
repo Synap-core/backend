@@ -191,6 +191,18 @@ export interface CreateFromDefinitionOptions {
   createdBy: "user" | "provisioning" | "plugin";
   /** Optional system slug written atomically into settings on creation (e.g. "pod-admin"). */
   systemSlug?: string;
+  /**
+   * Semantic role of the workspace within the pod.
+   * - "personal"     — user's curated space (default)
+   * - "agent"        — AI staging area (no proposal flow required)
+   * - "project"      — scoped project context
+   * - "operational"  — system/admin workspace
+   */
+  workspaceType?: "personal" | "agent" | "project" | "operational";
+  /**
+   * For agent workspaces: the userId (userType="agent") that owns this workspace.
+   */
+  linkedAgentId?: string;
 }
 
 export interface CreateFromDefinitionResult {
@@ -258,6 +270,12 @@ export async function createWorkspaceFromDefinition(
   }
   if (systemSlug) {
     settings.systemSlug = systemSlug;
+  }
+  if (opts.workspaceType) {
+    settings.workspaceType = opts.workspaceType;
+  }
+  if (opts.linkedAgentId) {
+    settings.linkedAgentId = opts.linkedAgentId;
   }
 
   // 1. Create workspace

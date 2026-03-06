@@ -119,22 +119,8 @@ export const channels = pgTable(
       .notNull()
       .default(ChannelStatus.ACTIVE),
 
-    // Agent type for multi-agent system
-    agentType: text("agent_type", {
-      enum: [
-        ChannelAgentType.DEFAULT,
-        ChannelAgentType.META,
-        ChannelAgentType.PROMPTING,
-        ChannelAgentType.KNOWLEDGE_SEARCH,
-        ChannelAgentType.CODE,
-        ChannelAgentType.WRITING,
-        ChannelAgentType.ACTION,
-        ChannelAgentType.ONBOARDING,
-        ChannelAgentType.WORKSPACE_CREATION,
-      ],
-    })
-      .notNull()
-      .default(ChannelAgentType.DEFAULT),
+    // Agent type for multi-agent system — free string, no DB-level enum constraint
+    agentType: text("agent_type").notNull().default(ChannelAgentType.DEFAULT),
 
     agentConfig: jsonb("agent_config"), // Custom agent configuration (system prompt, tools, etc.)
 

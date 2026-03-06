@@ -14,9 +14,6 @@ export * from "./documents/index.js";
 // User and context types
 export * from "./users/index.js";
 
-// Inbox types
-export * from "./inbox/index.js";
-
 // Template types
 export * from "./templates/types.js";
 export * from "./templates/schemas.js";

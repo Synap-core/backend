@@ -42,6 +42,8 @@ import {
   users,
   workspaceMembers,
   mcpServers,
+  sessions,
+  SessionStatus,
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
@@ -257,16 +259,10 @@ export const channelsRouter = router({
         branchPurpose: z.string().optional(),
         agentId: z.string().optional(),
         agentType: z
-          .enum([
-            "meta",
-            "default",
-            "prompting",
-            "knowledge-search",
-            "code",
-            "writing",
-            "action",
-            "onboarding",
-          ])
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
           .optional(),
         agentConfig: z.record(z.string(), z.any()).optional(),
         inheritContext: z.boolean().default(true),
@@ -293,7 +289,7 @@ export const channelsRouter = router({
       if (input.parentChannelId) {
         const branchChannelId = randomUUID();
 
-        await db
+        const [branchChannel] = await db
           .insert(channels)
           .values({
             id: branchChannelId,
@@ -302,9 +298,7 @@ export const channelsRouter = router({
             parentChannelId: input.parentChannelId,
             branchPurpose: input.branchPurpose,
             agentId: input.agentId || "orchestrator",
-            agentType: input.agentType
-              ? (input.agentType as ChannelAgentType)
-              : ChannelAgentType.DEFAULT,
+            agentType: input.agentType ?? ChannelAgentType.META,
             agentConfig: input.agentConfig,
             channelType: ChannelType.BRANCH,
             status: ChannelStatus.ACTIVE,
@@ -322,11 +316,7 @@ export const channelsRouter = router({
           userId: ctx.userId,
         });
 
-        return {
-          channelId: branchChannelId,
-          status: "created",
-          message: "Branch created",
-        };
+        return { channelId: branchChannelId, channel: branchChannel };
       }
 
       // Main AI channel
@@ -338,9 +328,7 @@ export const channelsRouter = router({
           channelType: ChannelType.AI_THREAD,
           status: ChannelStatus.ACTIVE,
           agentId: input.agentId || "orchestrator",
-          agentType: input.agentType
-            ? (input.agentType as ChannelAgentType)
-            : ChannelAgentType.DEFAULT,
+          agentType: input.agentType ?? ChannelAgentType.META,
         })
         .returning();
 
@@ -451,15 +439,10 @@ export const channelsRouter = router({
         /** Agent user IDs that can post (required for closed, recommended for open) */
         participants: z.array(z.string().uuid()).optional(),
         agentType: z
-          .enum([
-            "default",
-            "meta",
-            "prompting",
-            "knowledge-search",
-            "code",
-            "writing",
-            "action",
-          ])
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
           .optional(),
         title: z.string().max(255).optional(),
       })
@@ -490,8 +473,7 @@ export const channelsRouter = router({
         status: ChannelStatus.ACTIVE,
         title: input.title ?? input.topic.slice(0, 80),
         agentId: "orchestrator",
-        agentType:
-          (input.agentType as ChannelAgentType) ?? ChannelAgentType.DEFAULT,
+        agentType: input.agentType ?? ChannelAgentType.DEFAULT,
         metadata: {
           topic: input.topic,
           visibility: input.visibility,
@@ -665,16 +647,10 @@ export const channelsRouter = router({
         content: z.string().min(1),
         workspaceId: z.string().uuid().optional(),
         agentType: z
-          .enum([
-            "meta",
-            "default",
-            "prompting",
-            "knowledge-search",
-            "code",
-            "writing",
-            "action",
-            "onboarding",
-          ])
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
           .optional(),
         /** @mention handle, e.g. "cto" or "ai" — resolved to agentType for this call only */
         agentHandle: z.string().optional(),
@@ -780,6 +756,40 @@ export const channelsRouter = router({
         }
       }
 
+      // Get or create an active session for this channel so messages are session-scoped.
+      // This is idempotent — the IS also calls getOrCreate, they'll both resolve to the same session.
+      let activeSessionId: string | undefined;
+      if (
+        channel.channelType === ChannelType.AI_THREAD ||
+        channel.channelType === ChannelType.BRANCH
+      ) {
+        try {
+          const existingSession = await db.query.sessions.findFirst({
+            where: and(
+              eq(sessions.channelId, channelId),
+              eq(sessions.status, SessionStatus.ACTIVE)
+            ),
+            columns: { id: true },
+          });
+          if (existingSession) {
+            activeSessionId = existingSession.id;
+          } else {
+            const newSessionId = randomUUID();
+            await db
+              .insert(sessions)
+              .values({
+                id: newSessionId,
+                channelId,
+                status: SessionStatus.ACTIVE,
+              })
+              .onConflictDoNothing();
+            activeSessionId = newSessionId;
+          }
+        } catch {
+          // Non-fatal — messages still saved, session tracking degrades gracefully
+        }
+      }
+
       // Save user message
       const userMessageId = randomUUID();
       const userMessageHash = createHash("sha256")
@@ -794,6 +804,7 @@ export const channelsRouter = router({
         userId: ctx.userId,
         previousHash: "",
         hash: userMessageHash,
+        ...(activeSessionId ? { sessionId: activeSessionId } : {}),
       });
 
       // Auto-provision agent user for this human+workspace pair (idempotent)
@@ -870,6 +881,10 @@ export const channelsRouter = router({
           userId: ctx.userId,
           agentId: channel.agentId ?? "orchestrator",
           agentType: effectiveAgentType,
+          // Personality overlay from channel — custom instructions, persona name, etc.
+          agentConfig: (channel.agentConfig ?? undefined) as
+            | Record<string, unknown>
+            | undefined,
           workspaceId,
           // Link proposals created during this response to the triggering user message
           sourceMessageId: userMessageId,
@@ -1081,7 +1096,25 @@ export const channelsRouter = router({
         previousHash: userMessageHash,
         hash: assistantMessageHash,
         metadata: messageMetadata as any,
+        ...(activeSessionId ? { sessionId: activeSessionId } : {}),
       });
+
+      // Update session activity + token usage (fire-and-forget — non-critical)
+      if (activeSessionId) {
+        const totalTokens = hubResponse?.usage?.totalTokens;
+        db.update(sessions)
+          .set({
+            lastActivityAt: new Date(),
+            ...(totalTokens
+              ? {
+                  totalTokensUsed: drizzleSql`COALESCE(total_tokens_used, 0) + ${totalTokens}`,
+                  messageCount: drizzleSql`COALESCE(message_count, 0) + 2`,
+                }
+              : { messageCount: drizzleSql`COALESCE(message_count, 0) + 2` }),
+          })
+          .where(eq(sessions.id, activeSessionId))
+          .catch(() => {}); // silent — non-critical
+      }
 
       // Create entities via event chain
       const createdEntities = [];
@@ -1661,16 +1694,10 @@ export const channelsRouter = router({
         title: z.string().optional(),
         agentId: z.string().optional(),
         agentType: z
-          .enum([
-            "meta",
-            "default",
-            "prompting",
-            "knowledge-search",
-            "code",
-            "writing",
-            "action",
-            "onboarding",
-          ])
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
           .optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
       })
@@ -1695,9 +1722,7 @@ export const channelsRouter = router({
         .set({
           title: input.title,
           agentId: input.agentId,
-          agentType: input.agentType
-            ? (input.agentType as ChannelAgentType)
-            : undefined,
+          agentType: input.agentType,
           agentConfig: input.agentConfig,
           updatedAt: new Date(),
         })
