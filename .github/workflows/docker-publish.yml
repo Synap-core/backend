@@ -4,28 +4,24 @@ on:
   push:
     branches:
       - main
+      - develop
     tags:
       - "v*"
     paths:
-      # Only build if relevant files changed (saves CI minutes)
       - "packages/**"
       - "apps/**"
       - "deploy/**"
       - "Dockerfile"
       - ".github/workflows/docker-publish.yml"
   workflow_dispatch:
-  # Builds automatically on:
-  # - Every push to main (if relevant files changed)
-  # - Version tags (v*)
-  # - Manual dispatch
-  # Images are tagged with: latest, main, sha-{commit}, and version tags
+
+# Branch → image tag mapping:
+#   develop  → :dev  (staging ring — no CP notification)
+#   main     → :main + :sha-* (production ring — notifies CP)
+#   v*       → :vX.Y.Z + :latest (release — notifies CP)
 
 env:
   REGISTRY: ghcr.io
-  # Convert repository names to lowercase (required for Docker registry)
-  # Format: owner/repo-name (lowercase)
-  IMAGE_NAME_BACKEND: ${{ github.repository_owner }}/${{ github.event.repository.name }}
-  IMAGE_NAME_INTELLIGENCE: ${{ github.repository_owner }}/intelligence-service
 
 jobs:
   build-and-push-backend-api:
@@ -33,7 +29,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # Required for OIDC authentication with GHCR
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -54,8 +50,6 @@ jobs:
         run: |
           REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
-          echo "name=${REPO_NAME}" >> $GITHUB_OUTPUT
           echo "full=${REPO_OWNER}/${REPO_NAME}" >> $GITHUB_OUTPUT
 
       - name: Extract metadata
@@ -65,13 +59,11 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
             type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=ref,event=branch
-            type=ref,event=pr
 
       - name: Build and push Backend API image
         uses: docker/build-push-action@v5
@@ -110,7 +102,6 @@ jobs:
         id: repo
         run: |
           REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
           echo "full=${REPO_OWNER}/backend-realtime" >> $GITHUB_OUTPUT
 
       - name: Extract metadata
@@ -120,13 +111,11 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
             type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=ref,event=branch
-            type=ref,event=pr
 
       - name: Build and push Backend Realtime image
         uses: docker/build-push-action@v5
@@ -140,79 +129,12 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
 
-  build-and-push-intelligence:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write # Required for OIDC authentication with GHCR
-
-    steps:
-      - name: Checkout intelligence service
-        uses: actions/checkout@v4
-        with:
-          repository: synap-labs/synap-intelligence-service
-          path: intelligence-service
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-          # Note: If you get "permission_denied: write_package", check:
-          # 1. Organization settings: https://github.com/organizations/synap-core/settings/packages
-          # 2. Repository Actions settings: https://github.com/synap-core/backend/settings/actions
-          # 3. Package might need to be created first: https://github.com/orgs/synap-core/packages
-          # See: .github/workflows/FIX_GHCR_PERMISSIONS.md
-
-      - name: Convert intelligence repo name to lowercase
-        id: intel-repo
-        run: |
-          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
-          echo "full=${REPO_OWNER}/intelligence-service" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.intel-repo.outputs.full }}
-          tags: |
-            # Always tag with commit SHA for traceability
-            type=sha,prefix={{branch}}-
-            # Tag main branch as 'latest' and 'main'
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            # Version tags (semver)
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            # PR and branch tags (for testing)
-            type=ref,event=branch
-            type=ref,event=pr
-
-      - name: Build and push Intelligence Service image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./intelligence-service
-          file: ./intelligence-service/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
-
   notify-control-plane:
     runs-on: ubuntu-latest
     needs:
       - build-and-push-backend-api
       - build-and-push-backend-realtime
-      - build-and-push-intelligence
+    # Only notify CP on main branch and version tags — not on develop
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
 
     steps:
