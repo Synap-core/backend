@@ -30,6 +30,7 @@ import { hubProfilesRouter } from "./profiles.js";
 import { hubRelationsRouter } from "./relations.js";
 import { sessionsRouter } from "./sessions.js";
 import { compactedStatesRouter } from "./compacted-states.js";
+import { hubWidgetDefinitionsRouter } from "./widget-definitions.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -56,4 +57,5 @@ export const hubProtocolRouter = router({
   relations: hubRelationsRouter,
   sessions: sessionsRouter,
   compactedStates: compactedStatesRouter,
+  widgetDefinitions: hubWidgetDefinitionsRouter,
 });

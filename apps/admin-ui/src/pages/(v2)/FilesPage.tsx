@@ -55,6 +55,14 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
+interface FileItem {
+  path: string;
+  name: string;
+  type: "folder" | "file";
+  size?: number;
+  lastModified?: string | null;
+}
+
 export default function FilesPage() {
   const [currentBucket, setCurrentBucket] = useState("synap-storage");
   const [currentPath, setCurrentPath] = useState<string[]>([]);
@@ -112,8 +120,8 @@ export default function FilesPage() {
   };
 
   const buckets = bucketsData?.buckets || [];
-  const items = filesData?.items || [];
-  const hasError = "error" in (filesData || {});
+  const items = (filesData?.items || []) as FileItem[];
+  const hasError = filesData != null && "error" in filesData;
 
   return (
     <div style={{ width: "100%", padding: spacing[8] }}>
@@ -228,7 +236,8 @@ export default function FilesPage() {
             {/* Error Alert */}
             {hasError && (
               <Alert icon={<IconAlertCircle size={16} />} color="red" mb="md">
-                {(filesData as any).error || "Failed to load files"}
+                {(filesData as { error?: string }).error ||
+                  "Failed to load files"}
               </Alert>
             )}
 
@@ -286,14 +295,14 @@ export default function FilesPage() {
                           <Table.Td>
                             <Text size="sm" c="dimmed">
                               {item.type === "file"
-                                ? formatSize((item as any).size || 0)
+                                ? formatSize(item.size || 0)
                                 : "-"}
                             </Text>
                           </Table.Td>
                           <Table.Td>
                             <Text size="sm" c="dimmed">
                               {item.type === "file"
-                                ? formatDate((item as any).lastModified)
+                                ? formatDate(item.lastModified ?? null)
                                 : "-"}
                             </Text>
                           </Table.Td>

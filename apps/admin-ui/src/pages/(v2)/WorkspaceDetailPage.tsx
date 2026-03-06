@@ -25,7 +25,6 @@ import {
   IconTrash,
   IconBuildingCommunity,
   IconRobot,
-  IconEdit,
   IconPlug,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";

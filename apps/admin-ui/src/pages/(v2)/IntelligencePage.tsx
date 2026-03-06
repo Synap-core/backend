@@ -368,7 +368,7 @@ function UsageTab() {
 
   const serviceListQuery = trpc.capabilities.list.useQuery();
   const serviceNames: Record<string, string> = Object.fromEntries(
-    (serviceListQuery.data?.intelligenceServices ?? []).map((s: any) => [
+    (serviceListQuery.data?.intelligenceServices ?? []).map((s) => [
       s.serviceId,
       s.name,
     ])

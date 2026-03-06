@@ -540,7 +540,8 @@ export default function TestingPage() {
                       <>
                         Event published successfully!
                         <Text size="xs" mt={4}>
-                          ID: {(publishResult.data as any).eventId}
+                          ID:{" "}
+                          {(publishResult.data as { eventId?: string }).eventId}
                         </Text>
                       </>
                     ) : (

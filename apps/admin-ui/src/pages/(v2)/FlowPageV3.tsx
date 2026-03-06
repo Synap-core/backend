@@ -132,11 +132,25 @@ export default function FlowPageV3() {
     retry: false,
   });
 
+  interface Worker {
+    name: string;
+    triggers?: string[];
+  }
+  interface Webhook {
+    id: string;
+    name: string;
+    url?: string;
+  }
+
   // Stats for module cards
+  const systemWithWorkers = system as
+    | (typeof system & { workers?: Worker[] })
+    | undefined;
+  const webhookList = webhooks as Webhook[] | undefined;
   const eventCount = system?.eventTypes?.length || 0;
-  const workerCount = (system as any)?.workers?.length || 0;
+  const workerCount = systemWithWorkers?.workers?.length || 0;
   const tableCount = tables?.length || 0;
-  const webhookCount = (webhooks as any[])?.length || 0;
+  const webhookCount = webhookList?.length || 0;
 
   // Build nodes and edges
   const { initialNodes, initialEdges } = useMemo(() => {
@@ -161,8 +175,8 @@ export default function FlowPageV3() {
     });
 
     // Worker nodes (column 2)
-    const workers = (system as any).workers || [];
-    workers.slice(0, 4).forEach((w: any, i: number) => {
+    const workers: Worker[] = (system as { workers?: Worker[] }).workers || [];
+    workers.slice(0, 4).forEach((w, i) => {
       const nodeId = `worker-${w.name}`;
       nodes.push({
         id: nodeId,
@@ -205,11 +219,10 @@ export default function FlowPageV3() {
     });
 
     // n8n nodes (column 4)
-    const n8nHooks = (webhooks || []).filter(
-      (w: any) =>
-        w.url?.includes("n8n") || w.name?.toLowerCase().includes("n8n")
+    const n8nHooks = (webhookList || []).filter(
+      (w) => w.url?.includes("n8n") || w.name?.toLowerCase().includes("n8n")
     );
-    n8nHooks.slice(0, 3).forEach((wh: any, i: number) => {
+    n8nHooks.slice(0, 3).forEach((wh, i) => {
       nodes.push({
         id: `n8n-${wh.id}`,
         type: "n8n",
@@ -224,7 +237,7 @@ export default function FlowPageV3() {
     });
 
     // Connect workers to resources
-    workers.slice(0, 3).forEach((_w: any, i: number) => {
+    workers.slice(0, 3).forEach((_w, i) => {
       if (i < resources.length) {
         edges.push({
           id: `e-w${i}-r${i}`,
@@ -236,7 +249,7 @@ export default function FlowPageV3() {
     });
 
     return { initialNodes: nodes, initialEdges: edges };
-  }, [system, webhooks]);
+  }, [system, webhookList]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);

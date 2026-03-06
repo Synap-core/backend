@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Modal,
   TextInput,
@@ -37,20 +37,14 @@ export default function SearchModal({
   presets = [],
 }: SearchModalProps) {
   const [searchValue, setSearchValue] = useState("");
-  const [localHistory, setLocalHistory] = useState<string[]>([]);
-
-  // Load history from localStorage on mount
-  useEffect(() => {
-    const stored = localStorage.getItem(`search-history-${type}`);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        setLocalHistory(parsed);
-      } catch {
-        // Ignore parse errors
-      }
+  const [localHistory, setLocalHistory] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem(`search-history-${type}`);
+      return stored ? (JSON.parse(stored) as string[]) : [];
+    } catch {
+      return [];
     }
-  }, [type]);
+  });
 
   // Combine localStorage history with prop history
   const allHistory = [...new Set([...localHistory, ...history])].slice(0, 10);

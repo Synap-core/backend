@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Title,
@@ -9,7 +9,6 @@ import {
   Button,
   ActionIcon,
   Badge,
-  Loader,
 } from "@mantine/core";
 import SearchModal from "../../components/search/SearchModal";
 import {
@@ -41,23 +40,21 @@ import { showInfoNotification } from "../../lib/notifications";
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [isAutoRefreshEnabled, setIsAutoRefreshEnabled] = useState(true);
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchType, setSearchType] = useState<"user" | "event">("user");
 
   // Fetch pod stats
-  const {
-    data: podStats,
-    isLoading: isLoadingPodStats,
-  } = trpc.system.getDataPodStats.useQuery(undefined, {
-    refetchInterval: isAutoRefreshEnabled ? 30000 : false,
-  });
+  const { data: podStats, isLoading: isLoadingPodStats } =
+    trpc.system.getDataPodStats.useQuery(undefined, {
+      refetchInterval: isAutoRefreshEnabled ? 30000 : false,
+    });
 
   // Fetch dashboard metrics
   const {
     data: metrics,
     refetch: refetchMetrics,
     isLoading: isLoadingMetrics,
+    dataUpdatedAt: metricsUpdatedAt,
   } = trpc.system.getDashboardMetrics.useQuery(undefined, {
     refetchInterval: isAutoRefreshEnabled ? 5000 : false,
     refetchOnWindowFocus: true,
@@ -78,17 +75,14 @@ export default function DashboardPage() {
 
   const events = recentEventsData?.events;
 
-  // Update last refresh timestamp
-  useEffect(() => {
-    if (metrics) {
-      setLastRefresh(new Date());
-    }
-  }, [metrics]);
+  const lastRefresh = useMemo(
+    () => (metricsUpdatedAt ? new Date(metricsUpdatedAt) : new Date()),
+    [metricsUpdatedAt]
+  );
 
   const handleManualRefresh = () => {
     refetchMetrics();
     refetchEvents();
-    setLastRefresh(new Date());
     showInfoNotification({
       message: "Refreshing dashboard data...",
       title: "Refresh",
@@ -214,7 +208,10 @@ export default function DashboardPage() {
                   >
                     Workspaces
                   </Text>
-                  <IconBuildingCommunity size={20} color={colors.eventTypes.created} />
+                  <IconBuildingCommunity
+                    size={20}
+                    color={colors.eventTypes.created}
+                  />
                 </Group>
                 <Text
                   size="2rem"
@@ -331,8 +328,8 @@ export default function DashboardPage() {
                           healthStatus === "healthy"
                             ? "green"
                             : healthStatus === "degraded"
-                            ? "yellow"
-                            : "red"
+                              ? "yellow"
+                              : "red"
                         }
                       >
                         {healthStyle.label}
@@ -361,8 +358,13 @@ export default function DashboardPage() {
                       Throughput
                     </Text>
                     <Group gap={spacing[2]} align="baseline">
-                      <Text size="xl" fw={typography.fontWeight.bold} c={colors.text.primary}>
-                        {metrics?.throughput.eventsPerSecond.toFixed(2) || "0.00"}
+                      <Text
+                        size="xl"
+                        fw={typography.fontWeight.bold}
+                        c={colors.text.primary}
+                      >
+                        {metrics?.throughput.eventsPerSecond.toFixed(2) ||
+                          "0.00"}
                       </Text>
                       <Text size="xs" c={colors.text.tertiary}>
                         events/sec
@@ -388,7 +390,11 @@ export default function DashboardPage() {
                       Live Connections
                     </Text>
                     <Group gap={spacing[2]} align="baseline">
-                      <Text size="xl" fw={typography.fontWeight.bold} c={colors.text.primary}>
+                      <Text
+                        size="xl"
+                        fw={typography.fontWeight.bold}
+                        c={colors.text.primary}
+                      >
                         {metrics?.connections.activeSSEClients ?? 0}
                       </Text>
                       <Text size="xs" c={colors.text.tertiary}>

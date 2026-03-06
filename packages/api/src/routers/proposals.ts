@@ -33,6 +33,56 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
 import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
+import { messages } from "@synap/database/schema";
+
+/**
+ * Fire-and-forget: report a proposal outcome to the IS telemetry endpoint.
+ * The IS records a Langfuse score on the originating conversation trace.
+ * Never awaited — never throws — never blocks the user response.
+ */
+function reportProposalOutcome(params: {
+  proposalId: string;
+  outcome: "approved" | "rejected";
+  sourceMessageId: string | null | undefined;
+  agentUserId: string | null | undefined;
+  targetType: string | null | undefined;
+}): void {
+  const hubUrl = process.env.INTELLIGENCE_HUB_URL;
+  const internalKey = process.env.INTELLIGENCE_HUB_INTERNAL_KEY;
+  if (!hubUrl || !internalKey || !params.agentUserId) return; // only track AI proposals
+
+  void (async () => {
+    try {
+      // Resolve channelId (= Langfuse traceId) from sourceMessageId
+      let traceId: string | undefined;
+      if (params.sourceMessageId) {
+        const [msg] = await db
+          .select({ channelId: messages.channelId })
+          .from(messages)
+          .where(eq(messages.id, params.sourceMessageId))
+          .limit(1);
+        traceId = msg?.channelId ?? undefined;
+      }
+
+      await fetch(`${hubUrl}/api/internal/telemetry/proposal-outcome`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Key": internalKey,
+        },
+        body: JSON.stringify({
+          traceId,
+          proposalId: params.proposalId,
+          outcome: params.outcome,
+          targetType: params.targetType,
+        }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      // Non-fatal — telemetry must never affect proposal approval UX
+    }
+  })();
+}
 
 export const proposalsRouter = router({
   /**
@@ -638,6 +688,15 @@ export const proposalsRouter = router({
         })
         .where(eq(proposals.id, input.proposalId));
 
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      reportProposalOutcome({
+        proposalId: input.proposalId,
+        outcome: "approved",
+        sourceMessageId: proposal.sourceMessageId,
+        agentUserId: proposal.agentUserId,
+        targetType: proposal.targetType,
+      });
+
       return { success: true };
     }),
 
@@ -654,6 +713,12 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
+      // Fetch first to get sourceMessageId + agentUserId for telemetry
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+        columns: { sourceMessageId: true, agentUserId: true, targetType: true },
+      });
+
       await db
         .update(proposals)
         .set({
@@ -664,6 +729,17 @@ export const proposalsRouter = router({
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // Report to IS telemetry (fire-and-forget — never blocks)
+      if (proposal) {
+        reportProposalOutcome({
+          proposalId: input.proposalId,
+          outcome: "rejected",
+          sourceMessageId: proposal.sourceMessageId,
+          agentUserId: proposal.agentUserId,
+          targetType: proposal.targetType,
+        });
+      }
 
       return { success: true };
     }),

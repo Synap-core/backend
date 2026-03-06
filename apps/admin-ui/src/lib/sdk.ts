@@ -29,7 +29,16 @@ export const sdk = {
     create: { mutate: async () => ({}) },
     delete: { mutate: async () => ({}) },
   },
-} as any;
+} as Record<
+  string,
+  Record<
+    string,
+    {
+      query?: (...args: unknown[]) => Promise<unknown>;
+      mutate?: (...args: unknown[]) => Promise<unknown>;
+    }
+  >
+>;
 
 /**
  * Admin SDK Helpers

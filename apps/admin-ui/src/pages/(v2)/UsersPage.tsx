@@ -11,11 +11,18 @@ import {
   Loader,
   Modal,
 } from "@mantine/core";
-import { IconUsers, IconRobot, IconUser } from "@tabler/icons-react";
+import { IconRobot, IconUser } from "@tabler/icons-react";
 import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 import { trpc } from "../../lib/trpc";
 
 type UserType = "all" | "human" | "agent";
+
+interface AgentMetadata {
+  agentType?: string;
+  description?: string;
+  capabilities?: string[];
+  createdByUserId?: string;
+}
 
 export default function UsersPage() {
   const [typeFilter, setTypeFilter] = useState<UserType>("all");
@@ -78,12 +85,7 @@ export default function UsersPage() {
               <Loader />
             </div>
           ) : !data || data.users.length === 0 ? (
-            <Text
-              size="sm"
-              c={colors.text.tertiary}
-              ta="center"
-              p={spacing[8]}
-            >
+            <Text size="sm" c={colors.text.tertiary} ta="center" p={spacing[8]}>
               No users found
             </Text>
           ) : (
@@ -117,7 +119,11 @@ export default function UsersPage() {
                       </Group>
                     </Table.Td>
                     <Table.Td>
-                      <Text size="sm" c="dimmed" style={{ fontFamily: typography.fontFamily.mono }}>
+                      <Text
+                        size="sm"
+                        c="dimmed"
+                        style={{ fontFamily: typography.fontFamily.mono }}
+                      >
                         {user.email}
                       </Text>
                     </Table.Td>
@@ -170,24 +176,40 @@ export default function UsersPage() {
         {selectedUser && (
           <Stack gap={spacing[4]}>
             <div>
-              <Text size="xs" c="dimmed" mb={2}>Name</Text>
-              <Text size="sm" fw={500}>{selectedUser.name || "—"}</Text>
+              <Text size="xs" c="dimmed" mb={2}>
+                Name
+              </Text>
+              <Text size="sm" fw={500}>
+                {selectedUser.name || "—"}
+              </Text>
             </div>
             <div>
-              <Text size="xs" c="dimmed" mb={2}>Email</Text>
-              <Text size="sm" style={{ fontFamily: typography.fontFamily.mono }}>
+              <Text size="xs" c="dimmed" mb={2}>
+                Email
+              </Text>
+              <Text
+                size="sm"
+                style={{ fontFamily: typography.fontFamily.mono }}
+              >
                 {selectedUser.email}
               </Text>
             </div>
             <div>
-              <Text size="xs" c="dimmed" mb={2}>ID</Text>
-              <Text size="sm" style={{ fontFamily: typography.fontFamily.mono }}>
+              <Text size="xs" c="dimmed" mb={2}>
+                ID
+              </Text>
+              <Text
+                size="sm"
+                style={{ fontFamily: typography.fontFamily.mono }}
+              >
                 {selectedUser.id}
               </Text>
             </div>
             <Group>
               <div>
-                <Text size="xs" c="dimmed" mb={2}>Type</Text>
+                <Text size="xs" c="dimmed" mb={2}>
+                  Type
+                </Text>
                 <Badge
                   variant="light"
                   color={selectedUser.userType === "agent" ? "orange" : "blue"}
@@ -196,68 +218,93 @@ export default function UsersPage() {
                 </Badge>
               </div>
               <div>
-                <Text size="xs" c="dimmed" mb={2}>Workspaces</Text>
+                <Text size="xs" c="dimmed" mb={2}>
+                  Workspaces
+                </Text>
                 <Badge variant="outline" color="gray">
                   {selectedUser.workspaceMembershipCount} memberships
                 </Badge>
               </div>
             </Group>
             <div>
-              <Text size="xs" c="dimmed" mb={2}>Created</Text>
+              <Text size="xs" c="dimmed" mb={2}>
+                Created
+              </Text>
               <Text size="sm">
                 {selectedUser.createdAt
                   ? new Date(selectedUser.createdAt).toLocaleString()
                   : "—"}
               </Text>
             </div>
-            {selectedUser.userType === "agent" && selectedUser.agentMetadata && (
-              <Card
-                padding={spacing[3]}
-                radius={borderRadius.md}
-                style={{
-                  backgroundColor: colors.background.secondary,
-                  border: `1px solid ${colors.border.light}`,
-                }}
-              >
-                <Text size="sm" fw={600} mb={spacing[2]}>
-                  Agent Metadata
-                </Text>
-                <Stack gap={spacing[2]}>
-                  <div>
-                    <Text size="xs" c="dimmed">Agent Type</Text>
-                    <Text size="sm">
-                      {(selectedUser.agentMetadata as any).agentType || "—"}
-                    </Text>
-                  </div>
-                  <div>
-                    <Text size="xs" c="dimmed">Description</Text>
-                    <Text size="sm">
-                      {(selectedUser.agentMetadata as any).description || "—"}
-                    </Text>
-                  </div>
-                  {(selectedUser.agentMetadata as any).capabilities && (
+            {selectedUser.userType === "agent" &&
+              selectedUser.agentMetadata && (
+                <Card
+                  padding={spacing[3]}
+                  radius={borderRadius.md}
+                  style={{
+                    backgroundColor: colors.background.secondary,
+                    border: `1px solid ${colors.border.light}`,
+                  }}
+                >
+                  <Text size="sm" fw={600} mb={spacing[2]}>
+                    Agent Metadata
+                  </Text>
+                  <Stack gap={spacing[2]}>
                     <div>
-                      <Text size="xs" c="dimmed" mb={2}>Capabilities</Text>
-                      <Group gap={4}>
-                        {((selectedUser.agentMetadata as any).capabilities as string[]).map(
-                          (cap: string) => (
-                            <Badge key={cap} size="xs" variant="light" color="cyan">
+                      <Text size="xs" c="dimmed">
+                        Agent Type
+                      </Text>
+                      <Text size="sm">
+                        {(selectedUser.agentMetadata as AgentMetadata)
+                          .agentType || "—"}
+                      </Text>
+                    </div>
+                    <div>
+                      <Text size="xs" c="dimmed">
+                        Description
+                      </Text>
+                      <Text size="sm">
+                        {(selectedUser.agentMetadata as AgentMetadata)
+                          .description || "—"}
+                      </Text>
+                    </div>
+                    {(selectedUser.agentMetadata as AgentMetadata)
+                      .capabilities && (
+                      <div>
+                        <Text size="xs" c="dimmed" mb={2}>
+                          Capabilities
+                        </Text>
+                        <Group gap={4}>
+                          {(
+                            selectedUser.agentMetadata as AgentMetadata
+                          ).capabilities!.map((cap) => (
+                            <Badge
+                              key={cap}
+                              size="xs"
+                              variant="light"
+                              color="cyan"
+                            >
                               {cap}
                             </Badge>
-                          )
-                        )}
-                      </Group>
+                          ))}
+                        </Group>
+                      </div>
+                    )}
+                    <div>
+                      <Text size="xs" c="dimmed">
+                        Created By
+                      </Text>
+                      <Text
+                        size="sm"
+                        style={{ fontFamily: typography.fontFamily.mono }}
+                      >
+                        {(selectedUser.agentMetadata as AgentMetadata)
+                          .createdByUserId || "—"}
+                      </Text>
                     </div>
-                  )}
-                  <div>
-                    <Text size="xs" c="dimmed">Created By</Text>
-                    <Text size="sm" style={{ fontFamily: typography.fontFamily.mono }}>
-                      {(selectedUser.agentMetadata as any).createdByUserId || "—"}
-                    </Text>
-                  </div>
-                </Stack>
-              </Card>
-            )}
+                  </Stack>
+                </Card>
+              )}
           </Stack>
         )}
       </Modal>

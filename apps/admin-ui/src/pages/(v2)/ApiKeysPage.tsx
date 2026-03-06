@@ -90,11 +90,17 @@ export default function ApiKeysPage() {
   const [scopes, setScopes] = useState<string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState<number | string>("");
 
-  const { data: myKeys, isLoading: myKeysLoading, refetch: refetchMy } =
-    trpc.apiKeys.list.useQuery();
+  const {
+    data: myKeys,
+    isLoading: myKeysLoading,
+    refetch: refetchMy,
+  } = trpc.apiKeys.list.useQuery();
 
-  const { data: systemKeys, isLoading: systemKeysLoading, refetch: refetchSystem } =
-    trpc.apiKeys.listSystemKeys.useQuery();
+  const {
+    data: systemKeys,
+    isLoading: systemKeysLoading,
+    refetch: refetchSystem,
+  } = trpc.apiKeys.listSystemKeys.useQuery();
 
   const createMutation = trpc.apiKeys.create.useMutation({
     onSuccess: (data) => {
@@ -119,7 +125,9 @@ export default function ApiKeysPage() {
     onSuccess: () => {
       refetchMy();
       refetchSystem();
-      showSuccessNotification({ message: "Key rotated — get new key from the response" });
+      showSuccessNotification({
+        message: "Key rotated — get new key from the response",
+      });
     },
     onError: (err) => showErrorNotification({ message: err.message }),
   });
@@ -146,8 +154,7 @@ export default function ApiKeysPage() {
     return new Date(d).toLocaleDateString();
   }
 
-  const isHubKey = (prefix: string) =>
-    prefix.startsWith("synap_hub_");
+  const isHubKey = (prefix: string) => prefix.startsWith("synap_hub_");
 
   const allKeys = [
     ...(systemKeys ?? []),
@@ -161,7 +168,6 @@ export default function ApiKeysPage() {
 
   function KeyRow({
     k,
-    accent,
   }: {
     k: NonNullable<typeof allKeys>[number];
     accent: string;

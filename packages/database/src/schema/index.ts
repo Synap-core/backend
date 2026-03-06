@@ -104,3 +104,6 @@ export * from "./secrets-vault.js";
 // CompactedStates are offline-produced structured memory snapshots.
 export * from "./sessions.js";
 export * from "./compacted-states.js";
+
+// NEW: Dynamic Widget Registry
+export * from "./widget-definitions.js";

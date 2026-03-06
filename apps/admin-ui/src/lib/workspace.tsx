@@ -34,12 +34,13 @@ const WorkspaceContext = createContext<WorkspaceState>({
   setWorkspace: () => {},
 });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useWorkspace(): WorkspaceState {
   return useContext(WorkspaceContext);
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [workspaceId, setWorkspaceIdState] = useState<string | null>(
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
     () => localStorage.getItem(STORAGE_KEY)
   );
 
@@ -57,21 +58,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [workspacesRaw]
   );
 
-  // Auto-select first workspace if none stored or stored one is invalid
+  // Derive effective workspace ID — auto-select first if selection is invalid
+  const workspaceId = useMemo(() => {
+    if (isLoading || workspaces.length === 0) return selectedWorkspaceId;
+    const valid =
+      selectedWorkspaceId &&
+      workspaces.some((w) => w.id === selectedWorkspaceId);
+    return valid ? selectedWorkspaceId : workspaces[0].id;
+  }, [isLoading, workspaces, selectedWorkspaceId]);
+
+  // Sync auto-selection to localStorage (external system side effect only)
   useEffect(() => {
-    if (isLoading || workspaces.length === 0) return;
-    const stored = localStorage.getItem(STORAGE_KEY);
-    const valid = workspaces.some((w) => w.id === stored);
-    if (!stored || !valid) {
-      const first = workspaces[0].id;
-      localStorage.setItem(STORAGE_KEY, first);
-      setWorkspaceIdState(first);
+    if (workspaceId && workspaceId !== selectedWorkspaceId) {
+      localStorage.setItem(STORAGE_KEY, workspaceId);
     }
-  }, [isLoading, workspaces]);
+  }, [workspaceId, selectedWorkspaceId]);
 
   const setWorkspace = useCallback((id: string) => {
     localStorage.setItem(STORAGE_KEY, id);
-    setWorkspaceIdState(id);
+    setSelectedWorkspaceId(id);
   }, []);
 
   const currentWorkspace = workspaces.find((w) => w.id === workspaceId);

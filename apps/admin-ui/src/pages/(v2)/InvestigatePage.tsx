@@ -1,4 +1,4 @@
-import { useState, useEffect, useDeferredValue } from "react";
+import { useState, useDeferredValue } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Title,
@@ -71,8 +71,12 @@ export default function InvestigatePage() {
   const deferredEventType = useDeferredValue(eventTypeFilter);
 
   // Event details state
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const [selectedEventType, setSelectedEventType] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(() =>
+    searchParams.get("eventId")
+  );
+  const [selectedEventType, setSelectedEventType] = useState<string | null>(
+    null
+  );
 
   // Event Types tab search
   const [typesSearch, setTypesSearch] = useState("");
@@ -153,7 +157,7 @@ export default function InvestigatePage() {
     onSuccess: (data) => {
       notifications.show({
         title: "Event Published",
-        message: `Event ID: ${(data as any).eventId}`,
+        message: `Event ID: ${(data as { eventId?: string }).eventId ?? ""}`,
         color: "green",
       });
       setPublishData({});
@@ -167,19 +171,6 @@ export default function InvestigatePage() {
       });
     },
   });
-
-  // Update search when URL params change (e.g. navigated from Dashboard)
-  useEffect(() => {
-    const userId = searchParams.get("userId");
-    const eventId = searchParams.get("eventId");
-    const eventType = searchParams.get("eventType");
-    if (userId) setSearchTerm(userId);
-    if (eventId) {
-      setSearchTerm(eventId);
-      setSelectedEventId(eventId);
-    }
-    if (eventType) setEventTypeFilter(eventType);
-  }, [searchParams]);
 
   const handleEventClick = (eventId: string) => {
     setSelectedEventId(eventId);
@@ -210,7 +201,12 @@ export default function InvestigatePage() {
     setToDate("");
   };
 
-  const hasActiveFilters = !!(searchTerm || eventTypeFilter || fromDate || toDate);
+  const hasActiveFilters = !!(
+    searchTerm ||
+    eventTypeFilter ||
+    fromDate ||
+    toDate
+  );
 
   // ── Event Types tab helpers ─────────────────────────────────────────────
 
@@ -227,15 +223,16 @@ export default function InvestigatePage() {
     action === "create"
       ? "green"
       : action === "update" || action === "add"
-      ? "orange"
-      : action === "delete" || action === "remove"
-      ? "red"
-      : "gray";
+        ? "orange"
+        : action === "delete" || action === "remove"
+          ? "red"
+          : "gray";
 
   const actionIcon = (action: string) => {
     if (action === "create" || action === "add") return <IconPlus size={14} />;
     if (action === "update") return <IconPencil size={14} />;
-    if (action === "delete" || action === "remove") return <IconTrash size={14} />;
+    if (action === "delete" || action === "remove")
+      return <IconTrash size={14} />;
     return <IconBolt size={14} />;
   };
 
@@ -243,21 +240,30 @@ export default function InvestigatePage() {
   const filteredGrouped = (() => {
     const allTypes = capabilities?.eventTypes ?? [];
     const q = typesSearch.toLowerCase();
+    type EventTypeEntry = {
+      type: string;
+      hasSchema: boolean;
+      action: string;
+      modifier: string;
+    };
     const filtered = q
-      ? allTypes.filter((et: any) => et.type.toLowerCase().includes(q))
+      ? allTypes.filter((et) => et.type.toLowerCase().includes(q))
       : allTypes;
 
-    const grouped = filtered.reduce((acc: Record<string, any[]>, et: any) => {
-      const parts = et.type.split(".");
-      const table = parts[0];
-      if (!acc[table]) acc[table] = [];
-      acc[table].push({
-        ...et,
-        action: parts[1] || "",
-        modifier: parts[2] || "",
-      });
-      return acc;
-    }, {});
+    const grouped = filtered.reduce(
+      (acc: Record<string, EventTypeEntry[]>, et) => {
+        const parts = et.type.split(".");
+        const table = parts[0];
+        if (!acc[table]) acc[table] = [];
+        acc[table].push({
+          ...et,
+          action: parts[1] || "",
+          modifier: parts[2] || "",
+        });
+        return acc;
+      },
+      {}
+    );
 
     return Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]));
   })();
@@ -271,11 +277,20 @@ export default function InvestigatePage() {
         <div>
           <Title
             order={1}
-            style={{ fontFamily: typography.fontFamily.sans, color: colors.text.primary }}
+            style={{
+              fontFamily: typography.fontFamily.sans,
+              color: colors.text.primary,
+            }}
           >
             Events
           </Title>
-          <Text size="sm" style={{ color: colors.text.secondary, fontFamily: typography.fontFamily.sans }}>
+          <Text
+            size="sm"
+            style={{
+              color: colors.text.secondary,
+              fontFamily: typography.fontFamily.sans,
+            }}
+          >
             Search, explore, and publish events
           </Text>
         </div>
@@ -331,7 +346,7 @@ export default function InvestigatePage() {
                     placeholder="All types"
                     leftSection={<IconFilter size={14} />}
                     data={
-                      capabilities?.eventTypes?.map((et: any) => ({
+                      capabilities?.eventTypes?.map((et) => ({
                         value: et.type,
                         label: et.type,
                       })) || []
@@ -346,13 +361,20 @@ export default function InvestigatePage() {
                     <ActionIcon
                       variant={showAdvancedFilters ? "filled" : "subtle"}
                       color={showAdvancedFilters ? "blue" : "gray"}
-                      onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                      onClick={() =>
+                        setShowAdvancedFilters(!showAdvancedFilters)
+                      }
                     >
                       <IconFilter size={16} />
                     </ActionIcon>
                   </Tooltip>
                   {hasActiveFilters && (
-                    <Button variant="subtle" color="gray" size="sm" onClick={clearFilters}>
+                    <Button
+                      variant="subtle"
+                      color="gray"
+                      size="sm"
+                      onClick={clearFilters}
+                    >
                       Clear
                     </Button>
                   )}
@@ -390,14 +412,19 @@ export default function InvestigatePage() {
                       {hasActiveFilters ? "Filtered Results" : "Recent Events"}
                     </Text>
                     {isFetchingSearch && !isLoadingSearch && (
-                      <Text size="xs" c="dimmed">updating…</Text>
+                      <Text size="xs" c="dimmed">
+                        updating…
+                      </Text>
                     )}
                   </Group>
                   <Group gap="xs">
                     <Badge variant="light" color="gray">
                       {events.length} events
                     </Badge>
-                    <ActionIcon variant="subtle" onClick={() => refetchSearch()}>
+                    <ActionIcon
+                      variant="subtle"
+                      onClick={() => refetchSearch()}
+                    >
                       <IconRefresh size={16} />
                     </ActionIcon>
                   </Group>
@@ -415,7 +442,11 @@ export default function InvestigatePage() {
                             : "No events recorded yet."}
                         </Text>
                         {hasActiveFilters && (
-                          <Button variant="subtle" size="xs" onClick={clearFilters}>
+                          <Button
+                            variant="subtle"
+                            size="xs"
+                            onClick={clearFilters}
+                          >
                             Clear filters
                           </Button>
                         )}
@@ -517,7 +548,11 @@ export default function InvestigatePage() {
                       onChange={(e) => setTypesSearch(e.target.value)}
                       rightSection={
                         typesSearch ? (
-                          <ActionIcon size="sm" variant="subtle" onClick={() => setTypesSearch("")}>
+                          <ActionIcon
+                            size="sm"
+                            variant="subtle"
+                            onClick={() => setTypesSearch("")}
+                          >
                             <IconX size={14} />
                           </ActionIcon>
                         ) : null
@@ -525,12 +560,14 @@ export default function InvestigatePage() {
                       style={{ flex: 1 }}
                     />
                     <Text size="sm" c="dimmed">
-                      {filteredGrouped.length} table{filteredGrouped.length !== 1 ? "s" : ""}
+                      {filteredGrouped.length} table
+                      {filteredGrouped.length !== 1 ? "s" : ""}
                       {typesSearch && ` matching "${typesSearch}"`}
                     </Text>
                   </Group>
                   <Text size="xs" c="dimmed" mt="xs">
-                    Pattern: <code>table.action.modifier</code> — click a modifier to explore
+                    Pattern: <code>table.action.modifier</code> — click a
+                    modifier to explore
                   </Text>
                 </Card>
 
@@ -539,8 +576,14 @@ export default function InvestigatePage() {
                   const isOpen = expandedTables.has(table) || !!typesSearch;
 
                   // Group by action within table
-                  const byAction = (tableEvents as any[]).reduce(
-                    (acc: Record<string, any[]>, e: any) => {
+                  type EventTypeEntry = {
+                    type: string;
+                    hasSchema: boolean;
+                    action: string;
+                    modifier: string;
+                  };
+                  const byAction = tableEvents.reduce(
+                    (acc: Record<string, EventTypeEntry[]>, e) => {
                       const action = e.action || "other";
                       if (!acc[action]) acc[action] = [];
                       acc[action].push(e);
@@ -562,7 +605,12 @@ export default function InvestigatePage() {
                         style={{ cursor: "pointer" }}
                         onClick={() => !typesSearch && toggleTable(table)}
                       >
-                        <ThemeIcon size={36} radius="md" color="blue" variant="light">
+                        <ThemeIcon
+                          size={36}
+                          radius="md"
+                          color="blue"
+                          variant="light"
+                        >
                           <IconDatabase size={20} />
                         </ThemeIcon>
                         <div style={{ flex: 1 }}>
@@ -570,23 +618,32 @@ export default function InvestigatePage() {
                             {table}
                           </Text>
                           <Text size="xs" c="dimmed">
-                            {tableEvents.length} event type{tableEvents.length !== 1 ? "s" : ""}
+                            {tableEvents.length} event type
+                            {tableEvents.length !== 1 ? "s" : ""}
                           </Text>
                         </div>
                         {!typesSearch && (
                           <ActionIcon variant="subtle" color="gray">
-                            {isOpen ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+                            {isOpen ? (
+                              <IconChevronDown size={16} />
+                            ) : (
+                              <IconChevronRight size={16} />
+                            )}
                           </ActionIcon>
                         )}
                       </Group>
 
                       <Collapse in={isOpen}>
-                        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="sm" mt="md">
+                        <SimpleGrid
+                          cols={{ base: 1, sm: 2, md: 3 }}
+                          spacing="sm"
+                          mt="md"
+                        >
                           {Object.entries(byAction)
                             .sort((a, b) => a[0].localeCompare(b[0]))
-                            .map(([action, actionEvents]: [string, any[]]) => {
+                            .map(([action, actionEvents]) => {
                               const modifiers = actionEvents
-                                .map((e: any) => e.modifier)
+                                .map((e) => e.modifier)
                                 .filter(Boolean);
                               const hasModifiers = modifiers.length > 0;
 
@@ -616,14 +673,18 @@ export default function InvestigatePage() {
 
                                   {hasModifiers && (
                                     <Stack gap={4} ml={34}>
-                                      {actionEvents.map((e: any) => (
+                                      {actionEvents.map((e) => (
                                         <Group
                                           key={e.type}
                                           gap="xs"
                                           style={{ cursor: "pointer" }}
-                                          onClick={() => setSelectedEventType(e.type)}
+                                          onClick={() =>
+                                            setSelectedEventType(e.type)
+                                          }
                                         >
-                                          <Text size="xs" c="dimmed">→</Text>
+                                          <Text size="xs" c="dimmed">
+                                            →
+                                          </Text>
                                           <Badge
                                             size="xs"
                                             variant="dot"
@@ -631,16 +692,20 @@ export default function InvestigatePage() {
                                               e.modifier === "requested"
                                                 ? "blue"
                                                 : e.modifier === "completed"
-                                                ? "green"
-                                                : e.modifier === "validated"
-                                                ? "teal"
-                                                : "gray"
+                                                  ? "green"
+                                                  : e.modifier === "validated"
+                                                    ? "teal"
+                                                    : "gray"
                                             }
                                           >
                                             {e.modifier}
                                           </Badge>
                                           {e.hasSchema && (
-                                            <Badge size="xs" color="violet" variant="light">
+                                            <Badge
+                                              size="xs"
+                                              color="violet"
+                                              variant="light"
+                                            >
                                               Schema
                                             </Badge>
                                           )}
@@ -651,10 +716,19 @@ export default function InvestigatePage() {
 
                                   {!hasModifiers && (
                                     <div
-                                      style={{ cursor: "pointer", marginTop: 4 }}
-                                      onClick={() => setSelectedEventType(actionEvents[0]?.type)}
+                                      style={{
+                                        cursor: "pointer",
+                                        marginTop: 4,
+                                      }}
+                                      onClick={() =>
+                                        setSelectedEventType(
+                                          actionEvents[0]?.type
+                                        )
+                                      }
                                     >
-                                      <Text size="xs" c="dimmed">{actionEvents[0]?.type}</Text>
+                                      <Text size="xs" c="dimmed">
+                                        {actionEvents[0]?.type}
+                                      </Text>
                                     </div>
                                   )}
                                 </Card>
@@ -686,14 +760,15 @@ export default function InvestigatePage() {
                 Publish Test Event
               </Text>
               <Text size="sm" c="dimmed" mb="md">
-                Inject an event directly into the event store for testing or debugging.
+                Inject an event directly into the event store for testing or
+                debugging.
               </Text>
               <Stack gap="md">
                 <Select
                   label="Event Type"
                   placeholder="Select or search event type"
                   data={
-                    capabilities?.eventTypes?.map((et: any) => ({
+                    capabilities?.eventTypes?.map((et) => ({
                       value: et.type,
                       label: et.type,
                     })) || []
@@ -724,7 +799,8 @@ export default function InvestigatePage() {
 
                 {publishEventType && !publishSchema?.hasSchema && (
                   <Text size="xs" c="dimmed">
-                    No schema registered for this event type — it will be published with empty data.
+                    No schema registered for this event type — it will be
+                    published with empty data.
                   </Text>
                 )}
 
@@ -787,11 +863,18 @@ export default function InvestigatePage() {
               <Text size="sm" fw={600} mb="sm">
                 Main Event
               </Text>
-              <Card padding="sm" style={{ backgroundColor: colors.background.secondary }}>
+              <Card
+                padding="sm"
+                style={{ backgroundColor: colors.background.secondary }}
+              >
                 <Stack gap="xs">
                   <Group gap="xs">
                     <IconTag size={15} color={colors.text.secondary} />
-                    <Badge variant="light" color="blue" style={{ fontFamily: typography.fontFamily.mono }}>
+                    <Badge
+                      variant="light"
+                      color="blue"
+                      style={{ fontFamily: typography.fontFamily.mono }}
+                    >
                       {traceData.event.eventType}
                     </Badge>
                   </Group>
@@ -811,14 +894,22 @@ export default function InvestigatePage() {
                   )}
                   <Group gap="xs">
                     <IconCode size={15} color={colors.text.secondary} />
-                    <Text size="xs" c="dimmed" style={{ fontFamily: typography.fontFamily.mono }}>
+                    <Text
+                      size="xs"
+                      c="dimmed"
+                      style={{ fontFamily: typography.fontFamily.mono }}
+                    >
                       {traceData.event.eventId}
                     </Text>
                   </Group>
                   {traceData.event.correlationId && (
                     <Group gap="xs">
                       <IconTimeline size={15} color={colors.text.secondary} />
-                      <Text size="xs" c="dimmed" style={{ fontFamily: typography.fontFamily.mono }}>
+                      <Text
+                        size="xs"
+                        c="dimmed"
+                        style={{ fontFamily: typography.fontFamily.mono }}
+                      >
                         corr: {traceData.event.correlationId}
                       </Text>
                     </Group>

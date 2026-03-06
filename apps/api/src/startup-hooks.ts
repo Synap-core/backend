@@ -9,6 +9,7 @@
 
 import { createLogger } from "@synap-core/core";
 import { db, webhookSubscriptions, eq } from "@synap/database";
+import { seedWidgetDefinitions } from "@synap/api";
 import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "startup-hooks" });
@@ -115,6 +116,9 @@ export async function runStartupHooks(): Promise<void> {
 
   await configureN8NWebhook();
   await configureLangFlow();
+
+  // Seed built-in widget definitions (idempotent, safe to run every boot)
+  await seedWidgetDefinitions();
 
   logger.info("✅ Startup hooks complete");
 }

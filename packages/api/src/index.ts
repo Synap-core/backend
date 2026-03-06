@@ -100,6 +100,7 @@ import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { relationDefsRouter } from "./routers/relation-defs.js";
 import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
+import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -331,6 +332,12 @@ registerRouter("mcpServers", mcpServersRouter, {
   source: "core",
   description: "Workspace-level MCP server registry and health tracking",
 });
+registerRouter("widgetDefinitions", widgetDefinitionsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description:
+    "Dynamic widget registry — built-in + AI-generated bento widget types",
+});
 
 import { coreRouter } from "./root.js";
 export type { AppRouter } from "./root.js";
@@ -338,6 +345,9 @@ export { coreRouter };
 
 // Export the dynamically built app router for the server
 export const appRouter = buildAppRouter();
+
+// Export seeder for startup hooks
+export { seedWidgetDefinitions } from "./lib/seed-widget-definitions.js";
 
 // Re-export router registry functions for plugin developers
 export {

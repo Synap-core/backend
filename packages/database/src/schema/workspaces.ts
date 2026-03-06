@@ -29,6 +29,26 @@ export interface WorkspaceSidebarItem {
   label?: string;
   /** Lucide icon name override */
   icon?: string;
+  /**
+   * Which sidebar section this item belongs to.
+   * 'workspace' = pod data items (views, profiles, pod links).
+   * 'space'     = browser/app items (app shortcuts, pinned URLs).
+   * Omitted items default to 'workspace' for backward compatibility.
+   */
+  section?: string;
+}
+
+/**
+ * A named collapsible section in the sidebar.
+ * Items are assigned to sections via WorkspaceSidebarItem.section.
+ */
+export interface WorkspaceSidebarSection {
+  /** Stable id — used as the key in WorkspaceSidebarItem.section */
+  id: string;
+  /** Display label */
+  label: string;
+  /** When true the section body is hidden; chevron still shown */
+  collapsed?: boolean;
 }
 
 export interface WorkspaceLayoutConfig {
@@ -43,6 +63,12 @@ export interface WorkspaceLayoutConfig {
   theme?: string; // Per-workspace theme override: 'dark' | 'light'
   /** Ordered list of sidebar items. When set, replaces the generic app list. */
   sidebarItems?: WorkspaceSidebarItem[];
+  /**
+   * Named sections for the sidebar. Default when absent: two sections —
+   * 'workspace' (pod data) and 'space' (browser/app shortcuts).
+   * Section collapsed state is stored here and persisted to the pod.
+   */
+  sidebarSections?: WorkspaceSidebarSection[];
 }
 
 /**

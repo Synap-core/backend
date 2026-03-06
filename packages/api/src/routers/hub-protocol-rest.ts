@@ -2107,4 +2107,72 @@ app.delete("/relations/:relationId", async (c) => {
   }
 });
 
+// ============================================================================
+// Widget Definitions
+// ============================================================================
+
+/**
+ * GET /widget-definitions?workspaceId=...
+ * List active widget definitions (builtins + workspace-specific).
+ */
+app.get("/widget-definitions", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, { workspaceId });
+    const result = await (caller as any).widgetDefinitions.listWidgetDefs({
+      workspaceId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "widgetDefinitions.listWidgetDefs failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /widget-definitions
+ * Create or update a workspace-specific widget definition.
+ */
+app.post("/widget-definitions", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  const userId = (body.userId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId as string;
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, {
+      userId,
+      workspaceId,
+      sourceMessageId: (body.sourceMessageId as string) ?? null,
+    });
+    const result = await (caller as any).widgetDefinitions.upsertWidgetDef({
+      ...body,
+      userId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "widgetDefinitions.upsertWidgetDef failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
 export const hubProtocolRestApp = app;

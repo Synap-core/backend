@@ -64,7 +64,7 @@ export default function EventTypeExplorer({
     onSuccess: (data) => {
       setPublishResult({
         success: true,
-        message: `Event published! ID: ${(data as any).eventId}`,
+        message: `Event published! ID: ${(data as { eventId?: string }).eventId ?? ""}`,
       });
     },
     onError: (error) => {
@@ -72,9 +72,20 @@ export default function EventTypeExplorer({
     },
   });
 
+  interface Worker {
+    name: string;
+    triggers?: string[];
+  }
+  interface Webhook {
+    id: string;
+    name: string;
+    url?: string;
+    eventTypes?: string[];
+  }
+
   // Find workers that listen to this event
-  const subscribers =
-    (capabilities as any)?.workers?.filter((w: any) =>
+  const subscribers: Worker[] =
+    (capabilities as { workers?: Worker[] } | undefined)?.workers?.filter((w) =>
       w.triggers?.includes(eventType)
     ) || [];
 
@@ -82,9 +93,10 @@ export default function EventTypeExplorer({
   const { data: webhooks } = trpc.integrations.list.useQuery(undefined, {
     retry: false,
   });
-  const subscribedWebhooks =
-    (webhooks as any[])?.filter((wh) => wh.eventTypes?.includes(eventType)) ||
-    [];
+  const subscribedWebhooks: Webhook[] =
+    (webhooks as Webhook[] | undefined)?.filter((wh) =>
+      wh.eventTypes?.includes(eventType)
+    ) || [];
 
   const handlePublish = () => {
     publishMutation.mutate({
@@ -147,7 +159,7 @@ export default function EventTypeExplorer({
           <IconArrowRight size={16} color={colors.text.tertiary} />
           <Stack gap={4}>
             {subscribers.length > 0 ? (
-              subscribers.map((s: any) => (
+              subscribers.map((s) => (
                 <Badge
                   key={s.name}
                   size="lg"
@@ -163,7 +175,7 @@ export default function EventTypeExplorer({
                 No workers
               </Badge>
             )}
-            {subscribedWebhooks.map((wh: any) => (
+            {subscribedWebhooks.map((wh) => (
               <Badge
                 key={wh.id}
                 size="lg"
@@ -189,21 +201,23 @@ export default function EventTypeExplorer({
             Event Schema
           </Text>
           <Stack gap={4}>
-            {schemaData.fields.map((field: any) => (
-              <Group key={field.name} gap="xs">
-                <Code style={{ fontFamily: typography.fontFamily.mono }}>
-                  {field.name}
-                </Code>
-                <Text size="xs" c="dimmed">
-                  {field.type}
-                </Text>
-                {field.required && (
-                  <Badge size="xs" color="red">
-                    required
-                  </Badge>
-                )}
-              </Group>
-            ))}
+            {schemaData.fields.map(
+              (field: { name: string; type: string; required: boolean }) => (
+                <Group key={field.name} gap="xs">
+                  <Code style={{ fontFamily: typography.fontFamily.mono }}>
+                    {field.name}
+                  </Code>
+                  <Text size="xs" c="dimmed">
+                    {field.type}
+                  </Text>
+                  {field.required && (
+                    <Badge size="xs" color="red">
+                      required
+                    </Badge>
+                  )}
+                </Group>
+              )
+            )}
           </Stack>
         </Card>
       )}
@@ -297,7 +311,7 @@ export default function EventTypeExplorer({
         </Group>
         <Stack gap={4}>
           {recentEvents?.events && recentEvents.events.length > 0 ? (
-            recentEvents.events.slice(0, 5).map((event: any) => (
+            recentEvents.events.slice(0, 5).map((event) => (
               <Group
                 key={event.id}
                 justify="space-between"

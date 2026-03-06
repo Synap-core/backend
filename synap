@@ -117,6 +117,9 @@ OPENAI_API_KEY=${openai_key}
 ANTHROPIC_API_KEY=${anthropic_key}
 GOOGLE_AI_API_KEY=${google_key}
 
+# Embeddings: use 'openai' (requires OPENAI_API_KEY) or 'deterministic' (no key needed)
+EMBEDDING_PROVIDER=$([ -n "${openai_key}" ] && echo "openai" || echo "deterministic")
+
 # Admin Configuration
 ADMIN_EMAIL=${admin_email}
 
@@ -630,14 +633,14 @@ EOF
         
         # AI Configuration
         echo ""
-        echo -e "${BLUE}🤖 AI Configuration (REQUIRED)${NC}"
-        echo "OpenAI API key is required for vector embeddings and semantic search."
-        echo "Get your key at: https://platform.openai.com/api-keys"
+        echo -e "${BLUE}🤖 AI Configuration (optional)${NC}"
+        echo "OpenAI API key enables vector embeddings and semantic search."
+        echo "Leave blank to use deterministic embeddings (works without any API key)."
         echo ""
 
-        # Ask for OpenAI API key (REQUIRED)
+        # Ask for OpenAI API key (OPTIONAL)
         if [ -z "$OPENAI_API_KEY" ]; then
-            local prompt="Enter OpenAI API key"
+            local prompt="Enter OpenAI API key (or press Enter to skip)"
             if [ -n "$DEFAULT_OPENAI_KEY" ]; then
                 prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...]: "
             else
@@ -646,11 +649,9 @@ EOF
             read -p "$prompt" OPENAI_API_KEY
             OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
 
-            # Require OpenAI key
-            while [ -z "$OPENAI_API_KEY" ]; do
-                echo -e "${RED}OpenAI API key is required for embeddings/vector search${NC}"
-                read -p "OpenAI API key: " OPENAI_API_KEY
-            done
+            if [ -z "$OPENAI_API_KEY" ]; then
+                echo -e "${YELLOW}  No OpenAI key provided — using deterministic embeddings (no semantic search)${NC}"
+            fi
         fi
         
         # Ask for optional AI providers
@@ -744,6 +745,10 @@ EOF
                 update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
                 update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
                 update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
+                # Set embedding provider based on whether OpenAI key is present
+                local embedding_provider="deterministic"
+                if [ -n "$OPENAI_API_KEY" ]; then embedding_provider="openai"; fi
+                update_env_value "EMBEDDING_PROVIDER" "$embedding_provider"
                 # Update backend version based on method
                 local backend_version="latest"
                 if [ "$FROM_SOURCE" = true ]; then
@@ -768,6 +773,10 @@ EOF
             update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
             update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
             update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
+            # Set embedding provider based on whether OpenAI key is present
+            local embedding_provider="deterministic"
+            if [ -n "$OPENAI_API_KEY" ]; then embedding_provider="openai"; fi
+            update_env_value "EMBEDDING_PROVIDER" "$embedding_provider"
             local backend_version="latest"
             if [ "$FROM_SOURCE" = true ]; then
                 backend_version="local"

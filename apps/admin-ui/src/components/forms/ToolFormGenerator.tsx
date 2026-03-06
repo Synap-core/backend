@@ -58,7 +58,10 @@ export default function ToolFormGenerator({
   const requiredFields = toolSchema.schema?.required || [];
   const fields = Object.keys(schemaProperties).map((key) => {
     const prop = schemaProperties[key];
-    const zodType = prop as any;
+    const zodType = prop as {
+      _def?: { innerType?: { typeName?: string }; typeName?: string };
+      description?: string;
+    };
 
     // Try to determine type from Zod schema
     let fieldType = "string";

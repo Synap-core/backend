@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Title,
   Text,
@@ -33,25 +33,29 @@ import {
 import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 import { AdminSDK } from "../../lib/sdk";
 
+interface TableInfo {
+  name: string;
+  estimated_rows?: number;
+}
+
 export default function DatabasePage() {
   const [activeTab, setActiveTab] = useState<string | null>("browse");
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const [selectedRow, setSelectedRow] = useState<any | null>(null);
+  const [selectedRow, setSelectedRow] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
   const pageSize = 50;
 
   // 1. Fetch list of tables
   const { data: tables, isLoading: isLoadingTables } = useQuery({
     queryKey: ["database", "tables"],
-    queryFn: () => AdminSDK.database.listTables(),
+    queryFn: () => AdminSDK.database.listTables() as Promise<TableInfo[]>,
   });
 
-  // Set default table on load
-  useEffect(() => {
-    if (tables && tables.length > 0 && !selectedTable) {
-      setSelectedTable(tables[0].name as string);
-    }
-  }, [tables, selectedTable]);
+  // Derive effective table — auto-select first if nothing chosen yet
+  const effectiveTable = selectedTable ?? tables?.[0]?.name ?? null;
 
   // 2. Fetch table data
   const {
@@ -61,14 +65,17 @@ export default function DatabasePage() {
     error: rowsError,
     refetch,
   } = useQuery({
-    queryKey: ["database", "rows", selectedTable, page],
+    queryKey: ["database", "rows", effectiveTable, page],
     queryFn: () =>
-      AdminSDK.database.getTableData(selectedTable!, (page - 1) * pageSize),
-    enabled: !!selectedTable,
+      AdminSDK.database.getTableData(
+        effectiveTable!,
+        (page - 1) * pageSize
+      ) as Promise<Record<string, unknown>[]>,
+    enabled: !!effectiveTable,
   });
 
   // Get current table info
-  const currentTable = tables?.find((t: any) => t.name === selectedTable);
+  const currentTable = tables?.find((t) => t.name === effectiveTable);
 
   // Extract columns from first row
   const columns =
@@ -104,13 +111,13 @@ export default function DatabasePage() {
               <Loader size="sm" />
             ) : (
               <Select
-                value={selectedTable}
+                value={effectiveTable}
                 onChange={(val) => {
                   setSelectedTable(val);
                   setPage(1);
                 }}
                 data={
-                  tables?.map((t: any) => ({
+                  tables?.map((t) => ({
                     value: t.name,
                     label: `${t.name} (${t.estimated_rows ?? "0"} rows)`,
                   })) || []
@@ -182,7 +189,7 @@ export default function DatabasePage() {
                       </Table.Thead>
                       <Table.Tbody>
                         {tableRows && tableRows.length > 0 ? (
-                          tableRows.map((row: any, idx: number) => (
+                          tableRows.map((row, idx) => (
                             <Table.Tr key={idx}>
                               {columns.map((col) => (
                                 <Table.Td key={col}>
@@ -327,14 +334,14 @@ export default function DatabasePage() {
                 </Text>
                 <ScrollArea style={{ maxHeight: 400 }}>
                   <Stack gap={4}>
-                    {tables?.map((table: any) => (
+                    {tables?.map((table) => (
                       <Group
                         key={table.name}
                         justify="space-between"
                         style={{
                           padding: `${spacing[2]} ${spacing[3]}`,
                           background:
-                            table.name === selectedTable
+                            table.name === effectiveTable
                               ? `${colors.eventTypes.created}15`
                               : colors.background.secondary,
                           borderRadius: borderRadius.base,
@@ -346,14 +353,14 @@ export default function DatabasePage() {
                           <IconTable
                             size={14}
                             color={
-                              table.name === selectedTable
+                              table.name === effectiveTable
                                 ? colors.eventTypes.created
                                 : colors.text.tertiary
                             }
                           />
                           <Text
                             size="sm"
-                            fw={table.name === selectedTable ? 600 : 400}
+                            fw={table.name === effectiveTable ? 600 : 400}
                           >
                             {table.name}
                           </Text>
@@ -383,7 +390,7 @@ export default function DatabasePage() {
             <Text size="lg" fw={600}>
               Row Details
             </Text>
-            <Badge>{selectedTable}</Badge>
+            <Badge>{effectiveTable}</Badge>
           </Group>
         }
       >

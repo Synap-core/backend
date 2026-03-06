@@ -36,6 +36,19 @@ import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 import { AdminSDK } from "../../lib/sdk";
 import { trpc } from "../../lib/trpc";
 
+interface Worker {
+  name: string;
+  description?: string;
+  triggers?: string[];
+}
+
+interface Webhook {
+  id: string;
+  name: string;
+  url: string;
+  eventTypes?: string[];
+}
+
 export default function SubscribersPage() {
   const [activeTab, setActiveTab] = useState<string | null>("workers");
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -44,11 +57,12 @@ export default function SubscribersPage() {
     url: "",
     eventTypes: [] as string[],
   });
-  const [selectedWorker, setSelectedWorker] = useState<any | null>(null);
+  const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
 
   // Fetch capabilities for event types and workers
   const { data: capabilities } = trpc.system.getCapabilities.useQuery();
-  const workers = (capabilities as any)?.workers || [];
+  const workers: Worker[] =
+    (capabilities as { workers?: Worker[] } | undefined)?.workers || [];
 
   // List Webhooks
   const {
@@ -64,7 +78,8 @@ export default function SubscribersPage() {
 
   // Create Webhook
   const createMutation = useMutation({
-    mutationFn: (data: any) => AdminSDK.webhooks.create(data),
+    mutationFn: (data: { name: string; url: string; eventTypes: string[] }) =>
+      AdminSDK.webhooks.create(data),
     onSuccess: () => {
       notifications.show({
         title: "Webhook Created",
@@ -75,7 +90,7 @@ export default function SubscribersPage() {
       setNewWebhook({ name: "", url: "", eventTypes: [] });
       refetch();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       notifications.show({
         title: "Failed",
         message: err.message,
@@ -123,14 +138,14 @@ export default function SubscribersPage() {
               Workers ({workers.length})
             </Tabs.Tab>
             <Tabs.Tab value="webhooks" leftSection={<IconWebhook size={16} />}>
-              Webhooks ({(webhooks as any[])?.length || 0})
+              Webhooks ({(webhooks as Webhook[])?.length || 0})
             </Tabs.Tab>
           </Tabs.List>
 
           {/* Workers Tab */}
           <Tabs.Panel value="workers" pt="md">
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
-              {workers.map((worker: any) => (
+              {workers.map((worker) => (
                 <Card
                   key={worker.name}
                   padding="md"
@@ -244,7 +259,7 @@ export default function SubscribersPage() {
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {(webhooks as any[])?.map((wh: any) => (
+                    {(webhooks as Webhook[])?.map((wh) => (
                       <Table.Tr key={wh.id}>
                         <Table.Td>
                           <Text size="sm" fw={500}>
@@ -291,7 +306,7 @@ export default function SubscribersPage() {
                         </Table.Td>
                       </Table.Tr>
                     ))}
-                    {(!webhooks || (webhooks as any[]).length === 0) && (
+                    {(!webhooks || (webhooks as Webhook[]).length === 0) && (
                       <Table.Tr>
                         <Table.Td colSpan={5}>
                           <Text ta="center" c="dimmed" py="lg">
@@ -415,7 +430,7 @@ export default function SubscribersPage() {
           <MultiSelect
             label="Event Types"
             placeholder="Select events"
-            data={capabilities?.eventTypes?.map((et: any) => et.type) || []}
+            data={capabilities?.eventTypes?.map((et) => et.type) || []}
             value={newWebhook.eventTypes}
             onChange={(val) =>
               setNewWebhook({ ...newWebhook, eventTypes: val })

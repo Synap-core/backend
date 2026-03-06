@@ -255,7 +255,7 @@ interface ServiceCardProps {
   workspaceId: string;
 }
 
-function ServiceCard({ meta, workspaceId }: ServiceCardProps) {
+function ServiceCard({ meta }: ServiceCardProps) {
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [revealed, setRevealed] = useState<ProvisionedInfo | null>(null);
 
