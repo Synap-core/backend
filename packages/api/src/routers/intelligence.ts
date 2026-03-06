@@ -374,7 +374,7 @@ export const intelligenceRouter = router({
           channelType: ChannelType.AI_THREAD,
           status: ChannelStatus.ACTIVE,
           agentId: "orchestrator",
-          agentType: ChannelAgentType.DEFAULT,
+          agentType: ChannelAgentType.META,
         })
         .returning();
       if (!thread) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -529,6 +529,30 @@ export const intelligenceRouter = router({
         intelligenceConfigured,
       };
     }),
+
+  // ── Specialisations Proxy ─────────────────────────────────────────────────
+
+  /**
+   * List specialisations from the connected intelligence service.
+   * Proxies to hub GET /api/specialisations — gracefully returns [] if
+   * the hub is unreachable (service not yet connected).
+   * Used by the branch picker and Intelligence Studio Capabilities tab.
+   */
+  listSpecialisations: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    try {
+      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const res = await apiProxyFetch("/specialisations", endpoint);
+      const data = (await res.json()) as { specialisations?: unknown[] };
+      return {
+        specialisations: Array.isArray(data.specialisations)
+          ? data.specialisations
+          : [],
+      };
+    } catch {
+      return { specialisations: [] };
+    }
+  }),
 
   // ── Agent Definitions Proxy ───────────────────────────────────────────────
 

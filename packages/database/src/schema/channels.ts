@@ -72,7 +72,11 @@ export const ChannelAgentType = {
   WRITING: "writing",
   ACTION: "action",
   ONBOARDING: "onboarding",
-  WORKSPACE_CREATION: "workspace-creation",
+  WORKSPACE_CREATION: "workspace-creation", // legacy key
+  // New specialists
+  INSIGHT_DISCOVERY: "insight-discovery",
+  VIEW_BUILDER: "view-builder",
+  WORKSPACE_BUILDER: "workspace-builder",
   // Legacy: pre-redesign channels. Routes to DefaultAgent (simple, read-only).
   DEFAULT: "default",
 } as const;
