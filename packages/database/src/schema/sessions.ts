@@ -48,6 +48,11 @@ export const sessions = pgTable(
       .defaultNow()
       .notNull(),
     endedAt: timestamp("ended_at", { mode: "date", withTimezone: true }),
+    // Updated on every message/token usage — used for session timeout checks
+    lastActivityAt: timestamp("last_activity_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
 
     // Links to compacted states
     // bootstrapStateId: which compacted state was used to start this session

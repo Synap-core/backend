@@ -137,12 +137,14 @@ export const sessionsRouter = router({
         totalTokensUsed: z.number().int().min(0).optional(),
         messageCount: z.number().int().min(0).optional(),
         compactionCount: z.number().int().min(0).optional(),
+        lastActivityAt: z.string().datetime().optional(),
       })
     )
     .mutation(async ({ input }) => {
       const { sessionId, ...updates } = input;
 
-      const updateData: Partial<typeof sessions.$inferInsert> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updateData: Record<string, any> = {};
       if (updates.status !== undefined)
         updateData.status = updates.status as SessionStatus;
       if (updates.endedAt !== undefined)
@@ -157,6 +159,8 @@ export const sessionsRouter = router({
         updateData.messageCount = updates.messageCount;
       if (updates.compactionCount !== undefined)
         updateData.compactionCount = updates.compactionCount;
+      if (updates.lastActivityAt !== undefined)
+        updateData.lastActivityAt = new Date(updates.lastActivityAt);
 
       const [updated] = await db
         .update(sessions)

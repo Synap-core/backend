@@ -15,6 +15,7 @@ import {
   messages,
   channels,
   knowledgeFacts,
+  users,
   eq,
   and,
   asc,
@@ -80,6 +81,42 @@ app.use("/*", async (c, next) => {
   c.set("scopes", keyRecord.scope);
   await next();
 });
+
+/**
+ * Resolve the actor ID for a hub protocol write request.
+ *
+ * If `agentUserId` is provided, verify it refers to a real agent user
+ * (userType = "agent") before trusting it. Returns:
+ *   - { actorId: agentUserId } if valid agent
+ *   - { actorId: userId } if no agentUserId provided
+ *   - { error: string } if agentUserId is provided but invalid
+ *
+ * This is the single place where the agentUserId claim is authenticated
+ * at the REST boundary, before it propagates into tRPC procedure calls.
+ */
+async function resolveActorId(
+  agentUserId: string | undefined,
+  userId: string
+): Promise<{ actorId: string } | { error: string }> {
+  if (!agentUserId) return { actorId: userId };
+
+  const agent = await db.query.users.findFirst({
+    where: and(eq(users.id, agentUserId), eq(users.userType, "agent")),
+    columns: { id: true },
+  });
+
+  if (!agent) {
+    logger.warn(
+      { agentUserId, userId },
+      "Hub request rejected: invalid agentUserId (not an agent user)"
+    );
+    return {
+      error: "Invalid agentUserId — must be a user with userType='agent'",
+    };
+  }
+
+  return { actorId: agentUserId };
+}
 
 /**
  * Helper: get hub protocol caller for current request.
@@ -290,7 +327,10 @@ app.post("/entities", async (c) => {
   }
   try {
     // When agentUserId is provided, use the agent's identity for permission checks
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       workspaceId: body.workspaceId,
       userId: actorId,
@@ -339,7 +379,10 @@ app.patch("/entities/:entityId", async (c) => {
     );
   }
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       workspaceId: body.workspaceId,
       userId: actorId,
@@ -538,7 +581,10 @@ app.post("/documents", async (c) => {
     );
   }
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       workspaceId: body.workspaceId,
       userId: actorId,
@@ -1350,7 +1396,10 @@ app.post("/views", async (c) => {
     return c.json({ error: "workspaceId is required" }, 400);
   }
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       userId: actorId,
       workspaceId: body.workspaceId,
@@ -1396,7 +1445,10 @@ app.patch("/views/:viewId", async (c) => {
     sourceMessageId?: string;
   };
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       userId: actorId,
       workspaceId: body.workspaceId,
@@ -1517,7 +1569,10 @@ app.post("/profiles", async (c) => {
     sourceMessageId?: string;
   };
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       userId: actorId,
       workspaceId: body.workspaceId,
@@ -1593,7 +1648,10 @@ app.post("/property-defs", async (c) => {
     sourceMessageId?: string;
   };
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       userId: actorId,
       workspaceId: body.workspaceId,
@@ -1674,7 +1732,10 @@ app.post("/relations", async (c) => {
     sourceMessageId?: string;
   };
   try {
-    const actorId = body.agentUserId || body.userId;
+    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       userId: actorId,
       workspaceId: body.workspaceId,

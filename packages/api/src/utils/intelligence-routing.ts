@@ -166,17 +166,37 @@ async function lookupAgentUser(
   }
 }
 
+/** Timeout for service resolution DB queries — prevents hangs during chat triggers */
+const SERVICE_RESOLUTION_TIMEOUT_MS = 5_000;
+
 /**
  * Get active service by ID.
- * Returns null if the service is known-unhealthy (skip routing to it).
+ * Returns null if the service is known-unhealthy (skip routing to it),
+ * or if the DB query times out (fail open → route to fallback).
  */
 async function getActiveService(serviceId: string) {
-  const svc = await db.query.intelligenceServices.findFirst({
+  const queryPromise = db.query.intelligenceServices.findFirst({
     where: and(
       eq(intelligenceServices.serviceId, serviceId),
       eq(intelligenceServices.status, "active"),
       eq(intelligenceServices.enabled, true)
     ),
+  });
+
+  const svc = await Promise.race([
+    queryPromise,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`getActiveService(${serviceId}) timed out`)),
+        SERVICE_RESOLUTION_TIMEOUT_MS
+      )
+    ),
+  ]).catch((err) => {
+    logger.warn(
+      { serviceId, err: err instanceof Error ? err.message : String(err) },
+      "Service resolution timed out or failed — falling through to default"
+    );
+    return null;
   });
   if (!svc) return null;
   // Skip explicitly unhealthy services — route to fallback instead

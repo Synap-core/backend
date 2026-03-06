@@ -94,6 +94,16 @@ try {
   if (config.server.nodeEnv === "production") {
     validateConfig("ai");
     apiLogger.info("AI configuration validated");
+
+    // Validate CORS origins — without this the API silently rejects all browser requests
+    if (!process.env.ALLOWED_ORIGINS) {
+      throw new Error(
+        "ALLOWED_ORIGINS is not set in production. " +
+          "Set it to a comma-separated list of allowed frontend origins " +
+          "(e.g. ALLOWED_ORIGINS=https://app.synap.live). " +
+          "Without this all browser requests will be rejected by CORS."
+      );
+    }
   }
 
   // Validate Intelligence Hub config (warns in dev, throws in production if missing)
