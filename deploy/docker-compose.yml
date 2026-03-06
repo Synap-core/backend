@@ -3,15 +3,10 @@ services:
   # BACKEND API
   # ============================================================================
   backend:
-    # Try to use pre-built image from GitHub Container Registry first
-    # If image doesn't exist, falls back to building from source
-    # Set BACKEND_VERSION in .env to pin a specific version (e.g., v1.2.3)
-    # Defaults to 'latest' if not set
     image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
-    # Build fallback: if image pull fails, build from source
     build:
       context: ..
-      dockerfile: deploy/Dockerfile.api
+      dockerfile: deploy/Dockerfile
     restart: always
     environment:
       NODE_ENV: production
@@ -76,22 +71,20 @@ services:
 
   # ============================================================================
   # REALTIME SERVER (WebSocket/Socket.IO)
+  # Same image as backend — different working directory and entry point
   # ============================================================================
   realtime:
-    # Separate image for realtime service (must stay distinct from backend when building from source)
-    # Use -realtime suffix so GITHUB_REPOSITORY=synap-core/backend yields synap-core/backend-realtime
-    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}-realtime:${BACKEND_VERSION:-latest}
-    # Build fallback: if image pull fails, build from source
+    image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
     build:
       context: ..
-      dockerfile: deploy/Dockerfile.realtime
+      dockerfile: deploy/Dockerfile
     restart: always
+    working_dir: /app/realtime
+    command: node dist/server.js
     environment:
       NODE_ENV: production
       REALTIME_PORT: 4001
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-      # CORS origin - use "*" to allow all origins (for same-domain Caddy setup)
-      # Or set to specific frontend URL if frontend is on different domain
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       STORAGE_PROVIDER: minio
@@ -100,7 +93,6 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_BUCKET: synap-storage
       MINIO_USE_SSL: false
-    command: node dist/server.js
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,12 +122,10 @@ services:
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
-    # Use same image as backend service (needs migrations + key seeding)
     image: ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:-latest}
-    # Build fallback: if image pull fails, build from source
     build:
       context: ..
-      dockerfile: deploy/Dockerfile.api
+      dockerfile: deploy/Dockerfile
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}

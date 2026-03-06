@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Card,
   Title,
@@ -35,7 +35,25 @@ export default function FlowDiagram({ capabilities }: FlowDiagramProps) {
   const [layoutType, setLayoutType] = useState<
     "cose" | "breadthfirst" | "circle"
   >("cose");
-  const [stats, setStats] = useState({ nodes: 0, edges: 0 });
+  const stats = useMemo(() => {
+    const handlerNodes = capabilities.handlers.reduce(
+      (sum, h) => sum + h.handlers.length,
+      0
+    );
+    const nodeCount =
+      capabilities.eventTypes.length + handlerNodes + capabilities.tools.length;
+    const aiHandlerCount = capabilities.handlers
+      .flatMap((h) => h.handlers)
+      .filter(
+        (h) =>
+          h.name.toLowerCase().includes("ai") ||
+          h.name.toLowerCase().includes("chat") ||
+          h.name.toLowerCase().includes("assistant") ||
+          h.name.toLowerCase().includes("conversation")
+      ).length;
+    const edgeCount = handlerNodes + aiHandlerCount * capabilities.tools.length;
+    return { nodes: nodeCount, edges: edgeCount };
+  }, [capabilities]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -225,7 +243,6 @@ export default function FlowDiagram({ capabilities }: FlowDiagramProps) {
     });
 
     cyRef.current = cy;
-    setStats({ nodes: nodes.length, edges: edges.length });
 
     // Cleanup
     return () => {

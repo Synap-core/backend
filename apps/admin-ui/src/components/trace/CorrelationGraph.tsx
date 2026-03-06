@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Card, Title, Text, Stack, Alert } from "@mantine/core";
 import { IconInfoCircle } from "@tabler/icons-react";
 import cytoscape from "cytoscape";
@@ -23,7 +23,15 @@ export default function CorrelationGraph({
 }: CorrelationGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
-  const [stats, setStats] = useState({ nodes: 0, edges: 0 });
+  const stats = useMemo(
+    () => ({
+      nodes: events.length,
+      edges: events.filter(
+        (e) => e.causationId && events.some((ev) => ev.id === e.causationId)
+      ).length,
+    }),
+    [events]
+  );
 
   useEffect(() => {
     if (!containerRef.current || events.length === 0) return;
@@ -117,7 +125,6 @@ export default function CorrelationGraph({
     });
 
     cyRef.current = cy;
-    setStats({ nodes: nodes.length, edges: edges.length });
 
     // Cleanup
     return () => {

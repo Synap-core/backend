@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Drawer } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
