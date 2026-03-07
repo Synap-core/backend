@@ -245,7 +245,7 @@ function loadConfig(): Config {
         nodeEnv: process.env.NODE_ENV,
         corsOrigins: process.env.CORS_ORIGINS,
         logLevel: process.env.LOG_LEVEL,
-        controlPlaneUrl: process.env.CONTROL_PLANE_URL,
+        controlPlaneUrl: process.env.CONTROL_PLANE_URL || undefined,
       },
       mem0: {
         apiUrl: process.env.MEM0_API_URL,
