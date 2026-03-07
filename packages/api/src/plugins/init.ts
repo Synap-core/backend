@@ -6,6 +6,7 @@
 
 import { pluginManager } from "./index.js";
 import { createLogger } from "@synap-core/core";
+import { seedWidgetDefinitions } from "../lib/seed-widget-definitions.js";
 
 const logger = createLogger({ module: "plugin-init" });
 
@@ -24,6 +25,9 @@ export async function initializePlugins(): Promise<void> {
 
     // Initialize all plugins
     await pluginManager.initialize();
+
+    // Seed built-in widget definitions (idempotent, ON CONFLICT DO UPDATE)
+    await seedWidgetDefinitions();
 
     logger.info("Plugin system initialized successfully");
   } catch (error) {

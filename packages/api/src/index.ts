@@ -346,9 +346,6 @@ export { coreRouter };
 // Export the dynamically built app router for the server
 export const appRouter = buildAppRouter();
 
-// Export seeder for startup hooks
-export { seedWidgetDefinitions } from "./lib/seed-widget-definitions.js";
-
 // Re-export router registry functions for plugin developers
 export {
   registerRouter,

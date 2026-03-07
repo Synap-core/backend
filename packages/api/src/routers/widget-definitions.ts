@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
+import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
@@ -68,7 +68,7 @@ export const widgetDefinitionsRouter = router({
         ),
         eq(widgetDefinitions.isActive, true)
       ),
-      orderBy: (t, { asc, desc }) => [
+      orderBy: (t, { asc }) => [
         // Builtins first (workspaceId null sorts before UUIDs)
         asc(t.workspaceId),
         asc(t.category),
