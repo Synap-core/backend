@@ -247,6 +247,36 @@ function createClient(service: any): ResolvedService {
 export const resolveAgent = resolveIntelligenceService;
 
 /**
+ * Return the endpoint + API key for the first active registered intelligence service,
+ * falling back to env vars. Useful for fire-and-forget callers that don't have
+ * full user/workspace context (e.g. proposal telemetry).
+ */
+export async function getDefaultActiveService(): Promise<{
+  endpoint: string;
+  apiKey: string;
+}> {
+  try {
+    const svc = await db.query.intelligenceServices.findFirst({
+      where: and(
+        eq(intelligenceServices.status, "active"),
+        eq(intelligenceServices.enabled, true)
+      ),
+      columns: { webhookUrl: true, apiKey: true },
+    });
+    if (svc?.webhookUrl) {
+      return {
+        endpoint: svc.webhookUrl,
+        apiKey: svc.apiKey ? resolveServiceKey(svc.apiKey as string) : "",
+      };
+    }
+  } catch {
+    // Fall through
+  }
+  const ep = createDefaultClient();
+  return { endpoint: ep.endpoint, apiKey: ep.serviceApiKey };
+}
+
+/**
  * Create default client from environment.
  * Reads AGENT_HUB_URL first, falls back to INTELLIGENCE_HUB_URL for backward compat.
  */

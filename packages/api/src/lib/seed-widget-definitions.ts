@@ -216,6 +216,229 @@ const BUILTIN_WIDGETS: BuiltinWidgetSeed[] = [
     defaultConfig: { limit: 8 },
     defaultSize: { w: 6, h: 4 },
   },
+  {
+    typeKey: "entity-gallery",
+    name: "Entity Gallery",
+    description:
+      "Grid of entity cards with cover images — ideal for books, articles, people.",
+    icon: "LayoutGrid",
+    category: "data",
+    configSchema: {
+      type: "object",
+      properties: {
+        profileSlug: {
+          type: "string",
+          title: "Profile",
+          description: "Entity type to display",
+        },
+        title: { type: "string", title: "Title" },
+        coverField: {
+          type: "string",
+          title: "Cover Field",
+          description:
+            "Property slug for the cover image (e.g. cover_url, avatar)",
+        },
+        limit: {
+          type: "number",
+          title: "Limit",
+          description: "Max items to show (1–50)",
+          minimum: 1,
+          maximum: 50,
+        },
+        filter: {
+          type: "object",
+          title: "Filter",
+          description: "Property filters as { field: value }",
+        },
+        sort: {
+          type: "object",
+          title: "Sort",
+          properties: {
+            field: { type: "string" },
+            direction: { type: "string", enum: ["asc", "desc"] },
+          },
+        },
+      },
+      required: ["profileSlug"],
+    },
+    defaultConfig: { limit: 12 },
+    defaultSize: { w: 8, h: 4 },
+  },
+  {
+    typeKey: "reading-progress",
+    name: "Reading Progress",
+    description:
+      "Circular progress ring showing how far through a book (or any entity with page tracking) you are.",
+    icon: "BookMarked",
+    category: "knowledge",
+    configSchema: {
+      type: "object",
+      properties: {
+        profileSlug: {
+          type: "string",
+          title: "Profile",
+          description: "Profile slug (e.g. book)",
+        },
+        pageField: {
+          type: "string",
+          title: "Current Page Field",
+          description: "Property slug for current page",
+        },
+        totalPagesField: {
+          type: "string",
+          title: "Total Pages Field",
+          description: "Property slug for total pages",
+        },
+        label: { type: "string", title: "Label" },
+      },
+      required: ["profileSlug"],
+    },
+    defaultConfig: {
+      profileSlug: "book",
+      pageField: "current_page",
+      totalPagesField: "pages",
+      label: "Reading Progress",
+    },
+    defaultSize: { w: 4, h: 3 },
+  },
+  {
+    typeKey: "quote-card",
+    name: "Quote Card",
+    description:
+      "Beautiful pull-quote display. Shows a random, daily, or latest quote from your collection.",
+    icon: "Quote",
+    category: "knowledge",
+    configSchema: {
+      type: "object",
+      properties: {
+        profileSlug: {
+          type: "string",
+          title: "Profile",
+          description: "Profile containing quotes (e.g. quote)",
+        },
+        textField: { type: "string", title: "Quote Text Field" },
+        authorField: { type: "string", title: "Author Field" },
+        seed: {
+          type: "string",
+          title: "Selection",
+          enum: ["random", "daily", "latest"],
+          description:
+            "random = random each load, daily = same all day, latest = most recently added",
+        },
+        filter: { type: "object", title: "Filter" },
+      },
+      required: ["profileSlug"],
+    },
+    defaultConfig: {
+      profileSlug: "quote",
+      textField: "text",
+      authorField: "author",
+      seed: "daily",
+    },
+    defaultSize: { w: 4, h: 3 },
+  },
+  {
+    typeKey: "bar-chart",
+    name: "Bar Chart",
+    description:
+      "Bar chart showing entity count grouped by a field value — great for status breakdowns and trends.",
+    icon: "BarChart2",
+    category: "analytics",
+    configSchema: {
+      type: "object",
+      properties: {
+        profileSlug: { type: "string", title: "Profile" },
+        groupByField: {
+          type: "string",
+          title: "Group By Field",
+          description: "Property slug to group entities by",
+        },
+        title: { type: "string", title: "Chart Title" },
+        limit: { type: "number", title: "Max Bars", minimum: 2, maximum: 20 },
+        metric: {
+          type: "string",
+          title: "Metric",
+          enum: ["count", "sum", "average"],
+        },
+        metricField: {
+          type: "string",
+          title: "Metric Field",
+          description: "For sum/average: which property to aggregate",
+        },
+        filter: { type: "object", title: "Filter" },
+      },
+      required: ["profileSlug", "groupByField"],
+    },
+    defaultConfig: { limit: 8, metric: "count" },
+    defaultSize: { w: 6, h: 3 },
+  },
+  {
+    typeKey: "entity-spotlight",
+    name: "Entity Spotlight",
+    description:
+      "Featured entity card — highlights a single entity (daily pick, latest, or pinned). Perfect for a 'Book of the Day' or 'Today's Focus' block.",
+    icon: "Sparkles",
+    category: "knowledge",
+    configSchema: {
+      type: "object",
+      properties: {
+        profileSlug: { type: "string", title: "Profile" },
+        seed: {
+          type: "string",
+          title: "Selection",
+          enum: ["daily", "pinned", "latest"],
+          description:
+            "daily = changes each day, pinned = fixed entity, latest = most recently created",
+        },
+        layout: {
+          type: "string",
+          title: "Layout",
+          enum: ["compact", "detail"],
+          description:
+            "compact = title+icon, detail = full card with properties",
+        },
+        entityId: {
+          type: "string",
+          title: "Pinned Entity ID",
+          description: "UUID of entity to pin (only used when seed=pinned)",
+        },
+        filter: {
+          type: "object",
+          title: "Filter",
+          description: "Restrict pool for random/daily selection",
+        },
+      },
+      required: ["profileSlug"],
+    },
+    defaultConfig: { seed: "daily", layout: "compact" },
+    defaultSize: { w: 8, h: 3 },
+  },
+  {
+    typeKey: "entity-timeline",
+    name: "Entity Timeline",
+    description:
+      "Chronological list of entities grouped by date — great for activity logs, reading history, note archives.",
+    icon: "Clock",
+    category: "data",
+    configSchema: {
+      type: "object",
+      properties: {
+        profileSlug: { type: "string", title: "Profile" },
+        dateField: {
+          type: "string",
+          title: "Date Field",
+          description:
+            "Property slug for the date to sort/group by (e.g. created_at, date_finished)",
+        },
+        title: { type: "string", title: "Title" },
+        limit: { type: "number", title: "Limit", minimum: 1, maximum: 100 },
+        filter: { type: "object", title: "Filter" },
+      },
+      required: ["profileSlug", "dateField"],
+    },
+    defaultConfig: { limit: 10 },
+    defaultSize: { w: 6, h: 4 },
+  },
 ];
 
 /**

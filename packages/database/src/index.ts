@@ -33,6 +33,16 @@ export * from "./errors/index.js";
 
 // Utilities
 export * from "./utils/preferences.js";
+export {
+  encryptServiceKey,
+  decryptServiceKey,
+  resolveServiceKey,
+  isEncryptedServiceKey,
+} from "./utils/service-key-crypto.js";
+export {
+  resolveDefaultIntelligenceEndpoint,
+  type IntelligenceEndpoint,
+} from "./utils/default-intelligence-endpoint.js";
 // Explicit export for ensureDefaultWhiteboard to ensure TypeScript picks it up
 export {
   ensureDefaultWhiteboard,

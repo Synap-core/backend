@@ -42,6 +42,7 @@ import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
 import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -1238,16 +1239,63 @@ export const workspacesRouter = router({
         await assertPackageTierAccess(ctx.userId, input.packageSlug);
       }
 
-      const result = await createWorkspaceFromDefinition({
-        definition: input.definition,
-        userId: ctx.userId,
-        packageSlug: input.packageSlug,
-        packageVersion: input.packageVersion,
-        workspaceName: input.workspaceName,
-        createdBy: "user",
-        workspaceType: input.workspaceType,
-        linkedAgentId: input.linkedAgentId,
-      });
+      // Idempotency: if the user already has a workspace with this packageSlug, return it.
+      // Prevents duplicate workspaces when the browser re-triggers onboarding on reconnect.
+      if (input.packageSlug) {
+        const existingMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, ctx.userId),
+            drizzleSql`EXISTS (
+              SELECT 1 FROM workspaces w
+              WHERE w.id = ${workspaceMembers.workspaceId}
+                AND w.settings->>'packageSlug' = ${input.packageSlug}
+            )`
+          ),
+          with: { workspace: true },
+        });
+        if (existingMembership?.workspace) {
+          logger.info(
+            {
+              userId: ctx.userId,
+              packageSlug: input.packageSlug,
+              workspaceId: existingMembership.workspace.id,
+            },
+            "createFromDefinition: returning existing workspace (idempotent)"
+          );
+          return { workspaceId: existingMembership.workspace.id };
+        }
+      }
+
+      let result: Awaited<ReturnType<typeof createWorkspaceFromDefinition>>;
+      try {
+        result = await createWorkspaceFromDefinition({
+          definition: input.definition,
+          userId: ctx.userId,
+          packageSlug: input.packageSlug,
+          packageVersion: input.packageVersion,
+          workspaceName: input.workspaceName,
+          createdBy: "user",
+          workspaceType: input.workspaceType,
+          linkedAgentId: input.linkedAgentId,
+          onProgress: (step, pct, label) => {
+            emitChatEvent({
+              event: "workspace:creation_progress",
+              data: { step, pct, label },
+              userId: ctx.userId,
+            });
+          },
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error(
+          { err, userId: ctx.userId, packageSlug: input.packageSlug },
+          "createFromDefinition failed"
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Workspace creation failed: ${message}`,
+        });
+      }
 
       // Create documents for entities with content
       // (storage lives in the API layer, not the database package)
@@ -1344,82 +1392,10 @@ export const workspacesRouter = router({
     }),
 
   /**
-   * Idempotently create the Pod Administration workspace.
-   *
-   * Called by the browser immediately after connecting to a pod (when the
-   * connected user has pod-admin rights). Safe to call on every reconnect —
-   * returns the existing workspace ID if one already exists.
-   *
-   * The workspace is identified by settings.systemSlug = 'pod-admin' so it
-   * survives pod migrations and workspace ID changes.
-   */
-  ensurePodAdminWorkspace: protectedProcedure.mutation(async ({ ctx }) => {
-    const {
-      POD_ADMIN_DEFINITION,
-      POD_ADMIN_SYSTEM_SLUG,
-      POD_ADMIN_WORKSPACE_NAME,
-    } = await import("../system-templates/pod-admin.js");
-
-    // Check if the pod-admin workspace already exists for this user.
-    // EXISTS subquery avoids loading all workspace IDs into JS.
-    const [existing] = await db
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .where(
-        and(
-          drizzleSql`EXISTS (
-            SELECT 1 FROM workspace_members
-            WHERE workspace_id = ${workspaces.id}
-              AND user_id = ${ctx.userId}
-          )`,
-          drizzleSql`${workspaces.settings}->>'systemSlug' = ${POD_ADMIN_SYSTEM_SLUG}`
-        )
-      )
-      .limit(1);
-
-    if (existing) {
-      return { workspaceId: existing.id, created: false };
-    }
-
-    // Create the pod-admin workspace from the system template.
-    // systemSlug is written atomically into settings so the idempotency check
-    // above always finds it — even if workspace-init updates the row later.
-    const result = await createWorkspaceFromDefinition({
-      definition: POD_ADMIN_DEFINITION,
-      userId: ctx.userId,
-      workspaceName: POD_ADMIN_WORKSPACE_NAME,
-      createdBy: "provisioning",
-      systemSlug: POD_ADMIN_SYSTEM_SLUG,
-    });
-
-    // Enqueue workspace-init for default whiteboard/commands (skip default views)
-    try {
-      const boss = getBoss();
-      await boss.send("workspace-init", {
-        workspaceId: result.workspaceId,
-        userId: ctx.userId,
-        packageSlug: POD_ADMIN_SYSTEM_SLUG, // signals: skip ensureDefaultViews
-      });
-    } catch (err) {
-      logger.warn(
-        { err, workspaceId: result.workspaceId },
-        "Failed to enqueue workspace-init for pod-admin (non-fatal)"
-      );
-    }
-
-    logger.info(
-      { userId: ctx.userId, workspaceId: result.workspaceId },
-      "Pod admin workspace created"
-    );
-
-    return { workspaceId: result.workspaceId, created: true };
-  }),
-
-  /**
    * Seed a plugin workspace (provisioning-level auth via token header)
    *
    * Called by the control plane during pod provisioning to auto-create
-   * a workspace for an enabled plugin (e.g., ZeroClaw).
+   * a workspace for an enabled plugin (e.g., agent-os).
    */
   seedPlugin: publicProcedure
     .input(
@@ -1441,6 +1417,31 @@ export const workspacesRouter = router({
       }
 
       const systemUserId = "00000000-0000-0000-0000-000000000000";
+
+      // Idempotency: if a provisioned workspace with this pluginId already exists, return it.
+      // Prevents duplicate workspaces when provisioning retries or the CP re-calls seedPlugin.
+      const existingPluginWorkspace = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(
+          and(
+            drizzleSql`${workspaces.settings}->>'packageSlug' = ${input.pluginId}`,
+            drizzleSql`${workspaces.settings}->>'createdBy' = 'provisioning'`
+          )
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+
+      if (existingPluginWorkspace) {
+        logger.info(
+          { workspaceId: existingPluginWorkspace.id, pluginId: input.pluginId },
+          "seedPlugin: returning existing provisioned workspace (idempotent)"
+        );
+        return {
+          status: "existing" as const,
+          workspaceId: existingPluginWorkspace.id,
+        };
+      }
 
       // Generic path: use definition from control plane registry
       if (input.definition) {
@@ -1495,7 +1496,7 @@ export const workspacesRouter = router({
       await workspaceRepo.create(
         {
           id: workspaceId,
-          name: "ZeroClaw Agent",
+          name: "Agent OS",
           ownerId: systemUserId,
           settings: {
             layout: {

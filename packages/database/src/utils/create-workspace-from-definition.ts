@@ -203,6 +203,14 @@ export interface CreateFromDefinitionOptions {
    * For agent workspaces: the userId (userType="agent") that owns this workspace.
    */
   linkedAgentId?: string;
+  /**
+   * Optional progress callback. Called at each major creation step so callers
+   * can emit real-time progress events (e.g. via WebSocket bridge).
+   * @param step  - machine-readable step key
+   * @param pct   - completion percentage (0–100)
+   * @param label - human-readable label for display
+   */
+  onProgress?: (step: string, pct: number, label: string) => void;
 }
 
 export interface CreateFromDefinitionResult {
@@ -223,6 +231,7 @@ export async function createWorkspaceFromDefinition(
     workspaceName,
     createdBy,
     systemSlug,
+    onProgress,
   } = opts;
   const { randomUUID } = await import("crypto");
 
@@ -278,6 +287,8 @@ export async function createWorkspaceFromDefinition(
     settings.linkedAgentId = opts.linkedAgentId;
   }
 
+  onProgress?.("workspace", 10, "Creating workspace");
+
   // 1. Create workspace
   const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
   await workspaceRepo.create(
@@ -293,6 +304,8 @@ export async function createWorkspaceFromDefinition(
   // 2. Add creator as owner member
   const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
   await memberRepo.add({ workspaceId, userId, role: "owner" }, userId);
+
+  onProgress?.("profiles", 25, "Setting up profiles");
 
   // 3. Create profiles and collect slug → id mapping
   const profileMap: Record<string, string> = {};
@@ -382,6 +395,8 @@ export async function createWorkspaceFromDefinition(
     }
   }
 
+  onProgress?.("relations", 35, "Configuring relationships");
+
   // 5. Create relation definitions and profile relations from entityLinks
   const relDefRepo = new RelationDefRepository(dbConn);
   const profileRelRepo = new ProfileRelationRepository(dbConn);
@@ -409,6 +424,7 @@ export async function createWorkspaceFromDefinition(
 
   // 6. Create display templates
   if (definition.displayTemplates?.length) {
+    onProgress?.("templates", 45, "Installing display templates");
     for (const tmpl of definition.displayTemplates) {
       await dbConn.insert(entityTemplates).values({
         id: randomUUID(),
@@ -418,11 +434,12 @@ export async function createWorkspaceFromDefinition(
         entityType: tmpl.entityType,
         isDefault: tmpl.isDefault ?? false,
         workspaceId,
-        userId,
         config: tmpl.config,
       });
     }
   }
+
+  onProgress?.("views", 55, "Creating views");
 
   // 6. Create non-bento, non-flow views first so viewMap is fully populated
   //    before bento views reference them by name.
@@ -469,6 +486,8 @@ export async function createWorkspaceFromDefinition(
     viewMap[view.name] = viewResult.id;
     viewIds.push(viewResult.id);
   }
+
+  onProgress?.("bento", 65, "Building dashboards");
 
   // 6b. Create bento views (explicit from template + auto-generated for remaining profiles).
   //
@@ -614,6 +633,8 @@ export async function createWorkspaceFromDefinition(
     await workspaceRepo2.mergeSettings(workspaceId, settingsPatch, userId);
   }
 
+  onProgress?.("home", 75, "Setting up home");
+
   // 7. Create bento home dashboard
   const widgetBlocks = (definition.bentoLayout ?? []).map((widget, idx) => ({
     id: `widget-${idx}`,
@@ -659,6 +680,8 @@ export async function createWorkspaceFromDefinition(
     );
   }
 
+  onProgress?.("entities", 85, "Adding initial data");
+
   // 8. Create seed entities
   const entityRepo = new EntityRepository(dbConn, eventRepo);
   const entityRefMap: Record<string, string> = {};
@@ -696,6 +719,8 @@ export async function createWorkspaceFromDefinition(
       await entityRepo.update(entityId, { properties: updates }, userId);
     }
   }
+
+  onProgress?.("flows", 90, "Finalizing views");
 
   // 9. Create flow views (need entity IDs for node configs)
   for (const view of flowViews) {
@@ -737,6 +762,8 @@ export async function createWorkspaceFromDefinition(
     );
     viewIds.push(flowViewResult.id);
   }
+
+  onProgress?.("done", 100, "Complete");
 
   // 10. Create relations between seed entities
   const relationRepo = new RelationRepository(dbConn, eventRepo);

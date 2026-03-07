@@ -16,6 +16,7 @@ import { db, eq, and } from "@synap/database";
 import { mcpServers } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { invalidateMcpCache } from "./channels.js";
+import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 
 /** Require owner or admin role — throws FORBIDDEN otherwise */
 function requireAdminRole(role: string | undefined | null) {
@@ -199,9 +200,11 @@ export const mcpServersRouter = router({
         });
       }
 
-      const hubUrl =
-        process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
-      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+      const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
+        await resolveIntelligenceService({
+          userId: ctx.userId!,
+          workspaceId: ctx.workspaceId!,
+        });
 
       let newStatus: "connected" | "error" = "connected";
       let errorMessage: string | undefined;
@@ -266,9 +269,11 @@ export const mcpServersRouter = router({
         });
       }
 
-      const hubUrl =
-        process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
-      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+      const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
+        await resolveIntelligenceService({
+          userId: ctx.userId!,
+          workspaceId: ctx.workspaceId!,
+        });
 
       try {
         const res = await fetch(`${hubUrl}/api/mcp/tools`, {

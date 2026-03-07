@@ -5,14 +5,15 @@
  * Ported from Inngest function: background-task-scheduler.ts
  */
 
-import { db, eq, backgroundTasks } from "@synap/database";
+import {
+  db,
+  eq,
+  backgroundTasks,
+  resolveDefaultIntelligenceEndpoint,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "background-task-scheduler" });
-
-const INTELLIGENCE_HUB_URL =
-  process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
-const HUB_PROTOCOL_API_KEY = process.env.HUB_PROTOCOL_API_KEY || "";
 
 export async function handleBackgroundTaskScheduler(): Promise<void> {
   // Fetch tasks where status="active" AND nextRunAt <= now
@@ -26,15 +27,19 @@ export async function handleBackgroundTaskScheduler(): Promise<void> {
 
   if (dueTasks.length === 0) return;
 
+  // Resolve IS endpoint once for the whole batch
+  const { endpoint: hubUrl, apiKey: hubApiKey } =
+    await resolveDefaultIntelligenceEndpoint();
+
   await Promise.allSettled(
     dueTasks.map(async (task) => {
       try {
         // Send execute event to Intelligence Service
-        await fetch(`${INTELLIGENCE_HUB_URL}/api/tasks/execute`, {
+        await fetch(`${hubUrl}/api/tasks/execute`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-API-Key": HUB_PROTOCOL_API_KEY,
+            "X-API-Key": hubApiKey,
           },
           body: JSON.stringify({
             taskId: task.id,
@@ -59,13 +64,19 @@ export async function handleBackgroundTaskScheduler(): Promise<void> {
 
         return { taskId: task.id, success: true };
       } catch (error) {
-        logger.warn({ err: error, taskId: task.id }, "Background task execution failed");
+        logger.warn(
+          { err: error, taskId: task.id },
+          "Background task execution failed"
+        );
         return { taskId: task.id, success: false };
       }
     })
   );
 
-  logger.info({ total: dueTasks.length }, "Background task scheduler run complete");
+  logger.info(
+    { total: dueTasks.length },
+    "Background task scheduler run complete"
+  );
 }
 
 function calculateNextRunTime(type: string, schedule: string | null): Date {

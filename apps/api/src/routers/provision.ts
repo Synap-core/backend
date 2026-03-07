@@ -5,9 +5,10 @@
  * Used for the Control Plane push flow where CP calls the pod to register itself.
  *
  * Routes:
- *   POST /api/provision/connect  — CP pushes credentials via signed JWT
- *   GET  /api/provision/status   — Public status check
- *   POST /api/provision/disconnect — Remove CP connection (admin only, uses CP JWT)
+ *   POST /api/provision/connect               — CP pushes credentials via signed JWT
+ *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
+ *   GET  /api/provision/status                — Public status check
+ *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
  * Auth model:
  *   All mutating calls use a short-lived ES256 JWT signed by the Control Plane.
@@ -72,7 +73,6 @@ provisionRouter.post("/connect", async (c) => {
     podId: string;
     controlPlaneUrl: string;
     intelligenceHubUrl?: string;
-    intelligenceHubApiKey?: string;
     tier?: string;
     resendApiKey?: string;
     resendFromEmail?: string;
@@ -128,46 +128,14 @@ provisionRouter.post("/connect", async (c) => {
         : {}),
       // App URL for invite deep-links (e.g. https://app.synap.live)
       ...(payload.appUrl ? { appUrl: payload.appUrl } : {}),
+      // Authorized IS URL — used by /register-intelligence to validate the registering IS
+      ...(payload.intelligenceHubUrl
+        ? { authorizedIntelligenceHubUrl: payload.intelligenceHubUrl }
+        : {}),
     };
-
-    // Register the intelligence service in the services registry (not in workspace settings).
-    // This integrates with resolveIntelligenceService() so all routing goes through
-    // the standard cascade (capability → workspace preference → user preference → default).
-    // The workspace.settings.intelligenceServiceId pointer is what activates it.
-    if (payload.intelligenceHubUrl && payload.intelligenceHubApiKey) {
-      const SERVICE_ID = "synap-hub";
-      await db
-        .insert(intelligenceServices)
-        .values({
-          id: SERVICE_ID,
-          serviceId: SERVICE_ID,
-          name: "Synap Intelligence Hub",
-          description: "Synap-provisioned intelligence service",
-          webhookUrl: payload.intelligenceHubUrl,
-          apiKey: encryptServiceKey(payload.intelligenceHubApiKey),
-          capabilities: ["chat", "analysis"],
-          status: "active",
-          enabled: true,
-          mcpApproved: true, // Trusted — provisioned by Control Plane
-        })
-        .onConflictDoUpdate({
-          target: intelligenceServices.serviceId,
-          set: {
-            webhookUrl: payload.intelligenceHubUrl,
-            apiKey: encryptServiceKey(payload.intelligenceHubApiKey),
-            status: "active",
-            enabled: true,
-            updatedAt: new Date(),
-          },
-        });
-
-      // Point the workspace to this service — resolveIntelligenceService() picks it up
-      updatedSettings.intelligenceServiceId = SERVICE_ID;
-      logger.info(
-        { podId, serviceId: SERVICE_ID },
-        "Intelligence service registered and activated"
-      );
-    }
+    // Intelligence service registration is handled by POST /api/provision/register-intelligence.
+    // The IS self-registers its API key directly with the pod after provisioning,
+    // so CP never needs to relay IS credentials.
 
     await db
       .update(workspaces)
@@ -181,6 +149,155 @@ provisionRouter.post("/connect", async (c) => {
     return c.json({ success: true });
   } catch (err) {
     logger.error({ err }, "Failed to store Control Plane connection");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// ─── POST /api/provision/register-intelligence ───────────────────────────────
+//
+// Called by the Intelligence Service after it has created its own API key.
+// The IS forwards the CP-signed provision JWT (obtained from the CP request body)
+// as a Bearer token — this proves CP authorized this IS to register here.
+//
+// Auth: Bearer <provisionJwt> (ES256 CP JWT, same JWKS chain as /connect)
+// Body: { serviceApiKey, serviceUrl, capabilities? }
+//
+// Security:
+//   - JWT must be valid CP-signed ES256 token with type "provision"
+//   - payload.intelligenceHubUrl must match body.serviceUrl (prevents rogue IS)
+//   - JWT exp = 10 min, standard exp check via verifyCpJwt
+//
+// Returns: { success: true }
+
+provisionRouter.post("/register-intelligence", async (c) => {
+  // Extract Bearer token
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  // Resolve cpUrl from workspace settings (set by /connect) or env
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  if (!cpUrl) {
+    try {
+      const db = await getDb();
+      const ws = await db.query.workspaces.findFirst({
+        columns: { settings: true },
+      });
+      const cp = (ws?.settings as Record<string, unknown> | null)
+        ?.controlPlane as { url?: string } | undefined;
+      cpUrl = cp?.url;
+    } catch {
+      // fall through to undefined — verifyCpJwt will attempt JWKS from token claim
+    }
+  }
+
+  const payload = await verifyCpJwt<{
+    type: string;
+    podId: string;
+    controlPlaneUrl: string;
+    intelligenceHubUrl?: string;
+  }>(token, cpUrl);
+
+  if (!payload) {
+    logger.warn({ cpUrl }, "register-intelligence: token verification failed");
+    return c.json({ error: "Invalid or expired provision token" }, 401);
+  }
+
+  if (payload.type !== "provision") {
+    return c.json(
+      { error: "Invalid token type for register-intelligence" },
+      400
+    );
+  }
+
+  if (!payload.intelligenceHubUrl) {
+    return c.json(
+      { error: "Provision token missing intelligenceHubUrl claim" },
+      400
+    );
+  }
+
+  // Parse and validate body
+  const body = await c.req.json().catch(() => null);
+  const parsed = z
+    .object({
+      serviceApiKey: z.string().min(1),
+      serviceUrl: z.string().url(),
+      capabilities: z
+        .array(z.string())
+        .optional()
+        .default(["chat", "analysis"]),
+    })
+    .safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const { serviceApiKey, serviceUrl, capabilities } = parsed.data;
+
+  // Prevent a rogue IS from registering — URL in body must match JWT claim
+  if (payload.intelligenceHubUrl !== serviceUrl) {
+    logger.warn(
+      { claimed: serviceUrl, authorized: payload.intelligenceHubUrl },
+      "register-intelligence: serviceUrl mismatch — rejecting"
+    );
+    return c.json(
+      { error: "serviceUrl does not match authorized intelligenceHubUrl" },
+      403
+    );
+  }
+
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst();
+    if (!ws) {
+      return c.json({ error: "No workspace found on this pod" }, 404);
+    }
+
+    const SERVICE_ID = "synap-hub";
+    await db
+      .insert(intelligenceServices)
+      .values({
+        id: SERVICE_ID,
+        serviceId: SERVICE_ID,
+        name: "Synap Intelligence Hub",
+        description: "Synap-provisioned intelligence service",
+        webhookUrl: serviceUrl,
+        apiKey: encryptServiceKey(serviceApiKey),
+        capabilities,
+        status: "active",
+        enabled: true,
+        mcpApproved: true, // Trusted — authorized by CP-signed JWT
+      })
+      .onConflictDoUpdate({
+        target: intelligenceServices.serviceId,
+        set: {
+          webhookUrl: serviceUrl,
+          apiKey: encryptServiceKey(serviceApiKey),
+          capabilities,
+          status: "active",
+          enabled: true,
+          updatedAt: new Date(),
+        },
+      });
+
+    // Point workspace to this IS — resolveIntelligenceService() picks it up
+    const existing = (ws.settings as Record<string, unknown>) ?? {};
+    await db
+      .update(workspaces)
+      .set({ settings: { ...existing, intelligenceServiceId: SERVICE_ID } })
+      .where(eq(workspaces.id, ws.id));
+
+    logger.info(
+      { podId: payload.podId, serviceId: SERVICE_ID, serviceUrl },
+      "Intelligence service self-registered and activated"
+    );
+    return c.json({ success: true });
+  } catch (err) {
+    logger.error({ err }, "Failed to register intelligence service");
     return c.json({ error: "Internal server error" }, 500);
   }
 });

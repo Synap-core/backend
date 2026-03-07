@@ -6,21 +6,18 @@
  */
 
 import type PgBoss from "pg-boss";
-import { sql } from "@synap/database";
+import { sql, resolveDefaultIntelligenceEndpoint } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "entity-embedding-worker" });
 
-const INTELLIGENCE_HUB_URL =
-  process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
-const INTELLIGENCE_HUB_API_KEY = process.env.INTELLIGENCE_HUB_API_KEY || "";
-
 async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(`${INTELLIGENCE_HUB_URL}/api/embeddings`, {
+  const { endpoint, apiKey } = await resolveDefaultIntelligenceEndpoint();
+  const response = await fetch(`${endpoint}/api/embeddings`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": INTELLIGENCE_HUB_API_KEY,
+      "X-API-Key": apiKey,
     },
     body: JSON.stringify({ text }),
   });
@@ -54,7 +51,11 @@ export async function handleEntityEmbedding(
     const { entities, eq } = await import("@synap/database");
     const { db } = await import("@synap/database");
     const [entity] = await db
-      .select({ title: entities.title, type: entities.type, preview: entities.preview })
+      .select({
+        title: entities.title,
+        type: entities.type,
+        preview: entities.preview,
+      })
       .from(entities)
       .where(eq(entities.id, entityId))
       .limit(1);
@@ -66,7 +67,10 @@ export async function handleEntityEmbedding(
   }
 
   if (!entityTitle) {
-    logger.warn({ entityId }, "Entity not found or has no title, skipping embedding");
+    logger.warn(
+      { entityId },
+      "Entity not found or has no title, skipping embedding"
+    );
     return;
   }
 

@@ -18,6 +18,7 @@ import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
+import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 
 export const skillsRouter = router({
   /**
@@ -370,10 +371,12 @@ export const skillsRouter = router({
         });
       }
 
-      // Delegate execution to Intelligence Hub
-      const hubUrl =
-        process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
-      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+      // Resolve the intelligence service from DB (workspace pref → user pref → default)
+      const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
+        await resolveIntelligenceService({
+          userId,
+          workspaceId: skill.workspaceId ?? undefined,
+        });
 
       let result: {
         success: boolean;

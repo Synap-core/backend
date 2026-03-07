@@ -31,6 +31,7 @@ import {
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
+import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { messages } from "@synap/database/schema";
@@ -47,12 +48,14 @@ function reportProposalOutcome(params: {
   agentUserId: string | null | undefined;
   targetType: string | null | undefined;
 }): void {
-  const hubUrl = process.env.INTELLIGENCE_HUB_URL;
   const internalKey = process.env.INTELLIGENCE_HUB_INTERNAL_KEY;
-  if (!hubUrl || !internalKey || !params.agentUserId) return; // only track AI proposals
+  if (!internalKey || !params.agentUserId) return; // only track AI proposals
 
   void (async () => {
     try {
+      // Resolve hub endpoint from DB (registered IS) rather than env vars
+      const { endpoint: hubUrl } = await getDefaultActiveService();
+
       // Resolve channelId (= Langfuse traceId) from sourceMessageId
       let traceId: string | undefined;
       if (params.sourceMessageId) {

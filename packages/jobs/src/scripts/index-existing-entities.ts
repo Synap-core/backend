@@ -7,25 +7,27 @@
  *   pnpm --filter @synap/jobs index-entities
  */
 
-import { db, isNull, sql } from "@synap/database";
+import {
+  db,
+  isNull,
+  sql,
+  resolveDefaultIntelligenceEndpoint,
+} from "@synap/database";
 import { entities } from "@synap/database/schema";
 
-// Intelligence Hub client configuration
-const INTELLIGENCE_HUB_URL =
-  process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
-
 /**
- * Generate embedding using Intelligence Hub
+ * Generate embedding using the registered Intelligence Service (from DB)
  */
 async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch(
-    `${INTELLIGENCE_HUB_URL}/api/embeddings/generate`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    }
-  );
+  const { endpoint, apiKey } = await resolveDefaultIntelligenceEndpoint();
+  const response = await fetch(`${endpoint}/api/embeddings/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey,
+    },
+    body: JSON.stringify({ text }),
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to generate embedding: ${response.statusText}`);

@@ -77,6 +77,7 @@ export interface ExecutionStats {
 async function hubProxyFetch(
   endpoint: string,
   serviceUrl: string,
+  apiKey: string,
   options: RequestInit = {}
 ): Promise<Response> {
   const url = `${serviceUrl}/api/hub${endpoint}`;
@@ -84,7 +85,7 @@ async function hubProxyFetch(
     ...options,
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+      "X-API-Key": apiKey,
       ...(options.headers ?? {}),
     },
   });
@@ -102,6 +103,7 @@ async function hubProxyFetch(
 async function apiProxyFetch(
   endpoint: string,
   serviceUrl: string,
+  apiKey: string,
   options: RequestInit = {}
 ): Promise<Response> {
   const url = `${serviceUrl}/api${endpoint}`;
@@ -109,7 +111,7 @@ async function apiProxyFetch(
     ...options,
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": process.env.INTELLIGENCE_HUB_API_KEY || "",
+      "X-API-Key": apiKey,
       ...(options.headers ?? {}),
     },
   });
@@ -123,17 +125,17 @@ async function apiProxyFetch(
   return res;
 }
 
-/** Resolve the intelligence service endpoint URL for the current workspace */
+/** Resolve the intelligence service endpoint + API key for the current workspace */
 async function getServiceEndpoint(
   userId: string,
   workspaceId: string
-): Promise<string> {
+): Promise<{ endpoint: string; apiKey: string }> {
   const resolved = await resolveIntelligenceService({
     userId,
     workspaceId,
     capability: "chat",
   });
-  return resolved.endpoint;
+  return { endpoint: resolved.endpoint, apiKey: resolved.serviceApiKey };
 }
 
 /** Default (proprietary) Synap Intelligence service manifest — used when no custom service is configured. */
@@ -518,6 +520,7 @@ export const intelligenceRouter = router({
       const intelligenceConfigured =
         !isDefaultService ||
         Boolean(
+          process.env.AGENT_HUB_API_KEY?.trim() ||
           process.env.INTELLIGENCE_HUB_API_KEY?.trim() ||
           process.env.HUB_PROTOCOL_API_KEY?.trim()
         );
@@ -541,8 +544,11 @@ export const intelligenceRouter = router({
   listSpecialisations: workspaceProcedure.query(async ({ ctx }) => {
     const userId = requireUserId(ctx.userId);
     try {
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await apiProxyFetch("/specialisations", endpoint);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
+      const res = await apiProxyFetch("/specialisations", endpoint, apiKey);
       const data = (await res.json()) as { specialisations?: unknown[] };
       return {
         specialisations: Array.isArray(data.specialisations)
@@ -564,8 +570,11 @@ export const intelligenceRouter = router({
   agentDefinitions: workspaceProcedure.query(async ({ ctx }) => {
     const userId = requireUserId(ctx.userId);
     try {
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await apiProxyFetch("/agent-definitions", endpoint);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
+      const res = await apiProxyFetch("/agent-definitions", endpoint, apiKey);
       const data = (await res.json()) as { agents?: unknown[] };
       return { agents: Array.isArray(data.agents) ? data.agents : [] };
     } catch {
@@ -581,12 +590,15 @@ export const intelligenceRouter = router({
     .input(z.object({ limit: z.number().min(1).max(200).default(100) }))
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       const params = new URLSearchParams({
         userId,
         limit: String(input.limit),
       });
-      const res = await hubProxyFetch(`/memory?${params}`, endpoint);
+      const res = await hubProxyFetch(`/memory?${params}`, endpoint, apiKey);
       const facts = await res.json();
       return { facts: Array.isArray(facts) ? facts : [] };
     }),
@@ -598,8 +610,11 @@ export const intelligenceRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await hubProxyFetch("/memory/search", endpoint, {
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
+      const res = await hubProxyFetch("/memory/search", endpoint, apiKey, {
         method: "POST",
         body: JSON.stringify({
           userId,
@@ -621,8 +636,11 @@ export const intelligenceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await hubProxyFetch("/memory", endpoint, {
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
+      const res = await hubProxyFetch("/memory", endpoint, apiKey, {
         method: "POST",
         body: JSON.stringify({
           userId,
@@ -639,10 +657,18 @@ export const intelligenceRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      await hubProxyFetch(`/memory/${encodeURIComponent(input.id)}`, endpoint, {
-        method: "DELETE",
-      });
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
+      await hubProxyFetch(
+        `/memory/${encodeURIComponent(input.id)}`,
+        endpoint,
+        apiKey,
+        {
+          method: "DELETE",
+        }
+      );
       return { success: true };
     }),
 
@@ -653,11 +679,18 @@ export const intelligenceRouter = router({
     .input(z.object({ since: z.string().optional() }))
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       const params = input.since
         ? `?since=${encodeURIComponent(input.since)}`
         : "";
-      const res = await apiProxyFetch(`/executions/stats${params}`, endpoint);
+      const res = await apiProxyFetch(
+        `/executions/stats${params}`,
+        endpoint,
+        apiKey
+      );
       const data = (await res.json()) as { stats: ExecutionStats };
       return { stats: data.stats };
     }),
@@ -673,14 +706,21 @@ export const intelligenceRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       const params = new URLSearchParams({
         limit: String(input.limit),
         offset: String(input.offset),
         userId,
       });
       if (input.agentType) params.set("agentType", input.agentType);
-      const res = await apiProxyFetch(`/executions?${params}`, endpoint);
+      const res = await apiProxyFetch(
+        `/executions?${params}`,
+        endpoint,
+        apiKey
+      );
       const data = (await res.json()) as { executions: ExecutionRecord[] };
       return { executions: data.executions };
     }),
@@ -690,10 +730,14 @@ export const intelligenceRouter = router({
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       const res = await apiProxyFetch(
         `/executions/${encodeURIComponent(input.id)}`,
-        endpoint
+        endpoint,
+        apiKey
       );
       const data = (await res.json()) as {
         execution: ExecutionRecord;
@@ -713,10 +757,13 @@ export const intelligenceRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       const params = new URLSearchParams({ userId });
       if (input.status) params.set("status", input.status);
-      const res = await hubProxyFetch(`/proposals?${params}`, endpoint);
+      const res = await hubProxyFetch(`/proposals?${params}`, endpoint, apiKey);
       const proposals = await res.json();
       return { proposals: Array.isArray(proposals) ? proposals : [] };
     }),
@@ -726,10 +773,14 @@ export const intelligenceRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       await hubProxyFetch(
         `/proposals/${encodeURIComponent(input.id)}`,
         endpoint,
+        apiKey,
         {
           method: "PATCH",
           body: JSON.stringify({ status: "approved", userId }),
@@ -743,10 +794,14 @@ export const intelligenceRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
       await hubProxyFetch(
         `/proposals/${encodeURIComponent(input.id)}`,
         endpoint,
+        apiKey,
         {
           method: "PATCH",
           body: JSON.stringify({ status: "denied", userId }),
@@ -873,8 +928,11 @@ export const intelligenceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const endpoint = await getServiceEndpoint(userId, ctx.workspaceId!);
-      const res = await apiProxyFetch("/ai-channel", endpoint, {
+      const { endpoint, apiKey } = await getServiceEndpoint(
+        userId,
+        ctx.workspaceId!
+      );
+      const res = await apiProxyFetch("/ai-channel", endpoint, apiKey, {
         method: "POST",
         body: JSON.stringify({ userId, ...input }),
       });
@@ -1189,24 +1247,25 @@ export const intelligenceRouter = router({
         // Fire-and-forget warmup ping: warms the Hub's MCP connection pool and
         // catches config issues early. Non-critical — result is ignored.
         if (!existing) {
-          const hubUrl =
-            process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3001";
-          const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
-          fetch(`${hubUrl}/api/mcp/ping`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-Key": hubApiKey,
-            },
-            body: JSON.stringify({
-              transport: "stdio",
-              command: "npx",
-              args: ["-y", "firecrawl-mcp@latest"],
-              env: { FIRECRAWL_API_URL: "http://localhost:3002" },
-            }),
-          }).catch(() => {
-            // Hub may not be reachable — safe to ignore
-          });
+          void resolveIntelligenceService({ userId: ctx.userId!, workspaceId })
+            .then(({ endpoint: hubUrl, serviceApiKey: hubApiKey }) => {
+              fetch(`${hubUrl}/api/mcp/ping`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-API-Key": hubApiKey,
+                },
+                body: JSON.stringify({
+                  transport: "stdio",
+                  command: "npx",
+                  args: ["-y", "firecrawl-mcp@latest"],
+                  env: { FIRECRAWL_API_URL: "http://localhost:3002" },
+                }),
+              }).catch(() => {
+                // Hub may not be reachable — safe to ignore
+              });
+            })
+            .catch(() => {});
         }
 
         return {
