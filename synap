@@ -80,7 +80,7 @@ generate_and_create_env() {
     local POSTGRES_PASSWORD=$(openssl rand -hex 24)
     local JWT_SECRET=$(openssl rand -hex 48)
     local KRATOS_COOKIE=$(openssl rand -hex 24)
-    local KRATOS_CIPHER=$(openssl rand -hex 24)
+    local KRATOS_CIPHER=$(openssl rand -hex 16)
     local KRATOS_WEBHOOK=$(openssl rand -hex 24)
     local MINIO_ACCESS_KEY=$(openssl rand -hex 12)
     local MINIO_SECRET_KEY=$(openssl rand -hex 24)

@@ -138,6 +138,9 @@ export const channels = pgTable(
 
     agentConfig: jsonb("agent_config"), // Custom agent configuration (system prompt, tools, etc.)
 
+    /** MCP servers enabled for this channel. null = inherit no MCPs (opt-in model). */
+    mcpServerIds: uuid("mcp_server_id").array(),
+
     // Context (compressed summaries from merged branches)
     contextSummary: text("context_summary"),
 
@@ -193,6 +196,7 @@ export interface Channel {
   status: ChannelStatus;
   agentType: string;
   agentConfig: unknown;
+  mcpServerIds: string[] | null;
   contextSummary: string | null;
   resultSummary: string | null;
   mergedIntoStateId: string | null;

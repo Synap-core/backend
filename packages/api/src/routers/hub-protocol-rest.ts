@@ -24,6 +24,7 @@ import {
   drizzleSql,
   traverseEntityGraph,
   intelligenceCommands,
+  mcpServers,
 } from "@synap/database";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -2131,6 +2132,130 @@ app.get("/widget-definitions", async (c) => {
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "widgetDefinitions.listWidgetDefs failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+// =============================================================================
+// MCP Servers
+// =============================================================================
+
+/**
+ * GET /mcp-servers?workspaceId=...
+ * List workspace MCP servers for the Intelligence Service.
+ * Returns only approved + enabled servers (the IS should only know about usable ones).
+ */
+app.get("/mcp-servers", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  try {
+    const rows = await db.query.mcpServers.findMany({
+      where: and(
+        eq(mcpServers.workspaceId, workspaceId),
+        eq(mcpServers.approved, true),
+        eq(mcpServers.enabled, true)
+      ),
+      columns: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        approved: true,
+        enabled: true,
+        transport: true,
+      },
+    });
+    return c.json(rows);
+  } catch (err) {
+    logger.error({ err, workspaceId }, "listMcpServers failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+// =============================================================================
+// Proposals (create)
+// =============================================================================
+
+/**
+ * POST /proposals
+ * Create a new proposal on behalf of an agent.
+ * Used by request_mcp and similar tools that need to surface a pending action to the user.
+ * Body: { workspaceId, agentUserId, channelId?, targetType, targetId, proposalType, data, summary? }
+ */
+app.post("/proposals", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+  const body = (await c.req.json()) as {
+    workspaceId: string;
+    agentUserId?: string;
+    channelId?: string;
+    targetType: string;
+    targetId: string;
+    proposalType: string;
+    data: Record<string, unknown>;
+    summary?: string;
+    sourceMessageId?: string;
+  };
+  if (
+    !body.workspaceId ||
+    !body.targetType ||
+    !body.targetId ||
+    !body.proposalType ||
+    !body.data
+  ) {
+    return c.json(
+      {
+        error:
+          "workspaceId, targetType, targetId, proposalType, and data are required",
+      },
+      400
+    );
+  }
+  try {
+    const { proposals, ProposalStatus } =
+      await import("@synap/database/schema");
+    const { randomUUID } = await import("crypto");
+    const id = randomUUID();
+    const dataWithSummary = body.summary
+      ? { ...body.data, _summary: body.summary }
+      : body.data;
+    const [row] = await db
+      .insert(proposals)
+      .values({
+        id,
+        workspaceId: body.workspaceId,
+        targetType: body.targetType,
+        targetId: body.targetId,
+        proposalType: body.proposalType,
+        data: dataWithSummary,
+        status: ProposalStatus.PENDING,
+        agentUserId: body.agentUserId ?? null,
+        threadId: body.channelId ?? null,
+        sourceMessageId: body.sourceMessageId ?? null,
+        createdBy: body.agentUserId ?? null,
+      })
+      .returning({ id: proposals.id });
+    return c.json({ id: row.id, status: "pending" });
+  } catch (err) {
+    logger.error({ err }, "createProposal failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500

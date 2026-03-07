@@ -10,12 +10,39 @@ FROM base AS builder
 # Build tools for native addons
 RUN apk add --no-cache python3 make g++
 
+# ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
+# Copy workspace config and all package.json files BEFORE source code.
+# This layer is only invalidated when dependencies change, not on every commit.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/admin-ui/package.json ./apps/admin-ui/
+COPY apps/api/package.json      ./apps/api/
+COPY packages/ai-embeddings/package.json ./packages/ai-embeddings/
+COPY packages/ai/package.json            ./packages/ai/
+COPY packages/api-types/package.json     ./packages/api-types/
+COPY packages/api/package.json           ./packages/api/
+COPY packages/auth/package.json          ./packages/auth/
+COPY packages/core/package.json          ./packages/core/
+COPY packages/database/package.json      ./packages/database/
+COPY packages/events/package.json        ./packages/events/
+COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
+COPY packages/jobs/package.json          ./packages/jobs/
+COPY packages/realtime/package.json      ./packages/realtime/
+COPY packages/scripts/package.json       ./packages/scripts/
+COPY packages/search/package.json        ./packages/search/
+COPY packages/storage/package.json       ./packages/storage/
+COPY packages/test-e2e/package.json      ./packages/test-e2e/
+COPY packages/types/package.json         ./packages/types/
+
+# Install all dependencies — pnpm store is cached across builds
+RUN --mount=type=cache,id=pnpm-backend,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+
+# ── Layer 2: source + build (re-runs on every source change) ──
 COPY . .
 
-RUN pnpm install --no-frozen-lockfile
-
-# Build API + realtime in one turbo pass
-RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
+# Build API + realtime in one turbo pass (turbo cache speeds up unchanged packages)
+RUN --mount=type=cache,id=turbo-backend,target=/app/.turbo \
+    NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
       --filter=api \
       --filter=@synap/realtime \
       --concurrency=1
@@ -24,7 +51,8 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
 RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts
 
 # Build admin-ui SPA
-RUN cd apps/admin-ui && npx vite build
+RUN --mount=type=cache,id=vite-admin,target=/app/apps/admin-ui/.vite \
+    cd apps/admin-ui && npx vite build
 
 # Deploy each service to its own self-contained directory
 RUN pnpm deploy --filter=api --prod --legacy /app/deploy/api

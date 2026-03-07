@@ -853,6 +853,17 @@ export const channelsRouter = router({
           // Non-critical — agents still work without MCP servers
         }
       }
+      // Filter to per-channel MCPs if the channel has an explicit opt-in list.
+      // null = backward-compat (use workspace defaults); [] = no MCPs; [...] = explicit subset.
+      const channelMcpIds = channel.mcpServerIds as string[] | null;
+      if (channelMcpIds !== null && channelMcpIds !== undefined) {
+        // Per-channel opt-in: only include MCPs explicitly added to this channel
+        mcpServersList =
+          channelMcpIds.length > 0
+            ? mcpServersList?.filter((s) => channelMcpIds.includes(s.id))
+            : undefined; // empty array = no MCPs
+      }
+      // If channelMcpIds is null, use workspace defaults (backward compat)
       // Inject the resolved intelligence service's MCP endpoint (e.g. ZeroClaw/OpenClaw)
       // as a pre-configured HTTP MCP server so agents can use its local tools.
       // Guard: only inject if explicitly approved — prevents unauthorized tool injection.
@@ -1700,6 +1711,7 @@ export const channelsRouter = router({
           .regex(/^[\w:.-]+$/)
           .optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
+        mcpServerIds: z.array(z.string().uuid()).nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1724,6 +1736,9 @@ export const channelsRouter = router({
           agentId: input.agentId,
           agentType: input.agentType,
           agentConfig: input.agentConfig,
+          ...(input.mcpServerIds !== undefined && {
+            mcpServerIds: input.mcpServerIds,
+          }),
           updatedAt: new Date(),
         })
         .where(eq(channels.id, input.channelId));
@@ -1739,6 +1754,91 @@ export const channelsRouter = router({
         status: "updated",
         channelId: input.channelId,
       };
+    }),
+
+  /**
+   * Add an MCP server to a channel's explicit opt-in list.
+   * The server must be approved + enabled in the channel's workspace.
+   */
+  addMcpToChannel: protectedProcedure
+    .input(
+      z.object({ channelId: z.string().uuid(), mcpServerId: z.string().uuid() })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.id, input.channelId),
+          eq(channels.userId, ctx.userId)
+        ),
+      });
+      if (!channel)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+
+      // Verify the MCP server exists and is approved in the workspace
+      if (channel.workspaceId) {
+        const server = await db.query.mcpServers.findFirst({
+          where: and(
+            eq(mcpServers.id, input.mcpServerId),
+            eq(mcpServers.workspaceId, channel.workspaceId),
+            eq(mcpServers.approved, true),
+            eq(mcpServers.enabled, true)
+          ),
+        });
+        if (!server)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "MCP server not found or not approved",
+          });
+      }
+
+      const currentIds = (channel.mcpServerIds as string[] | null) ?? [];
+      if (currentIds.includes(input.mcpServerId))
+        return { channelId: input.channelId };
+
+      await db
+        .update(channels)
+        .set({
+          mcpServerIds: [...currentIds, input.mcpServerId],
+          updatedAt: new Date(),
+        })
+        .where(eq(channels.id, input.channelId));
+
+      return { channelId: input.channelId };
+    }),
+
+  /**
+   * Remove an MCP server from a channel's explicit opt-in list.
+   */
+  removeMcpFromChannel: protectedProcedure
+    .input(
+      z.object({ channelId: z.string().uuid(), mcpServerId: z.string().uuid() })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.id, input.channelId),
+          eq(channels.userId, ctx.userId)
+        ),
+      });
+      if (!channel)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+
+      const currentIds = (channel.mcpServerIds as string[] | null) ?? [];
+      await db
+        .update(channels)
+        .set({
+          mcpServerIds: currentIds.filter((id) => id !== input.mcpServerId),
+          updatedAt: new Date(),
+        })
+        .where(eq(channels.id, input.channelId));
+
+      return { channelId: input.channelId };
     }),
 
   /**
