@@ -30,6 +30,12 @@ export interface WorkspaceSidebarItem {
   /** Lucide icon name override */
   icon?: string;
   /**
+   * URL patterns that auto-activate this item's highlight when the active browser
+   * tab URL matches. Checked as prefix (startsWith). Supports the __POD_URL__
+   * placeholder. When omitted, kind='external' items auto-match their own url.
+   */
+  matchUrls?: string[];
+  /**
    * Which sidebar section this item belongs to.
    * 'workspace' = pod data items (views, profiles, pod links).
    * 'space'     = browser/app items (app shortcuts, pinned URLs).

@@ -119,6 +119,7 @@ export interface Channel {
 	status: ChannelStatus;
 	agentType: string;
 	agentConfig: unknown;
+	mcpServerIds: string[] | null;
 	contextSummary: string | null;
 	resultSummary: string | null;
 	mergedIntoStateId: string | null;
@@ -1478,6 +1479,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1583,6 +1585,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1702,6 +1705,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1741,6 +1745,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1783,6 +1788,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1844,6 +1850,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1874,9 +1881,30 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentId?: string | undefined;
 				agentType?: string | undefined;
 				agentConfig?: Record<string, unknown> | undefined;
+				mcpServerIds?: string[] | null | undefined;
 			};
 			output: {
 				status: string;
+				channelId: string;
+			};
+			meta: object;
+		}>;
+		addMcpToChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				mcpServerId: string;
+			};
+			output: {
+				channelId: string;
+			};
+			meta: object;
+		}>;
+		removeMcpFromChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				mcpServerId: string;
+			};
+			output: {
 				channelId: string;
 			};
 			meta: object;
@@ -1916,6 +1944,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1941,6 +1970,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
@@ -1966,6 +1996,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentId: string;
 					agentType: string;
 					agentConfig: unknown;
+					mcpServerIds: string[] | null;
 					contextSummary: string | null;
 					resultSummary: string | null;
 					mergedIntoStateId: string | null;
