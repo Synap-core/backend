@@ -167,6 +167,25 @@ export interface WorkspaceSidebarItem {
 	label?: string;
 	/** Lucide icon name override */
 	icon?: string;
+	/**
+	 * Which sidebar section this item belongs to.
+	 * 'workspace' = pod data items (views, profiles, pod links).
+	 * 'space'     = browser/app items (app shortcuts, pinned URLs).
+	 * Omitted items default to 'workspace' for backward compatibility.
+	 */
+	section?: string;
+}
+/**
+ * A named collapsible section in the sidebar.
+ * Items are assigned to sections via WorkspaceSidebarItem.section.
+ */
+export interface WorkspaceSidebarSection {
+	/** Stable id — used as the key in WorkspaceSidebarItem.section */
+	id: string;
+	/** Display label */
+	label: string;
+	/** When true the section body is hidden; chevron still shown */
+	collapsed?: boolean;
 }
 export interface WorkspaceLayoutConfig {
 	pinnedApps?: string[];
@@ -180,6 +199,12 @@ export interface WorkspaceLayoutConfig {
 	theme?: string;
 	/** Ordered list of sidebar items. When set, replaces the generic app list. */
 	sidebarItems?: WorkspaceSidebarItem[];
+	/**
+	 * Named sections for the sidebar. Default when absent: two sections —
+	 * 'workspace' (pod data) and 'space' (browser/app shortcuts).
+	 * Section collapsed state is stored here and persisted to the pod.
+	 */
+	sidebarSections?: WorkspaceSidebarSection[];
 }
 /**
  * MCP server configuration — stored per workspace.
@@ -700,6 +725,18 @@ declare enum ProfileScope {
 	WORKSPACE = "workspace",// Owned by a single workspace
 	USER = "user"
 }
+/**
+ * Widget Definitions Schema
+ *
+ * Stores widget type definitions for the dynamic bento widget registry.
+ * - workspaceId = null → system-wide built-in widgets
+ * - workspaceId set → workspace-specific custom widgets (AI-generated or iframe)
+ *
+ * configSchema (JSONSchema) drives:
+ *   1. IS config generation/validation
+ *   2. Settings form auto-generation in the frontend
+ */
+export type WidgetRendererType = "builtin" | "iframe";
 /**
  * EventRecord - Database representation of an event
  *
@@ -7366,6 +7403,133 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentType: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	widgetDefinitions: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				name: string;
+				workspaceId: string | null;
+				id: string;
+				description: string | null;
+				updatedAt: Date;
+				createdAt: Date;
+				version: string | null;
+				isActive: boolean;
+				category: string | null;
+				typeKey: string;
+				icon: string | null;
+				rendererType: WidgetRendererType;
+				rendererSource: string | null;
+				configSchema: Record<string, unknown>;
+				defaultConfig: Record<string, unknown> | null;
+				defaultSize: {
+					w: number;
+					h: number;
+				};
+				minSize: {
+					w: number;
+					h: number;
+				} | null;
+			}[];
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				typeKey: string;
+			};
+			output: {
+				name: string;
+				workspaceId: string | null;
+				id: string;
+				description: string | null;
+				updatedAt: Date;
+				createdAt: Date;
+				version: string | null;
+				isActive: boolean;
+				category: string | null;
+				typeKey: string;
+				icon: string | null;
+				rendererType: WidgetRendererType;
+				rendererSource: string | null;
+				configSchema: Record<string, unknown>;
+				defaultConfig: Record<string, unknown> | null;
+				defaultSize: {
+					w: number;
+					h: number;
+				};
+				minSize: {
+					w: number;
+					h: number;
+				} | null;
+			} | null;
+			meta: object;
+		}>;
+		upsert: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				typeKey: string;
+				name: string;
+				description?: string | undefined;
+				icon?: string | undefined;
+				category?: string | undefined;
+				rendererType?: "builtin" | "iframe" | undefined;
+				rendererSource?: string | undefined;
+				configSchema?: Record<string, unknown> | undefined;
+				defaultConfig?: Record<string, unknown> | undefined;
+				defaultSize?: {
+					w: number;
+					h: number;
+				} | undefined;
+				minSize?: {
+					w: number;
+					h: number;
+				} | undefined;
+			};
+			output: {
+				name: string;
+				workspaceId: string | null;
+				id: string;
+				description: string | null;
+				updatedAt: Date;
+				createdAt: Date;
+				version: string | null;
+				isActive: boolean;
+				category: string | null;
+				typeKey: string;
+				icon: string | null;
+				rendererType: WidgetRendererType;
+				rendererSource: string | null;
+				configSchema: Record<string, unknown>;
+				defaultConfig: Record<string, unknown> | null;
+				defaultSize: {
+					w: number;
+					h: number;
+				};
+				minSize: {
+					w: number;
+					h: number;
+				} | null;
+			};
+			meta: object;
+		}>;
+		deactivate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				typeKey: string;
 			};
 			output: {
 				success: boolean;

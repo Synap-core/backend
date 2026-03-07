@@ -426,8 +426,9 @@ export function validateConfig(
       }
 
       if (config.server.nodeEnv === "production" && (!hubUrl || !hubApiKey)) {
-        throw new Error(
-          "Production requires INTELLIGENCE_HUB_URL and INTELLIGENCE_HUB_API_KEY environment variables"
+        configLogger.warn(
+          "INTELLIGENCE_HUB_URL or INTELLIGENCE_HUB_API_KEY is not set in production. " +
+            "AI features (chat, search, analysis) will be disabled until an Intelligence Service is configured."
         );
       }
       break;

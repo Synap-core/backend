@@ -588,47 +588,54 @@ EOF
             ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
         fi
         
-        # Intelligence Service Configuration (REQUIRED)
+        # Intelligence Service Configuration (optional)
         echo ""
-        echo -e "${BLUE}🧠 Intelligence Service Configuration (REQUIRED)${NC}"
-        echo "Connect to your deployed Synap Intelligence Service."
-        echo "If you don't have one yet, run 'intelligence-hub/deploy/synap install' first."
+        echo -e "${BLUE}🧠 Intelligence Service Configuration${NC}"
+        echo "The Intelligence Service powers AI features (chat, search, analysis)."
+        echo ""
+        echo "  1) Use Synap hosted Intelligence Service (app.synap.live)"
+        echo "  2) Use my own self-hosted Intelligence Service"
+        echo "  3) Skip for now (AI features will be disabled)"
         echo ""
 
         if [ -z "$INTELLIGENCE_URL" ]; then
-             # Try to detect local IP as a suggestion
-            local LOCAL_IP=""
-            if command -v hostname &> /dev/null; then
-                LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-            fi
-            local SUGGESTION=${DEFAULT_INTEL_URL:-"http://${LOCAL_IP:-localhost}:3001"}
+            read -p "Choice [1/2/3]: " INTEL_CHOICE
+            INTEL_CHOICE=${INTEL_CHOICE:-3}
 
-            read -p "Intelligence URL [${SUGGESTION}]: " INTELLIGENCE_URL
-            INTELLIGENCE_URL=${INTELLIGENCE_URL:-$SUGGESTION}
+            case "$INTEL_CHOICE" in
+                1)
+                    INTELLIGENCE_URL="https://intelligence.synap.live"
+                    echo -e "${YELLOW}  Using Synap hosted service. Enter your API key from app.synap.live/settings/developer${NC}"
+                    read -p "  API Key (or press Enter to skip): " INTELLIGENCE_KEY
+                    INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
+                    ;;
+                2)
+                    # Try to detect local IP as a suggestion
+                    local LOCAL_IP=""
+                    if command -v hostname &> /dev/null; then
+                        LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+                    fi
+                    local SUGGESTION=${DEFAULT_INTEL_URL:-"http://${LOCAL_IP:-localhost}:3001"}
+                    read -p "  Intelligence Service URL [${SUGGESTION}]: " INTELLIGENCE_URL
+                    INTELLIGENCE_URL=${INTELLIGENCE_URL:-$SUGGESTION}
 
-            # Require intelligence URL
-            while [ -z "$INTELLIGENCE_URL" ]; do
-                echo -e "${RED}Intelligence Hub URL is required${NC}"
-                read -p "Intelligence URL: " INTELLIGENCE_URL
-            done
-        fi
-
-        if [ -z "$INTELLIGENCE_KEY" ]; then
-             local prompt="Intelligence API Key (from hub installation)"
-             if [ -n "$DEFAULT_INTEL_KEY" ]; then
-                prompt="$prompt [${DEFAULT_INTEL_KEY:0:5}...]: "
-             else
-                prompt="$prompt: "
-             fi
-             read -p "$prompt" INTELLIGENCE_KEY
-             INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
-
-             # Require intelligence key
-             while [ -z "$INTELLIGENCE_KEY" ]; do
-                echo -e "${RED}Intelligence Hub API Key is required${NC}"
-                echo "  Get this from your Intelligence Hub installation output"
-                read -p "Intelligence API Key: " INTELLIGENCE_KEY
-             done
+                    if [ -z "$INTELLIGENCE_KEY" ]; then
+                        local key_prompt="  API Key (from hub installation)"
+                        if [ -n "$DEFAULT_INTEL_KEY" ]; then
+                            key_prompt="$key_prompt [${DEFAULT_INTEL_KEY:0:5}...]: "
+                        else
+                            key_prompt="$key_prompt: "
+                        fi
+                        read -p "$key_prompt" INTELLIGENCE_KEY
+                        INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
+                    fi
+                    ;;
+                *)
+                    echo -e "${YELLOW}  Skipping — AI features will be disabled until you configure an Intelligence Service${NC}"
+                    INTELLIGENCE_URL=""
+                    INTELLIGENCE_KEY=""
+                    ;;
+            esac
         fi
         
         # AI Configuration
