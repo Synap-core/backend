@@ -5082,6 +5082,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceIds?: string[] | undefined;
 				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
+				excludeAutoCreated?: boolean | undefined;
 			};
 			output: {
 				name: string;

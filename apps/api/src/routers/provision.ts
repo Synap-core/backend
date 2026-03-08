@@ -7,7 +7,8 @@
  * Routes:
  *   POST /api/provision/connect               — CP pushes credentials via signed JWT
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
- *   GET  /api/provision/status                — Public status check
+ *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
+ *   GET  /api/provision/status                — Public status check (includes IS credential probe)
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
  * Auth model:
@@ -21,7 +22,7 @@ import { createLogger, config } from "@synap-core/core";
 import { verifyCpJwt } from "@synap/api";
 import { getDb, eq } from "@synap/database";
 import { workspaces, intelligenceServices } from "@synap/database/schema";
-import { encryptServiceKey } from "@synap/api";
+import { encryptServiceKey, resolveServiceKey } from "@synap/api";
 
 const logger = createLogger({ module: "provision" });
 
@@ -302,10 +303,245 @@ provisionRouter.post("/register-intelligence", async (c) => {
   }
 });
 
+// ─── POST /api/provision/reset-intelligence ──────────────────────────────────
+//
+// Clears the IS registration from the pod's database so a fresh set of
+// credentials can be registered via /register-intelligence. Use this when
+// credentials are stale or corrupted — the pod goes back to `connectionState: partial`
+// and the next provision cycle delivers a clean key.
+//
+// Auth: Bearer <cpJwt> — CP-signed ES256 JWT, MUST be type "provision".
+//   Lighter JWT types (e.g. "tier_update") are rejected — they carry no IS authority
+//   and must not be able to wipe IS credentials.
+//
+// Security:
+//   - JWT signature verified via JWKS (same as /register-intelligence)
+//   - type MUST be "provision" — rejects tier_update and other lightweight token types
+//   - payload.podId MUST match the registered controlPlane.podId — prevents JWT replay
+//     from a different pod being used to wipe this pod's IS credentials
+//
+// Returns: { success: true, cleared: boolean }
+
+provisionRouter.post("/reset-intelligence", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  // Resolve cpUrl from workspace settings or env
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let registeredPodId: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string; podId?: string } | undefined;
+    if (!cpUrl) cpUrl = cp?.url;
+    registeredPodId = cp?.podId;
+  } catch {
+    /* fall through */
+  }
+
+  const payload = await verifyCpJwt<{ type: string; podId: string }>(
+    token,
+    cpUrl
+  );
+  if (!payload) {
+    logger.warn({ cpUrl }, "reset-intelligence: token verification failed");
+    return c.json({ error: "Invalid or expired provision token" }, 401);
+  }
+
+  // Only "provision" JWTs carry the authority to reset IS credentials.
+  // "tier_update" and other lightweight types must not be able to do this.
+  if (payload.type !== "provision") {
+    logger.warn(
+      { type: payload.type },
+      "reset-intelligence: rejected — token type must be 'provision'"
+    );
+    return c.json(
+      {
+        error:
+          "Invalid token type — only 'provision' tokens may reset IS credentials",
+      },
+      403
+    );
+  }
+
+  // Verify the JWT was issued for THIS pod — prevents cross-pod JWT replay.
+  // A valid provision JWT for Pod A cannot be used to wipe Pod B's IS credentials.
+  if (registeredPodId && payload.podId !== registeredPodId) {
+    logger.warn(
+      { jwtPodId: payload.podId, registeredPodId },
+      "reset-intelligence: rejected — JWT podId does not match this pod's registered podId"
+    );
+    return c.json({ error: "Token was not issued for this pod" }, 403);
+  }
+
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst();
+    if (!ws) return c.json({ error: "No workspace found" }, 404);
+
+    const SERVICE_ID = "synap-hub";
+
+    // Delete the IS record — pod goes back to connectionState: partial
+    const deleted = await db
+      .delete(intelligenceServices)
+      .where(eq(intelligenceServices.serviceId, SERVICE_ID))
+      .returning({ id: intelligenceServices.id });
+
+    // Clear intelligenceServiceId from workspace settings
+    const existing = (ws.settings as Record<string, unknown>) ?? {};
+    const { intelligenceServiceId: _removed, ...rest } = existing;
+    await db
+      .update(workspaces)
+      .set({ settings: rest })
+      .where(eq(workspaces.id, ws.id));
+
+    logger.info(
+      { cleared: deleted.length > 0 },
+      "Intelligence service registration cleared — ready for fresh re-registration"
+    );
+    return c.json({ success: true, cleared: deleted.length > 0 });
+  } catch (err) {
+    logger.error({ err }, "Failed to reset intelligence service");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// ─── POST /api/provision/validate-credentials ────────────────────────────────
+//
+// Live IS credential probe — calls GET {isUrl}/api/validate with the stored key
+// and updates intelligenceServices.status accordingly.
+//
+// This is the ONLY endpoint that makes an outbound call to the IS for validation.
+// /api/provision/status is public and reads the cached DB status instead.
+//
+// Auth: Bearer <cpJwt>, type MUST be "provision".
+// Called by the CP status endpoint when it wants an accurate credential picture.
+//
+// Returns: { credentialsValid: boolean | null, status: string }
+
+provisionRouter.post("/validate-credentials", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let registeredPodId: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string; podId?: string } | undefined;
+    if (!cpUrl) cpUrl = cp?.url;
+    registeredPodId = cp?.podId;
+  } catch {
+    /* fall through */
+  }
+
+  const payload = await verifyCpJwt<{ type: string; podId: string }>(
+    token,
+    cpUrl
+  );
+  if (!payload) {
+    return c.json({ error: "Invalid or expired provision token" }, 401);
+  }
+  if (payload.type !== "provision") {
+    return c.json(
+      {
+        error:
+          "Invalid token type — only 'provision' tokens may validate credentials",
+      },
+      403
+    );
+  }
+  if (registeredPodId && payload.podId !== registeredPodId) {
+    return c.json({ error: "Token was not issued for this pod" }, 403);
+  }
+
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const intelligenceServiceId = (ws?.settings as Record<string, unknown>)
+      ?.intelligenceServiceId as string | undefined;
+
+    if (!intelligenceServiceId) {
+      return c.json({ credentialsValid: null, status: "not_registered" });
+    }
+
+    const svc = await db.query.intelligenceServices.findFirst({
+      where: eq(intelligenceServices.serviceId, intelligenceServiceId),
+      columns: { webhookUrl: true, status: true, apiKey: true },
+    });
+
+    if (!svc) {
+      return c.json({ credentialsValid: null, status: "not_found" });
+    }
+
+    if (!svc.apiKey) {
+      return c.json({ credentialsValid: null, status: "no_key" });
+    }
+
+    // Live probe — decrypt stored key and call IS /api/validate
+    let credentialsValid: boolean | null = null;
+    let newStatus = svc.status;
+    try {
+      const isKey = resolveServiceKey(svc.apiKey as string);
+      const validateRes = await fetch(`${svc.webhookUrl}/api/validate`, {
+        headers: { Authorization: `Bearer ${isKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      credentialsValid = validateRes.ok;
+      newStatus = credentialsValid ? "active" : "credential_error";
+
+      // Persist result to DB so /status can use it without making outbound calls
+      await db
+        .update(intelligenceServices)
+        .set({ status: newStatus, updatedAt: new Date() })
+        .where(eq(intelligenceServices.serviceId, intelligenceServiceId));
+
+      logger.info(
+        { credentialsValid, webhookUrl: svc.webhookUrl },
+        "IS credential validation complete"
+      );
+    } catch {
+      credentialsValid = null; // IS unreachable — can't determine validity
+      logger.warn(
+        { webhookUrl: svc.webhookUrl },
+        "IS credential probe timed out — IS may be unreachable"
+      );
+    }
+
+    return c.json({ credentialsValid, status: newStatus });
+  } catch (err) {
+    logger.error({ err }, "Credential validation error");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 // ─── GET /api/provision/status ────────────────────────────────────────────────
 //
-// Public endpoint — returns current CP connection status.
-// Does NOT return the cpApiKey (sensitive).
+// Public endpoint — returns current CP connection status + IS registration state.
+// Does NOT return any secrets (cpApiKey, IS apiKey).
+//
+// `credentialsValid` is derived from the cached `intelligenceServices.status` in the
+// DB — NOT from a live IS probe. Use POST /api/provision/validate-credentials
+// (CP-JWT-gated) to run the live probe and refresh the cached status.
+//
+// connectionState:
+//   "connected"   — CP connection + IS registered + credentials valid
+//   "partial"     — CP connection exists but IS missing OR credentials invalid
+//   "disconnected"— No CP connection
 
 provisionRouter.get("/status", async (c) => {
   try {
@@ -322,6 +558,7 @@ provisionRouter.get("/status", async (c) => {
           cpApiKey: string;
           connectedAt: string;
           lastPingAt: string | null;
+          authorizedIntelligenceHubUrl?: string;
         }
       | undefined;
 
@@ -333,6 +570,11 @@ provisionRouter.get("/status", async (c) => {
       url: string;
       status: string;
     } | null = null;
+    // credentialsValid: derived from DB-cached status, NOT a live probe.
+    // POST /api/provision/validate-credentials (CP-JWT-gated) updates this.
+    let credentialsValid: boolean | null = null;
+    const connectionIssues: string[] = [];
+
     if (intelligenceServiceId) {
       const svc = await db.query.intelligenceServices.findFirst({
         where: eq(intelligenceServices.serviceId, intelligenceServiceId),
@@ -344,17 +586,49 @@ provisionRouter.get("/status", async (c) => {
           url: svc.webhookUrl,
           status: svc.status,
         };
+
+        // Use DB-cached status to derive credentialsValid — no live outbound call.
+        // "active" = credentials last verified OK (or never checked → assume valid)
+        // "credential_error" = live probe previously confirmed stale key
+        if (svc.status === "credential_error") {
+          credentialsValid = false;
+          connectionIssues.push("credentials_invalid");
+        } else if (svc.status === "active") {
+          credentialsValid = true;
+        }
+        // Other statuses (disabled, etc.) leave credentialsValid = null
       }
     }
 
+    // Detect "partial" state: CP connected but IS credentials never delivered.
+    // This happens when the IS self-registration push failed during provisioning.
+    if (cp && !intelligenceService) {
+      connectionIssues.push("hub_not_registered");
+    }
+    if (cp && cp.authorizedIntelligenceHubUrl && !intelligenceService) {
+      connectionIssues.push("hub_push_failed");
+    }
+
+    const connectionState = !cp
+      ? "disconnected"
+      : intelligenceService && credentialsValid !== false
+        ? "connected"
+        : "partial";
+
     return c.json({
       connected: !!cp,
+      connectionState,
+      connectionIssues,
+      // null = IS unreachable (can't check); true/false = probe result
+      credentialsValid,
       controlPlane: cp
         ? {
             url: cp.url,
             podId: cp.podId,
             connectedAt: cp.connectedAt,
             lastPingAt: cp.lastPingAt,
+            // authorizedHubUrl tells the UI which IS URL is expected to register
+            authorizedHubUrl: cp.authorizedIntelligenceHubUrl ?? null,
             // cpApiKey intentionally omitted from status response
           }
         : null,
