@@ -966,6 +966,33 @@ export const channelsRouter = router({
         8 * 60 * 1000
       );
 
+      // Merge workspace-level agentPersonality into agentConfig so the IS picks it up.
+      // Channel agentConfig takes precedence (more specific) over workspace defaults.
+      let effectiveAgentConfig = (channel.agentConfig ?? {}) as Record<
+        string,
+        unknown
+      >;
+      if (workspaceId) {
+        try {
+          const [wsRow] = await db
+            .select({ settings: workspaces.settings })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .limit(1);
+          const wsPersonality = (
+            wsRow?.settings as { agentPersonality?: string } | undefined
+          )?.agentPersonality;
+          if (wsPersonality && !effectiveAgentConfig.personality) {
+            effectiveAgentConfig = {
+              ...effectiveAgentConfig,
+              personality: wsPersonality,
+            };
+          }
+        } catch {
+          // Non-critical — skip personality if fetch fails
+        }
+      }
+
       try {
         const stream = resolvedService.client.sendMessageStream({
           query: content,
@@ -973,10 +1000,11 @@ export const channelsRouter = router({
           userId: ctx.userId,
           agentId: channel.agentId ?? "orchestrator",
           agentType: effectiveAgentType,
-          // Personality overlay from channel — custom instructions, persona name, etc.
-          agentConfig: (channel.agentConfig ?? undefined) as
-            | Record<string, unknown>
-            | undefined,
+          // Personality overlay: channel config merged with workspace-level agentPersonality
+          agentConfig:
+            Object.keys(effectiveAgentConfig).length > 0
+              ? effectiveAgentConfig
+              : undefined,
           workspaceId,
           // Link proposals created during this response to the triggering user message
           sourceMessageId: userMessageId,
@@ -1331,6 +1359,50 @@ export const channelsRouter = router({
           .returning();
 
         branchChannel = branch;
+      }
+
+      // Auto-title: generate a short title from the first user message when channel has no title.
+      // Fires fire-and-forget so it never blocks the response.
+      if (
+        !channel.title &&
+        (channel.channelType === ChannelType.AI_THREAD ||
+          channel.channelType === ChannelType.BRANCH) &&
+        content
+      ) {
+        (async () => {
+          try {
+            // Derive a concise title (≤ 60 chars) from the user message content.
+            // Strips markdown syntax, trims to word boundary, capitalises first letter.
+            const raw = content
+              .replace(/[#*_`~[\]()>!]/g, " ") // strip markdown punctuation
+              .replace(/\s+/g, " ")
+              .trim();
+            const truncated =
+              raw.length <= 60
+                ? raw
+                : raw
+                    .slice(0, 60)
+                    .replace(/\s\S*$/, "")
+                    .trim();
+            const autoTitle =
+              truncated.charAt(0).toUpperCase() + truncated.slice(1);
+            if (!autoTitle) return;
+
+            await db
+              .update(channels)
+              .set({ title: autoTitle, updatedAt: new Date() })
+              .where(eq(channels.id, channelId));
+
+            emitChatEvent({
+              event: "channel:updated",
+              data: { channelId, userId: ctx.userId },
+              workspaceId: workspaceId ?? null,
+              userId: ctx.userId,
+            });
+          } catch {
+            // Non-critical — title generation is best-effort
+          }
+        })();
       }
 
       await db
