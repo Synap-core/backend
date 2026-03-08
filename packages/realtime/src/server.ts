@@ -11,7 +11,7 @@
 import { Server as SocketIOServer } from "socket.io";
 import { createServer } from "http";
 import { CollaborationManager } from "./collaboration-manager.js";
-import { setupYjsServer } from "./yjs-server.js";
+import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
@@ -49,7 +49,7 @@ const io = new SocketIOServer(httpServer, {
 // Allows workers to emit real-time events to connected clients via HTTP POST
 // Also handles Yjs state management endpoints
 // Use lazy getter because yjsServer is created after bridge setup
-let yjsServerRef: ReturnType<typeof setupYjsServer> | null = null;
+let yjsServerRef: YjsServerInstance | null = null;
 setupBridge(io, httpServer, () => yjsServerRef);
 
 // Log all connection attempts (for debugging WebSocket routing)
@@ -113,6 +113,8 @@ presenceNamespace.on("connection", (socket) => {
   if (workspaceId) {
     socket.join(`workspace:${workspaceId}`);
   }
+  // Join user-specific room so bridge emissions to user:${userId} reach this client
+  socket.join(`user:${userId}`);
 
   // Register user in collaboration manager
   const session = collaborationManager.userJoined({
@@ -222,12 +224,24 @@ httpServer.listen(PORT, "0.0.0.0", () => {
 /**
  * Graceful shutdown
  */
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
+  console.log("[Shutdown] Flushing Yjs pending saves...");
+  if (yjsServerRef?.flushAll) {
+    await yjsServerRef.flushAll();
+  }
   console.log("[Shutdown] Closing WebSocket server...");
   httpServer.close(() => {
     console.log("[Shutdown] Server closed");
     process.exit(0);
   });
+});
+
+process.on("SIGINT", async () => {
+  console.log("[Shutdown] Flushing Yjs pending saves (SIGINT)...");
+  if (yjsServerRef?.flushAll) {
+    await yjsServerRef.flushAll();
+  }
+  process.exit(0);
 });
 
 /**

@@ -19,6 +19,7 @@ import {
   documentSessions,
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
+import { recordYjsPersist } from "./bridge.js";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -213,13 +214,38 @@ class DatabasePersistence {
           content = `yjs:${Buffer.from(state).toString("base64")}`;
         }
 
-        await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
-          contentType: "application/json",
-        });
+        // Retry MinIO upload up to 3 times with exponential backoff
+        let uploadOk = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            if (attempt > 0) {
+              await new Promise<void>((r) =>
+                setTimeout(r, 200 * Math.pow(2, attempt - 1))
+              );
+            }
+            await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
+              contentType: "application/json",
+            });
+            uploadOk = true;
+            break;
+          } catch (uploadErr) {
+            console.warn(
+              `[Yjs] MinIO upload attempt ${attempt + 1} failed for ${roomName}:`,
+              uploadErr
+            );
+          }
+        }
+        if (!uploadOk) {
+          console.error(
+            `[Yjs] All MinIO upload attempts failed for ${roomName} — data may be lost`
+          );
+          return;
+        }
         await db
           .update(documents)
           .set({ updatedAt: new Date() })
           .where(eq(documents.id, documentId));
+        recordYjsPersist();
         console.log(
           `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} tldraw records, ${content.length} bytes)`
         );
@@ -265,6 +291,7 @@ class DatabasePersistence {
         .set({ updatedAt: new Date() })
         .where(eq(documents.id, documentId));
 
+      recordYjsPersist();
       console.log(
         `[Yjs] Updated working version ${workingVersion} for ${roomName}`
       );
@@ -357,12 +384,19 @@ class DatabasePersistence {
   }
 }
 
+export interface YjsServerInstance {
+  /** Active Yjs documents keyed by room name (exposed by y-socket.io at runtime). */
+  documents: Map<string, Y.Doc>;
+  /** Flush all pending debounced saves immediately — call before process exit. */
+  flushAll: () => Promise<void>;
+  // Expose event emitter surface used by server.ts
+  on: YSocketIO["on"];
+}
+
 /**
  * Setup Yjs WebSocket server
  */
-export function setupYjsServer(
-  config: YjsServerConfig
-): YSocketIO & { documents: Map<string, Y.Doc> } {
+export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   const { io, persistenceInterval = 5000 } = config;
   const persistence = new DatabasePersistence();
 
@@ -471,6 +505,33 @@ export function setupYjsServer(
   console.log(`  - Auto-save: ✅ (debounced)`);
   console.log(`  - Garbage collection: ✅`);
 
-  // Expose documents map for HTTP endpoint access
-  return yServer as YSocketIO & { documents: Map<string, Y.Doc> };
+  /** Flush all pending debounced saves — bypasses the debounce timer. */
+  const flushAll = async (): Promise<void> => {
+    const docs = (yServer as any).documents as Map<string, Y.Doc> | undefined;
+    const flushPromises: Promise<void>[] = [];
+    for (const [docName, timeout] of saveIntervals.entries()) {
+      clearTimeout(timeout);
+      saveIntervals.delete(docName);
+      const doc = docs?.get(docName);
+      if (doc) {
+        flushPromises.push(
+          persistence.writeState(docName, doc).catch((err) => {
+            console.error(
+              `[Yjs] flushAll writeState failed for ${docName}:`,
+              err
+            );
+          })
+        );
+      }
+    }
+    if (flushPromises.length > 0) {
+      console.log(`[Yjs] Flushing ${flushPromises.length} pending save(s)...`);
+      await Promise.allSettled(flushPromises);
+      console.log("[Yjs] Flush complete");
+    }
+  };
+
+  const server = yServer as unknown as YjsServerInstance;
+  server.flushAll = flushAll;
+  return server;
 }

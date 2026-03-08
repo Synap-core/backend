@@ -16,12 +16,22 @@ interface BridgeEmitRequest {
   workspaceId?: string;
   viewId?: string;
   userId?: string;
+  /** Channel-scoped room — reduces noise by targeting only clients in that channel */
+  channelId?: string;
   data: any;
 }
 
 /** Lazy getter for the Yjs server — set after yjsServer is initialized in server.ts */
 type YjsServerAccessor = () => { documents: Map<string, Y.Doc> } | null;
 let getYjsServer: YjsServerAccessor = () => null;
+
+/** Track last successful MinIO/DB write for /health/yjs */
+let lastPersistAt: Date | null = null;
+const serverStartAt = new Date();
+
+export function recordYjsPersist(): void {
+  lastPersistAt = new Date();
+}
 
 /**
  * Setup Socket.IO bridge HTTP endpoint
@@ -91,6 +101,25 @@ async function handleBridgeRequest(
     return;
   }
 
+  // Yjs health endpoint — reports active rooms and last persistence
+  if (url === "/health/yjs" && req.method === "GET") {
+    const yjsServer = getYjsServer();
+    const activeRooms = yjsServer?.documents.size ?? 0;
+    const uptimeSeconds = Math.floor(
+      (Date.now() - serverStartAt.getTime()) / 1000
+    );
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        activeRooms,
+        lastPersistAt: lastPersistAt?.toISOString() ?? null,
+        uptimeSeconds,
+      })
+    );
+    return;
+  }
+
   // Emit endpoint
   if (url === "/bridge/emit" && req.method === "POST") {
     await handleEmit(io, req, res);
@@ -131,9 +160,20 @@ async function handleEmit(
   res: ServerResponse
 ) {
   try {
+    // Validate bridge secret (if configured)
+    const bridgeSecret = process.env.BRIDGE_SECRET;
+    if (bridgeSecret) {
+      const provided = req.headers["x-bridge-secret"];
+      if (provided !== bridgeSecret) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+    }
+
     // Parse request body
     const body = await parseBody(req);
-    const { event, workspaceId, viewId, userId, data } =
+    const { event, workspaceId, viewId, userId, channelId, data } =
       body as BridgeEmitRequest;
 
     // Validate required fields
@@ -143,11 +183,12 @@ async function handleEmit(
       return;
     }
 
-    if (!workspaceId && !viewId && !userId) {
+    if (!workspaceId && !viewId && !userId && !channelId) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
-          error: "Must provide at least one of: workspaceId, viewId, userId",
+          error:
+            "Must provide at least one of: workspaceId, viewId, userId, channelId",
         })
       );
       return;
@@ -158,6 +199,13 @@ async function handleEmit(
 
     // Emit to appropriate room(s)
     let emitCount = 0;
+
+    if (channelId) {
+      // Channel-scoped: only clients who joined this specific channel room receive the event.
+      // This reduces unnecessary traffic for high-frequency stream chunks.
+      presenceNamespace.to(`channel:${channelId}`).emit(event, data);
+      emitCount++;
+    }
 
     if (workspaceId) {
       presenceNamespace.to(`workspace:${workspaceId}`).emit(event, data);
@@ -178,6 +226,7 @@ async function handleEmit(
       workspaceId,
       viewId,
       userId,
+      channelId,
     });
 
     // Success response

@@ -19,6 +19,10 @@ export interface AgentMetadata {
   description?: string;
   createdByUserId: string;
   capabilities?: string[];
+  isPersonalAgent?: boolean;
+  parentAgentId?: string;
+  writesRequireProposal?: boolean;
+  activePersonality?: string;
 }
 
 export const users = pgTable("users", {

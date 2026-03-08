@@ -41,6 +41,7 @@ import {
   ProposalStatus,
   users,
   workspaceMembers,
+  workspaces,
   mcpServers,
   sessions,
   SessionStatus,
@@ -118,53 +119,93 @@ async function getMcpServersForWorkspace(
 }
 
 /**
- * Ensure a per-human AI agent user exists for the given (userId, workspaceId) pair.
- * Creates one if absent, then adds it as a workspace member (editor role).
- * Returns the agent user ID.
+ * Ensure a pod-wide personal AI agent user exists for this human.
+ * One agent user is shared across all workspaces — it accumulates memory
+ * and identity pod-wide rather than being fragmented per workspace.
+ *
+ * Flow:
+ *   1. Look up by createdByUserId + isPersonalAgent (pod-wide, no workspace filter).
+ *   2. If found: ensure membership in the current workspace if absent.
+ *   3. If not found: create the agent user, then add membership.
+ *
+ * Role: "owner" in agent-governed workspaces (governanceMode='agent-owned'),
+ *       "editor" in all other workspaces.
  */
 async function ensureAgentUser(
   userId: string,
   workspaceId: string
 ): Promise<string> {
-  // Try to find existing agent user for this human in this workspace
+  // 1. Find existing pod-wide personal agent (no workspace filter)
   const [existing] = await db
     .select({ id: users.id })
     .from(users)
-    .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
     .where(
       and(
         eq(users.userType, "agent"),
-        eq(workspaceMembers.workspaceId, workspaceId),
-        drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`
+        drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`,
+        drizzleSql`${users.agentMetadata}->>'isPersonalAgent' = 'true'`
       )
     )
     .limit(1);
 
-  if (existing) return existing.id;
+  let resolvedAgentId: string;
 
-  // Create agent user row
-  const agentId = randomUUID();
-  const shortId = agentId.slice(0, 8);
-  const [agentUser] = await db
-    .insert(users)
-    .values({
-      id: agentId,
-      email: `agent-orchestrator-${shortId}@synap.agent`,
-      userType: "agent",
-      kratosIdentityId: null,
-      agentMetadata: { createdByUserId: userId, agentType: "orchestrator" },
-    })
-    .returning({ id: users.id });
+  if (!existing) {
+    // 2a. Create the pod-wide personal agent user
+    const newId = randomUUID();
+    const shortId = newId.slice(0, 8);
+    const [agentUser] = await db
+      .insert(users)
+      .values({
+        id: newId,
+        email: `agent-orchestrator-${shortId}@synap.agent`,
+        userType: "agent",
+        kratosIdentityId: null,
+        agentMetadata: {
+          createdByUserId: userId,
+          agentType: "orchestrator",
+          isPersonalAgent: true,
+        },
+      })
+      .returning({ id: users.id });
+    resolvedAgentId = agentUser.id;
+  } else {
+    resolvedAgentId = existing.id;
+  }
 
-  // Add as workspace member with editor role
-  await db.insert(workspaceMembers).values({
-    id: randomUUID(),
-    workspaceId,
-    userId: agentUser.id,
-    role: "editor",
-  });
+  // 2b. Ensure workspace membership (idempotent)
+  const [existingMembership] = await db
+    .select({ id: workspaceMembers.id })
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.userId, resolvedAgentId),
+        eq(workspaceMembers.workspaceId, workspaceId)
+      )
+    )
+    .limit(1);
 
-  return agentUser.id;
+  if (!existingMembership) {
+    // Agent is owner in agent-governed workspaces, editor elsewhere
+    const [ws] = await db
+      .select({ settings: workspaces.settings })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+
+    const wsSettings = ws?.settings as { governanceMode?: string } | undefined;
+    const role =
+      wsSettings?.governanceMode === "agent-owned" ? "owner" : "editor";
+
+    await db.insert(workspaceMembers).values({
+      id: randomUUID(),
+      workspaceId,
+      userId: resolvedAgentId,
+      role,
+    });
+  }
+
+  return resolvedAgentId;
 }
 
 /**
@@ -761,7 +802,8 @@ export const channelsRouter = router({
       let activeSessionId: string | undefined;
       if (
         channel.channelType === ChannelType.AI_THREAD ||
-        channel.channelType === ChannelType.BRANCH
+        channel.channelType === ChannelType.BRANCH ||
+        channel.channelType === ChannelType.THREAD
       ) {
         try {
           const existingSession = await db.query.sessions.findFirst({
@@ -783,7 +825,17 @@ export const channelsRouter = router({
                 status: SessionStatus.ACTIVE,
               })
               .onConflictDoNothing();
-            activeSessionId = newSessionId;
+            // Re-query to get the canonical session — handles the race where two concurrent
+            // sendMessage calls both find no session and both try to insert.
+            const canonical = await db.query.sessions.findFirst({
+              where: and(
+                eq(sessions.channelId, channelId),
+                eq(sessions.status, SessionStatus.ACTIVE)
+              ),
+              columns: { id: true },
+              orderBy: (s, { asc }) => [asc(s.startedAt)],
+            });
+            activeSessionId = canonical?.id ?? newSessionId;
           }
         } catch {
           // Non-fatal — messages still saved, session tracking degrades gracefully
@@ -824,6 +876,22 @@ export const channelsRouter = router({
         workspaceId: ctx.workspaceId || undefined,
         capability: "chat",
       });
+
+      // AI routing gate:
+      //   AI_THREAD + BRANCH: always call IS.
+      //   THREAD: only call IS when the channel has an explicit agentType set
+      //           (user-created threads are human-only by default; AI is opt-in).
+      //   All other types: never call IS — return after saving the user message.
+      const isAiChannel =
+        channel.channelType === ChannelType.AI_THREAD ||
+        channel.channelType === ChannelType.BRANCH ||
+        (channel.channelType === ChannelType.THREAD &&
+          !!channel.agentType &&
+          channel.agentType !== "default");
+
+      if (!isAiChannel) {
+        return { messageId: userMessageId, channelId };
+      }
 
       // Stream from Intelligence Service
       let fullContent = "";
@@ -885,6 +953,19 @@ export const channelsRouter = router({
           : [serviceMcpEntry];
       }
 
+      // 8-minute hard deadline — if the IS hangs mid-stream, break out and
+      // emit a complete event so the frontend is never permanently stuck.
+      const streamDeadline = new AbortController();
+      const streamDeadlineTimer = setTimeout(
+        () => {
+          console.error(
+            `[Chat] Stream deadline exceeded for channel ${channelId} — aborting`
+          );
+          streamDeadline.abort();
+        },
+        8 * 60 * 1000
+      );
+
       try {
         const stream = resolvedService.client.sendMessageStream({
           query: content,
@@ -906,6 +987,7 @@ export const channelsRouter = router({
         });
 
         for await (const chunk of stream) {
+          if (streamDeadline.signal.aborted) break;
           if (chunk.type === "chunk" && chunk.content) {
             fullContent += chunk.content;
 
@@ -919,6 +1001,7 @@ export const channelsRouter = router({
               },
               workspaceId: workspaceId ?? null,
               userId: ctx.userId,
+              channelId,
             });
           } else if (chunk.type === "step" && chunk.step) {
             aiSteps.push(chunk.step);
@@ -932,6 +1015,7 @@ export const channelsRouter = router({
               },
               workspaceId: workspaceId ?? null,
               userId: ctx.userId,
+              channelId,
             });
           } else if (chunk.type === "entities" && chunk.entities) {
             hubResponse.entities = chunk.entities;
@@ -947,6 +1031,7 @@ export const channelsRouter = router({
               },
               workspaceId: workspaceId ?? null,
               userId: ctx.userId,
+              channelId,
             });
           } else if (chunk.type === "complete") {
             if (chunk.data) {
@@ -979,6 +1064,7 @@ export const channelsRouter = router({
                 },
                 workspaceId: workspaceId ?? null,
                 userId: ctx.userId,
+                channelId,
               });
             }
 
@@ -987,6 +1073,7 @@ export const channelsRouter = router({
               data: { threadId: channelId, type: "complete", isComplete: true },
               workspaceId: workspaceId ?? null,
               userId: ctx.userId,
+              channelId,
             });
           }
         }
@@ -1008,6 +1095,7 @@ export const channelsRouter = router({
           },
           workspaceId: workspaceId ?? null,
           userId: ctx.userId,
+          channelId,
         });
 
         try {
@@ -1036,6 +1124,7 @@ export const channelsRouter = router({
             },
             workspaceId: workspaceId ?? null,
             userId: ctx.userId,
+            channelId,
           });
         }
 
@@ -1058,8 +1147,28 @@ export const channelsRouter = router({
               },
               workspaceId: workspaceId ?? null,
               userId: ctx.userId,
+              channelId,
             });
           }
+        }
+      } finally {
+        clearTimeout(streamDeadlineTimer);
+        // If the 8-minute deadline fired and we got no content (IS permanently hung),
+        // emit a completion event so the frontend is never left waiting forever.
+        if (streamDeadline.signal.aborted && !fullContent) {
+          emitChatEvent({
+            event: "chat:stream",
+            data: {
+              threadId: channelId,
+              type: "complete",
+              isComplete: true,
+              timedOut: true,
+            },
+            workspaceId: workspaceId ?? null,
+            userId: ctx.userId,
+            channelId,
+          });
+          fullContent = "The AI response timed out. Please try again.";
         }
       }
 
