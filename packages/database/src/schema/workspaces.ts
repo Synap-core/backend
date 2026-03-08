@@ -180,9 +180,14 @@ export interface WorkspaceSettings {
     };
   };
 
-  // Template configuration
+  // ─── Template / Package provenance ──────────────────────────────────────────
   /** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
   templateName?: string;
+  /**
+   * ID of the template used to create this workspace (from control plane registry).
+   * Distinct from packageSlug — a package can have multiple template versions.
+   */
+  templateId?: string;
   /** Slug of the control plane package used to create this workspace. */
   packageSlug?: string;
   /**
@@ -194,13 +199,38 @@ export interface WorkspaceSettings {
   /** Version of the package at time of creation. */
   packageVersion?: string;
 
-  // Provenance — how this workspace was created
+  // ─── Provenance & provisioning status ────────────────────────────────────────
   /** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
   createdBy?: "user" | "provisioning" | "plugin";
-  /** ISO timestamp when provisioning created this workspace */
+  /** ISO timestamp when provisioning started (set immediately on workspace creation) */
   provisionedAt?: string;
-  /** Current provisioning status */
+  /** ISO timestamp when provisioning started */
+  provisioningStartedAt?: string;
+  /**
+   * Current provisioning status.
+   * - "pending" — workspace row exists but provisioning is in progress (or failed)
+   * - "active"  — fully provisioned and ready to use
+   * - "failed"  — provisioning stopped at a step (see failedStep + completedSteps)
+   */
   provisioningStatus?: "pending" | "active" | "failed";
+  /**
+   * The step at which provisioning failed.
+   * Only set when provisioningStatus === "failed".
+   * Format: step-key (e.g. "profiles[company].create", "views[Home]", "entities")
+   */
+  failedStep?: string;
+  /**
+   * Human-readable error message from the failed step (truncated to 500 chars).
+   * Only set when provisioningStatus === "failed".
+   */
+  failedStepError?: string;
+  /**
+   * Step keys that completed successfully before the failure.
+   * Populated in order: ["workspace", "member", "profiles", "relations", "templates",
+   *   "views", "bento", "home", "entities", "flows", "relations-seed", "done"]
+   * Lets callers know how far provisioning progressed for debugging / partial retry.
+   */
+  completedSteps?: string[];
 
   // ─── Agent Workspace Pair ────────────────────────────────────────────────────
   /**

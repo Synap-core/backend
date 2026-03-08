@@ -300,6 +300,8 @@ export interface WorkspaceSettings {
 	};
 	/** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
 	templateName?: string;
+	/** ID of the template from the control plane registry (for audit trail). */
+	templateId?: string;
 	/** Slug of the control plane package used to create this workspace. */
 	packageSlug?: string;
 	/**
@@ -314,8 +316,21 @@ export interface WorkspaceSettings {
 	createdBy?: "user" | "provisioning" | "plugin";
 	/** ISO timestamp when provisioning created this workspace */
 	provisionedAt?: string;
-	/** Current provisioning status */
+	/** ISO timestamp when provisioning started */
+	provisioningStartedAt?: string;
+	/**
+	 * Current provisioning status.
+	 * - "pending" — workspace row exists but provisioning is in progress (or failed)
+	 * - "active"  — fully provisioned and ready to use
+	 * - "failed"  — provisioning stopped at a step (see failedStep + completedSteps)
+	 */
 	provisioningStatus?: "pending" | "active" | "failed";
+	/** The step at which provisioning failed. Only set when provisioningStatus === "failed". */
+	failedStep?: string;
+	/** Human-readable error message from the failed step (truncated to 500 chars). */
+	failedStepError?: string;
+	/** Step keys completed before the failure (for debugging / partial retry). */
+	completedSteps?: string[];
 	/**
 	 * Semantic type of this workspace within the pod.
 	 * - "personal"     — the user's curated space (default)

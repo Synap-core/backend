@@ -1086,10 +1086,12 @@ export const workspacesRouter = router({
                 z.object({
                   slug: z.string(),
                   displayName: z.string(),
+                  // Proposal format: direct fields
                   icon: z.string().optional(),
                   color: z.string().optional(),
                   description: z.string().optional(),
                   scope: z.string().optional(),
+                  // Proposal format: flat property list
                   properties: z
                     .array(
                       z.object({
@@ -1101,6 +1103,39 @@ export const workspacesRouter = router({
                         enumValues: z.array(z.string()).optional(),
                         constraints: z
                           .record(z.string(), z.unknown())
+                          .optional(),
+                        // entity_id properties: which profile this field links to
+                        targetProfileSlug: z.string().optional(),
+                      })
+                    )
+                    .optional(),
+                  // Registry format: nested uiHints (alternative to direct fields)
+                  uiHints: z
+                    .object({
+                      icon: z.string().optional(),
+                      color: z.string().optional(),
+                      description: z.string().optional(),
+                    })
+                    .optional(),
+                  // Registry format: propertyDefs with nested uiHints (alternative to properties[])
+                  propertyDefs: z
+                    .array(
+                      z.object({
+                        slug: z.string(),
+                        valueType: z.string(),
+                        required: z.boolean().optional(),
+                        constraints: z
+                          .object({
+                            enum: z.array(z.string()).optional(),
+                          })
+                          .passthrough()
+                          .optional(),
+                        uiHints: z
+                          .object({
+                            label: z.string().optional(),
+                            inputType: z.string().optional(),
+                            placeholder: z.string().optional(),
+                          })
                           .optional(),
                       })
                     )
@@ -1114,13 +1149,35 @@ export const workspacesRouter = router({
                   // Accept both "name" (proposal format) and "displayName" (registry format)
                   name: z.string().optional(),
                   displayName: z.string().optional(),
+                  slug: z.string().optional(),
                   type: z.string(),
                   scopeProfileSlug: z.string().optional(),
                   scopeProfileSlugs: z.array(z.string()).optional(),
                   config: z.record(z.string(), z.unknown()).optional(),
+                  // View configuration fields (merged into config during processing)
+                  groupBy: z.string().optional(),
+                  sortBy: z.string().optional(),
+                  sortOrder: z.enum(["asc", "desc"]).optional(),
+                  filterBy: z.record(z.string(), z.unknown()).optional(),
+                  description: z.string().optional(),
+                  defaultView: z.boolean().optional(),
+                  hierarchyEdges: z
+                    .array(
+                      z.object({
+                        parent: z.string(),
+                        child: z.string(),
+                        via: z.string().optional(),
+                      })
+                    )
+                    .optional(),
+                  startField: z.string().optional(),
+                  endField: z.string().optional(),
+                  colorBy: z.string().optional(),
                 })
               )
               .optional(),
+            /** Override the default "Home" name for the workspace home bento view */
+            bentoViewName: z.string().optional(),
             bentoLayout: z
               .array(
                 z.object({
@@ -1151,6 +1208,17 @@ export const workspacesRouter = router({
               )
               .optional(),
             suggestedEntities: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  title: z.string(),
+                  properties: z.record(z.string(), z.unknown()).optional(),
+                  content: z.string().optional(),
+                })
+              )
+              .optional(),
+            /** Alias for suggestedEntities (used by some template authors). Normalized server-side. */
+            seedEntities: z
               .array(
                 z.object({
                   profileSlug: z.string(),
@@ -1225,6 +1293,10 @@ export const workspacesRouter = router({
           .passthrough(),
         packageSlug: z.string().optional(),
         packageVersion: z.string().optional(),
+        /** ID of the template from the control plane registry (stored in workspace settings). */
+        templateId: z.string().optional(),
+        /** Human-readable name of the template (for workspace-init + settings). */
+        templateName: z.string().optional(),
         workspaceName: z.string().optional(),
         workspaceType: z
           .enum(["personal", "agent", "project", "operational"])
@@ -1240,6 +1312,9 @@ export const workspacesRouter = router({
       }
 
       // Idempotency: if the user already has a workspace with this packageSlug, return it.
+      // "pending" workspaces (creation in progress) are returned as-is so the client can
+      // subscribe to progress events. "failed" workspaces are returned with status "failed"
+      // so the client can offer a retry button.
       // Prevents duplicate workspaces when the browser re-triggers onboarding on reconnect.
       if (input.packageSlug) {
         const existingMembership = await db.query.workspaceMembers.findFirst({
@@ -1254,15 +1329,77 @@ export const workspacesRouter = router({
           with: { workspace: true },
         });
         if (existingMembership?.workspace) {
+          const ws = existingMembership.workspace;
+          const wsSettings = ws.settings as WorkspaceSettings | null;
+          const provStatus = wsSettings?.provisioningStatus;
+
+          if (provStatus === "failed") {
+            // Automatically resume from where the previous attempt failed.
+            logger.warn(
+              {
+                userId: ctx.userId,
+                packageSlug: input.packageSlug,
+                workspaceId: ws.id,
+                failedStep: wsSettings?.failedStep,
+                completedSteps: wsSettings?.completedSteps,
+              },
+              "createFromDefinition: resuming failed workspace"
+            );
+            emitChatEvent({
+              event: "workspace:creation_progress",
+              data: {
+                step: "resume",
+                pct: 5,
+                label: `Resuming from step '${wsSettings?.failedStep ?? "unknown"}'`,
+                status: "progress",
+              },
+              userId: ctx.userId,
+            });
+            // Fall through to createWorkspaceFromDefinition with resumeFrom set
+            const resumeResult = await createWorkspaceFromDefinition({
+              definition: input.definition,
+              userId: ctx.userId,
+              packageSlug: input.packageSlug,
+              packageVersion: input.packageVersion,
+              templateId: input.templateId,
+              templateName: input.templateName,
+              workspaceName: input.workspaceName,
+              createdBy: "user",
+              workspaceType: input.workspaceType,
+              linkedAgentId: input.linkedAgentId,
+              resumeFrom: {
+                workspaceId: ws.id,
+                completedSteps: wsSettings?.completedSteps ?? [],
+              },
+              onProgress: (step, pct, label) => {
+                emitChatEvent({
+                  event: "workspace:creation_progress",
+                  data: { step, pct, label, status: "progress" },
+                  userId: ctx.userId,
+                });
+              },
+            });
+            return {
+              status: "created" as const,
+              workspaceId: resumeResult.workspaceId,
+              profileIds: resumeResult.profileIds,
+              viewIds: resumeResult.viewIds,
+            };
+          }
+
           logger.info(
             {
               userId: ctx.userId,
               packageSlug: input.packageSlug,
-              workspaceId: existingMembership.workspace.id,
+              workspaceId: ws.id,
+              provisioningStatus: provStatus,
             },
             "createFromDefinition: returning existing workspace (idempotent)"
           );
-          return { workspaceId: existingMembership.workspace.id };
+          return {
+            status: provStatus === "active" ? ("created" as const) : ("pending" as const),
+            workspaceId: ws.id,
+          };
         }
       }
 
@@ -1273,6 +1410,8 @@ export const workspacesRouter = router({
           userId: ctx.userId,
           packageSlug: input.packageSlug,
           packageVersion: input.packageVersion,
+          templateId: input.templateId,
+          templateName: input.templateName,
           workspaceName: input.workspaceName,
           createdBy: "user",
           workspaceType: input.workspaceType,
@@ -1280,20 +1419,39 @@ export const workspacesRouter = router({
           onProgress: (step, pct, label) => {
             emitChatEvent({
               event: "workspace:creation_progress",
-              data: { step, pct, label },
+              data: { step, pct, label, status: "progress" },
               userId: ctx.userId,
             });
           },
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // Extract step name from structured error message ("...at step 'X': ...")
+        const stepMatch = message.match(/at step '([^']+)'/);
+        const failedStep = stepMatch?.[1];
         logger.error(
-          { err, userId: ctx.userId, packageSlug: input.packageSlug },
+          { err, userId: ctx.userId, packageSlug: input.packageSlug, failedStep },
           "createFromDefinition failed"
         );
+        // Emit error progress event so the frontend loading state can show
+        // what went wrong instead of spinning indefinitely.
+        emitChatEvent({
+          event: "workspace:creation_progress",
+          data: {
+            step: failedStep ?? "error",
+            pct: 0,
+            label: failedStep
+              ? `Failed at step '${failedStep}': ${message}`
+              : `Creation failed: ${message}`,
+            status: "error",
+          },
+          userId: ctx.userId,
+        });
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Workspace creation failed: ${message}`,
+          message: failedStep
+            ? `Workspace creation failed at step '${failedStep}': ${message}`
+            : `Workspace creation failed: ${message}`,
         });
       }
 
