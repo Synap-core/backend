@@ -52,7 +52,7 @@ export class IndexingService {
    * Called by scheduled Inngest function every 10 seconds
    */
   async flushQueue(): Promise<Record<string, any>> {
-    const client = getTypesenseClient();
+    const client = getTypesenseAdminClient();
     const results: Record<string, any> = {};
 
     for (const [collection, items] of this.queue.entries()) {
