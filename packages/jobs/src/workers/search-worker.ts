@@ -13,7 +13,11 @@ const logger = createLogger({ module: "search-worker" });
 
 /**
  * Handle individual search index requests.
- * Queues the item for bulk indexing.
+ *
+ * Calls indexNow() for immediate Typesense upsert/delete so that newly
+ * created/updated items are searchable within seconds. The bulk-index cron
+ * (search-bulk-index) handles any items that slipped through (e.g. Typesense
+ * was temporarily unavailable) by re-queuing and flushing.
  */
 export async function handleSearchIndex(
   job: PgBoss.Job<{
@@ -25,14 +29,31 @@ export async function handleSearchIndex(
 ): Promise<void> {
   const { collection, operation, documentId, timestamp } = job.data;
 
-  await indexingService.queueIndexing({
-    collection,
-    operation,
-    documentId,
-    timestamp,
-  });
-
-  logger.debug({ collection, operation, documentId }, "Queued for search indexing");
+  try {
+    await indexingService.indexNow({
+      collection,
+      operation,
+      documentId,
+      timestamp,
+    });
+    logger.debug(
+      { collection, operation, documentId },
+      "Indexed immediately via indexNow"
+    );
+  } catch (err) {
+    // If immediate indexing fails (Typesense down), fall back to queue so the
+    // bulk cron can retry later.
+    logger.warn(
+      { err, collection, documentId },
+      "indexNow failed — falling back to queue"
+    );
+    await indexingService.queueIndexing({
+      collection,
+      operation,
+      documentId,
+      timestamp,
+    });
+  }
 }
 
 /**

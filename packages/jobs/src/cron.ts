@@ -33,9 +33,11 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("background-task-scheduler", "* * * * *", {});
   logger.info("Registered cron: background-task-scheduler (every 1min)");
 
-  // Search reindex (every 30 minutes)
-  await boss.schedule("search-bulk-index", "*/30 * * * *", {});
-  logger.info("Registered cron: search-bulk-index (every 30min)");
+  // Search bulk-index catch-up (every 5 minutes).
+  // Individual items are indexed immediately via indexNow(); this cron only flushes
+  // items that were queued as fallback when Typesense was temporarily unavailable.
+  await boss.schedule("search-bulk-index", "*/5 * * * *", {});
+  logger.info("Registered cron: search-bulk-index (every 5min, catch-up only)");
 
   // Intelligence service health checks (every 2 minutes)
   await boss.schedule("intelligence-health-check", "*/2 * * * *", {});

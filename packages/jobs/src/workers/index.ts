@@ -10,6 +10,7 @@
 
 import { getBoss } from "../boss.js";
 import { createLogger } from "@synap-core/core";
+import { collectionService } from "@synap/search";
 import { handleSearchIndex, handleBulkIndex } from "./search-worker.js";
 import { handleWorkspaceInit } from "./workspace-init.js";
 import { handleCrossChannelNotify } from "./cross-channel-notifier.js";
@@ -74,6 +75,18 @@ export async function registerAllWorkers(): Promise<void> {
     await boss.createQueue(name);
   }
   logger.info({ count: ALL_QUEUES.length }, "Created all pg-boss queues");
+
+  // Ensure Typesense collections exist before registering search workers.
+  // Non-fatal: if Typesense is not running the search feature degrades gracefully.
+  try {
+    await collectionService.initializeCollections();
+    logger.info("Typesense collections initialized");
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Typesense collection init failed — search unavailable until Typesense is reachable"
+    );
+  }
 
   // Search indexing
   await boss.work("search-index", async ([job]: any[]) =>

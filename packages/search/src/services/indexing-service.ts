@@ -181,6 +181,60 @@ export class IndexingService {
   }
 
   /**
+   * Immediately index a single item without queuing.
+   *
+   * Used by the per-item search-index job handler so newly created/updated
+   * entities, documents, and views appear in Typesense within seconds rather
+   * than waiting for the 30-minute bulk flush cron.
+   */
+  async indexNow(item: IndexingQueueItem): Promise<void> {
+    const client = getTypesenseClient();
+
+    if (item.operation === "delete") {
+      try {
+        await client
+          .collections(item.collection)
+          .documents(item.documentId)
+          .delete();
+      } catch {
+        // Document may not exist in Typesense — not an error
+      }
+      return;
+    }
+
+    const indexer =
+      this.indexers[item.collection as keyof typeof this.indexers];
+    if (!indexer) {
+      console.error(`[indexNow] No indexer for collection: ${item.collection}`);
+      return;
+    }
+
+    const records = await this.fetchDocuments(item.collection, [
+      item.documentId,
+    ]);
+    if (records.length === 0) {
+      // Record was deleted before indexing — remove from Typesense if present
+      try {
+        await client
+          .collections(item.collection)
+          .documents(item.documentId)
+          .delete();
+      } catch {
+        // Not found — fine
+      }
+      return;
+    }
+
+    const searchDocs = await indexer.toSearchDocuments(records);
+    if (searchDocs.length === 0) return;
+
+    await client
+      .collections(item.collection)
+      .documents()
+      .import(searchDocs, { action: "upsert" });
+  }
+
+  /**
    * Get queue status
    */
   getQueueStatus(): Record<string, number> {
