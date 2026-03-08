@@ -85,10 +85,15 @@ export interface AgentMetadata {
 	description?: string;
 	createdByUserId: string;
 	capabilities?: string[];
+	isPersonalAgent?: boolean;
+	parentAgentId?: string;
+	writesRequireProposal?: boolean;
+	activePersonality?: string;
 }
 declare const ChannelType: {
 	readonly AI_THREAD: "ai_thread";
 	readonly BRANCH: "branch";
+	readonly THREAD: "thread";
 	readonly ENTITY_COMMENTS: "entity_comments";
 	readonly DOCUMENT_REVIEW: "document_review";
 	readonly VIEW_DISCUSSION: "view_discussion";
@@ -151,11 +156,13 @@ export interface InputOverride {
  * - Enterprise (advanced features)
  */
 export interface WorkspaceSidebarItem {
-	kind: "app" | "view" | "profile" | "external";
+	kind: "app" | "view" | "profile" | "external" | "cell";
 	/** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
 	appId?: string;
 	/** View name for kind='view' — resolved lazily at click time */
 	viewName?: string;
+	/** View ID for kind='view' — preferred over viewName when available */
+	viewId?: string;
 	/**
 	 * Profile slug for kind='profile'.
 	 * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,
@@ -164,6 +171,10 @@ export interface WorkspaceSidebarItem {
 	profileSlug?: string;
 	/** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
 	url?: string;
+	/** Widget/cell type key for kind='cell' (e.g. 'ai-chat', 'proposals-list') */
+	cellKey?: string;
+	/** Config props passed to the cell when opened as a panel */
+	cellProps?: Record<string, unknown>;
 	/** Display label shown in the sidebar */
 	label?: string;
 	/** Lucide icon name override */
@@ -318,6 +329,24 @@ export interface WorkspaceSettings {
 	 * Enables the intelligence service to know which staging area belongs to which agent.
 	 */
 	linkedAgentId?: string;
+	/**
+	 * Workspace governance mode.
+	 * - "standard"    — default: workspace owner has full control.
+	 * - "agent-owned" — the AI agent is workspace owner (creative authority);
+	 *                   the human is admin (irreversibility guard).
+	 *                   All destructive actions by the agent require a proposal
+	 *                   even if the agent holds the owner role.
+	 */
+	governanceMode?: "standard" | "agent-owned";
+	/**
+	 * Package enabled overrides for this workspace.
+	 * Maps SynapPackage id → enabled boolean.
+	 * Only entries that differ from the package's `defaultEnabled` flag are stored.
+	 * When absent for a package, the package's own default applies.
+	 *
+	 * Example: { "synap.proposals": false, "synap.ai-chat": true }
+	 */
+	enabledPackages?: Record<string, boolean>;
 	aiGovernance?: {
 		/**
 		 * Whitelist of event keys that AI agents may execute WITHOUT a proposal.
@@ -1476,7 +1505,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1563,6 +1592,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentChannelId?: string | undefined;
 			};
 			output: {
+				messageId: `${string}-${string}-${string}-${string}-${string}`;
+				channelId: string;
+				content?: undefined;
+				entities?: undefined;
+				branchDecision?: undefined;
+				branchThread?: undefined;
+				aiSteps?: undefined;
+			} | {
 				channelId: string;
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
 				content: string;
@@ -1582,7 +1619,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1667,7 +1704,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
+					role: "user" | "system" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
@@ -1702,7 +1739,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1742,7 +1779,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1785,7 +1822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1847,7 +1884,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1873,7 +1910,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "none" | "pending" | "resolved";
+					conflictStatus: "pending" | "none" | "resolved";
 					relevanceScore: number | null;
 				}[] | undefined;
 				branchTree: any;
@@ -1941,7 +1978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1967,7 +2004,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -1993,7 +2030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					channelType: "ai_thread" | "branch" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
 					contextObjectType: string | null;
 					contextObjectId: string | null;
 					parentChannelId: string | null;
@@ -2029,7 +2066,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "none" | "pending" | "resolved";
+					conflictStatus: "pending" | "none" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				entities: {
@@ -2042,7 +2079,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "none" | "pending" | "resolved";
+					conflictStatus: "pending" | "none" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				documents: {
@@ -2055,7 +2092,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "none" | "pending" | "resolved";
+					conflictStatus: "pending" | "none" | "resolved";
 					relevanceScore: number | null;
 				}[];
 			};
@@ -4895,19 +4932,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linkedAgentId?: string | undefined;
 			};
 			output: {
+				workspaceId: string;
+				status?: undefined;
+				profileIds?: undefined;
+				viewIds?: undefined;
+				entityIds?: undefined;
+			} | {
 				status: "created";
 				workspaceId: string;
 				profileIds: string[];
 				viewIds: string[];
 				entityIds: string[];
-			};
-			meta: object;
-		}>;
-		ensurePodAdminWorkspace: import("@trpc/server").TRPCMutationProcedure<{
-			input: void;
-			output: {
-				workspaceId: string;
-				created: boolean;
 			};
 			meta: object;
 		}>;
@@ -4917,6 +4952,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				definition?: unknown;
 			};
 			output: {
+				status: "existing";
+				workspaceId: string;
+			} | {
 				status: "created";
 				workspaceId: string;
 			};

@@ -204,6 +204,32 @@ export async function checkPermissionOrPropose(
 
         const settings = ws?.settings as WorkspaceSettings | undefined;
 
+        // In agent-owned workspaces, destructive actions always go through
+        // proposals — even if the agent holds the owner role or the action
+        // appears in the auto-approve whitelist. The human admin is the sole
+        // authority for irreversible operations.
+        if (
+          settings?.governanceMode === "agent-owned" &&
+          (action === "delete" || action === "archive" || action === "purge")
+        ) {
+          return createProposal({
+            userId,
+            agentUserId,
+            workspaceId,
+            subjectType,
+            action,
+            source,
+            data,
+            correlationId,
+            reasoning:
+              opts.reasoning ??
+              "Destructive action in agent-owned workspace requires human approval.",
+            threadId,
+            commandRunId,
+            sourceMessageId,
+          });
+        }
+
         // Default whitelist: read-only + safe context-tracking + schema evolution operations.
         // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
         // "filesystem.read" is safe — agents can read files without proposals.

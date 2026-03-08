@@ -20,6 +20,7 @@ interface Workspace {
 
 interface WorkspaceState {
   workspaceId: string | null;
+  workspaceName: string | null;
   workspaceRole: string | null;
   workspaces: Workspace[];
   isLoading: boolean;
@@ -28,6 +29,7 @@ interface WorkspaceState {
 
 const WorkspaceContext = createContext<WorkspaceState>({
   workspaceId: null,
+  workspaceName: null,
   workspaceRole: null,
   workspaces: [],
   isLoading: true,
@@ -84,12 +86,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       workspaceId,
+      workspaceName: currentWorkspace?.name ?? null,
       workspaceRole: currentWorkspace?.role ?? null,
       workspaces,
       isLoading,
       setWorkspace,
     }),
-    [workspaceId, currentWorkspace?.role, workspaces, isLoading, setWorkspace]
+    [
+      workspaceId,
+      currentWorkspace?.name,
+      currentWorkspace?.role,
+      workspaces,
+      isLoading,
+      setWorkspace,
+    ]
   );
 
   return (

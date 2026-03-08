@@ -21,17 +21,8 @@ import {
   Card,
   Drawer,
   Button,
-  SimpleGrid,
-  ThemeIcon,
 } from "@mantine/core";
-import {
-  IconRefresh,
-  IconBolt,
-  IconDatabase,
-  IconCloud,
-  IconWebhook,
-  IconArrowRight,
-} from "@tabler/icons-react";
+import { IconRefresh, IconArrowRight } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
 import {
   EventNode,
@@ -51,68 +42,6 @@ const nodeTypes = {
   langflow: LangFlowNode,
 };
 
-// Module Card Component
-interface ModuleCardProps {
-  title: string;
-  description: string;
-  icon: React.ReactNode;
-  stats: string;
-  color: string;
-  onClick: () => void;
-}
-
-function ModuleCard({
-  title,
-  description,
-  icon,
-  stats,
-  color,
-  onClick,
-}: ModuleCardProps) {
-  return (
-    <Card
-      padding="lg"
-      radius={borderRadius.lg}
-      style={{
-        border: `2px solid ${color}`,
-        cursor: "pointer",
-        transition: "all 0.2s ease",
-        background: colors.background.primary,
-      }}
-      onClick={onClick}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.transform = "translateY(-4px)";
-        e.currentTarget.style.boxShadow = `0 8px 24px ${color}40`;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.boxShadow = "none";
-      }}
-    >
-      <Group justify="space-between" mb="xs">
-        <ThemeIcon size={48} radius="md" style={{ background: color }}>
-          {icon}
-        </ThemeIcon>
-        <Badge size="lg" variant="light" color={color}>
-          {stats}
-        </Badge>
-      </Group>
-      <Text fw={700} size="lg" mt="md">
-        {title}
-      </Text>
-      <Text size="sm" c="dimmed" mt={4}>
-        {description}
-      </Text>
-      <Group mt="md" gap={4}>
-        <Text size="xs" c={color}>
-          Explore
-        </Text>
-        <IconArrowRight size={14} color={color} />
-      </Group>
-    </Card>
-  );
-}
-
 export default function FlowPageV3() {
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -128,9 +57,6 @@ export default function FlowPageV3() {
   const { data: webhooks } = trpc.integrations.list.useQuery(undefined, {
     retry: false,
   });
-  const { data: tables } = trpc.system.getDatabaseTables.useQuery(undefined, {
-    retry: false,
-  });
 
   interface Worker {
     name: string;
@@ -142,15 +68,7 @@ export default function FlowPageV3() {
     url?: string;
   }
 
-  // Stats for module cards
-  const systemWithWorkers = system as
-    | (typeof system & { workers?: Worker[] })
-    | undefined;
   const webhookList = webhooks as Webhook[] | undefined;
-  const eventCount = system?.eventTypes?.length || 0;
-  const workerCount = systemWithWorkers?.workers?.length || 0;
-  const tableCount = tables?.length || 0;
-  const webhookCount = webhookList?.length || 0;
 
   // Build nodes and edges
   const { initialNodes, initialEdges } = useMemo(() => {
@@ -318,42 +236,6 @@ export default function FlowPageV3() {
             Refresh
           </Button>
         </Group>
-
-        {/* Module Cards */}
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
-          <ModuleCard
-            title="Event Layer"
-            description="Event bus, types & publishing"
-            icon={<IconBolt size={24} color="white" />}
-            stats={`${eventCount} types`}
-            color={colors.eventTypes.created}
-            onClick={() => navigate("/events")}
-          />
-          <ModuleCard
-            title="Database"
-            description="PostgreSQL tables & data"
-            icon={<IconDatabase size={24} color="white" />}
-            stats={`${tableCount} tables`}
-            color="#3b82f6"
-            onClick={() => navigate("/data")}
-          />
-          <ModuleCard
-            title="File Storage"
-            description="MinIO (S3) & documents"
-            icon={<IconCloud size={24} color="white" />}
-            stats="Connected"
-            color="#06b6d4"
-            onClick={() => navigate("/files")}
-          />
-          <ModuleCard
-            title="Subscribers"
-            description="Workers, n8n & webhooks"
-            icon={<IconWebhook size={24} color="white" />}
-            stats={`${workerCount + webhookCount} active`}
-            color={colors.semantic.success}
-            onClick={() => navigate("/automation")}
-          />
-        </SimpleGrid>
 
         {/* Flow Graph */}
         <Card

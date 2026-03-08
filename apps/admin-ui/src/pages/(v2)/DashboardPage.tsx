@@ -17,12 +17,9 @@ import {
   IconUsers,
   IconSearch,
   IconTimeline,
-  IconFlask,
-  IconMap,
   IconPlayerPause,
   IconPlayerPlay,
   IconRefresh,
-  IconFolder,
   IconBuildingCommunity,
   IconFiles,
   IconRobot,
@@ -132,7 +129,7 @@ export default function DashboardPage() {
               fontFamily: typography.fontFamily.sans,
             }}
           >
-            Overview of your self-hosted Synap instance
+            System-wide overview — all workspaces, users, and events
           </Text>
         </div>
 
@@ -198,7 +195,9 @@ export default function DashboardPage() {
                 style={{
                   border: `1px solid ${colors.border.default}`,
                   backgroundColor: colors.background.primary,
+                  cursor: "pointer",
                 }}
+                onClick={() => navigate("/workspaces")}
               >
                 <Group justify="space-between" mb={spacing[2]}>
                   <Text
@@ -455,31 +454,10 @@ export default function DashboardPage() {
             </Button>
             <Button
               variant="light"
-              leftSection={<IconFlask size={18} />}
-              onClick={() => navigate("/testing")}
-            >
-              Test AI Tool
-            </Button>
-            <Button
-              variant="light"
               leftSection={<IconUsers size={18} />}
               onClick={() => navigate("/users")}
             >
               Manage Users
-            </Button>
-            <Button
-              variant="light"
-              leftSection={<IconFolder size={18} />}
-              onClick={() => navigate("/files")}
-            >
-              Browse Files
-            </Button>
-            <Button
-              variant="light"
-              leftSection={<IconMap size={18} />}
-              onClick={() => navigate("/flow")}
-            >
-              View Architecture
             </Button>
           </div>
         </Card>

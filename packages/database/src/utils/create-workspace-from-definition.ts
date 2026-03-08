@@ -84,8 +84,19 @@ function buildDefaultProfileBentoBlocks(profile: {
 
 /**
  * Subset of PackageDefinition fields consumed by this utility.
- * Kept loose (Record-based) so it works with both control-plane
- * PackageDefinition and frontend WorkspaceProposal shapes.
+ *
+ * Supports two input formats interchangeably:
+ *
+ * 1. **Frontend proposal format** (used by local templates / useCreateWorkspaceFromProposal)
+ *    - `profiles[].icon`, `profiles[].color`, `profiles[].description` — direct fields
+ *    - `profiles[].properties[]` — flat array with `label`, `inputType`, `enumValues`
+ *
+ * 2. **Control-plane registry format** (used by CP templates / createFromDefinition fast path)
+ *    - `profiles[].uiHints.icon`, `profiles[].uiHints.color`, `profiles[].uiHints.description`
+ *    - `profiles[].propertyDefs[]` — with nested `uiHints.label/inputType` and `constraints.enum`
+ *
+ * The `createWorkspaceFromDefinition` function normalizes both formats transparently
+ * before processing (see the profile loop in the implementation).
  */
 export interface WorkspaceDefinitionInput {
   workspaceName?: string;
@@ -93,10 +104,12 @@ export interface WorkspaceDefinitionInput {
   profiles?: Array<{
     slug: string;
     displayName: string;
+    // Proposal format: direct fields
     icon?: string;
     color?: string;
     description?: string;
     scope?: string;
+    // Proposal format: flat property list
     properties?: Array<{
       slug: string;
       label?: string;
@@ -105,6 +118,24 @@ export interface WorkspaceDefinitionInput {
       placeholder?: string;
       enumValues?: string[];
       constraints?: Record<string, unknown>;
+    }>;
+    // CP registry format (alternative to the above direct fields)
+    uiHints?: {
+      icon?: string;
+      color?: string;
+      description?: string;
+    };
+    // CP registry format (alternative to `properties`)
+    propertyDefs?: Array<{
+      slug: string;
+      valueType: string;
+      required?: boolean;
+      constraints?: { enum?: string[]; [k: string]: unknown };
+      uiHints?: {
+        label?: string;
+        inputType?: string;
+        placeholder?: string;
+      };
     }>;
   }>;
   views?: Array<{
@@ -262,8 +293,7 @@ export async function createWorkspaceFromDefinition(
         kind: "profile",
         profileSlug: p.slug,
         label: p.displayName,
-        // Support both CP format (uiHints.icon) and proposal format (direct icon)
-        icon: p.icon ?? (p as any).uiHints?.icon,
+        icon: p.icon ?? p.uiHints?.icon,
       })),
     } as any;
   }
@@ -322,6 +352,8 @@ export async function createWorkspaceFromDefinition(
 
   // 3. Create profiles and collect slug → id mapping
   const profileMap: Record<string, string> = {};
+  /** Resolved icon/color per slug — used later for auto-generated bento blocks. */
+  const profileHintsMap: Record<string, { icon?: string; color?: string }> = {};
   const profileRepo = new ProfileRepository(dbConn);
   const propDefRepo = new PropertyDefRepository(dbConn);
   const profilePropRepo = new ProfilePropertyRepository(dbConn);
@@ -340,30 +372,17 @@ export async function createWorkspaceFromDefinition(
     // Normalize profile fields: support both formats
     //   • Control-plane registry format: uiHints.icon/color/description + propertyDefs[]
     //   • Frontend proposal format:      icon/color/description (direct) + properties[]
-    const rawProfile = profile as unknown as Record<string, unknown>;
-    const cpUiHints = rawProfile.uiHints as Record<string, unknown> | undefined;
-    const resolvedIcon =
-      profile.icon ?? (cpUiHints?.icon as string | undefined);
-    const resolvedColor =
-      profile.color ?? (cpUiHints?.color as string | undefined);
+    // (Both are typed in WorkspaceDefinitionInput — no casting needed)
+    const resolvedIcon = profile.icon ?? profile.uiHints?.icon;
+    const resolvedColor = profile.color ?? profile.uiHints?.color;
     const resolvedDescription =
-      profile.description ?? (cpUiHints?.description as string | undefined);
+      profile.description ?? profile.uiHints?.description;
 
-    // Normalize properties: proposal format has profile.properties[], CP registry format
-    // has profile.propertyDefs[] with nested uiHints. Merge both into a single list.
-    type RawPropertyDef = {
-      slug: string;
-      valueType: string;
-      required?: boolean;
-      constraints?: { enum?: string[]; [k: string]: unknown };
-      uiHints?: { label?: string; inputType?: string; placeholder?: string };
-    };
-    const cpPropertyDefs = rawProfile.propertyDefs as
-      | RawPropertyDef[]
-      | undefined;
+    // Normalize properties: prefer proposal format (properties[]) when present,
+    // fall back to CP registry format (propertyDefs[] with nested uiHints).
     const resolvedProperties: typeof profile.properties =
       profile.properties ??
-      cpPropertyDefs?.map((pd) => ({
+      profile.propertyDefs?.map((pd) => ({
         slug: pd.slug,
         label: pd.uiHints?.label ?? pd.slug,
         valueType: pd.valueType,
@@ -411,6 +430,10 @@ export async function createWorkspaceFromDefinition(
     }
 
     profileMap[profile.slug] = created.id;
+    profileHintsMap[profile.slug] = {
+      icon: resolvedIcon,
+      color: resolvedColor,
+    };
     profileIds.push(created.id);
 
     // 4. Create property definitions and link to profile.
@@ -642,7 +665,12 @@ export async function createWorkspaceFromDefinition(
   for (const profile of definition.profiles ?? []) {
     if (profilesWithExplicitBento.has(profile.slug)) continue;
     const scopeProfileId = profileMap[profile.slug];
-    const blocks = buildDefaultProfileBentoBlocks(profile);
+    const hints = profileHintsMap[profile.slug] ?? {};
+    const blocks = buildDefaultProfileBentoBlocks({
+      ...profile,
+      icon: hints.icon,
+      color: hints.color,
+    });
 
     const viewResult = await viewRepo.create(
       {

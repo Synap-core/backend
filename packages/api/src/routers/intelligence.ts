@@ -517,13 +517,7 @@ export const intelligenceRouter = router({
       }
 
       const isDefaultService = resolved.serviceId === "default";
-      const intelligenceConfigured =
-        !isDefaultService ||
-        Boolean(
-          process.env.AGENT_HUB_API_KEY?.trim() ||
-          process.env.INTELLIGENCE_HUB_API_KEY?.trim() ||
-          process.env.HUB_PROTOCOL_API_KEY?.trim()
-        );
+      const intelligenceConfigured = !isDefaultService;
 
       return {
         serviceId: resolved.serviceId,
@@ -679,20 +673,24 @@ export const intelligenceRouter = router({
     .input(z.object({ since: z.string().optional() }))
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { endpoint, apiKey } = await getServiceEndpoint(
-        userId,
-        ctx.workspaceId!
-      );
-      const params = input.since
-        ? `?since=${encodeURIComponent(input.since)}`
-        : "";
-      const res = await apiProxyFetch(
-        `/executions/stats${params}`,
-        endpoint,
-        apiKey
-      );
-      const data = (await res.json()) as { stats: ExecutionStats };
-      return { stats: data.stats };
+      try {
+        const { endpoint, apiKey } = await getServiceEndpoint(
+          userId,
+          ctx.workspaceId!
+        );
+        const params = input.since
+          ? `?since=${encodeURIComponent(input.since)}`
+          : "";
+        const res = await apiProxyFetch(
+          `/executions/stats${params}`,
+          endpoint,
+          apiKey
+        );
+        const data = (await res.json()) as { stats: ExecutionStats };
+        return { stats: data.stats };
+      } catch {
+        return { stats: {} as ExecutionStats };
+      }
     }),
 
   /** List executions with filters */

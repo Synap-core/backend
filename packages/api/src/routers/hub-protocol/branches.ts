@@ -35,15 +35,10 @@ export const branchesRouter = router({
         branchPurpose: z.string(),
         agentId: z.string().optional(),
         agentType: z
-          .enum([
-            "default",
-            "meta",
-            "prompting",
-            "knowledge-search",
-            "code",
-            "writing",
-            "action",
-          ])
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
           .optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
         inheritContext: z.boolean().default(true),

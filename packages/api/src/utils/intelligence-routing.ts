@@ -285,12 +285,10 @@ function createDefaultClient(): ResolvedService {
     process.env.AGENT_HUB_URL ||
     process.env.INTELLIGENCE_HUB_URL ||
     "http://localhost:3001";
-  const apiKey =
-    process.env.AGENT_HUB_API_KEY || process.env.INTELLIGENCE_HUB_API_KEY || "";
   return {
     serviceId: "default",
     endpoint: baseUrl,
-    client: new IntelligenceHubClient(baseUrl, apiKey),
-    serviceApiKey: apiKey,
+    client: new IntelligenceHubClient(baseUrl, ""),
+    serviceApiKey: "",
   };
 }

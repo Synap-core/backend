@@ -1,4 +1,4 @@
-import { NavLink } from "@mantine/core";
+import { NavLink, Select, Text } from "@mantine/core";
 import { Link, useLocation } from "react-router-dom";
 import {
   IconHome,
@@ -14,6 +14,7 @@ import {
   IconBuildingCommunity,
   IconTopologyStarRing3,
   IconPlug,
+  IconBrain,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
 import { colors, layout, spacing, typography } from "../../theme/tokens";
@@ -39,6 +40,7 @@ const sections: NavSection[] = [
     items: [
       { path: "/", label: "Dashboard", icon: IconHome },
       { path: "/users", label: "Users", icon: IconUsers },
+      { path: "/workspaces", label: "Workspaces", icon: IconBuildingCommunity },
       { path: "/data", label: "Database", icon: IconDatabase },
       { path: "/files", label: "Files", icon: IconFolder },
       { path: "/events", label: "Events", icon: IconSearch },
@@ -48,9 +50,9 @@ const sections: NavSection[] = [
   {
     label: "Workspace",
     items: [
-      { path: "/workspace", label: "Overview", icon: IconBuildingCommunity },
+      { path: "/workspace", label: "Overview", icon: IconHome },
       { path: "/proposals", label: "Proposals", icon: IconCheckbox },
-      { path: "/commands", label: "Intelligence", icon: IconTerminal2 },
+      { path: "/intelligence", label: "Intelligence", icon: IconTerminal2 },
       { path: "/services", label: "Services", icon: IconPlug },
     ],
   },
@@ -59,6 +61,7 @@ const sections: NavSection[] = [
     items: [
       { path: "/testing", label: "Testing", icon: IconFlask },
       { path: "/automation", label: "Webhooks", icon: IconWebhook },
+      { path: "/memory", label: "Memory", icon: IconBrain },
       { path: "/flow", label: "Architecture", icon: IconTopologyStarRing3 },
     ],
   },
@@ -66,7 +69,13 @@ const sections: NavSection[] = [
 
 export default function MainNav({ onNavigate }: MainNavProps) {
   const location = useLocation();
-  const { workspaceRole } = useWorkspace();
+  const {
+    workspaceId,
+    workspaceName,
+    workspaceRole,
+    workspaces,
+    setWorkspace,
+  } = useWorkspace();
 
   // Only show Data Pod section for owner/admin roles
   const isAdmin = workspaceRole === "owner" || workspaceRole === "admin";
@@ -76,7 +85,17 @@ export default function MainNav({ onNavigate }: MainNavProps) {
 
   const isActive = (path: string) => {
     if (path === "/") {
-      return location.pathname === "/" || location.pathname === "/health";
+      return location.pathname === "/";
+    }
+    if (path === "/workspaces") {
+      // Match /workspaces and /workspaces/:id but not /workspace
+      return (
+        location.pathname === "/workspaces" ||
+        location.pathname.startsWith("/workspaces/")
+      );
+    }
+    if (path === "/workspace") {
+      return location.pathname === "/workspace";
     }
     return (
       location.pathname === path || location.pathname.startsWith(path + "/")
@@ -96,6 +115,38 @@ export default function MainNav({ onNavigate }: MainNavProps) {
     >
       {visibleSections.map((section, sectionIndex) => (
         <div key={section.label} style={{ marginBottom: spacing[4] }}>
+          {/* Workspace selector — appears above the Workspace section */}
+          {section.label === "Workspace" && workspaces.length > 0 && (
+            <div style={{ marginBottom: spacing[3] }}>
+              <Text
+                size="xs"
+                style={{
+                  color: colors.text.tertiary,
+                  padding: `0 ${spacing[3]}`,
+                  marginBottom: spacing[1],
+                  fontFamily: typography.fontFamily.sans,
+                }}
+              >
+                Active workspace
+              </Text>
+              <Select
+                size="xs"
+                value={workspaceId}
+                onChange={(v) => v && setWorkspace(v)}
+                data={workspaces.map((w) => ({ value: w.id, label: w.name }))}
+                placeholder={workspaceName ?? "Select workspace"}
+                styles={{
+                  input: {
+                    fontSize: typography.fontSize.xs,
+                    fontFamily: typography.fontFamily.sans,
+                    borderColor: colors.border.default,
+                    backgroundColor: colors.background.secondary,
+                  },
+                }}
+              />
+            </div>
+          )}
+
           {/* Section label */}
           <div
             style={{

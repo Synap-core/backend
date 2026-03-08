@@ -1,11 +1,4 @@
-import {
-  Group,
-  Text,
-  Badge,
-  ActionIcon,
-  Tooltip,
-  Menu,
-} from "@mantine/core";
+import { Group, Text, Badge, ActionIcon, Tooltip, Menu } from "@mantine/core";
 import {
   IconCommand,
   IconMenu2,
@@ -13,6 +6,7 @@ import {
   IconLogout,
 } from "@tabler/icons-react";
 import { useAuth } from "../../lib/auth";
+import { useWorkspace } from "../../lib/workspace";
 import { colors } from "../../theme/tokens";
 
 interface TopNavProps {
@@ -21,6 +15,7 @@ interface TopNavProps {
 
 export default function TopNav({ onMenuOpen }: TopNavProps) {
   const { user, logout } = useAuth();
+  const { workspaceName } = useWorkspace();
 
   return (
     <Group
@@ -62,12 +57,27 @@ export default function TopNav({ onMenuOpen }: TopNavProps) {
         <Badge size="xs" variant="light" color="gray">
           Admin
         </Badge>
+        {workspaceName && (
+          <>
+            <Text size="xs" c="dimmed" style={{ opacity: 0.5 }}>
+              /
+            </Text>
+            <Text size="xs" style={{ color: colors.text.secondary }}>
+              {workspaceName}
+            </Text>
+          </>
+        )}
       </Group>
 
       {/* Actions */}
       <Group gap="xs">
         <Tooltip label="Command Menu (⌘K)" position="bottom">
-          <ActionIcon variant="subtle" size="lg" color="gray" aria-label="Open command palette">
+          <ActionIcon
+            variant="subtle"
+            size="lg"
+            color="gray"
+            aria-label="Open command palette"
+          >
             <IconCommand size={20} />
           </ActionIcon>
         </Tooltip>
@@ -76,7 +86,12 @@ export default function TopNav({ onMenuOpen }: TopNavProps) {
         {user && (
           <Menu shadow="md" width={200} position="bottom-end">
             <Menu.Target>
-              <ActionIcon variant="subtle" size="lg" color="gray" aria-label="User menu">
+              <ActionIcon
+                variant="subtle"
+                size="lg"
+                color="gray"
+                aria-label="User menu"
+              >
                 <IconUser size={20} />
               </ActionIcon>
             </Menu.Target>

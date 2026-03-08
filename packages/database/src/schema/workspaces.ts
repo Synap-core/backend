@@ -12,11 +12,13 @@ import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
 export interface WorkspaceSidebarItem {
-  kind: "app" | "view" | "profile" | "external";
+  kind: "app" | "view" | "profile" | "external" | "cell";
   /** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
   appId?: string;
   /** View name for kind='view' — resolved lazily at click time */
   viewName?: string;
+  /** View ID for kind='view' — preferred over viewName when available */
+  viewId?: string;
   /**
    * Profile slug for kind='profile'.
    * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,
@@ -25,6 +27,10 @@ export interface WorkspaceSidebarItem {
   profileSlug?: string;
   /** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
   url?: string;
+  /** Widget/cell type key for kind='cell' (e.g. 'ai-chat', 'proposals-list') */
+  cellKey?: string;
+  /** Config props passed to the cell when opened as a panel */
+  cellProps?: Record<string, unknown>;
   /** Display label shown in the sidebar */
   label?: string;
   /** Lucide icon name override */
@@ -211,6 +217,27 @@ export interface WorkspaceSettings {
    * Enables the intelligence service to know which staging area belongs to which agent.
    */
   linkedAgentId?: string;
+
+  /**
+   * Workspace governance mode.
+   * - "standard"    — default: workspace owner has full control.
+   * - "agent-owned" — the AI agent is workspace owner (creative authority);
+   *                   the human is admin (irreversibility guard).
+   *                   All destructive actions by the agent require a proposal
+   *                   even if the agent holds the owner role.
+   */
+  governanceMode?: "standard" | "agent-owned";
+
+  // ─── Per-workspace package enabled/disabled state ────────────────────────────
+  /**
+   * Package enabled overrides for this workspace.
+   * Maps SynapPackage id → enabled boolean.
+   * Only entries that differ from the package's `defaultEnabled` flag are stored.
+   * When absent for a package, the package's own default applies.
+   *
+   * Example: { "synap.proposals": false, "synap.ai-chat": true }
+   */
+  enabledPackages?: Record<string, boolean>;
 
   // AI Governance Settings
   aiGovernance?: {

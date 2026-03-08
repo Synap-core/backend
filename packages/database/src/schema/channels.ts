@@ -24,7 +24,11 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * Channel Types
  *
  * AI_THREAD       — AI conversation (was 'main')
- * BRANCH          — sub-conversation branched from a parent channel message
+ * BRANCH          — AI-spawned research sub-channel; has branchPurpose + specialized agent;
+ *                   expected to conclude and feed results back to parent.
+ * THREAD          — User-created sub-conversation forked from a parent channel.
+ *                   Casual side context; AI optional (determined by agentType field).
+ *                   Both BRANCH and THREAD use parentChannelId for hierarchy.
  * ENTITY_COMMENTS — comment/discussion thread attached to a specific entity
  * DOCUMENT_REVIEW — review/comment thread attached to a specific document
  * VIEW_DISCUSSION — discussion thread attached to a view
@@ -35,6 +39,7 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 export const ChannelType = {
   AI_THREAD: "ai_thread",
   BRANCH: "branch",
+  THREAD: "thread",
   ENTITY_COMMENTS: "entity_comments",
   DOCUMENT_REVIEW: "document_review",
   VIEW_DISCUSSION: "view_discussion",
@@ -98,6 +103,7 @@ export const channels = pgTable(
       enum: [
         ChannelType.AI_THREAD,
         ChannelType.BRANCH,
+        ChannelType.THREAD,
         ChannelType.ENTITY_COMMENTS,
         ChannelType.DOCUMENT_REVIEW,
         ChannelType.VIEW_DISCUSSION,

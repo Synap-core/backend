@@ -10,6 +10,7 @@ import InvestigatePage from "./pages/(v2)/InvestigatePage";
 import ApiKeysPage from "./pages/(v2)/ApiKeysPage";
 
 // Workspace Pages
+import WorkspaceDashboardPage from "./pages/(v2)/WorkspaceDashboardPage";
 import WorkspacesPage from "./pages/(v2)/WorkspacesPage";
 import WorkspaceDetailPage from "./pages/(v2)/WorkspaceDetailPage";
 import ProposalsPage from "./pages/(v2)/ProposalsPage";
@@ -32,7 +33,6 @@ function App() {
       <Route path="/" element={<MainLayout />}>
         {/* Data Pod Routes */}
         <Route index element={<DashboardPage />} />
-        <Route path="health" element={<DashboardPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="data" element={<DatabasePage />} />
         <Route path="files" element={<FilesPage />} />
@@ -40,23 +40,18 @@ function App() {
         <Route path="api-keys" element={<ApiKeysPage />} />
 
         {/* Workspace Routes */}
-        <Route path="workspace" element={<WorkspaceDetailPage />} />
+        <Route path="workspace" element={<WorkspaceDashboardPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="workspaces/:id" element={<WorkspaceDetailPage />} />
         <Route path="proposals" element={<ProposalsPage />} />
-        <Route path="commands" element={<IntelligencePage />} />
-        <Route path="memory" element={<MemoryPage />} />
+        <Route path="intelligence" element={<IntelligencePage />} />
+        <Route path="services" element={<ServicesPage />} />
 
         {/* Developer Routes */}
         <Route path="testing" element={<TestingPage />} />
         <Route path="automation" element={<SubscribersPage />} />
         <Route path="flow" element={<FlowPageV3 />} />
-        <Route path="services" element={<ServicesPage />} />
-
-        {/* Legacy route redirects */}
-        <Route path="investigate" element={<InvestigatePage />} />
-        <Route path="database" element={<DatabasePage />} />
-        <Route path="subscribers" element={<SubscribersPage />} />
+        <Route path="memory" element={<MemoryPage />} />
       </Route>
     </Routes>
   );
