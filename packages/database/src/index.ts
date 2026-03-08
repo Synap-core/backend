@@ -86,6 +86,7 @@ export {
   type WorkspaceDefinitionInput,
   type CreateFromDefinitionOptions,
   type CreateFromDefinitionResult,
+  type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
 
 // Export document types for type safety
