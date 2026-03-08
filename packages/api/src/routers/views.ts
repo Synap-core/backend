@@ -343,6 +343,8 @@ export const viewsRouter = router({
             "all",
           ])
           .optional(),
+        /** When true, exclude views that were auto-created by bento block picker */
+        excludeAutoCreated: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -357,6 +359,9 @@ export const viewsRouter = router({
           workspaceCondition,
           input.type && input.type !== "all"
             ? eq(views.type, input.type)
+            : undefined,
+          input.excludeAutoCreated
+            ? sql`(${views.metadata}->>'autoCreated') IS DISTINCT FROM 'true'`
             : undefined
         ),
         orderBy: [desc(views.updatedAt)],
