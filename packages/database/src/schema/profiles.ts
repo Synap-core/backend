@@ -14,7 +14,6 @@ import {
   integer,
   timestamp,
   index,
-  unique,
   primaryKey,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
@@ -86,7 +85,11 @@ export const profiles = pgTable(
       .notNull(),
   },
   (table) => ({
-    slugIdx: unique("profiles_slug_unique").on(table.slug),
+    // NOTE: slug uniqueness is enforced via partial DB indexes (migration 0052):
+    //   - system + shared: unique(slug) globally
+    //   - workspace: unique(slug, workspace_id)
+    //   - user: unique(slug, user_id)
+    // The old global unique("profiles_slug_unique") has been dropped.
     parentProfileIdx: index("profiles_parent_profile_id_idx").on(
       table.parentProfileId
     ),
