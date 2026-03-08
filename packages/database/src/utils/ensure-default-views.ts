@@ -55,18 +55,9 @@ export async function ensureDefaultViews(
       };
     }
 
-    // Get task profile (system profile)
+    // Get task profile if available (optional — task views are only created when profile exists)
     const profileRepo = new ProfileRepository(db);
     const taskProfile = await profileRepo.getBySlug("task");
-
-    if (!taskProfile) {
-      return {
-        status: "skipped",
-        message:
-          "Task profile not found - system profiles may not be seeded yet",
-        viewsCreated: 0,
-      };
-    }
 
     // Check if default views already exist
     const allWorkspaceViews = await db.query.views.findMany({
@@ -82,7 +73,9 @@ export async function ensureDefaultViews(
         v.type === "bento" && (v.metadata as any)?.homeScope === "workspace"
     );
 
-    if (hasAllTasks && hasTaskBoard && hasHome) {
+    // Skip only if Home is done AND (task views done OR task profile not available)
+    const taskViewsDone = !taskProfile || (hasAllTasks && hasTaskBoard);
+    if (hasHome && taskViewsDone) {
       return {
         status: "skipped",
         message: "Default views already exist",
@@ -105,8 +98,8 @@ export async function ensureDefaultViews(
 
     const createdViewIds: string[] = [];
 
-    // 1. Create "All Tasks" table view
-    if (!hasAllTasks) {
+    // 1. Create "All Tasks" table view (only when task profile exists)
+    if (taskProfile && !hasAllTasks) {
       const allTasksView = await viewRepo.create(
         {
           type: "table",
@@ -139,8 +132,8 @@ export async function ensureDefaultViews(
       createdViewIds.push(allTasksView.id);
     }
 
-    // 2. Create "Task Board" kanban view
-    if (!hasTaskBoard) {
+    // 2. Create "Task Board" kanban view (only when task profile exists)
+    if (taskProfile && !hasTaskBoard) {
       const taskBoardView = await viewRepo.create(
         {
           type: "kanban",

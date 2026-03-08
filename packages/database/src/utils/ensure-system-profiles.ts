@@ -254,7 +254,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           {
             slug: "status",
             required: false,
-            defaultValue: "active",
+            defaultValue: "todo",
             displayOrder: 1,
           },
           { slug: "tags", required: false, displayOrder: 2 },

@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, webhookSubscriptions, eq, ensureSystemProfiles } from "@synap/database";
+import { db, webhookSubscriptions, eq } from "@synap/database";
 import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "startup-hooks" });
@@ -108,31 +108,11 @@ export async function configureLangFlow(): Promise<void> {
 }
 
 /**
- * Ensure system profiles (note, task, project, event, person, company) exist.
- * Idempotent — safe to run on every startup.
- */
-async function initSystemProfiles(): Promise<void> {
-  try {
-    const result = await ensureSystemProfiles();
-    if (result.status === "error") {
-      logger.warn({ error: result.error }, "ensureSystemProfiles returned error (non-fatal)");
-    } else {
-      logger.info(result, "System profiles ready");
-    }
-  } catch (err) {
-    // Non-fatal: existing workspaces are unaffected; new template-based
-    // workspaces that reference system profiles will get logged errors.
-    logger.error({ err }, "Failed to ensure system profiles (non-fatal)");
-  }
-}
-
-/**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
-  await initSystemProfiles();
   await configureN8NWebhook();
   await configureLangFlow();
 

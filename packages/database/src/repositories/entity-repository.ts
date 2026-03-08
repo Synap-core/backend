@@ -36,6 +36,13 @@ export interface CreateEntityInput {
 
   workspaceId: string;
   userId: string;
+
+  /**
+   * Skip property validation. Use for trusted seed data during workspace provisioning
+   * where template property slugs may differ from system profile property defs.
+   * Properties are stored as-is without enum/required checks.
+   */
+  skipValidation?: boolean;
 }
 
 export interface UpdateEntityInput {
@@ -164,7 +171,10 @@ export class EntityRepository extends BaseRepository<
 
     // 2. Validate and normalize properties
     let validatedProperties: Record<string, unknown> = {};
-    if (profileId && data.properties) {
+    if (data.skipValidation) {
+      // Trusted seed data (template provisioning) — store as-is without schema enforcement
+      validatedProperties = data.properties ?? {};
+    } else if (profileId && data.properties) {
       const validationResult = await this.propertyValidation.validateProperties(
         data.properties,
         profileId

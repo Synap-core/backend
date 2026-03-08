@@ -1102,6 +1102,11 @@ export async function createWorkspaceFromDefinition(
             properties: entity.properties,
             workspaceId,
             userId,
+            // Skip strict validation for template seed data — property slugs in the
+            // template may differ from system profile property defs, and required
+            // properties on system profiles (like 'title') are entity-level fields,
+            // not property values.
+            skipValidation: true,
           },
           userId
         );
