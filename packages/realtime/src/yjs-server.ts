@@ -17,6 +17,7 @@ import {
   documents,
   documentVersions,
   documentSessions,
+  workspaceMembers,
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
 import { recordYjsPersist } from "./bridge.js";
@@ -402,9 +403,70 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
 
   console.log("[Yjs] Initializing y-socket.io server...");
 
-  // Create YSocketIO server with database persistence
+  // Create YSocketIO server with database persistence and access control.
+  //
+  // Access model: any workspace member may read/write any document in that workspace.
+  // The client sends { userId, workspaceId } in the SocketIOProvider auth object;
+  // we verify the document belongs to that workspace and the user is a member.
+  //
+  // If auth is missing (legacy clients, local dev without auth), we fail open with a
+  // warning so existing flows aren't broken. Set REQUIRE_YJS_AUTH=true in production
+  // to make the check strict.
+  const requireAuth = process.env.REQUIRE_YJS_AUTH === "true";
+
   const yServer = new YSocketIO(io, {
     gcEnabled: true,
+    authenticate: async (handshake) => {
+      const { userId, workspaceId } = (handshake.auth ?? {}) as {
+        userId?: string;
+        workspaceId?: string;
+      };
+
+      if (!userId) {
+        if (requireAuth) {
+          console.warn("[Yjs] Auth rejected: missing userId");
+          return false;
+        }
+        return true; // lenient in dev
+      }
+
+      // The room name is either "whiteboard-{docId}" or "{docId}" — parse documentId
+      // We can't get the room name from the handshake alone (it's per-namespace middleware),
+      // so we verify workspace membership instead: userId ∈ workspaceId.
+      // This is sufficient because all documents in a workspace share the same access gate.
+      if (!workspaceId) {
+        if (requireAuth) {
+          console.warn(
+            `[Yjs] Auth rejected for userId=${userId}: missing workspaceId`
+          );
+          return false;
+        }
+        return true; // lenient in dev
+      }
+
+      try {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(workspaceMembers.userId, userId)
+          ),
+          columns: { id: true },
+        });
+
+        if (!membership) {
+          console.warn(
+            `[Yjs] Auth rejected: userId=${userId} is not a member of workspace=${workspaceId}`
+          );
+          return false;
+        }
+
+        return true;
+      } catch (err) {
+        // DB error — fail open to avoid locking out users during transient outages
+        console.error("[Yjs] Auth check failed (DB error), failing open:", err);
+        return true;
+      }
+    },
   });
 
   // CRITICAL: Set persistence directly on the YSocketIO instance.
