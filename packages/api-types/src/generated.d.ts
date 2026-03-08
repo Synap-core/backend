@@ -300,7 +300,10 @@ export interface WorkspaceSettings {
 	};
 	/** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
 	templateName?: string;
-	/** ID of the template from the control plane registry (for audit trail). */
+	/**
+	 * ID of the template used to create this workspace (from control plane registry).
+	 * Distinct from packageSlug — a package can have multiple template versions.
+	 */
 	templateId?: string;
 	/** Slug of the control plane package used to create this workspace. */
 	packageSlug?: string;
@@ -314,7 +317,7 @@ export interface WorkspaceSettings {
 	packageVersion?: string;
 	/** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
 	createdBy?: "user" | "provisioning" | "plugin";
-	/** ISO timestamp when provisioning created this workspace */
+	/** ISO timestamp when provisioning started (set immediately on workspace creation) */
 	provisionedAt?: string;
 	/** ISO timestamp when provisioning started */
 	provisioningStartedAt?: string;
@@ -325,11 +328,23 @@ export interface WorkspaceSettings {
 	 * - "failed"  — provisioning stopped at a step (see failedStep + completedSteps)
 	 */
 	provisioningStatus?: "pending" | "active" | "failed";
-	/** The step at which provisioning failed. Only set when provisioningStatus === "failed". */
+	/**
+	 * The step at which provisioning failed.
+	 * Only set when provisioningStatus === "failed".
+	 * Format: step-key (e.g. "profiles[company].create", "views[Home]", "entities")
+	 */
 	failedStep?: string;
-	/** Human-readable error message from the failed step (truncated to 500 chars). */
+	/**
+	 * Human-readable error message from the failed step (truncated to 500 chars).
+	 * Only set when provisioningStatus === "failed".
+	 */
 	failedStepError?: string;
-	/** Step keys completed before the failure (for debugging / partial retry). */
+	/**
+	 * Step keys that completed successfully before the failure.
+	 * Populated in order: ["workspace", "member", "profiles", "relations", "templates",
+	 *   "views", "bento", "home", "entities", "flows", "relations-seed", "done"]
+	 * Lets callers know how far provisioning progressed for debugging / partial retry.
+	 */
 	completedSteps?: string[];
 	/**
 	 * Semantic type of this workspace within the pod.
@@ -4865,16 +4880,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							placeholder?: string | undefined;
 							enumValues?: string[] | undefined;
 							constraints?: Record<string, unknown> | undefined;
+							targetProfileSlug?: string | undefined;
+						}[] | undefined;
+						uiHints?: {
+							icon?: string | undefined;
+							color?: string | undefined;
+							description?: string | undefined;
+						} | undefined;
+						propertyDefs?: {
+							slug: string;
+							valueType: string;
+							required?: boolean | undefined;
+							constraints?: {
+								[x: string]: unknown;
+								enum?: string[] | undefined;
+							} | undefined;
+							uiHints?: {
+								label?: string | undefined;
+								inputType?: string | undefined;
+								placeholder?: string | undefined;
+							} | undefined;
 						}[] | undefined;
 					}[] | undefined;
 					views?: {
 						type: string;
 						name?: string | undefined;
 						displayName?: string | undefined;
+						slug?: string | undefined;
 						scopeProfileSlug?: string | undefined;
 						scopeProfileSlugs?: string[] | undefined;
 						config?: Record<string, unknown> | undefined;
+						groupBy?: string | undefined;
+						sortBy?: string | undefined;
+						sortOrder?: "desc" | "asc" | undefined;
+						filterBy?: Record<string, unknown> | undefined;
+						description?: string | undefined;
+						defaultView?: boolean | undefined;
+						hierarchyEdges?: {
+							parent: string;
+							child: string;
+							via?: string | undefined;
+						}[] | undefined;
+						startField?: string | undefined;
+						endField?: string | undefined;
+						colorBy?: string | undefined;
 					}[] | undefined;
+					bentoViewName?: string | undefined;
 					bentoLayout?: {
 						widgetType: string;
 						pos: {
@@ -4897,6 +4948,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						overrides?: Record<string, unknown> | undefined;
 					}[] | undefined;
 					suggestedEntities?: {
+						profileSlug: string;
+						title: string;
+						properties?: Record<string, unknown> | undefined;
+						content?: string | undefined;
+					}[] | undefined;
+					seedEntities?: {
 						profileSlug: string;
 						title: string;
 						properties?: Record<string, unknown> | undefined;
@@ -4942,13 +4999,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
+				templateId?: string | undefined;
+				templateName?: string | undefined;
 				workspaceName?: string | undefined;
 				workspaceType?: "project" | "agent" | "personal" | "operational" | undefined;
 				linkedAgentId?: string | undefined;
 			};
 			output: {
+				status: "created";
 				workspaceId: string;
-				status?: undefined;
+				profileIds: string[];
+				viewIds: string[];
+				entityIds?: undefined;
+			} | {
+				status: "created" | "pending";
+				workspaceId: string;
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;

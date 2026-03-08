@@ -370,9 +370,22 @@ provisionRouter.post("/reset-intelligence", async (c) => {
     );
   }
 
+  // Require the pod to have been provisioned before we allow a reset.
+  // An unprovisioned pod (no registeredPodId) has nothing to reset, and accepting any
+  // valid CP JWT here would allow an adversary to pre-occupy a pod's IS slot.
+  if (!registeredPodId) {
+    return c.json(
+      {
+        error:
+          "Pod is not yet provisioned — cannot reset a registration that does not exist",
+      },
+      409
+    );
+  }
+
   // Verify the JWT was issued for THIS pod — prevents cross-pod JWT replay.
   // A valid provision JWT for Pod A cannot be used to wipe Pod B's IS credentials.
-  if (registeredPodId && payload.podId !== registeredPodId) {
+  if (payload.podId !== registeredPodId) {
     logger.warn(
       { jwtPodId: payload.podId, registeredPodId },
       "reset-intelligence: rejected — JWT podId does not match this pod's registered podId"
@@ -421,7 +434,18 @@ provisionRouter.post("/reset-intelligence", async (c) => {
 // /api/provision/status is public and reads the cached DB status instead.
 //
 // Auth: Bearer <cpJwt>, type MUST be "provision".
-// Called by the CP status endpoint when it wants an accurate credential picture.
+// Called by the CP after provisioning to confirm credentials landed correctly.
+//
+// Security:
+//   - type MUST be "provision" (rejects tier_update and other lightweight types)
+//   - payload.podId MUST match registered podId — prevents cross-pod JWT replay
+//   - pod MUST already be provisioned (registeredPodId must exist) — rejects calls
+//     against unprovisioned pods where any valid JWT would otherwise pass
+//   - SSRF prevention: the URL probed (svc.webhookUrl) is verified against
+//     payload.intelligenceHubUrl from the CP-signed JWT — ensures we only probe
+//     the URL the CP explicitly authorized, even if the DB record is tampered
+//   - Only HTTP 401 marks credentials as invalid — transient errors (500, 503,
+//     network timeout) leave status unchanged to avoid false positives
 //
 // Returns: { credentialsValid: boolean | null, status: string }
 
@@ -447,10 +471,11 @@ provisionRouter.post("/validate-credentials", async (c) => {
     /* fall through */
   }
 
-  const payload = await verifyCpJwt<{ type: string; podId: string }>(
-    token,
-    cpUrl
-  );
+  const payload = await verifyCpJwt<{
+    type: string;
+    podId: string;
+    intelligenceHubUrl?: string;
+  }>(token, cpUrl);
   if (!payload) {
     return c.json({ error: "Invalid or expired provision token" }, 401);
   }
@@ -463,7 +488,23 @@ provisionRouter.post("/validate-credentials", async (c) => {
       403
     );
   }
-  if (registeredPodId && payload.podId !== registeredPodId) {
+
+  // Require the pod to already be provisioned. An unprovisioned pod has no IS to validate,
+  // and accepting JWTs without a known podId anchor is weaker than requiring registration first.
+  if (!registeredPodId) {
+    return c.json(
+      {
+        error:
+          "Pod is not yet provisioned — complete provisioning before validating credentials",
+      },
+      409
+    );
+  }
+  if (payload.podId !== registeredPodId) {
+    logger.warn(
+      { jwtPodId: payload.podId, registeredPodId },
+      "validate-credentials: rejected — JWT podId does not match this pod's registered podId"
+    );
     return c.json({ error: "Token was not issued for this pod" }, 403);
   }
 
@@ -492,33 +533,70 @@ provisionRouter.post("/validate-credentials", async (c) => {
       return c.json({ credentialsValid: null, status: "no_key" });
     }
 
+    // SSRF prevention: the URL we probe must match what the CP authorized in the JWT.
+    // This ensures we only call the CP-sanctioned IS endpoint, even if the DB record
+    // was somehow modified to point at an internal or attacker-controlled URL.
+    if (
+      payload.intelligenceHubUrl &&
+      svc.webhookUrl !== payload.intelligenceHubUrl
+    ) {
+      logger.warn(
+        { stored: svc.webhookUrl, authorized: payload.intelligenceHubUrl },
+        "validate-credentials: stored IS URL does not match JWT-authorized URL — rejecting probe"
+      );
+      return c.json(
+        { error: "Stored IS URL does not match authorized intelligenceHubUrl" },
+        403
+      );
+    }
+
     // Live probe — decrypt stored key and call IS /api/validate
+    // Only HTTP 401 means "key rejected" → credential_error.
+    // All other non-2xx (500, 503, network timeout) are transient — don't mark as invalid.
     let credentialsValid: boolean | null = null;
     let newStatus = svc.status;
+    let httpStatus: number | null = null;
     try {
       const isKey = resolveServiceKey(svc.apiKey as string);
       const validateRes = await fetch(`${svc.webhookUrl}/api/validate`, {
         headers: { Authorization: `Bearer ${isKey}` },
         signal: AbortSignal.timeout(5000),
       });
-      credentialsValid = validateRes.ok;
-      newStatus = credentialsValid ? "active" : "credential_error";
+      httpStatus = validateRes.status;
 
-      // Persist result to DB so /status can use it without making outbound calls
-      await db
-        .update(intelligenceServices)
-        .set({ status: newStatus, updatedAt: new Date() })
-        .where(eq(intelligenceServices.serviceId, intelligenceServiceId));
+      if (validateRes.ok) {
+        credentialsValid = true;
+        newStatus = "active";
+      } else if (validateRes.status === 401) {
+        // Definitive rejection — key is not recognized by IS
+        credentialsValid = false;
+        newStatus = "credential_error";
+      } else {
+        // IS returned 403, 429, 500, 503, etc. — transient or policy issue, not invalid key
+        credentialsValid = null;
+        logger.warn(
+          { webhookUrl: svc.webhookUrl, httpStatus },
+          "IS returned non-401 non-2xx during credential probe — treating as transient, not marking credential_error"
+        );
+      }
+
+      // Only persist definitive outcomes to DB (true → active, false → credential_error)
+      if (credentialsValid !== null) {
+        await db
+          .update(intelligenceServices)
+          .set({ status: newStatus, updatedAt: new Date() })
+          .where(eq(intelligenceServices.serviceId, intelligenceServiceId));
+      }
 
       logger.info(
-        { credentialsValid, webhookUrl: svc.webhookUrl },
+        { credentialsValid, httpStatus, webhookUrl: svc.webhookUrl },
         "IS credential validation complete"
       );
     } catch {
-      credentialsValid = null; // IS unreachable — can't determine validity
+      credentialsValid = null; // network timeout or IS unreachable — not a credential error
       logger.warn(
         { webhookUrl: svc.webhookUrl },
-        "IS credential probe timed out — IS may be unreachable"
+        "IS credential probe timed out or threw — IS may be unreachable (not marking credential_error)"
       );
     }
 
@@ -658,6 +736,18 @@ provisionRouter.post("/disconnect", async (c) => {
   const payload = await verifyCpJwt<{ type?: string }>(token, cpUrl);
   if (!payload) {
     return c.json({ error: "Invalid or expired token" }, 401);
+  }
+
+  // Only "provision" JWTs carry the authority to remove the CP connection.
+  // "tier_update" JWTs are distributed more broadly and must not be able to disconnect.
+  if (payload.type !== "provision") {
+    return c.json(
+      {
+        error:
+          "Invalid token type — only 'provision' tokens may disconnect the pod",
+      },
+      403
+    );
   }
 
   try {
