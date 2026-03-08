@@ -262,7 +262,8 @@ export async function createWorkspaceFromDefinition(
         kind: "profile",
         profileSlug: p.slug,
         label: p.displayName,
-        icon: p.icon,
+        // Support both CP format (uiHints.icon) and proposal format (direct icon)
+        icon: p.icon ?? (p as any).uiHints?.icon,
       })),
     } as any;
   }
@@ -286,6 +287,11 @@ export async function createWorkspaceFromDefinition(
   if (opts.linkedAgentId) {
     settings.linkedAgentId = opts.linkedAgentId;
   }
+  // Agent workspaces invert the normal hierarchy: the AI agent is owner
+  // (creative authority) and the human is admin (irreversibility guard).
+  if (opts.workspaceType === "agent") {
+    settings.governanceMode = "agent-owned";
+  }
 
   onProgress?.("workspace", 10, "Creating workspace");
 
@@ -301,9 +307,16 @@ export async function createWorkspaceFromDefinition(
     userId
   );
 
-  // 2. Add creator as owner member
+  // 2. Add creator as member.
+  // In agent workspaces the human is "admin" (irreversibility guard) — the AI
+  // agent will be added as "owner" (creative authority) on its first message.
+  // In all other workspaces the creator is "owner" as usual.
   const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
-  await memberRepo.add({ workspaceId, userId, role: "owner" }, userId);
+  const creatorRole = opts.workspaceType === "agent" ? "admin" : "owner";
+  await memberRepo.add(
+    { workspaceId, userId, role: creatorRole as "owner" | "editor" | "viewer" },
+    userId
+  );
 
   onProgress?.("profiles", 25, "Setting up profiles");
 
@@ -323,6 +336,42 @@ export async function createWorkspaceFromDefinition(
     const scope = profile.scope
       ? (scopeMap[profile.scope] ?? "workspace")
       : "workspace";
+
+    // Normalize profile fields: support both formats
+    //   • Control-plane registry format: uiHints.icon/color/description + propertyDefs[]
+    //   • Frontend proposal format:      icon/color/description (direct) + properties[]
+    const rawProfile = profile as unknown as Record<string, unknown>;
+    const cpUiHints = rawProfile.uiHints as Record<string, unknown> | undefined;
+    const resolvedIcon =
+      profile.icon ?? (cpUiHints?.icon as string | undefined);
+    const resolvedColor =
+      profile.color ?? (cpUiHints?.color as string | undefined);
+    const resolvedDescription =
+      profile.description ?? (cpUiHints?.description as string | undefined);
+
+    // Normalize properties: proposal format has profile.properties[], CP registry format
+    // has profile.propertyDefs[] with nested uiHints. Merge both into a single list.
+    type RawPropertyDef = {
+      slug: string;
+      valueType: string;
+      required?: boolean;
+      constraints?: { enum?: string[]; [k: string]: unknown };
+      uiHints?: { label?: string; inputType?: string; placeholder?: string };
+    };
+    const cpPropertyDefs = rawProfile.propertyDefs as
+      | RawPropertyDef[]
+      | undefined;
+    const resolvedProperties: typeof profile.properties =
+      profile.properties ??
+      cpPropertyDefs?.map((pd) => ({
+        slug: pd.slug,
+        label: pd.uiHints?.label ?? pd.slug,
+        valueType: pd.valueType,
+        inputType: pd.uiHints?.inputType,
+        placeholder: pd.uiHints?.placeholder,
+        enumValues: pd.constraints?.enum,
+        constraints: pd.constraints,
+      }));
 
     // Handle pod-wide slug uniqueness: if the slug already exists (e.g., "company"
     // was created by a previous workspace from the same template), reuse the
@@ -347,9 +396,9 @@ export async function createWorkspaceFromDefinition(
         slug: profile.slug,
         displayName: profile.displayName,
         uiHints: {
-          icon: profile.icon,
-          color: profile.color,
-          description: profile.description,
+          icon: resolvedIcon,
+          color: resolvedColor,
+          description: resolvedDescription,
         },
         scope: scope as ProfileScope,
         workspaceId,
@@ -368,8 +417,8 @@ export async function createWorkspaceFromDefinition(
     // Skip entirely if we reused an existing profile — its property defs are already
     // set up and re-inserting would hit the (slug, profile_id) unique constraint.
     if (profileIsReused) continue;
-    for (let i = 0; i < (profile.properties ?? []).length; i++) {
-      const prop = profile.properties![i];
+    for (let i = 0; i < (resolvedProperties ?? []).length; i++) {
+      const prop = resolvedProperties![i];
 
       const propDef = await propDefRepo.create({
         slug: prop.slug,
