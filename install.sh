@@ -251,6 +251,7 @@ else
   KRATOS_WEBHOOK_SECRET=$(_gen)
   ORY_HYDRA_SECRETS_SYSTEM=$(_gen)
   HUB_PROTOCOL_API_KEY=$(_gen)
+  HUB_JWT_SECRET=$(_gen)
 
   success "Secrets generated"
 
@@ -295,6 +296,7 @@ ORY_HYDRA_SECRETS_SYSTEM=$ORY_HYDRA_SECRETS_SYSTEM
 
 # ── Hub Protocol ──────────────────────────────────────────────────────────────
 HUB_PROTOCOL_API_KEY=$HUB_PROTOCOL_API_KEY
+HUB_JWT_SECRET=$HUB_JWT_SECRET
 
 # ── Control Plane Integration ─────────────────────────────────────────────────
 # For Synap-managed deployments only. Leave blank for fully self-hosted setups.
@@ -314,9 +316,10 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 # ── Email (optional — configure SMTP for user notifications) ──────────────────
 # SMTP_CONNECTION_URI=smtps://user:pass@smtp.example.com:465
 
-# ── Frontend URL (if frontend is on a different domain) ───────────────────────
+# ── Frontend / CORS ───────────────────────────────────────────────────────────
 FRONTEND_URL=https://$DOMAIN
-CORS_ORIGIN=*
+CORS_ORIGIN=https://$DOMAIN
+ALLOWED_ORIGINS=https://$DOMAIN
 ENV_EOF
 
   chmod 600 "$INSTALL_DIR/.env"

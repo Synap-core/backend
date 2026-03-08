@@ -11,7 +11,19 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "pg-boss" });
 
-let _boss: PgBoss | null = null;
+// Use globalThis to share the singleton across pnpm module instances.
+// pnpm can create multiple copies of @synap/jobs when packages resolve
+// peer dependencies differently, giving each copy its own module-level
+// _boss variable. Storing on globalThis ensures all copies share one instance.
+const GLOBAL_KEY = "__synap_pg_boss__";
+
+function getGlobal(): PgBoss | null {
+  return (globalThis as Record<string, unknown>)[GLOBAL_KEY] as PgBoss | null ?? null;
+}
+
+function setGlobal(boss: PgBoss | null): void {
+  (globalThis as Record<string, unknown>)[GLOBAL_KEY] = boss;
+}
 
 function createBoss(): PgBoss {
   const connectionString = process.env.DATABASE_URL;
@@ -40,10 +52,12 @@ function createBoss(): PgBoss {
  * Creates if not yet initialized but does NOT start it.
  */
 export function getBoss(): PgBoss {
-  if (!_boss) {
-    _boss = createBoss();
+  let boss = getGlobal();
+  if (!boss) {
+    boss = createBoss();
+    setGlobal(boss);
   }
-  return _boss;
+  return boss;
 }
 
 /**
@@ -59,9 +73,10 @@ export async function startBoss(): Promise<void> {
  * Stop the pg-boss worker gracefully. Call on server shutdown.
  */
 export async function stopBoss(): Promise<void> {
-  if (_boss) {
-    await _boss.stop({ graceful: true, timeout: 10_000 });
+  const boss = getGlobal();
+  if (boss) {
+    await boss.stop({ graceful: true, timeout: 10_000 });
     logger.info("pg-boss stopped");
-    _boss = null;
+    setGlobal(null);
   }
 }

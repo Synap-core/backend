@@ -48,6 +48,10 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
       ORY_HYDRA_SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
+      REALTIME_URL: http://realtime:4001
+      HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}
+      INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
+      INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

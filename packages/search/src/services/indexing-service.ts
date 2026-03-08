@@ -3,7 +3,7 @@
  * Handles queue management and bulk imports to Typesense
  */
 
-import { getTypesenseClient } from "../client.js";
+import { getTypesenseAdminClient } from "../client.js";
 import { getDb, inArray } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import type { IndexingQueueItem } from "../types/index.js";
@@ -188,7 +188,7 @@ export class IndexingService {
    * than waiting for the 30-minute bulk flush cron.
    */
   async indexNow(item: IndexingQueueItem): Promise<void> {
-    const client = getTypesenseClient();
+    const client = getTypesenseAdminClient();
 
     if (item.operation === "delete") {
       try {
