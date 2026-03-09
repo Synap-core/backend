@@ -4872,6 +4872,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						color?: string | undefined;
 						description?: string | undefined;
 						scope?: string | undefined;
+						semanticSlug?: string | null | undefined;
 						properties?: {
 							slug: string;
 							valueType: string;
@@ -6691,6 +6692,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
 				}[];
 			};
 			meta: object;
@@ -6714,6 +6716,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
 				};
 				effectiveProperties: EffectiveProperty[];
 			};
@@ -6747,6 +6750,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
 				};
 				existing: boolean;
 				status?: undefined;
@@ -6773,6 +6777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
 				};
 				existing?: undefined;
 				status?: undefined;
@@ -6806,6 +6811,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
 				};
 			};
 			meta: object;
@@ -6847,6 +6853,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
 				}[];
 			};
 			meta: object;
@@ -6880,6 +6887,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					displayName: string;
 					parentProfileId: string | null;
 					defaultValues: unknown;
+					semanticSlug: string | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		getBySemanticSlug: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				semanticSlug: string;
+				workspaceIds?: string[] | undefined;
+			};
+			output: {
+				profiles: {
+					workspaceId: string | null;
+					userId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					version: number;
+					isActive: boolean;
+					scope: ProfileScope;
+					slug: string;
+					uiHints: unknown;
+					displayName: string;
+					parentProfileId: string | null;
+					defaultValues: unknown;
+					semanticSlug: string | null;
 				}[];
 			};
 			meta: object;

@@ -995,6 +995,120 @@ provisionRouter.post("/activate-addon", async (c) => {
   }
 });
 
+// ─── POST /api/provision/deactivate-addon ────────────────────────────────────
+//
+// Called by the Control Plane when an addon is deprovisioned.
+// Removes the agent user's workspace memberships and revokes all active Hub keys
+// so the agent can no longer access any workspace even if somehow rekeyed.
+//
+// Auth: Bearer <cpJwt> — type MUST be "addon_deactivate".
+//       payload.podId MUST match registered podId.
+//
+// This complements Hub API key revocation (done by the CP directly via Hub
+// Protocol). Key revocation blocks access immediately; this endpoint removes
+// the identity relationship from the pod's DB for clean long-term hygiene.
+
+provisionRouter.post("/deactivate-addon", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let registeredPodId: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
+      | { url?: string; podId?: string }
+      | undefined;
+    if (!cpUrl) cpUrl = cp?.url;
+    registeredPodId = cp?.podId;
+  } catch {
+    /* fall through */
+  }
+
+  const payload = await verifyCpJwt<{
+    type: string;
+    podId: string;
+    addon: string;
+    agentUserId?: string;
+  }>(token, cpUrl);
+
+  if (!payload) {
+    return c.json({ error: "Invalid or expired provision token" }, 401);
+  }
+  if (payload.type !== "addon_deactivate") {
+    return c.json(
+      { error: "Invalid token type — expected 'addon_deactivate'" },
+      400
+    );
+  }
+  if (!registeredPodId || payload.podId !== registeredPodId) {
+    return c.json({ error: "Token was not issued for this pod" }, 403);
+  }
+  if (payload.addon !== "openclaw") {
+    return c.json({ error: `Unsupported addon: ${payload.addon}` }, 400);
+  }
+
+  try {
+    const db = await getDb();
+
+    // Locate the OpenClaw agent — prefer agentUserId from JWT claim, fall back to lookup
+    let agentUserId = payload.agentUserId;
+    if (!agentUserId) {
+      const agent = await db.query.users.findFirst({
+        where: and(
+          eq(users.userType, "agent"),
+          drizzleSql`${users.agentMetadata}->>'agentType' = 'openclaw'`
+        ),
+        columns: { id: true },
+      });
+      agentUserId = agent?.id;
+    }
+
+    if (!agentUserId) {
+      return c.json({ success: true, cleaned: false });
+    }
+
+    // Remove all workspace memberships — agent retains no access after this
+    const deleted = await db
+      .delete(workspaceMembers)
+      .where(eq(workspaceMembers.userId, agentUserId))
+      .returning({ id: workspaceMembers.id });
+
+    // Belt-and-suspenders: revoke any remaining active Hub keys in DB
+    // (CP already called revokeHubApiKeyOnPod via Hub Protocol before this)
+    await db
+      .update(apiKeys)
+      .set({
+        isActive: false,
+        revokedAt: new Date(),
+        revokedBy: agentUserId,
+        revokedReason: "Addon deprovisioned",
+      })
+      .where(and(eq(apiKeys.userId, agentUserId), eq(apiKeys.isActive, true)));
+
+    logger.info(
+      { agentUserId, membershipsRemoved: deleted.length },
+      "deactivate-addon: OpenClaw agent memberships removed"
+    );
+
+    return c.json({
+      success: true,
+      cleaned: true,
+      agentUserId,
+      membershipsRemoved: deleted.length,
+    });
+  } catch (err) {
+    logger.error({ err }, "deactivate-addon: failed");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 // ─── POST /api/provision/disconnect ──────────────────────────────────────────
 //
 // Removes the Control Plane connection.
