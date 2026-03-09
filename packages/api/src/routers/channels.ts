@@ -2037,7 +2037,7 @@ export const channelsRouter = router({
         where: and(
           eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId),
-          eq(channels.type, ChannelType.BRANCH)
+          eq(channels.channelType, ChannelType.BRANCH)
         ),
       });
       if (!channel) return { pruned: false };
