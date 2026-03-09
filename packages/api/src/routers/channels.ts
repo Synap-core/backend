@@ -704,6 +704,8 @@ export const channelsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // protectedProcedure guarantees userId — narrow type for Drizzle compatibility
+      const userId = ctx.userId!;
       let channelId = input.channelId;
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
@@ -729,7 +731,7 @@ export const channelsRouter = router({
           const [channel] = await db
             .insert(channels)
             .values({
-              userId: ctx.userId,
+              userId: userId,
               workspaceId: workspaceId ?? null,
               channelType: ChannelType.AI_THREAD,
               status: ChannelStatus.ACTIVE,
@@ -741,9 +743,9 @@ export const channelsRouter = router({
           channelId = channel.id;
           emitChatEvent({
             event: "channel:created",
-            data: { channelId, userId: ctx.userId },
+            data: { channelId, userId: userId },
             workspaceId: workspaceId ?? null,
-            userId: ctx.userId,
+            userId: userId,
           });
         } else {
           // All other cases: route to the user's personal AI timeline.
@@ -753,7 +755,7 @@ export const channelsRouter = router({
             const membership = await db.query.workspaceMembers.findFirst({
               where: and(
                 eq(workspaceMembers.workspaceId, workspaceId),
-                eq(workspaceMembers.userId, ctx.userId)
+                eq(workspaceMembers.userId, userId)
               ),
             });
             if (!membership) {
@@ -764,7 +766,7 @@ export const channelsRouter = router({
             }
           }
           const personalChannel = await ensurePersonalChannel(
-            ctx.userId,
+            userId,
             workspaceId!
           );
           channelId = personalChannel.id;
@@ -786,11 +788,11 @@ export const channelsRouter = router({
       }
 
       // Verify the user has access to the channel's workspace
-      if (channel.workspaceId && channel.userId !== ctx.userId) {
+      if (channel.workspaceId && channel.userId !== userId) {
         const membership = await db.query.workspaceMembers.findFirst({
           where: and(
             eq(workspaceMembers.workspaceId, channel.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
+            eq(workspaceMembers.userId, userId)
           ),
         });
         if (!membership) {
@@ -857,7 +859,7 @@ export const channelsRouter = router({
         channelId,
         role: MessageRole.USER,
         content,
-        userId: ctx.userId,
+        userId: userId,
         previousHash: "",
         hash: userMessageHash,
         ...(activeSessionId ? { sessionId: activeSessionId } : {}),
@@ -867,7 +869,7 @@ export const channelsRouter = router({
       let agentUserId: string | undefined;
       if (workspaceId) {
         try {
-          agentUserId = await ensureAgentUser(ctx.userId, workspaceId);
+          agentUserId = await ensureAgentUser(userId, workspaceId);
         } catch (err) {
           // Non-critical — degrade gracefully
           console.error("Failed to ensure agent user:", err);
@@ -876,7 +878,7 @@ export const channelsRouter = router({
 
       // Resolve intelligence service dynamically
       const resolvedService = await resolveIntelligenceService({
-        userId: ctx.userId,
+        userId: userId,
         workspaceId: ctx.workspaceId || undefined,
         capability: "chat",
       });
@@ -1001,7 +1003,7 @@ export const channelsRouter = router({
         const stream = resolvedService.client.sendMessageStream({
           query: content,
           threadId: channelId,
-          userId: ctx.userId,
+          userId: userId,
           agentId: channel.agentId ?? "orchestrator",
           agentType: effectiveAgentType,
           // Personality overlay: channel config merged with workspace-level agentPersonality
@@ -1032,7 +1034,7 @@ export const channelsRouter = router({
                 isComplete: false,
               },
               workspaceId: workspaceId ?? null,
-              userId: ctx.userId,
+              userId: userId,
               channelId,
             });
           } else if (chunk.type === "step" && chunk.step) {
@@ -1046,7 +1048,7 @@ export const channelsRouter = router({
                 step: chunk.step,
               },
               workspaceId: workspaceId ?? null,
-              userId: ctx.userId,
+              userId: userId,
               channelId,
             });
           } else if (chunk.type === "entities" && chunk.entities) {
@@ -1062,7 +1064,7 @@ export const channelsRouter = router({
                 decision: chunk.decision,
               },
               workspaceId: workspaceId ?? null,
-              userId: ctx.userId,
+              userId: userId,
               channelId,
             });
           } else if (chunk.type === "complete") {
@@ -1095,7 +1097,7 @@ export const channelsRouter = router({
                   agentUserId: agentUserId ?? resolvedService.agentUserId,
                 },
                 workspaceId: workspaceId ?? null,
-                userId: ctx.userId,
+                userId: userId,
                 channelId,
               });
             }
@@ -1104,7 +1106,7 @@ export const channelsRouter = router({
               event: "chat:stream",
               data: { threadId: channelId, type: "complete", isComplete: true },
               workspaceId: workspaceId ?? null,
-              userId: ctx.userId,
+              userId: userId,
               channelId,
             });
           }
@@ -1126,7 +1128,7 @@ export const channelsRouter = router({
             fallback: true,
           },
           workspaceId: workspaceId ?? null,
-          userId: ctx.userId,
+          userId: userId,
           channelId,
         });
 
@@ -1134,7 +1136,7 @@ export const channelsRouter = router({
           hubResponse = await resolvedService.client.sendMessage({
             query: content,
             threadId: channelId,
-            userId: ctx.userId,
+            userId: userId,
             agentId: channel.agentId ?? "orchestrator",
             agentType: effectiveAgentType,
             workspaceId,
@@ -1155,7 +1157,7 @@ export const channelsRouter = router({
               fallback: false,
             },
             workspaceId: workspaceId ?? null,
-            userId: ctx.userId,
+            userId: userId,
             channelId,
           });
         }
@@ -1178,7 +1180,7 @@ export const channelsRouter = router({
                 agentUserId: agentUserId ?? resolvedService.agentUserId,
               },
               workspaceId: workspaceId ?? null,
-              userId: ctx.userId,
+              userId: userId,
               channelId,
             });
           }
@@ -1197,7 +1199,7 @@ export const channelsRouter = router({
               timedOut: true,
             },
             workspaceId: workspaceId ?? null,
-            userId: ctx.userId,
+            userId: userId,
             channelId,
           });
           fullContent = "The AI response timed out. Please try again.";
@@ -1244,7 +1246,7 @@ export const channelsRouter = router({
         role: MessageRole.ASSISTANT,
         authorType: MessageAuthorType.AI_AGENT,
         content: fullContent,
-        userId: ctx.userId,
+        userId: userId,
         previousHash: userMessageHash,
         hash: assistantMessageHash,
         metadata: messageMetadata as any,
@@ -1281,7 +1283,7 @@ export const channelsRouter = router({
               type: entity.type,
               title: entity.title,
               preview: entity.description,
-              userId: ctx.userId,
+              userId: userId,
               workspaceId: workspaceId ?? ctx.workspaceId,
               source: "chat-extraction",
               action: "create",
@@ -1309,16 +1311,16 @@ export const channelsRouter = router({
             threadId: channelId,
             role: MessageRole.ASSISTANT,
             content: fullContent,
-            userId: ctx.userId,
+            userId: userId,
             timestamp: new Date(),
             previousHash: userMessageHash,
             hash: assistantMessageHash,
             metadata: messageMetadata,
           },
-          userId: ctx.userId,
+          userId: userId,
         },
         workspaceId: workspaceId ?? null,
-        userId: ctx.userId,
+        userId: userId,
       });
 
       // Outbound relay: for EXTERNAL_IMPORT channels, forward the AI response back to
@@ -1332,7 +1334,7 @@ export const channelsRouter = router({
       ) {
         relayToExternalChannel({
           workspaceId: workspaceId || channel.workspaceId || undefined,
-          userId: ctx.userId,
+          userId: userId,
           externalSource: channel.externalSource,
           externalChannelId: channel.externalChannelId,
           content: fullContent,
@@ -1351,7 +1353,7 @@ export const channelsRouter = router({
         const [branch] = await db
           .insert(channels)
           .values({
-            userId: ctx.userId,
+            userId: userId,
             parentChannelId: channelId,
             branchedFromMessageId: assistantMessageId,
             branchPurpose:
@@ -1399,9 +1401,9 @@ export const channelsRouter = router({
 
             emitChatEvent({
               event: "channel:updated",
-              data: { channelId, userId: ctx.userId },
+              data: { channelId, userId: userId },
               workspaceId: workspaceId ?? null,
-              userId: ctx.userId,
+              userId: userId,
             });
           } catch {
             // Non-critical — title generation is best-effort
