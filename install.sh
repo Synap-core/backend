@@ -252,6 +252,8 @@ else
   ORY_HYDRA_SECRETS_SYSTEM=$(_gen)
   HUB_PROTOCOL_API_KEY=$(_gen)
   HUB_JWT_SECRET=$(_gen)
+  SYNAP_SERVICE_ENCRYPTION_KEY=$(_gen)
+  VAULT_SERVER_KEY=$(_gen)
 
   success "Secrets generated"
 
@@ -297,6 +299,16 @@ ORY_HYDRA_SECRETS_SYSTEM=$ORY_HYDRA_SECRETS_SYSTEM
 # ── Hub Protocol ──────────────────────────────────────────────────────────────
 HUB_PROTOCOL_API_KEY=$HUB_PROTOCOL_API_KEY
 HUB_JWT_SECRET=$HUB_JWT_SECRET
+
+# ── Service credential encryption ─────────────────────────────────────────────
+# Used by the pod to encrypt Hub API keys and other IS credentials at rest.
+# REQUIRED for Control Plane provisioning (register-intelligence endpoint).
+# Rotating this key will invalidate stored IS credentials — re-provision to recover.
+SYNAP_SERVICE_ENCRYPTION_KEY=$SYNAP_SERVICE_ENCRYPTION_KEY
+
+# ── Secrets vault ─────────────────────────────────────────────────────────────
+# Used for add-on provisioning (OpenClaw, ZeroClaw bootstrap credentials).
+VAULT_SERVER_KEY=$VAULT_SERVER_KEY
 
 # ── Control Plane Integration ─────────────────────────────────────────────────
 # For Synap-managed deployments only. Leave blank for fully self-hosted setups.

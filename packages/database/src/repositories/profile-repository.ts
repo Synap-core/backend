@@ -14,11 +14,6 @@ import {
 } from "../schema/profiles.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-/** Standard profile slugs that carry pod-wide semantic meaning. */
-export const STANDARD_SEMANTIC_SLUGS = new Set([
-  "task", "project", "person", "note", "event", "company",
-]);
-
 export interface CreateProfileInput {
   slug: string;
   displayName: string;
@@ -30,9 +25,8 @@ export interface CreateProfileInput {
   userId?: string;
   workspaceId?: string;
   /**
-   * Semantic identity for cross-workspace queries.
-   * Auto-assigned from `slug` when slug is a known standard concept.
-   * Pass `null` to explicitly suppress auto-assignment.
+   * Semantic identity for cross-workspace queries. Defaults to `slug`.
+   * Pass `null` to explicitly mark this profile as private (no cross-workspace semantics).
    */
   semanticSlug?: string | null;
 }
@@ -54,13 +48,10 @@ export class ProfileRepository {
       }
     }
 
-    // Auto-assign semanticSlug for standard concepts unless explicitly suppressed.
+    // Default semanticSlug to slug — every profile is cross-workspace queryable by default.
+    // Pass null explicitly to mark a profile as private (no cross-workspace semantics).
     const resolvedSemanticSlug =
-      input.semanticSlug !== undefined
-        ? input.semanticSlug
-        : STANDARD_SEMANTIC_SLUGS.has(input.slug)
-          ? input.slug
-          : null;
+      input.semanticSlug !== undefined ? input.semanticSlug : input.slug;
 
     const [profile] = await this.db
       .insert(profiles)

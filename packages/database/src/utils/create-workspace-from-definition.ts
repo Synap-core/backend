@@ -113,9 +113,8 @@ export interface WorkspaceDefinitionInput {
     description?: string;
     scope?: string;
     /**
-     * Semantic identity tag for cross-workspace queries.
-     * Auto-assigned from slug for standard concepts (task, project, person, note, event, company).
-     * Set to null to suppress auto-assignment for a standard-slug profile that should stay private.
+     * Semantic identity tag for cross-workspace queries. Defaults to the profile's slug.
+     * Set to null to mark this profile as private (no cross-workspace semantics).
      */
     semanticSlug?: string | null;
     // Proposal format: flat property list
