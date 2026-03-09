@@ -1982,6 +1982,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		pruneEmptyBranch: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: {
+				pruned: boolean;
+			};
+			meta: object;
+		}>;
 		archiveChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				channelId: string;
@@ -2133,6 +2142,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId: string;
 				objectType: "entity" | "document" | "view";
 				objectId: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		deleteMessagesFrom: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				fromMessageId: string;
 			};
 			output: {
 				ok: boolean;

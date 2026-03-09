@@ -21,9 +21,9 @@ const HUB_JWT_SECRET =
   process.env.SYNAP_SECRET_TOKEN ||
   "change-me-in-production";
 
-if (!process.env.HUB_JWT_SECRET && process.env.NODE_ENV === "production") {
-  logger.warn(
-    "HUB_JWT_SECRET not set - using SYNAP_SECRET_TOKEN. This is not recommended for production."
+if (process.env.NODE_ENV === "production" && !process.env.HUB_JWT_SECRET) {
+  throw new Error(
+    "HUB_JWT_SECRET is required in production. Set it to a secure random string of at least 32 characters."
   );
 }
 

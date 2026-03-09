@@ -152,6 +152,11 @@ export const messages = pgTable(
     externalSourceIdx: index("messages_ext_source_idx").on(
       table.externalSource
     ),
+    sessionIdIdx: index("messages_session_id_idx").on(table.sessionId),
+    channelTimestampIdx: index("messages_channel_timestamp_idx").on(
+      table.channelId,
+      table.timestamp
+    ),
   })
 );
 

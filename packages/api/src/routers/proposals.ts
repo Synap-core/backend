@@ -31,10 +31,13 @@ import {
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
+import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { messages } from "@synap/database/schema";
+
+const logger = createLogger({ module: "proposals" });
 
 /**
  * Fire-and-forget: report a proposal outcome to the IS telemetry endpoint.
@@ -81,8 +84,12 @@ function reportProposalOutcome(params: {
         }),
         signal: AbortSignal.timeout(5_000),
       });
-    } catch {
+    } catch (err) {
       // Non-fatal — telemetry must never affect proposal approval UX
+      logger.warn(
+        { err, proposalId: params.proposalId },
+        "Failed to report proposal outcome to IS telemetry"
+      );
     }
   })();
 }

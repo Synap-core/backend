@@ -11,6 +11,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
   extractMentionAgentType,
@@ -683,6 +684,7 @@ export const channelsRouter = router({
    * When threadId is omitted, the backend creates a new channel and attaches the message.
    */
   sendMessage: protectedProcedure
+    .use(aiRateLimitMiddleware)
     .input(
       z.object({
         /** When omitted, backend creates a new channel and returns its id. */

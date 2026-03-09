@@ -1046,8 +1046,12 @@ app.get("/threads/:threadId/messages", async (c) => {
 
 /**
  * POST /threads/:threadId/messages
- * Inject a system or assistant message into a thread (used by sub-agents to report back).
- * Body: { role: "system" | "assistant", content: string, userId: string }
+ * Inject a message into a thread (used by sub-agents to report back or post user messages).
+ * Body: { role: "system" | "assistant" | "user", content: string, userId: string, autoRespond?: boolean }
+ *
+ * autoRespond=true: queues an IS response trigger for AI_THREAD and BRANCH channels.
+ * Used for async inter-branch messaging — branch A posts "user" message to branch B,
+ * branch B's IS responds automatically via the a2ai-response-trigger worker.
  */
 app.post("/threads/:threadId/messages", async (c) => {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -1058,23 +1062,25 @@ app.post("/threads/:threadId/messages", async (c) => {
   }
   const threadId = c.req.param("threadId");
   const body = (await c.req.json()) as {
-    role: "system" | "assistant";
+    role: "system" | "assistant" | "user";
     content: string;
     userId: string;
     metadata?: Record<string, unknown>;
+    autoRespond?: boolean;
   };
   if (!body.role || !body.content || !body.userId) {
     return c.json({ error: "role, content, and userId are required" }, 400);
   }
   try {
     const { randomUUID, createHash } = await import("crypto");
+    const msgId = randomUUID();
     const hash = createHash("sha256")
       .update(
         JSON.stringify({ threadId, content: body.content, role: body.role })
       )
       .digest("hex");
     await db.insert(messages).values({
-      id: randomUUID(),
+      id: msgId,
       channelId: threadId,
       role: body.role as any,
       content: body.content,
@@ -1082,7 +1088,57 @@ app.post("/threads/:threadId/messages", async (c) => {
       hash,
       ...(body.metadata ? { metadata: body.metadata } : {}),
     });
-    return c.json({ success: true });
+
+    // autoRespond: trigger IS to respond when an external agent posts a user-role message
+    // to an AI channel (ai_thread or branch). Enables async inter-branch messaging.
+    if (body.autoRespond === true && body.role === "user") {
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, threadId),
+      });
+      const { ChannelType } = await import("@synap/database/schema");
+      if (
+        channel?.workspaceId &&
+        (channel.channelType === ChannelType.AI_THREAD ||
+          channel.channelType === ChannelType.BRANCH)
+      ) {
+        try {
+          const { resolveIntelligenceService } =
+            await import("../utils/intelligence-routing.js");
+          const { getBoss, A2AI_TRIGGER_QUEUE, A2AI_TRIGGER_JOB_OPTIONS } =
+            await import("@synap/jobs");
+          const resolvedService = await resolveIntelligenceService({
+            userId: channel.userId,
+            workspaceId: channel.workspaceId,
+            capability: "chat",
+          });
+          await getBoss().send(
+            A2AI_TRIGGER_QUEUE,
+            {
+              channelId: threadId,
+              userMessageId: msgId,
+              content: body.content,
+              userId: channel.userId,
+              workspaceId: channel.workspaceId,
+              agentType: (channel.agentType as string) ?? "meta",
+              sourceAgentUserId: body.userId,
+              serviceUrl: resolvedService.endpoint,
+              serviceApiKey: resolvedService.serviceApiKey,
+              serviceId: resolvedService.serviceId,
+              agentUserId: resolvedService.agentUserId,
+            },
+            A2AI_TRIGGER_JOB_OPTIONS
+          );
+        } catch (err) {
+          // Non-fatal: message stored, trigger queueing failed
+          logger.warn(
+            { err, threadId },
+            "postMessage autoRespond trigger failed"
+          );
+        }
+      }
+    }
+
+    return c.json({ success: true, messageId: msgId });
   } catch (err) {
     logger.error({ err, threadId }, "postMessage failed");
     return c.json(
@@ -1809,10 +1865,11 @@ app.post("/sessions/getOrCreate", async (c) => {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
-  const body = (await c.req.json().catch(() => ({}))) as {
+  const body = (await c.req.json().catch(() => null)) as {
     channelId?: string;
     bootstrapStateId?: string;
-  };
+  } | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   if (!body.channelId) {
     return c.json({ error: "channelId is required" }, 400);
   }
@@ -1911,10 +1968,11 @@ app.patch("/sessions/:sessionId", async (c) => {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
   const sessionId = c.req.param("sessionId");
-  const body = (await c.req.json().catch(() => ({}))) as Record<
+  const body = (await c.req.json().catch(() => null)) as Record<
     string,
     unknown
-  >;
+  > | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   try {
     const caller = await getCaller(c);
     const result = await (caller as any).sessions.update({
@@ -1940,9 +1998,10 @@ app.post("/sessions/:sessionId/close", async (c) => {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
   const sessionId = c.req.param("sessionId");
-  const body = (await c.req.json().catch(() => ({}))) as {
+  const body = (await c.req.json().catch(() => null)) as {
     producedStateId?: string;
-  };
+  } | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   try {
     const caller = await getCaller(c);
     const result = await (caller as any).sessions.close({
@@ -1971,10 +2030,11 @@ app.post("/compacted-states", async (c) => {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
-  const body = (await c.req.json().catch(() => ({}))) as Record<
+  const body = (await c.req.json().catch(() => null)) as Record<
     string,
     unknown
-  >;
+  > | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   if (!body.channelId) {
     return c.json({ error: "channelId is required" }, 400);
   }
@@ -2076,13 +2136,14 @@ app.delete("/relations/:relationId", async (c) => {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
   const relationId = c.req.param("relationId");
-  const body = (await c.req.json().catch(() => ({}))) as {
+  const body = (await c.req.json().catch(() => null)) as {
     userId?: string;
     workspaceId?: string;
     agentUserId?: string;
     reasoning?: string;
     sourceMessageId?: string;
-  };
+  } | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   const userId = body.userId ?? c.req.query("userId") ?? "";
   try {
     const actorId = body.agentUserId || userId;
@@ -2271,10 +2332,11 @@ app.post("/widget-definitions", async (c) => {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
-  const body = (await c.req.json().catch(() => ({}))) as Record<
+  const body = (await c.req.json().catch(() => null)) as Record<
     string,
     unknown
-  >;
+  > | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   const userId = (body.userId as string) ?? (c.get("userId") as string);
   const workspaceId = body.workspaceId as string;
   if (!workspaceId) {
