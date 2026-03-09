@@ -3,7 +3,7 @@
  * Multi-search with union mode for unified results
  */
 
-import { getTypesenseClient } from "../client.js";
+import { getTypesenseAdminClient } from "../client.js";
 import type { SearchResult } from "../types/index.js";
 import type { MultiSearchRequestSchema } from "../types/index.js";
 
@@ -36,7 +36,7 @@ export class SearchService {
    * Uses multi_search for parallel queries
    */
   async search(options: UnifiedSearchOptions): Promise<SearchResponse> {
-    const client = getTypesenseClient();
+    const client = getTypesenseAdminClient();
 
     const collections = options.collections || [
       "entities",
@@ -118,7 +118,7 @@ export class SearchService {
       page?: number;
     }
   ): Promise<SearchResponse> {
-    const client = getTypesenseClient();
+    const client = getTypesenseAdminClient();
 
     const searchParams = {
       q: query,
