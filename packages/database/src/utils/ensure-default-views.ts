@@ -57,7 +57,7 @@ export async function ensureDefaultViews(
 
     // Get task profile if available (optional — task views are only created when profile exists)
     const profileRepo = new ProfileRepository(db);
-    const taskProfile = await profileRepo.getBySlug("task");
+    const taskProfile = await profileRepo.getBySlug("task", workspaceId);
 
     // Check if default views already exist
     const allWorkspaceViews = await db.query.views.findMany({

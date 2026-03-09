@@ -35,15 +35,9 @@ export class ProfileResolutionService {
     userId: string,
     workspaceId: string
   ): Promise<Profile | null> {
-    // Try by slug first
-    let profile = await this.profileRepo.getBySlug(identifier);
-    if (profile) {
-      // Check if accessible
-      if (await this.isAccessible(profile, userId, workspaceId)) {
-        return profile;
-      }
-      return null;
-    }
+    // Try by slug first — workspace-aware, returns only what's accessible
+    let profile = await this.profileRepo.getBySlug(identifier, workspaceId);
+    if (profile) return profile;
 
     // Try by ID
     profile = await this.profileRepo.getById(identifier);

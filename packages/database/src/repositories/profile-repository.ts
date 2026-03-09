@@ -74,15 +74,30 @@ export class ProfileRepository {
   }
 
   /**
-   * Get profile by slug (pod-wide — intentional, slugs are unique across the pod).
-   * For workspace-scoped lookups use getBySlugForWorkspace.
+   * Get a profile by slug, workspace-aware.
+   *
+   * - With workspaceId: returns the best-matching profile accessible to that
+   *   workspace (workspace-owned > shared > system). Same as getBySlugForWorkspace.
+   * - Without workspaceId: returns only system or shared profiles (pod-wide concepts).
+   *   Use this for contexts that have no workspace (scripts, system jobs, etc.).
    */
-  async getBySlug(slug: string): Promise<Profile | null> {
-    const result = await this.db.query.profiles.findFirst({
-      where: eq(profiles.slug, slug),
-    });
-
-    return result || null;
+  async getBySlug(slug: string, workspaceId?: string): Promise<Profile | null> {
+    if (workspaceId) {
+      return this.getBySlugForWorkspace(slug, workspaceId);
+    }
+    // No workspace context — only pod-wide profiles
+    return (
+      (await this.db.query.profiles.findFirst({
+        where: and(
+          eq(profiles.slug, slug),
+          eq(profiles.isActive, true),
+          or(
+            eq(profiles.scope, ProfileScope.SYSTEM),
+            eq(profiles.scope, ProfileScope.SHARED)
+          )
+        ),
+      })) ?? null
+    );
   }
 
   /**

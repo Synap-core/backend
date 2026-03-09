@@ -116,10 +116,9 @@ export const profilesRouter = router({
       const db = await getDb();
       const profileRepo = new ProfileRepository(db);
 
-      // Check for slug conflict — return existing profile gracefully
-      // Profiles have a global unique slug constraint, so reuse across workspaces.
-      // For shared profiles, also grant access to the requesting workspace.
-      const existing = await profileRepo.getBySlug(input.slug);
+      // Check for slug conflict within this workspace context.
+      // Returns workspace-owned profile first, then shared/system if accessible.
+      const existing = await profileRepo.getBySlug(input.slug, ctx.workspaceId);
       if (existing) {
         logger.info(
           { slug: input.slug, existingId: existing.id },
