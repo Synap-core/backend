@@ -385,34 +385,36 @@ services:
   # ============================================================================
   # OPENCLAW (opt-in — managed via control plane /openclaw/provision)
   #
-  # Uncomment and configure to add OpenClaw as a world-interface agent.
-  # OpenClaw provides: shell, filesystem, browser automation, and messaging
-  # channels (Telegram, WhatsApp, Slack, Discord, iMessage, Teams...).
-  #
-  # Environment variables are injected automatically by the provisioning flow.
-  # Manual setup: copy this block, fill in SYNAP_* vars, run:
-  #   docker compose up -d openclaw
+  # For cloud-managed pods: activated automatically by the CP provisioning flow.
+  # For self-hosted: fill in SYNAP_* vars in /opt/synap/.env, then run:
+  #   docker compose --profile openclaw up -d openclaw
   #   openclaw skill install https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap-os/SKILL.md
+  #
+  # Environment variables injected by the provisioning flow:
+  #   OPENCLAW_HUB_API_KEY  — Hub Protocol key bound to the OpenClaw agent user
+  #   SYNAP_AGENT_USER_ID   — Agent user ID for attribution and RBAC on the pod
+  #   SYNAP_WORKSPACE_ID    — Workspace the agent is scoped to
   # ============================================================================
-  # openclaw:
-  #   container_name: openclaw
-  #   image: ghcr.io/openclaw/openclaw:latest
-  #   restart: unless-stopped
-  #   volumes:
-  #     - openclaw_config:/root/.openclaw
-  #     - openclaw_workspace:/root/openclaw/workspace
-  #   environment:
-  #     - SYNAP_POD_URL=${SYNAP_POD_URL:-http://backend:4000}
-  #     - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY}        # From /openclaw/register or Settings → API Keys
-  #     - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID}          # Your workspace UUID
-  #     - OPENCLAW_MODEL=anthropic/claude-sonnet-4-6        # AI model for OpenClaw
-  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}            # Required for the model above
-  #   ports:
-  #     - "18789:18789"   # OpenClaw gateway (HTTP + WebSocket)
-  #   networks:
-  #     - synap-net
-  #   profiles:
-  #     - openclaw
+  openclaw:
+    container_name: openclaw
+    image: ghcr.io/openclaw/openclaw:latest
+    restart: unless-stopped
+    volumes:
+      - openclaw_config:/root/.openclaw
+      - openclaw_workspace:/root/openclaw/workspace
+    environment:
+      - SYNAP_POD_URL=${SYNAP_POD_URL:-http://backend:4000}
+      - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY} # Hub Protocol key (injected by provisioning flow)
+      - SYNAP_AGENT_USER_ID=${SYNAP_AGENT_USER_ID} # Agent user ID for Hub Protocol attribution
+      - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID} # Workspace scope for this agent
+      - OPENCLAW_MODEL=anthropic/claude-sonnet-4-6 # AI model
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} # Required for the model above
+    ports:
+      - "18789:18789" # OpenClaw gateway — SSH health checks use localhost:18789
+    networks:
+      - synap-net
+    profiles:
+      - openclaw
 
   # ============================================================================
   # MONITORING (Dozzle)

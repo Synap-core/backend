@@ -18,10 +18,25 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
+import { randomUUID, randomBytes } from "crypto";
 import { createLogger, config } from "@synap-core/core";
 import { verifyCpJwt } from "@synap/api";
-import { getDb, eq } from "@synap/database";
-import { workspaces, intelligenceServices } from "@synap/database/schema";
+import {
+  getDb,
+  eq,
+  and,
+  drizzleSql,
+  EventRepository,
+  ApiKeyRepository,
+  sql,
+} from "@synap/database";
+import {
+  workspaces,
+  intelligenceServices,
+  users,
+  workspaceMembers,
+  apiKeys,
+} from "@synap/database/schema";
 import { encryptServiceKey, resolveServiceKey } from "@synap/api";
 
 const logger = createLogger({ module: "provision" });
@@ -714,6 +729,246 @@ provisionRouter.get("/status", async (c) => {
     });
   } catch (err) {
     logger.error({ err }, "Provision status error");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// ─── POST /api/provision/activate-addon ──────────────────────────────────────
+//
+// Called by the Control Plane to activate an add-on service with proper RBAC.
+//
+// Auth: Bearer <cpJwt> — ES256 JWT signed by CP, type MUST be "addon_activate".
+//       payload.podId MUST match the registered controlPlane.podId.
+//
+// Body: JWT claims carry { addon, serviceId, workspaceId? }
+//
+// For addon = "openclaw":
+//   1. Find or create a pod-wide OpenClaw agent user
+//      (agentMetadata.writesRequireProposal: true — all writes require approval)
+//   2. Grant the agent editor membership in the target workspace (idempotent)
+//   3. Create a Hub Protocol API key bound to the agent user
+//
+// Returns: { agentUserId, workspaceId, hubApiKey, keyId, serviceId }
+//   hubApiKey is returned ONCE and is never stored in plaintext — the caller
+//   (CP job) injects it into the container's environment via SSH.
+//
+// Security:
+//   - JWT signature verified via JWKS (same chain as other provision routes)
+//   - type MUST be "addon_activate" (lightweight types cannot create agent users)
+//   - payload.podId MUST match registeredPodId — prevents cross-pod replay
+//   - Hub API key is bcrypt-hashed before storage; scoped to hub-protocol only
+
+provisionRouter.post("/activate-addon", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  // Resolve cpUrl and registered podId from workspace settings or env
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let registeredPodId: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
+      | { url?: string; podId?: string }
+      | undefined;
+    if (!cpUrl) cpUrl = cp?.url;
+    registeredPodId = cp?.podId;
+  } catch {
+    /* fall through */
+  }
+
+  const payload = await verifyCpJwt<{
+    type: string;
+    podId: string;
+    addon: string;
+    serviceId: string;
+    workspaceId?: string;
+  }>(token, cpUrl);
+
+  if (!payload) {
+    logger.warn({ cpUrl }, "activate-addon: token verification failed");
+    return c.json({ error: "Invalid or expired provision token" }, 401);
+  }
+
+  if (payload.type !== "addon_activate") {
+    return c.json(
+      { error: "Invalid token type — expected 'addon_activate'" },
+      400
+    );
+  }
+
+  if (!registeredPodId) {
+    return c.json({ error: "Pod is not yet provisioned" }, 409);
+  }
+
+  if (payload.podId !== registeredPodId) {
+    logger.warn(
+      { jwtPodId: payload.podId, registeredPodId },
+      "activate-addon: podId mismatch — rejecting"
+    );
+    return c.json({ error: "Token was not issued for this pod" }, 403);
+  }
+
+  if (payload.addon !== "openclaw") {
+    return c.json({ error: `Unsupported addon: ${payload.addon}` }, 400);
+  }
+
+  try {
+    const db = await getDb();
+
+    // Get the pod's workspace (provisioned pods have exactly one primary workspace)
+    const ws = await db.query.workspaces.findFirst();
+    if (!ws) return c.json({ error: "No workspace found on this pod" }, 404);
+
+    const targetWorkspaceId = payload.workspaceId ?? ws.id;
+
+    // Find the workspace owner — used as agentMetadata.createdByUserId for attribution
+    const ownerMember = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, ws.id),
+        eq(workspaceMembers.role, "owner")
+      ),
+      columns: { userId: true },
+    });
+    const ownerUserId = ownerMember?.userId ?? null;
+
+    // ── 1. Find or create the OpenClaw agent user (pod-wide singleton) ────────
+    //
+    // One agent user per pod, not per workspace. It's granted access to
+    // specific workspaces via workspace_members (step 2).
+
+    const existingAgent = await db.query.users.findFirst({
+      where: and(
+        eq(users.userType, "agent"),
+        drizzleSql`${users.agentMetadata}->>'agentType' = 'openclaw'`
+      ),
+      columns: { id: true },
+    });
+
+    let agentUserId: string;
+
+    if (existingAgent) {
+      agentUserId = existingAgent.id;
+      logger.info(
+        { agentUserId },
+        "activate-addon: reusing existing OpenClaw agent user"
+      );
+    } else {
+      agentUserId = randomUUID();
+      const shortId = agentUserId.slice(0, 8);
+      await db.insert(users).values({
+        id: agentUserId,
+        email: `agent-openclaw-${shortId}@synap.agent`,
+        name: "OpenClaw",
+        emailVerified: true,
+        userType: "agent",
+        kratosIdentityId: null,
+        agentMetadata: {
+          agentType: "openclaw",
+          description:
+            "OpenClaw — world-interface AI agent (shell, browser, messaging channels)",
+          createdByUserId: ownerUserId ?? agentUserId,
+          isPersonalAgent: false,
+          writesRequireProposal: true,
+          capabilities: ["shell", "browser", "filesystem", "messaging"],
+        },
+        timezone: "UTC",
+        locale: "en",
+      });
+      logger.info(
+        { agentUserId },
+        "activate-addon: created OpenClaw agent user"
+      );
+    }
+
+    // ── 2. Grant workspace membership (idempotent) ────────────────────────────
+
+    const existingMembership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.userId, agentUserId),
+        eq(workspaceMembers.workspaceId, targetWorkspaceId)
+      ),
+      columns: { id: true },
+    });
+
+    if (!existingMembership) {
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: targetWorkspaceId,
+        userId: agentUserId,
+        role: "editor",
+        invitedBy: ownerUserId ?? undefined,
+      });
+      logger.info(
+        { agentUserId, targetWorkspaceId },
+        "activate-addon: workspace membership granted"
+      );
+    }
+
+    // ── 3. Create Hub Protocol API key bound to the agent user ────────────────
+    //
+    // Idempotency: if a key already exists (e.g. Trigger.dev is retrying this
+    // job after a later step failed), revoke the old key before creating a new
+    // one. The plaintext is returned once only and injected into the container
+    // by the CP job via SSH.
+
+    await db
+      .update(apiKeys)
+      .set({
+        isActive: false,
+        revokedAt: new Date(),
+        revokedBy: agentUserId,
+        revokedReason: "Re-provisioning — replaced by new key",
+      })
+      .where(
+        and(
+          eq(apiKeys.userId, agentUserId),
+          eq(apiKeys.keyType, "hub_inbound"),
+          eq(apiKeys.isActive, true)
+        )
+      );
+
+    const keyPrefix =
+      process.env.NODE_ENV === "production"
+        ? "synap_hub_live_"
+        : "synap_hub_test_";
+    const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
+
+    const eventRepo = new EventRepository(sql);
+    const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+    const apiKey = await apiKeyRepo.create(
+      {
+        keyName: "OpenClaw Hub Key",
+        keyPrefix,
+        key: plainKey,
+        scope: ["hub-protocol.read", "hub-protocol.write"],
+        userId: agentUserId,
+        keyType: "hub_inbound",
+        description:
+          "Hub Protocol auth token for OpenClaw agent — revoked automatically on deprovisioning",
+      },
+      agentUserId
+    );
+
+    logger.info(
+      { agentUserId, keyId: apiKey.id, targetWorkspaceId },
+      "activate-addon: Hub API key created"
+    );
+
+    return c.json({
+      agentUserId,
+      workspaceId: targetWorkspaceId,
+      hubApiKey: plainKey,
+      keyId: apiKey.id,
+      serviceId: payload.serviceId,
+    });
+  } catch (err) {
+    logger.error({ err }, "activate-addon: failed");
     return c.json({ error: "Internal server error" }, 500);
   }
 });
