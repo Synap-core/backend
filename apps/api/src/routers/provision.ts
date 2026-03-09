@@ -755,6 +755,107 @@ provisionRouter.get("/status", async (c) => {
   }
 });
 
+// ─── GET /api/provision/addon-status ─────────────────────────────────────────
+//
+// Returns the real-time registration state of an add-on IS from the pod's own
+// database. Used by the Control Plane to reconcile its cached provisioning
+// status against the pod's source of truth.
+//
+// ?addon=openclaw → checks whether OpenClaw is registered as an active IS
+//
+// Auth: Bearer <cpJwt> — type MUST be "addon_status".
+//   Same ES256/JWKS chain as all other provision endpoints.
+//   The CP calls this during status polling when its DB shows "provisioning".
+
+provisionRouter.get("/addon-status", async (c) => {
+  const addon = c.req.query("addon");
+  if (!addon)
+    return c.json({ error: "addon query parameter is required" }, 400);
+  if (addon !== "openclaw")
+    return c.json({ error: `Unknown addon: ${addon}` }, 400);
+
+  // Require CP-signed JWT (type "addon_status")
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let registeredPodId: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
+      | { url?: string; podId?: string }
+      | undefined;
+    if (!cpUrl) cpUrl = cp?.url;
+    registeredPodId = cp?.podId;
+  } catch {
+    /* fall through */
+  }
+
+  const payload = await verifyCpJwt<{ type: string; podId: string }>(
+    token,
+    cpUrl
+  );
+  if (!payload) return c.json({ error: "Invalid or expired token" }, 401);
+  if (payload.type !== "addon_status") {
+    return c.json(
+      { error: "Invalid token type — expected 'addon_status'" },
+      400
+    );
+  }
+  if (registeredPodId && payload.podId !== registeredPodId) {
+    logger.warn(
+      { jwtPodId: payload.podId, registeredPodId },
+      "addon-status: podId mismatch — rejecting"
+    );
+    return c.json({ error: "Token was not issued for this pod" }, 403);
+  }
+
+  try {
+    const db = await getDb();
+
+    // Check if OpenClaw is registered as an active intelligence service
+    // serviceId is "openclaw-{userId-prefix}", so we use a prefix match
+    const services = await db.query.intelligenceServices.findMany({
+      where: eq(intelligenceServices.status, "active"),
+      columns: {
+        serviceId: true,
+        webhookUrl: true,
+        status: true,
+        enabled: true,
+      },
+    });
+    const openclawSvc = services.find(
+      (s) => s.serviceId.startsWith("openclaw-") && s.enabled
+    );
+
+    // Check if the agent user exists (independent of IS registration)
+    const agentUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.userType, "agent"),
+        drizzleSql`${users.agentMetadata}->>'agentType' = 'openclaw'`
+      ),
+      columns: { id: true },
+    });
+
+    return c.json({
+      addon: "openclaw",
+      registered: !!openclawSvc,
+      serviceId: openclawSvc?.serviceId ?? null,
+      serviceStatus: openclawSvc?.status ?? null,
+      agentUserId: agentUser?.id ?? null,
+    });
+  } catch (err) {
+    logger.error({ err }, "addon-status: failed");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 // ─── POST /api/provision/activate-addon ──────────────────────────────────────
 //
 // Called by the Control Plane to activate an add-on service with proper RBAC.

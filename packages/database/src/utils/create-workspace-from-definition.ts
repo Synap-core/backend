@@ -178,6 +178,7 @@ export interface WorkspaceDefinitionInput {
   bentoViewBlocks?: Array<{
     kind: "view";
     viewName: string;
+    viewSlug?: string;
     pos: { x: number; y: number; w: number; h: number };
     overrides?: Record<string, unknown>;
   }>;
@@ -292,48 +293,101 @@ export interface CreateFromDefinitionOptions {
    * from the DB) and execution continues from the first incomplete step.
    */
   resumeFrom?: ResumeState;
+  /** Validate but do not write anything to the database. */
+  dryRun?: boolean;
 }
 
 // ─── Definition validation ────────────────────────────────────────────────────
+import { z } from "zod";
+
+const WorkspaceDefinitionSchema = z
+  .object({
+    workspaceName: z.string().optional(),
+    description: z.string().optional(),
+    profiles: z.array(z.record(z.unknown())).optional(),
+    suggestedEntities: z.array(z.record(z.unknown())).optional(),
+    seedEntities: z.array(z.record(z.unknown())).optional(),
+    bentoLayout: z.array(z.record(z.unknown())).optional(),
+    bentoViewBlocks: z.array(z.record(z.unknown())).optional(),
+    bentoViewName: z.string().optional(),
+    views: z.array(z.record(z.unknown())).optional(),
+    suggestedRelations: z.array(z.record(z.unknown())).optional(),
+    entityLinks: z.array(z.record(z.unknown())).optional(),
+    displayTemplates: z.array(z.record(z.unknown())).optional(),
+    profileEntityBentoTemplates: z.record(z.unknown()).optional(),
+    layoutConfig: z.record(z.unknown()).optional(),
+  })
+  .catchall(z.unknown());
 
 /**
  * Validate definition structure before touching the DB.
  * Catches cross-reference errors (unknown profile slugs in views/entities/links)
  * so we fail fast with a descriptive error instead of a cryptic DB failure mid-way.
  */
-function validateDefinition(def: WorkspaceDefinitionInput, label: string): void {
+function validateDefinition(
+  def: WorkspaceDefinitionInput,
+  label: string
+): void {
+  const parsed = WorkspaceDefinitionSchema.safeParse(def);
+  if (!parsed.success) {
+    const errorMsg = parsed.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join(", ");
+    throw new Error(
+      `Definition validation failed for '${label}': Schema error: ${errorMsg}`
+    );
+  }
+
   const errors: string[] = [];
   const definedSlugs = new Set<string>();
 
   for (const p of def.profiles ?? []) {
-    if (!p.slug) { errors.push(`A profile is missing the required 'slug' field`); continue; }
-    if (!p.displayName) errors.push(`Profile '${p.slug}': missing required 'displayName'`);
-    if (definedSlugs.has(p.slug)) errors.push(`Profile slug '${p.slug}' is duplicated`);
+    if (!p.slug) {
+      errors.push(`A profile is missing the required 'slug' field`);
+      continue;
+    }
+    if (!p.displayName)
+      errors.push(`Profile '${p.slug}': missing required 'displayName'`);
+    if (definedSlugs.has(p.slug))
+      errors.push(`Profile slug '${p.slug}' is duplicated`);
     definedSlugs.add(p.slug);
   }
 
   for (const v of def.views ?? []) {
     const vname = v.name ?? v.displayName ?? "(unnamed)";
-    for (const s of [v.scopeProfileSlug, ...(v.scopeProfileSlugs ?? [])].filter(Boolean) as string[]) {
+    for (const s of [v.scopeProfileSlug, ...(v.scopeProfileSlugs ?? [])].filter(
+      Boolean
+    ) as string[]) {
       if (!definedSlugs.has(s)) {
-        errors.push(`View '${vname}': scopeProfile '${s}' not in definition.profiles`);
+        errors.push(
+          `View '${vname}': scopeProfile '${s}' not in definition.profiles`
+        );
       }
     }
   }
 
   for (const e of def.suggestedEntities ?? []) {
-    if (!e.profileSlug) { errors.push(`Entity '${e.title}': missing required 'profileSlug'`); continue; }
+    if (!e.profileSlug) {
+      errors.push(`Entity '${e.title}': missing required 'profileSlug'`);
+      continue;
+    }
     if (!definedSlugs.has(e.profileSlug)) {
-      errors.push(`Entity '${e.title}': profileSlug '${e.profileSlug}' not in definition.profiles`);
+      errors.push(
+        `Entity '${e.title}': profileSlug '${e.profileSlug}' not in definition.profiles`
+      );
     }
   }
 
   for (const link of def.entityLinks ?? []) {
     if (!definedSlugs.has(link.sourceProfileSlug)) {
-      errors.push(`entityLink: sourceProfileSlug '${link.sourceProfileSlug}' not in definition.profiles`);
+      errors.push(
+        `entityLink: sourceProfileSlug '${link.sourceProfileSlug}' not in definition.profiles`
+      );
     }
     if (!definedSlugs.has(link.targetProfileSlug)) {
-      errors.push(`entityLink: targetProfileSlug '${link.targetProfileSlug}' not in definition.profiles`);
+      errors.push(
+        `entityLink: targetProfileSlug '${link.targetProfileSlug}' not in definition.profiles`
+      );
     }
   }
 
@@ -374,13 +428,21 @@ export async function createWorkspaceFromDefinition(
   const definition: WorkspaceDefinitionInput = {
     ...opts.definition,
     suggestedEntities:
-      opts.definition.suggestedEntities ??
-      opts.definition.seedEntities,
+      opts.definition.suggestedEntities ?? opts.definition.seedEntities,
   };
 
   // ── Validate before touching the DB ─────────────────────────────────────────
   const templateLabel = templateName ?? packageSlug ?? "unnamed";
   validateDefinition(definition, templateLabel);
+
+  if (opts.dryRun) {
+    return {
+      workspaceId: "dry-run",
+      profileIds: [],
+      viewIds: [],
+      entityIds: [],
+    };
+  }
 
   const dbConn = await getDb();
   const eventRepo = new EventRepository(sql);
@@ -395,7 +457,9 @@ export async function createWorkspaceFromDefinition(
   const viewIds: string[] = [];
   const entityIds: string[] = [];
   /** Steps completed in THIS run (accumulated; written to settings on finish/fail). */
-  const completedSteps: string[] = isResume ? [...resumeFrom!.completedSteps] : [];
+  const completedSteps: string[] = isResume
+    ? [...resumeFrom!.completedSteps]
+    : [];
 
   const provisioningStartedAt = new Date().toISOString();
 
@@ -460,7 +524,11 @@ export async function createWorkspaceFromDefinition(
     );
     completedSteps.push("workspace");
   }
-  onProgress?.("workspace", 10, isResume ? "Workspace restored" : "Workspace created");
+  onProgress?.(
+    "workspace",
+    10,
+    isResume ? "Workspace restored" : "Workspace created"
+  );
 
   /**
    * Mark the workspace as failed in settings (for inspection / retry),
@@ -514,9 +582,13 @@ export async function createWorkspaceFromDefinition(
     entityRefMap: Record<string, string>;
   }> {
     const profileRepo_ = new ProfileRepository(dbConn);
-    const existingProfiles = await profileRepo_.getAccessibleProfiles(userId, workspaceId);
+    const existingProfiles = await profileRepo_.getAccessibleProfiles(
+      userId,
+      workspaceId
+    );
     const profileMap_: Record<string, string> = {};
-    const profileHintsMap_: Record<string, { icon?: string; color?: string }> = {};
+    const profileHintsMap_: Record<string, { icon?: string; color?: string }> =
+      {};
     const profileIds_: string[] = [];
     for (const p of existingProfiles) {
       profileMap_[p.slug] = p.id;
@@ -535,6 +607,10 @@ export async function createWorkspaceFromDefinition(
     const profileBentoViewIds_: Record<string, string> = {};
     for (const v of existingViews) {
       if (v.name) viewMap_[v.name] = v.id;
+      const defView = definition.views?.find(
+        (dv) => dv.name === v.name || dv.displayName === v.name
+      );
+      if (defView?.slug) viewMap_[defView.slug] = v.id;
       viewIds_.push(v.id);
       const meta = v.metadata as Record<string, unknown> | null;
       if (meta?.isProfileBento && typeof meta?.profileSlug === "string") {
@@ -572,7 +648,11 @@ export async function createWorkspaceFromDefinition(
     const creatorRole = opts.workspaceType === "agent" ? "admin" : "owner";
     try {
       await memberRepo.add(
-        { workspaceId, userId, role: creatorRole as "owner" | "editor" | "viewer" },
+        {
+          workspaceId,
+          userId,
+          role: creatorRole as "owner" | "editor" | "viewer",
+        },
         userId
       );
     } catch (err) {
@@ -614,7 +694,8 @@ export async function createWorkspaceFromDefinition(
       //   • Frontend proposal:      icon/color/description (direct) + properties[]
       const resolvedIcon = profile.icon ?? profile.uiHints?.icon;
       const resolvedColor = profile.color ?? profile.uiHints?.color;
-      const resolvedDescription = profile.description ?? profile.uiHints?.description;
+      const resolvedDescription =
+        profile.description ?? profile.uiHints?.description;
 
       // Normalize properties: prefer proposal format, fall back to CP registry format.
       const resolvedProperties: typeof profile.properties =
@@ -638,10 +719,17 @@ export async function createWorkspaceFromDefinition(
       let created;
       let profileIsReused = false;
 
-      const accessible = await profileRepo.getBySlugForWorkspace(profile.slug, workspaceId);
+      const accessible = await profileRepo.getBySlugForWorkspace(
+        profile.slug,
+        workspaceId
+      );
       if (accessible) {
         logger.info(
-          { slug: profile.slug, existingId: accessible.id, scope: accessible.scope },
+          {
+            slug: profile.slug,
+            existingId: accessible.id,
+            scope: accessible.scope,
+          },
           "Reusing accessible profile"
         );
         // Shared profiles need an explicit access grant for this workspace
@@ -661,16 +749,26 @@ export async function createWorkspaceFromDefinition(
           const podWide = await profileRepo.getBySlug(profile.slug);
           if (podWide) {
             logger.info(
-              { slug: profile.slug, existingId: podWide.id, scope: podWide.scope },
+              {
+                slug: profile.slug,
+                existingId: podWide.id,
+                scope: podWide.scope,
+              },
               "Reusing pod-wide shared/system profile (granting access)"
             );
             try {
               await profileRepo.grantAccess(podWide.id, workspaceId);
             } catch (err) {
-              await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
+              await handleStepError(
+                `profiles[${profile.slug}].grantAccess`,
+                err
+              );
             }
             profileMap[profile.slug] = podWide.id;
-            profileHintsMap[profile.slug] = { icon: resolvedIcon, color: resolvedColor };
+            profileHintsMap[profile.slug] = {
+              icon: resolvedIcon,
+              color: resolvedColor,
+            };
             profileIds.push(podWide.id);
             profileIsReused = true;
             created = podWide;
@@ -705,14 +803,20 @@ export async function createWorkspaceFromDefinition(
             try {
               await profileRepo.grantAccess(created!.id, workspaceId);
             } catch (err) {
-              await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
+              await handleStepError(
+                `profiles[${profile.slug}].grantAccess`,
+                err
+              );
             }
           }
         }
       }
 
       profileMap[profile.slug] = created!.id;
-      profileHintsMap[profile.slug] = { icon: resolvedIcon, color: resolvedColor };
+      profileHintsMap[profile.slug] = {
+        icon: resolvedIcon,
+        color: resolvedColor,
+      };
       profileIds.push(created!.id);
 
       // 4. Create property definitions.
@@ -723,7 +827,9 @@ export async function createWorkspaceFromDefinition(
         try {
           const existingLinks = await profilePropRepo.getByProfile(created!.id);
           if (existingLinks.length > 0) {
-            const pdMap = await propDefRepo.getManyByIds(existingLinks.map((l) => l.propertyDefId));
+            const pdMap = await propDefRepo.getManyByIds(
+              existingLinks.map((l) => l.propertyDefId)
+            );
             for (const pd of pdMap.values()) existingPropSlugs.add(pd.slug);
           }
         } catch (_) {
@@ -741,7 +847,9 @@ export async function createWorkspaceFromDefinition(
           // Merge targetProfileSlug into constraints for entity_id properties
           const propConstraints: Record<string, unknown> = {
             ...(prop.constraints ?? {}),
-            ...(prop.targetProfileSlug ? { targetProfileSlug: prop.targetProfileSlug } : {}),
+            ...(prop.targetProfileSlug
+              ? { targetProfileSlug: prop.targetProfileSlug }
+              : {}),
           };
           const propDef = await propDefRepo.create({
             slug: prop.slug,
@@ -752,7 +860,9 @@ export async function createWorkspaceFromDefinition(
               placeholder: prop.placeholder,
               enumValues: prop.enumValues,
             },
-            ...(Object.keys(propConstraints).length > 0 ? { constraints: propConstraints } : {}),
+            ...(Object.keys(propConstraints).length > 0
+              ? { constraints: propConstraints }
+              : {}),
             profileId: created!.id,
           });
           await profilePropRepo.link({
@@ -762,7 +872,10 @@ export async function createWorkspaceFromDefinition(
             displayOrder: i,
           });
         } catch (err) {
-          await handleStepError(`profiles[${profile.slug}].properties[${prop.slug}]`, err);
+          await handleStepError(
+            `profiles[${profile.slug}].properties[${prop.slug}]`,
+            err
+          );
         }
       }
     }
@@ -803,7 +916,10 @@ export async function createWorkspaceFromDefinition(
           relationDefId: relDef.id,
         });
       } catch (err) {
-        await handleStepError(`relations[${link.sourceProfileSlug}->${link.targetProfileSlug}]`, err);
+        await handleStepError(
+          `relations[${link.sourceProfileSlug}->${link.targetProfileSlug}]`,
+          err
+        );
       }
     }
     completedSteps.push("relations");
@@ -859,8 +975,14 @@ export async function createWorkspaceFromDefinition(
     onProgress?.("views", 55, "Views restored");
   } else {
     for (const view of normalizedViews) {
-      if (view.type === "flow") { flowViews.push(view); continue; }
-      if (view.type === "bento") { bentoViews.push(view); continue; }
+      if (view.type === "flow") {
+        flowViews.push(view);
+        continue;
+      }
+      if (view.type === "bento") {
+        bentoViews.push(view);
+        continue;
+      }
 
       const scopeProfileIds = view.scopeProfileSlugs
         ? view.scopeProfileSlugs.map((s) => profileMap[s]).filter(Boolean)
@@ -874,8 +996,17 @@ export async function createWorkspaceFromDefinition(
       const viewConfigExtra: Record<string, unknown> = {};
       const viewRecord = view as Record<string, unknown>;
       for (const k of [
-        "groupBy", "sortBy", "sortOrder", "filterBy", "description",
-        "defaultView", "hierarchyEdges", "startField", "endField", "colorBy", "slug",
+        "groupBy",
+        "sortBy",
+        "sortOrder",
+        "filterBy",
+        "description",
+        "defaultView",
+        "hierarchyEdges",
+        "startField",
+        "endField",
+        "colorBy",
+        "slug",
       ]) {
         if (viewRecord[k] !== undefined) viewConfigExtra[k] = viewRecord[k];
       }
@@ -890,7 +1021,9 @@ export async function createWorkspaceFromDefinition(
           {
             name: view.name,
             type: view.type as any,
-            scopeProfileIds: scopeProfileIds?.length ? scopeProfileIds : undefined,
+            scopeProfileIds: scopeProfileIds?.length
+              ? scopeProfileIds
+              : undefined,
             config: mergedConfig,
             workspaceId,
             userId,
@@ -902,6 +1035,7 @@ export async function createWorkspaceFromDefinition(
       }
 
       viewMap[view.name] = viewResult!.id;
+      if (view.slug) viewMap[view.slug] = viewResult!.id;
       viewIds.push(viewResult!.id);
     }
     completedSteps.push("views");
@@ -960,20 +1094,26 @@ export async function createWorkspaceFromDefinition(
     for (const view of bentoViews) {
       const scopeProfileSlug =
         view.scopeProfileSlug ??
-        (view.scopeProfileSlugs?.length === 1 ? view.scopeProfileSlugs[0] : undefined);
+        (view.scopeProfileSlugs?.length === 1
+          ? view.scopeProfileSlugs[0]
+          : undefined);
       const scopeProfileIds = view.scopeProfileSlugs
         ? view.scopeProfileSlugs.map((s) => profileMap[s]).filter(Boolean)
         : scopeProfileSlug
           ? [profileMap[scopeProfileSlug]].filter(Boolean)
           : undefined;
 
-      const rawBlocks = (view.config?.blocks as Array<Record<string, unknown>> | undefined) ?? [];
-      const resolvedBlocks = rawBlocks.length > 0
-        ? resolveBentoBlocks(rawBlocks, scopeProfileSlug ?? view.name)
-        : rawBlocks;
-      const resolvedConfig = rawBlocks.length > 0
-        ? { ...view.config, blocks: resolvedBlocks }
-        : view.config;
+      const rawBlocks =
+        (view.config?.blocks as Array<Record<string, unknown>> | undefined) ??
+        [];
+      const resolvedBlocks =
+        rawBlocks.length > 0
+          ? resolveBentoBlocks(rawBlocks, scopeProfileSlug ?? view.name)
+          : rawBlocks;
+      const resolvedConfig =
+        rawBlocks.length > 0
+          ? { ...view.config, blocks: resolvedBlocks }
+          : view.config;
 
       const isProfileBento = !!scopeProfileSlug;
       const metadata = isProfileBento
@@ -986,7 +1126,9 @@ export async function createWorkspaceFromDefinition(
           {
             name: view.name,
             type: "bento" as any,
-            scopeProfileIds: scopeProfileIds?.length ? scopeProfileIds : undefined,
+            scopeProfileIds: scopeProfileIds?.length
+              ? scopeProfileIds
+              : undefined,
             config: resolvedConfig,
             metadata,
             workspaceId,
@@ -999,6 +1141,7 @@ export async function createWorkspaceFromDefinition(
       }
 
       viewMap[view.name] = viewResult!.id;
+      if (view.slug) viewMap[view.slug] = viewResult!.id;
       viewIds.push(viewResult!.id);
       if (scopeProfileSlug) {
         profilesWithExplicitBento.add(scopeProfileSlug);
@@ -1050,10 +1193,15 @@ export async function createWorkspaceFromDefinition(
       where: eq(views.workspaceId, workspaceId),
     });
     const existing = existingHomeViews.find(
-      (v) => (v.metadata as Record<string, unknown> | null)?.homeScope === "workspace"
+      (v) =>
+        (v.metadata as Record<string, unknown> | null)?.homeScope ===
+        "workspace"
     );
     if (!existing) {
-      await handleStepError("home", new Error("Resume: home dashboard view not found in DB"));
+      await handleStepError(
+        "home",
+        new Error("Resume: home dashboard view not found in DB")
+      );
     }
     homeView = existing!;
     onProgress?.("home", 75, "Home dashboard restored");
@@ -1068,8 +1216,12 @@ export async function createWorkspaceFromDefinition(
 
     const viewBlocks = (definition.bentoViewBlocks ?? [])
       .filter((vb) => {
-        if (!viewMap[vb.viewName]) {
-          logger.warn({ viewName: vb.viewName }, "bentoViewBlock references unknown view — skipping");
+        const mappedId = viewMap[vb.viewSlug ?? vb.viewName];
+        if (!mappedId) {
+          logger.warn(
+            { viewName: vb.viewName, viewSlug: vb.viewSlug },
+            "bentoViewBlock references unknown view — skipping"
+          );
           return false;
         }
         return true;
@@ -1077,7 +1229,7 @@ export async function createWorkspaceFromDefinition(
       .map((vb, idx) => ({
         id: `view-${idx}`,
         kind: "view" as const,
-        viewId: viewMap[vb.viewName],
+        viewId: viewMap[vb.viewSlug ?? vb.viewName],
         pos: vb.pos,
         overrides: vb.overrides,
       }));
@@ -1131,7 +1283,10 @@ export async function createWorkspaceFromDefinition(
           userId
         );
       } catch (err) {
-        await handleStepError(`entities[${entity.profileSlug}:${entity.title}]`, err);
+        await handleStepError(
+          `entities[${entity.profileSlug}:${entity.title}]`,
+          err
+        );
       }
       entityIds.push(result!.id);
       entityRefMap[`${entity.profileSlug}:${entity.title}`] = result!.id;
@@ -1176,19 +1331,21 @@ export async function createWorkspaceFromDefinition(
 
       const config = { ...(view.config || {}) };
       if (config.nodes && Array.isArray(config.nodes)) {
-        config.nodes = (config.nodes as Array<Record<string, unknown>>).map((node) => {
-          const entityIndex = node.data
-            ? (node.data as Record<string, unknown>).entityIndex
-            : undefined;
-          if (
-            typeof entityIndex === "number" &&
-            entityIndex >= 0 &&
-            entityIndex < entityIds.length
-          ) {
-            return { ...node, entityId: entityIds[entityIndex] };
+        config.nodes = (config.nodes as Array<Record<string, unknown>>).map(
+          (node) => {
+            const entityIndex = node.data
+              ? (node.data as Record<string, unknown>).entityIndex
+              : undefined;
+            if (
+              typeof entityIndex === "number" &&
+              entityIndex >= 0 &&
+              entityIndex < entityIds.length
+            ) {
+              return { ...node, entityId: entityIds[entityIndex] };
+            }
+            return node;
           }
-          return node;
-        });
+        );
       }
 
       try {
@@ -1196,7 +1353,9 @@ export async function createWorkspaceFromDefinition(
           {
             name: view.name,
             type: view.type as any,
-            scopeProfileIds: scopeProfileIds?.length ? scopeProfileIds : undefined,
+            scopeProfileIds: scopeProfileIds?.length
+              ? scopeProfileIds
+              : undefined,
             config,
             workspaceId,
             userId,
@@ -1238,7 +1397,10 @@ export async function createWorkspaceFromDefinition(
           userId
         );
       } catch (err) {
-        await handleStepError(`relations-seed[${rel.sourceRef}->${rel.targetRef}]`, err);
+        await handleStepError(
+          `relations-seed[${rel.sourceRef}->${rel.targetRef}]`,
+          err
+        );
       }
     }
     completedSteps.push("relations-seed");

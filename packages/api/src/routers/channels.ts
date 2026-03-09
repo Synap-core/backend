@@ -23,7 +23,9 @@ import {
   and,
   or,
   lt,
+  gte,
   inArray,
+  isNull,
   drizzleSql,
 } from "@synap/database";
 import {
@@ -1462,6 +1464,7 @@ export const channelsRouter = router({
       const msgs = await db.query.messages.findMany({
         where: and(
           eq(messages.channelId, input.threadId),
+          isNull(messages.deletedAt),
           input.cursor ? lt(messages.id, input.cursor) : undefined
         ),
         orderBy: [desc(messages.timestamp)],
@@ -2023,6 +2026,39 @@ export const channelsRouter = router({
     }),
 
   /**
+   * Delete a branch that has no messages (sent when user navigates away without chatting).
+   * Safe to call even if the branch has messages — it's a no-op in that case.
+   * Only deletes branch-type channels owned by the caller.
+   */
+  pruneEmptyBranch: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.id, input.channelId),
+          eq(channels.userId, ctx.userId),
+          eq(channels.type, ChannelType.BRANCH)
+        ),
+      });
+      if (!channel) return { pruned: false };
+
+      // Count non-deleted user/assistant messages
+      const msgs = await db.query.messages.findMany({
+        where: and(
+          eq(messages.channelId, input.channelId),
+          isNull(messages.deletedAt)
+        ),
+        columns: { id: true },
+        limit: 1,
+      });
+      if (msgs.length > 0) return { pruned: false };
+
+      // Hard-delete the empty branch
+      await db.delete(channels).where(eq(channels.id, input.channelId));
+      return { pruned: true };
+    }),
+
+  /**
    * Archive channel (soft delete)
    */
   archiveChannel: protectedProcedure
@@ -2216,6 +2252,61 @@ export const channelsRouter = router({
           workspaceId: channel.workspaceId,
         })
         .onConflictDoNothing();
+
+      return { ok: true };
+    }),
+
+  /**
+   * Soft-delete all messages in a channel at or after a given message (by timestamp).
+   * Used for regenerate (delete AI response + anything after) and edit (delete from
+   * the edited user message onwards so the thread can be re-submitted).
+   */
+  deleteMessagesFrom: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        fromMessageId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.channelId),
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+      if (channel.userId !== ctx.userId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+      }
+
+      // Find the anchor message to get its timestamp
+      const anchor = await db.query.messages.findFirst({
+        where: and(
+          eq(messages.id, input.fromMessageId),
+          eq(messages.channelId, input.channelId)
+        ),
+      });
+      if (!anchor) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Message not found",
+        });
+      }
+
+      // Soft-delete all messages at or after the anchor timestamp
+      await db
+        .update(messages)
+        .set({ deletedAt: new Date() })
+        .where(
+          and(
+            eq(messages.channelId, input.channelId),
+            gte(messages.timestamp, anchor.timestamp),
+            isNull(messages.deletedAt)
+          )
+        );
 
       return { ok: true };
     }),
