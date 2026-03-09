@@ -165,10 +165,11 @@ export class SearchService {
     userId: string;
     workspaceId?: string;
   }): string {
-    const filters: string[] = [`userId:${options.userId}`];
+    // Backtick-quote values so UUIDs/IDs with hyphens parse correctly
+    const filters: string[] = [`userId:=\`${options.userId}\``];
 
     if (options.workspaceId) {
-      filters.push(`workspaceId:${options.workspaceId}`);
+      filters.push(`workspaceId:=\`${options.workspaceId}\``);
     }
 
     return filters.join(" && ");

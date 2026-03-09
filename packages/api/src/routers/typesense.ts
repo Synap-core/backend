@@ -26,7 +26,7 @@ export const typesenseRouter = router({
         workspaceId: z.string().optional(),
         collections: z
           .array(
-            z.enum(["entities", "documents", "views", "chat_threads", "agents"])
+            z.enum(["entities", "documents", "views", "channels", "agents"])
           )
           .optional(),
         limit: z.number().min(1).max(100).default(20),
@@ -34,14 +34,25 @@ export const typesenseRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      return await searchService.search({
-        query: input.query,
-        userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        collections: input.collections,
-        limit: input.limit,
-        page: input.page,
-      });
+      try {
+        return await searchService.search({
+          query: input.query,
+          userId: ctx.userId,
+          workspaceId: input.workspaceId,
+          collections: input.collections,
+          limit: input.limit,
+          page: input.page,
+        });
+      } catch (error: any) {
+        const message =
+          error?.message ||
+          (typeof error === "string" ? error : "Search failed");
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Search failed: ${message}`,
+          cause: error,
+        });
+      }
     }),
 
   /**
@@ -54,7 +65,7 @@ export const typesenseRouter = router({
           "entities",
           "documents",
           "views",
-          "chat_threads",
+          "channels",
           "agents",
         ]),
         query: z.string().min(1).max(500),
@@ -64,16 +75,27 @@ export const typesenseRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      return await searchService.searchCollection(
-        input.collection,
-        input.query,
-        {
-          userId: ctx.userId,
-          workspaceId: input.workspaceId,
-          limit: input.limit,
-          page: input.page,
-        }
-      );
+      try {
+        return await searchService.searchCollection(
+          input.collection,
+          input.query,
+          {
+            userId: ctx.userId,
+            workspaceId: input.workspaceId,
+            limit: input.limit,
+            page: input.page,
+          }
+        );
+      } catch (error: any) {
+        const message =
+          error?.message ||
+          (typeof error === "string" ? error : "Search failed");
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Search failed: ${message}`,
+          cause: error,
+        });
+      }
     }),
 
   /**

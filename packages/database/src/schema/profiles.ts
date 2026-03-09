@@ -14,7 +14,6 @@ import {
   integer,
   timestamp,
   index,
-  unique,
   primaryKey,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
@@ -55,6 +54,10 @@ export const profiles = pgTable(
     // Example: { status: "open", priority: "medium" }
     defaultValues: jsonb("default_values").default("{}").notNull(),
 
+    // Semantic identity for cross-workspace queries.
+    // e.g. "task", "project", "person" — NULL means no cross-workspace semantics.
+    semanticSlug: text("semantic_slug"),
+
     // Scope (who can use this profile)
     scope: text("scope", {
       enum: [
@@ -86,7 +89,11 @@ export const profiles = pgTable(
       .notNull(),
   },
   (table) => ({
-    slugIdx: unique("profiles_slug_unique").on(table.slug),
+    // NOTE: slug uniqueness is enforced via partial DB indexes (migration 0052):
+    //   - system + shared: unique(slug) globally
+    //   - workspace: unique(slug, workspace_id)
+    //   - user: unique(slug, user_id)
+    // The old global unique("profiles_slug_unique") has been dropped.
     parentProfileIdx: index("profiles_parent_profile_id_idx").on(
       table.parentProfileId
     ),

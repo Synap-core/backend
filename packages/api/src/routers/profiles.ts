@@ -116,10 +116,9 @@ export const profilesRouter = router({
       const db = await getDb();
       const profileRepo = new ProfileRepository(db);
 
-      // Check for slug conflict — return existing profile gracefully
-      // Profiles have a global unique slug constraint, so reuse across workspaces.
-      // For shared profiles, also grant access to the requesting workspace.
-      const existing = await profileRepo.getBySlug(input.slug);
+      // Check for slug conflict within this workspace context.
+      // Returns workspace-owned profile first, then shared/system if accessible.
+      const existing = await profileRepo.getBySlug(input.slug, ctx.workspaceId);
       if (existing) {
         logger.info(
           { slug: input.slug, existingId: existing.id },
@@ -733,6 +732,39 @@ export const profilesRouter = router({
       }
 
       return { profiles: allProfiles };
+    }),
+
+  /**
+   * Get all profiles sharing a given semantic slug across workspaces.
+   *
+   * Returns every workspace-scoped (or shared/system) profile tagged with
+   * `semanticSlug`, filtered to workspaces the caller is a member of.
+   * Use this to power cross-workspace views: "all tasks", "all projects", etc.
+   */
+  getBySemanticSlug: protectedProcedure
+    .input(
+      z.object({
+        semanticSlug: z.string(),
+        workspaceIds: z.array(z.string().uuid()).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const { validateWorkspaceAccess } =
+        await import("../utils/workspace-membership.js");
+
+      const validatedIds = await validateWorkspaceAccess(
+        ctx.userId,
+        input.workspaceIds
+      );
+
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
+      const matchingProfiles = await profileRepo.getBySemanticSlug(
+        input.semanticSlug,
+        validatedIds.length > 0 ? validatedIds : undefined
+      );
+
+      return { profiles: matchingProfiles };
     }),
 
   /**

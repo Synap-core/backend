@@ -266,6 +266,24 @@ provisionRouter.post("/register-intelligence", async (c) => {
     );
   }
 
+  // Encrypt the key before touching the DB — gives a clear error if the
+  // encryption key env var is missing, rather than a generic DB/500 below.
+  let encryptedKey: string;
+  try {
+    encryptedKey = encryptServiceKey(serviceApiKey);
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    logger.error({ err }, "register-intelligence: encryption step failed");
+    return c.json(
+      {
+        error: "Pod encryption key not configured",
+        detail: msg,
+        hint: "Set SYNAP_SERVICE_ENCRYPTION_KEY (or HUB_PROTOCOL_API_KEY as fallback) in the pod environment",
+      },
+      500
+    );
+  }
+
   try {
     const db = await getDb();
     const ws = await db.query.workspaces.findFirst();
@@ -282,17 +300,20 @@ provisionRouter.post("/register-intelligence", async (c) => {
         name: "Synap Intelligence Hub",
         description: "Synap-provisioned intelligence service",
         webhookUrl: serviceUrl,
-        apiKey: encryptServiceKey(serviceApiKey),
+        apiKey: encryptedKey,
         capabilities,
         status: "active",
         enabled: true,
         mcpApproved: true, // Trusted — authorized by CP-signed JWT
       })
       .onConflictDoUpdate({
-        target: intelligenceServices.serviceId,
+        // Use the primary key (id) as conflict target — safer than serviceId
+        // since both id and serviceId are set to SERVICE_ID, a PK conflict will
+        // always match before a serviceId conflict on the same row.
+        target: intelligenceServices.id,
         set: {
           webhookUrl: serviceUrl,
-          apiKey: encryptServiceKey(serviceApiKey),
+          apiKey: encryptedKey,
           capabilities,
           status: "active",
           enabled: true,
@@ -312,9 +333,10 @@ provisionRouter.post("/register-intelligence", async (c) => {
       "Intelligence service self-registered and activated"
     );
     return c.json({ success: true });
-  } catch (err) {
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
     logger.error({ err }, "Failed to register intelligence service");
-    return c.json({ error: "Internal server error" }, 500);
+    return c.json({ error: "Internal server error", detail: msg }, 500);
   }
 });
 

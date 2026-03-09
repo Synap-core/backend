@@ -69,6 +69,9 @@ TYPESENSE_ADMIN_KEY=$(openssl rand -base64 32)
 INNGEST_EVENT=$(openssl rand -base64 32)
 INNGEST_SIGNING=$(openssl rand -base64 32)
 JWT_SECRET=$(openssl rand -base64 64)
+HUB_PROTOCOL_API_KEY=$(openssl rand -hex 32)
+SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)
+VAULT_SERVER_KEY=$(openssl rand -hex 32)
 
 echo -e "${GREEN}✓ All secrets generated${NC}"
 echo ""
@@ -242,6 +245,23 @@ FRONTEND_URL=https://${APP_URL}
 ALLOWED_ORIGINS=https://${APP_URL},https://${DOMAIN}
 
 # ============================================================================
+# HUB PROTOCOL
+# ============================================================================
+HUB_PROTOCOL_API_KEY=${HUB_PROTOCOL_API_KEY}
+
+# ============================================================================
+# SERVICE CREDENTIAL ENCRYPTION
+# ============================================================================
+# Encrypts Hub API keys and IS credentials at rest.
+# REQUIRED for CP provisioning (register-intelligence). Do NOT rotate without re-provisioning IS.
+SYNAP_SERVICE_ENCRYPTION_KEY=${SYNAP_SERVICE_ENCRYPTION_KEY}
+
+# ============================================================================
+# VAULT (add-on provisioning)
+# ============================================================================
+VAULT_SERVER_KEY=${VAULT_SERVER_KEY}
+
+# ============================================================================
 # DEMO MODE CONFIG
 # ============================================================================
 DEMO_MODE_ENABLED=${DEMO_MODE_ENABLED}
@@ -269,10 +289,11 @@ TYPESENSE_ADMIN_KEY=${TYPESENSE_ADMIN_KEY}
 INNGEST_EVENT=${INNGEST_EVENT}
 INNGEST_SIGNING=${INNGEST_SIGNING}
 JWT_SECRET=${JWT_SECRET}
+HUB_PROTOCOL_API_KEY=${HUB_PROTOCOL_API_KEY}
+SYNAP_SERVICE_ENCRYPTION_KEY=${SYNAP_SERVICE_ENCRYPTION_KEY}
+VAULT_SERVER_KEY=${VAULT_SERVER_KEY}
 
 OPENAI_KEY=${OPENAI_KEY}
-STRIPE_SECRET=${STRIPE_SECRET}
-STRIPE_WEBHOOK=${STRIPE_WEBHOOK}
 EOF
 chmod 600 "${DEPLOYMENT_ROOT}/.secrets-backup.txt"
 echo -e "${GREEN}✓ Secrets backup created at ${DEPLOYMENT_ROOT}/.secrets-backup.txt${NC}"

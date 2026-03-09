@@ -112,6 +112,11 @@ export interface WorkspaceDefinitionInput {
     color?: string;
     description?: string;
     scope?: string;
+    /**
+     * Semantic identity tag for cross-workspace queries. Defaults to the profile's slug.
+     * Set to null to mark this profile as private (no cross-workspace semantics).
+     */
+    semanticSlug?: string | null;
     // Proposal format: flat property list
     properties?: Array<{
       slug: string;
@@ -650,43 +655,58 @@ export async function createWorkspaceFromDefinition(
         created = accessible;
         profileIsReused = true;
       } else {
-        const podWide = await profileRepo.getBySlug(profile.slug);
-        if (podWide) {
-          // Profile exists in the pod but belongs to another workspace's private scope
-          await handleStepError(
-            `profiles[${profile.slug}]`,
-            new Error(
-              `Profile slug '${profile.slug}' is already in use by a private profile in ` +
-                `workspace '${podWide.workspaceId ?? "unknown"}'. ` +
-                `Either rename this profile in the template, or convert the existing profile ` +
-                `to 'shared' scope so it can be reused.`
-            )
-          );
+        // For shared/system scope: do a pod-wide check — their slugs are globally
+        // unique, so if one exists but wasn't accessible we should reuse it.
+        if (scope === "shared" || scope === "system") {
+          const podWide = await profileRepo.getBySlug(profile.slug);
+          if (podWide) {
+            logger.info(
+              { slug: profile.slug, existingId: podWide.id, scope: podWide.scope },
+              "Reusing pod-wide shared/system profile (granting access)"
+            );
+            try {
+              await profileRepo.grantAccess(podWide.id, workspaceId);
+            } catch (err) {
+              await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
+            }
+            profileMap[profile.slug] = podWide.id;
+            profileHintsMap[profile.slug] = { icon: resolvedIcon, color: resolvedColor };
+            profileIds.push(podWide.id);
+            profileIsReused = true;
+            created = podWide;
+          }
         }
+        // For workspace/user scope: partial DB index allows same slug in different
+        // workspaces — no pod-wide check needed, just create it.
 
-        try {
-          created = await profileRepo.create({
-            slug: profile.slug,
-            displayName: profile.displayName,
-            uiHints: {
-              icon: resolvedIcon,
-              color: resolvedColor,
-              description: resolvedDescription,
-            },
-            scope: scope as ProfileScope,
-            workspaceId,
-            userId,
-          });
-        } catch (err) {
-          await handleStepError(`profiles[${profile.slug}].create`, err);
-        }
-
-        // For newly created shared profiles, grant the creating workspace access
-        if (scope === "shared") {
+        if (!created) {
           try {
-            await profileRepo.grantAccess(created!.id, workspaceId);
+            created = await profileRepo.create({
+              slug: profile.slug,
+              displayName: profile.displayName,
+              uiHints: {
+                icon: resolvedIcon,
+                color: resolvedColor,
+                description: resolvedDescription,
+              },
+              scope: scope as ProfileScope,
+              workspaceId,
+              userId,
+              // Pass explicit semanticSlug from template; auto-assignment for
+              // standard slugs (task, project, person, etc.) happens in create().
+              semanticSlug: profile.semanticSlug,
+            });
           } catch (err) {
-            await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
+            await handleStepError(`profiles[${profile.slug}].create`, err);
+          }
+
+          // For newly created shared profiles, grant the creating workspace access
+          if (scope === "shared") {
+            try {
+              await profileRepo.grantAccess(created!.id, workspaceId);
+            } catch (err) {
+              await handleStepError(`profiles[${profile.slug}].grantAccess`, err);
+            }
           }
         }
       }

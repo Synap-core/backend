@@ -4,7 +4,7 @@
  * Handles CRUD operations for profiles (entity types).
  */
 
-import { eq, and, or, sql, isNotNull } from "drizzle-orm";
+import { eq, and, or, sql, isNotNull, inArray } from "drizzle-orm";
 import {
   profiles,
   profileWorkspaceAccess,
@@ -24,6 +24,11 @@ export interface CreateProfileInput {
   scope?: ProfileScope;
   userId?: string;
   workspaceId?: string;
+  /**
+   * Semantic identity for cross-workspace queries. Defaults to `slug`.
+   * Pass `null` to explicitly mark this profile as private (no cross-workspace semantics).
+   */
+  semanticSlug?: string | null;
 }
 
 export class ProfileRepository {
@@ -43,6 +48,11 @@ export class ProfileRepository {
       }
     }
 
+    // Default semanticSlug to slug — every profile is cross-workspace queryable by default.
+    // Pass null explicitly to mark a profile as private (no cross-workspace semantics).
+    const resolvedSemanticSlug =
+      input.semanticSlug !== undefined ? input.semanticSlug : input.slug;
+
     const [profile] = await this.db
       .insert(profiles)
       .values({
@@ -54,6 +64,7 @@ export class ProfileRepository {
         scope: input.scope || ProfileScope.WORKSPACE,
         userId: input.userId || null,
         workspaceId: input.workspaceId || null,
+        semanticSlug: resolvedSemanticSlug,
         isActive: true,
         version: 1,
       } as NewProfile)
@@ -63,15 +74,30 @@ export class ProfileRepository {
   }
 
   /**
-   * Get profile by slug (pod-wide — intentional, slugs are unique across the pod).
-   * For workspace-scoped lookups use getBySlugForWorkspace.
+   * Get a profile by slug, workspace-aware.
+   *
+   * - With workspaceId: returns the best-matching profile accessible to that
+   *   workspace (workspace-owned > shared > system). Same as getBySlugForWorkspace.
+   * - Without workspaceId: returns only system or shared profiles (pod-wide concepts).
+   *   Use this for contexts that have no workspace (scripts, system jobs, etc.).
    */
-  async getBySlug(slug: string): Promise<Profile | null> {
-    const result = await this.db.query.profiles.findFirst({
-      where: eq(profiles.slug, slug),
-    });
-
-    return result || null;
+  async getBySlug(slug: string, workspaceId?: string): Promise<Profile | null> {
+    if (workspaceId) {
+      return this.getBySlugForWorkspace(slug, workspaceId);
+    }
+    // No workspace context — only pod-wide profiles
+    return (
+      (await this.db.query.profiles.findFirst({
+        where: and(
+          eq(profiles.slug, slug),
+          eq(profiles.isActive, true),
+          or(
+            eq(profiles.scope, ProfileScope.SYSTEM),
+            eq(profiles.scope, ProfileScope.SHARED)
+          )
+        ),
+      })) ?? null
+    );
   }
 
   /**
@@ -245,6 +271,29 @@ export class ProfileRepository {
     }
 
     return hierarchy.reverse(); // Root → Leaf
+  }
+
+  /**
+   * Get all profiles that share a semantic slug, optionally filtered to specific workspaces.
+   *
+   * Use this for cross-workspace queries: "give me all profiles that represent 'task'
+   * across workspaces A, B and C" — each workspace may have its own schema but they
+   * all refer to the same concept.
+   */
+  async getBySemanticSlug(
+    semanticSlug: string,
+    workspaceIds?: string[]
+  ): Promise<Profile[]> {
+    const conditions = [
+      eq(profiles.semanticSlug, semanticSlug),
+      eq(profiles.isActive, true),
+    ];
+    if (workspaceIds && workspaceIds.length > 0) {
+      conditions.push(inArray(profiles.workspaceId, workspaceIds));
+    }
+    return this.db.query.profiles.findMany({
+      where: and(...conditions),
+    });
   }
 
   /**
