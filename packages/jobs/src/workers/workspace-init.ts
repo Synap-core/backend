@@ -50,17 +50,13 @@ export async function handleWorkspaceInit(
     },
   ];
 
-  if (!templateName && !packageSlug) {
-    tasks.push({
-      name: "views",
-      promise: ensureDefaultViews(workspaceId, userId),
-    });
-  } else {
-    logger.info(
-      { workspaceId, templateName, packageSlug },
-      "Skipping default views — workspace created from template/package"
-    );
-  }
+  // Always run ensureDefaultViews — it is idempotent and only creates what is missing.
+  // Template workspaces define their own views; ensureDefaultViews will skip those
+  // and only add the Home bento if the template didn't include one.
+  tasks.push({
+    name: "views",
+    promise: ensureDefaultViews(workspaceId, userId),
+  });
 
   const results = await Promise.allSettled(tasks.map((t) => t.promise));
 
@@ -68,8 +64,6 @@ export async function handleWorkspaceInit(
   tasks.forEach((t, i) => {
     resultMap[t.name] = results[i].status;
   });
-  if (templateName || packageSlug)
-    resultMap.views = "skipped (template/package)";
 
   logger.info(
     { workspaceId, ...resultMap },

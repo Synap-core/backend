@@ -1091,6 +1091,7 @@ export const workspacesRouter = router({
                   color: z.string().optional(),
                   description: z.string().optional(),
                   scope: z.string().optional(),
+                  semanticSlug: z.string().nullable().optional(),
                   // Proposal format: flat property list
                   properties: z
                     .array(

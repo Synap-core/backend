@@ -54,6 +54,10 @@ export const profiles = pgTable(
     // Example: { status: "open", priority: "medium" }
     defaultValues: jsonb("default_values").default("{}").notNull(),
 
+    // Semantic identity for cross-workspace queries.
+    // e.g. "task", "project", "person" — NULL means no cross-workspace semantics.
+    semanticSlug: text("semantic_slug"),
+
     // Scope (who can use this profile)
     scope: text("scope", {
       enum: [

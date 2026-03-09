@@ -112,6 +112,12 @@ export interface WorkspaceDefinitionInput {
     color?: string;
     description?: string;
     scope?: string;
+    /**
+     * Semantic identity tag for cross-workspace queries.
+     * Auto-assigned from slug for standard concepts (task, project, person, note, event, company).
+     * Set to null to suppress auto-assignment for a standard-slug profile that should stay private.
+     */
+    semanticSlug?: string | null;
     // Proposal format: flat property list
     properties?: Array<{
       slug: string;
@@ -687,6 +693,9 @@ export async function createWorkspaceFromDefinition(
               scope: scope as ProfileScope,
               workspaceId,
               userId,
+              // Pass explicit semanticSlug from template; auto-assignment for
+              // standard slugs (task, project, person, etc.) happens in create().
+              semanticSlug: profile.semanticSlug,
             });
           } catch (err) {
             await handleStepError(`profiles[${profile.slug}].create`, err);
