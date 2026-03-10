@@ -235,6 +235,108 @@ export class IndexingService {
   }
 
   /**
+   * Full reindex: fetch all live records from DB, upsert into Typesense,
+   * then delete Typesense docs that no longer exist in DB.
+   *
+   * Called by the `search-reindex` pg-boss job (admin-triggered or startup).
+   * Safe to run at any time — uses upsert so no data is lost on partial runs.
+   */
+  async fullReindex(
+    collections?: string[]
+  ): Promise<Record<string, { upserted: number; deleted: number; error?: string }>> {
+    const client = getTypesenseAdminClient();
+    const db = await getDb();
+    const targetCollections = collections ?? Object.keys(this.indexers);
+    const results: Record<string, { upserted: number; deleted: number; error?: string }> = {};
+
+    for (const collection of targetCollections) {
+      const indexer = this.indexers[collection as keyof typeof this.indexers];
+      if (!indexer) continue;
+
+      try {
+        // 1. Fetch all live records from DB
+        let dbRecords: any[] = [];
+        switch (collection) {
+          case "entities":
+            dbRecords = await db.query.entities.findMany({
+              where: (e, { isNull }) => isNull(e.deletedAt),
+            });
+            break;
+          case "documents":
+            dbRecords = await db.query.documents.findMany({
+              where: (d, { isNull }) => isNull(d.deletedAt),
+            });
+            break;
+          case "views":
+            dbRecords = await db.query.views.findMany();
+            break;
+          case "channels":
+            dbRecords = await db.query.channels.findMany();
+            break;
+          case "agents":
+            dbRecords = await db.query.agents.findMany();
+            break;
+          default:
+            continue;
+        }
+
+        // 2. Convert and upsert into Typesense
+        const searchDocs = await indexer.toSearchDocuments(dbRecords);
+        let upserted = 0;
+        if (searchDocs.length > 0) {
+          const importResult = await client
+            .collections(collection)
+            .documents()
+            .import(searchDocs, { action: "upsert" });
+          upserted = importResult.filter((r: any) => r.success).length;
+          const failed = importResult.filter((r: any) => !r.success).length;
+          if (failed > 0) {
+            console.error(`[fullReindex] ${failed} docs failed in ${collection}`);
+          }
+        }
+
+        // 3. Delete Typesense docs that no longer exist in DB
+        // Use the export endpoint to stream all document IDs from Typesense
+        const liveIds = new Set(dbRecords.map((r: any) => r.id));
+        let deleted = 0;
+        try {
+          const exported = await client
+            .collections(collection)
+            .documents()
+            .export({ include_fields: "id" } as any);
+          const lines = (exported as string).split("\n").filter(Boolean);
+          for (const line of lines) {
+            try {
+              const doc = JSON.parse(line);
+              if (doc.id && !liveIds.has(doc.id)) {
+                try {
+                  await client.collections(collection).documents(doc.id).delete();
+                  deleted++;
+                } catch {
+                  // already gone
+                }
+              }
+            } catch {
+              // malformed line — skip
+            }
+          }
+        } catch {
+          // export may fail for empty collections — fine
+        }
+
+        results[collection] = { upserted, deleted };
+        console.log(`[fullReindex] ${collection}: upserted=${upserted}, deleted=${deleted}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[fullReindex] Error in collection ${collection}:`, err);
+        results[collection] = { upserted: 0, deleted: 0, error: msg };
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * Get queue status
    */
   getQueueStatus(): Record<string, number> {

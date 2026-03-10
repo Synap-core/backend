@@ -11,7 +11,7 @@
 import { getBoss } from "../boss.js";
 import { createLogger } from "@synap-core/core";
 import { collectionService } from "@synap/search";
-import { handleSearchIndex, handleBulkIndex } from "./search-worker.js";
+import { handleSearchIndex, handleBulkIndex, handleFullReindex } from "./search-worker.js";
 import { handleWorkspaceInit } from "./workspace-init.js";
 import { handleCrossChannelNotify } from "./cross-channel-notifier.js";
 import {
@@ -170,8 +170,8 @@ export async function registerAllWorkers(): Promise<void> {
   });
   logger.info("Registered worker: side-effects");
 
-  // Search reindex (triggered by admin)
-  await boss.work("search-reindex", async () => handleBulkIndex());
+  // Search reindex (triggered by admin) — full DB→Typesense sync
+  await boss.work("search-reindex", async ([job]: any[]) => handleFullReindex(job));
   logger.info("Registered worker: search-reindex");
 
   // A2AI response trigger (with retry, replaces fire-and-forget)

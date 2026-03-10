@@ -188,7 +188,7 @@ export const capabilitiesRouter = router({
             AVG(COALESCE((metadata->>'latency')::float, 0))::float AS avg_latency_ms
           FROM messages
           WHERE author_type = ${MessageAuthorType.AI_AGENT}
-            AND timestamp  >= ${since}
+            AND timestamp  >= ${since.toISOString()}
             AND deleted_at IS NULL
           GROUP BY service_id
           ORDER BY message_count DESC

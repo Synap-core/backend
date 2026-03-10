@@ -74,3 +74,14 @@ export async function handleBulkIndex(): Promise<void> {
   const results = await indexingService.flushQueue();
   logger.info({ totalItems, results }, "Flushed search indexing queue");
 }
+
+/**
+ * Full reindex: sync all live DB records into Typesense and prune stale docs.
+ * Called by the `search-reindex` pg-boss job (admin-triggered).
+ */
+export async function handleFullReindex(job: PgBoss.Job<{ collections?: string[] }>): Promise<void> {
+  const { collections } = job.data ?? {};
+  logger.info({ collections }, "Starting full search reindex");
+  const results = await indexingService.fullReindex(collections);
+  logger.info({ results }, "Full search reindex complete");
+}
