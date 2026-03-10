@@ -2368,4 +2368,283 @@ app.post("/widget-definitions", async (c) => {
   }
 });
 
+// ── Automations ──────────────────────────────────────────────────────────────
+
+/**
+ * POST /automations/create
+ * Create a new automation (typically draft, from AI tool).
+ */
+app.post("/automations/create", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+  const userId = (body.userId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId as string;
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+  if (!body.name) {
+    return c.json({ error: "name is required" }, 400);
+  }
+  if (!body.triggerType) {
+    return c.json({ error: "triggerType is required" }, 400);
+  }
+
+  try {
+    const caller = await getCaller(c, {
+      userId,
+      workspaceId,
+      sourceMessageId: (body.sourceMessageId as string) ?? null,
+    });
+    const result = await (caller as any).automations.createAutomation({
+      userId,
+      agentUserId: body.agentUserId as string | undefined,
+      workspaceId,
+      sourceMessageId: body.sourceMessageId as string | undefined,
+      name: body.name as string,
+      description: body.description as string | undefined,
+      triggerType: body.triggerType as string,
+      triggerConfig: (body.triggerConfig as Record<string, unknown>) ?? {},
+      flowDefinition: body.flowDefinition as {
+        nodes: unknown[];
+        edges: unknown[];
+      },
+      status: (body.status as string) ?? "draft",
+      metadata: body.metadata as Record<string, unknown> | undefined,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.create failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /automations?userId=...&workspaceId=...&status=...&limit=...
+ * List automations for a workspace.
+ */
+app.get("/automations", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read required" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId) return c.json({ error: "userId is required" }, 400);
+  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).automations.listAutomations({
+      userId,
+      workspaceId,
+      status: c.req.query("status") || undefined,
+      limit: c.req.query("limit")
+        ? parseInt(c.req.query("limit")!, 10)
+        : undefined,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.list failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /automations/:automationId
+ * Get a single automation by ID.
+ */
+app.get("/automations/:automationId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read required" }, 403);
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId) return c.json({ error: "userId is required" }, 400);
+  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).automations.getAutomation({
+      userId,
+      workspaceId,
+      id: c.req.param("automationId"),
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.get failed");
+    const status =
+      err instanceof Error && err.message.includes("not found") ? 404 : 500;
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      status
+    );
+  }
+});
+
+/**
+ * POST /automations/:automationId/trigger
+ * Manually trigger an automation.
+ */
+app.post("/automations/:automationId/trigger", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  const userId = (body.userId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId as string;
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).automations.triggerAutomation({
+      userId,
+      workspaceId,
+      id: c.req.param("automationId"),
+      payload: body.payload as Record<string, unknown> | undefined,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.trigger failed");
+    const status =
+      err instanceof Error && err.message.includes("not found") ? 404 : 500;
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      status
+    );
+  }
+});
+
+/**
+ * PATCH /automations/:automationId
+ * Update an automation.
+ */
+app.patch("/automations/:automationId", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+
+  const userId = (body.userId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId as string;
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).automations.updateAutomation({
+      userId,
+      workspaceId,
+      id: c.req.param("automationId"),
+      name: body.name as string | undefined,
+      description: body.description as string | undefined,
+      triggerType: body.triggerType as string | undefined,
+      triggerConfig: body.triggerConfig as Record<string, unknown> | undefined,
+      flowDefinition: body.flowDefinition as
+        | { nodes: unknown[]; edges: unknown[] }
+        | undefined,
+      status: body.status as string | undefined,
+      metadata: body.metadata as Record<string, unknown> | undefined,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.update failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /automations/:automationId/activate
+ * Activate an automation.
+ */
+app.post("/automations/:automationId/activate", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  const userId = (body.userId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId as string;
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).automations.activateAutomation({
+      userId,
+      workspaceId,
+      id: c.req.param("automationId"),
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.activate failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /automations/:automationId/pause
+ * Pause an automation.
+ */
+app.post("/automations/:automationId/pause", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  const userId = (body.userId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId as string;
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+
+  try {
+    const caller = await getCaller(c, { userId, workspaceId });
+    const result = await (caller as any).automations.pauseAutomation({
+      userId,
+      workspaceId,
+      id: c.req.param("automationId"),
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err }, "automations.pause failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
 export const hubProtocolRestApp = app;

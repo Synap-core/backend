@@ -19,6 +19,14 @@ export interface SideEffectPayload {
   userId: string;
   workspaceId?: string;
   data?: Record<string, unknown>;
+  /** Automation chain tracking — prevents circular triggers */
+  automationContext?: {
+    automationRunId: string;
+    automationId: string;
+    chainDepth: number;
+    rootRunId?: string;
+    chainAutomationIds?: string[];
+  };
 }
 
 /**
@@ -27,7 +35,9 @@ export interface SideEffectPayload {
  * This is fire-and-forget — failures in side-effects don't affect
  * the CRUD response. pg-boss handles retries automatically.
  */
-export async function emitSideEffects(payload: SideEffectPayload): Promise<void> {
+export async function emitSideEffects(
+  payload: SideEffectPayload
+): Promise<void> {
   try {
     const boss = getBoss();
 
@@ -73,7 +83,8 @@ export async function emitSideEffects(payload: SideEffectPayload): Promise<void>
 
     // 4. Cross-thread notifications (for entity/document updates)
     if (
-      (payload.subjectType === "entity" || payload.subjectType === "document") &&
+      (payload.subjectType === "entity" ||
+        payload.subjectType === "document") &&
       payload.action === "update"
     ) {
       await boss.send("cross-thread-notify", {
@@ -81,6 +92,18 @@ export async function emitSideEffects(payload: SideEffectPayload): Promise<void>
         subjectId: payload.subjectId,
         userId: payload.userId,
         workspaceId: payload.workspaceId,
+      });
+    }
+
+    // 5. Automation trigger matching
+    if (payload.workspaceId) {
+      await boss.send("automation-trigger-match", {
+        eventType: `${payload.subjectType}.${payload.action}.completed`,
+        subjectId: payload.subjectId,
+        userId: payload.userId,
+        workspaceId: payload.workspaceId,
+        data: payload.data,
+        automationContext: payload.automationContext,
       });
     }
   } catch (error) {
