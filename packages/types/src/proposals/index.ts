@@ -9,7 +9,10 @@ import type { EventAction } from "../events/unified.js";
 // Re-export database types for proposals
 export type { Proposal, NewProposal } from "@synap/database";
 
-export { insertProposalSchema, selectProposalSchema } from "@synap/database";
+// NOTE: Zod schemas (insertProposalSchema, selectProposalSchema)
+// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
+// browser/Electron builds. Backend consumers should import directly from
+// @synap/database.
 
 /**
  * Proposal status as stored in the DB.

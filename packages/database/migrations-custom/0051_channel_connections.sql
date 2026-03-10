@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS channel_connections (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   channel         TEXT NOT NULL,          -- 'telegram' | 'whatsapp' | 'discord'
   channel_user_id TEXT NOT NULL,          -- external platform user ID
-  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   workspace_id    UUID REFERENCES workspaces(id) ON DELETE SET NULL,
   default_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
   external_username  TEXT,               -- display name from external platform

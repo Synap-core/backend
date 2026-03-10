@@ -21,10 +21,10 @@ export type {
   GraphPreferences,
 } from "@synap/database";
 
-export {
-  insertUserPreferenceSchema,
-  selectUserPreferenceSchema,
-} from "@synap/database";
+// NOTE: Zod schemas (insertUserPreferenceSchema, selectUserPreferenceSchema)
+// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
+// browser/Electron builds. Backend consumers should import directly from
+// @synap/database.
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Frontend Validation)

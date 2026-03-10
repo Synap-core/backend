@@ -37,8 +37,8 @@ export const channelConnections = pgTable(
     /** External platform user identifier (e.g. Telegram user ID as string) */
     channelUserId: text("channel_user_id").notNull(),
 
-    /** Synap user this connection belongs to */
-    userId: uuid("user_id")
+    /** Synap user this connection belongs to (text — matches users.id type) */
+    userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
 
@@ -102,8 +102,8 @@ export const channelLinkTokens = pgTable(
     /** Which external channel this token is intended for */
     channel: text("channel").notNull(),
 
-    /** Synap user who generated the token */
-    userId: uuid("user_id")
+    /** Synap user who generated the token (text — matches users.id type) */
+    userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
 

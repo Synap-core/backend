@@ -11,10 +11,7 @@ export type {
   NewDocumentSession,
 } from "@synap/database";
 
-// Re-export Zod schemas for runtime validation
-export {
-  insertDocumentVersionSchema,
-  selectDocumentVersionSchema,
-  insertDocumentSessionSchema,
-  selectDocumentSessionSchema,
-} from "@synap/database";
+// NOTE: Zod schemas (insert/selectDocumentVersionSchema, insert/selectDocumentSessionSchema)
+// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
+// browser/Electron builds. Backend consumers should import directly from
+// @synap/database.

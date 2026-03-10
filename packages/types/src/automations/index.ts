@@ -29,10 +29,10 @@ export type {
   LoopNodeDef,
 } from "@synap/database";
 
-export {
-  insertAutomationSchema,
-  selectAutomationSchema,
-} from "@synap/database";
+// NOTE: Zod schemas (insertAutomationSchema, selectAutomationSchema)
+// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
+// browser/Electron builds. Backend consumers should import directly from
+// @synap/database.
 
 // ── Domain types ────────────────────────────────────────────────────────────
 
