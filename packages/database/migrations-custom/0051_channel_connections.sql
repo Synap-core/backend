@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS channel_link_tokens (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   token            TEXT NOT NULL UNIQUE,  -- short alphanumeric token shown to user
   channel          TEXT NOT NULL,         -- which channel this token is for
-  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   workspace_id     UUID REFERENCES workspaces(id) ON DELETE SET NULL,
   default_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
   expires_at       TIMESTAMPTZ NOT NULL,
