@@ -32,7 +32,7 @@ function computeNextRunAt(cronExpr: string, fromDate: Date): Date | null {
   function matchesCronField(
     field: string,
     value: number,
-    max: number
+    _max: number
   ): boolean {
     if (field === "*") return true;
 

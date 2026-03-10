@@ -584,7 +584,6 @@ export async function handleAutomationExecute(job: {
           output = { result };
 
           // Mark nodes on the untaken branch as skipped
-          const takenHandle = result ? "yes" : "no";
           const untakenHandle = result ? "no" : "yes";
 
           const untakenEdges = getOutEdges(flow.edges, node.id, untakenHandle);

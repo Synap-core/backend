@@ -8,7 +8,6 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { createHubProtocolCallerContext } from "./utils.js";
 import { db, intelligenceCommands, eq, and, desc } from "@synap/database";
 
 export const hubCommandsRouter = router({
