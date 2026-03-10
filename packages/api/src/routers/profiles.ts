@@ -834,7 +834,6 @@ export const profilesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
-      const profileRepo = new ProfileRepository(db);
       const profilePropertyRepo = new ProfilePropertyRepository(db);
 
       // Verify profile exists and is accessible to this workspace

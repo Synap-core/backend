@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, desc, isNull } from "@synap/database";
+import { db, eq, and, or, desc } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
