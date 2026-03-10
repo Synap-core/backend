@@ -285,9 +285,7 @@ async function run() {
       let healthStr = "not yet checked";
       if (service.lastHealthCheck) {
         const ago = Math.round(
-          (Date.now() - new Date(service.lastHealthCheck).getTime()) /
-            1000 /
-            60
+          (Date.now() - new Date(service.lastHealthCheck).getTime()) / 1000 / 60
         );
         healthStr = `${service.lastHealthStatus || "unknown"} (checked ${ago}m ago)`;
       }

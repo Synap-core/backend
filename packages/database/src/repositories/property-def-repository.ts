@@ -9,7 +9,7 @@ import {
   propertyDefs,
   type PropertyDef,
   type NewPropertyDef,
-  PropertyValueType,
+  type PropertyValueType,
 } from "../schema/property-defs.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 

@@ -796,7 +796,9 @@ export const entitiesRouter = router({
             try {
               if (document.storageKey)
                 await storage.delete(document.storageKey);
-            } catch {}
+            } catch {
+              // Storage deletion is best-effort — entity delete proceeds regardless
+            }
             await docRepo.delete(entity.documentId, ctx.userId);
           }
         }

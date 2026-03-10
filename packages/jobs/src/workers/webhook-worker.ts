@@ -6,7 +6,13 @@
  */
 
 import type PgBoss from "pg-boss";
-import { db, webhookSubscriptions, webhookDeliveries, eq, and } from "@synap/database";
+import {
+  db,
+  webhookSubscriptions,
+  webhookDeliveries,
+  eq,
+  and,
+} from "@synap/database";
 import { createHmac } from "crypto";
 import { createLogger } from "@synap-core/core";
 
@@ -34,7 +40,9 @@ export async function handleWebhookDelivery(
       )
     );
 
-  const matchingSubs = allSubs.filter((sub) => sub.eventTypes.includes(eventType));
+  const matchingSubs = allSubs.filter((sub) =>
+    sub.eventTypes.includes(eventType)
+  );
 
   if (matchingSubs.length === 0) return;
 
@@ -71,7 +79,10 @@ export async function handleWebhookDelivery(
       status = response.ok ? "success" : "failed";
     } catch (error) {
       status = "failed";
-      logger.warn({ err: error, subscriptionId: sub.id }, "Webhook delivery failed");
+      logger.warn(
+        { err: error, subscriptionId: sub.id },
+        "Webhook delivery failed"
+      );
     }
 
     await db.insert(webhookDeliveries).values({

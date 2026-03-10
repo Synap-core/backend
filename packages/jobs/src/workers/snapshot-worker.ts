@@ -8,7 +8,12 @@
 
 import type PgBoss from "pg-boss";
 import { db, eq } from "@synap/database";
-import { documents, documentVersions, documentSessions, views } from "@synap/database/schema";
+import {
+  documents,
+  documentVersions,
+  documentSessions,
+  views,
+} from "@synap/database/schema";
 import { storage } from "@synap/storage";
 import { broadcastSuccess } from "../utils/realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
@@ -86,7 +91,8 @@ export async function handleDocumentRestore(
     where: eq(documentVersions.id, versionId),
   });
   if (!version) throw new Error(`Version ${versionId} not found`);
-  if (version.documentId !== documentId) throw new Error("Version does not belong to this document");
+  if (version.documentId !== documentId)
+    throw new Error("Version does not belong to this document");
 
   const document = await db.query.documents.findFirst({
     where: eq(documents.id, documentId),
@@ -112,7 +118,10 @@ export async function handleDocumentRestore(
     currentVersion: newVersion,
   });
 
-  logger.info({ documentId, restoredFromVersion: version.version }, "Document restored");
+  logger.info(
+    { documentId, restoredFromVersion: version.version },
+    "Document restored"
+  );
 }
 
 // ============================================================================
@@ -158,7 +167,10 @@ export async function handleDocumentAutoSave(): Promise<void> {
     })
   );
 
-  logger.info({ sessions: activeSessions.length }, "Document auto-save complete");
+  logger.info(
+    { sessions: activeSessions.length },
+    "Document auto-save complete"
+  );
 }
 
 // ============================================================================
@@ -179,7 +191,10 @@ export async function handleDocumentPersistence(): Promise<void> {
     activeSessions.map(async (session) => {
       const yjsRoomId = session.documentId;
       const response = await fetch(`${REALTIME_URL}/yjs/${yjsRoomId}/state`, {
-        headers: { "X-Internal-Request": "true", "Content-Type": "application/json" },
+        headers: {
+          "X-Internal-Request": "true",
+          "Content-Type": "application/json",
+        },
       });
 
       if (!response.ok) {
@@ -197,7 +212,10 @@ export async function handleDocumentPersistence(): Promise<void> {
     })
   );
 
-  logger.info({ sessions: activeSessions.length }, "Document persistence complete");
+  logger.info(
+    { sessions: activeSessions.length },
+    "Document persistence complete"
+  );
 }
 
 // ============================================================================
@@ -217,9 +235,13 @@ export async function handleWhiteboardSnapshot(
 
   const REALTIME_URL = process.env.REALTIME_URL || "http://localhost:4001";
   const response = await fetch(`${REALTIME_URL}/yjs/${yjsRoomId}/state`, {
-    headers: { "X-Internal-Request": "true", "Content-Type": "application/json" },
+    headers: {
+      "X-Internal-Request": "true",
+      "Content-Type": "application/json",
+    },
   });
-  if (!response.ok) throw new Error(`Realtime server error: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Realtime server error: ${response.status}`);
 
   const buffer = await response.arrayBuffer();
   const base64State = Buffer.from(buffer).toString("base64");
@@ -286,10 +308,14 @@ export async function handleWhiteboardRestore(
   const REALTIME_URL = process.env.REALTIME_URL || "http://localhost:4001";
   const response = await fetch(`${REALTIME_URL}/yjs/${yjsRoomId}/restore`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Internal-Request": "true" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Request": "true",
+    },
     body: JSON.stringify({ state: content }),
   });
-  if (!response.ok) throw new Error(`Realtime server error: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Realtime server error: ${response.status}`);
 
   await broadcastSuccess(userId, "whiteboard.restored", {
     viewId,

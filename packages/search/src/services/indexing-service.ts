@@ -243,11 +243,16 @@ export class IndexingService {
    */
   async fullReindex(
     collections?: string[]
-  ): Promise<Record<string, { upserted: number; deleted: number; error?: string }>> {
+  ): Promise<
+    Record<string, { upserted: number; deleted: number; error?: string }>
+  > {
     const client = getTypesenseAdminClient();
     const db = await getDb();
     const targetCollections = collections ?? Object.keys(this.indexers);
-    const results: Record<string, { upserted: number; deleted: number; error?: string }> = {};
+    const results: Record<
+      string,
+      { upserted: number; deleted: number; error?: string }
+    > = {};
 
     for (const collection of targetCollections) {
       const indexer = this.indexers[collection as keyof typeof this.indexers];
@@ -291,7 +296,9 @@ export class IndexingService {
           upserted = importResult.filter((r: any) => r.success).length;
           const failed = importResult.filter((r: any) => !r.success).length;
           if (failed > 0) {
-            console.error(`[fullReindex] ${failed} docs failed in ${collection}`);
+            console.error(
+              `[fullReindex] ${failed} docs failed in ${collection}`
+            );
           }
         }
 
@@ -310,7 +317,10 @@ export class IndexingService {
               const doc = JSON.parse(line);
               if (doc.id && !liveIds.has(doc.id)) {
                 try {
-                  await client.collections(collection).documents(doc.id).delete();
+                  await client
+                    .collections(collection)
+                    .documents(doc.id)
+                    .delete();
                   deleted++;
                 } catch {
                   // already gone
@@ -325,7 +335,9 @@ export class IndexingService {
         }
 
         results[collection] = { upserted, deleted };
-        console.log(`[fullReindex] ${collection}: upserted=${upserted}, deleted=${deleted}`);
+        console.log(
+          `[fullReindex] ${collection}: upserted=${upserted}, deleted=${deleted}`
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[fullReindex] Error in collection ${collection}:`, err);

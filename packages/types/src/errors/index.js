@@ -22,27 +22,27 @@
  * - Optional context for debugging
  */
 export class SynapError extends Error {
-    code;
-    statusCode;
-    context;
-    constructor(message, code, statusCode = 500, context) {
-        super(message);
-        this.name = "SynapError";
-        this.code = code;
-        this.statusCode = statusCode;
-        this.context = context;
-    }
-    /**
-     * Convert error to JSON for API responses
-     */
-    toJSON() {
-        return {
-            error: this.name,
-            code: this.code,
-            message: this.message,
-            ...(this.context && { context: this.context }),
-        };
-    }
+  code;
+  statusCode;
+  context;
+  constructor(message, code, statusCode = 500, context) {
+    super(message);
+    this.name = "SynapError";
+    this.code = code;
+    this.statusCode = statusCode;
+    this.context = context;
+  }
+  /**
+   * Convert error to JSON for API responses
+   */
+  toJSON() {
+    return {
+      error: this.name,
+      code: this.code,
+      message: this.message,
+      ...(this.context && { context: this.context }),
+    };
+  }
 }
 /**
  * Validation error (400 Bad Request)
@@ -57,10 +57,10 @@ export class SynapError extends Error {
  * ```
  */
 export class ValidationError extends SynapError {
-    constructor(message, context) {
-        super(message, "VALIDATION_ERROR", 400, context);
-        this.name = "ValidationError";
-    }
+  constructor(message, context) {
+    super(message, "VALIDATION_ERROR", 400, context);
+    this.name = "ValidationError";
+  }
 }
 /**
  * Not found error (404 Not Found)
@@ -76,13 +76,13 @@ export class ValidationError extends SynapError {
  * ```
  */
 export class NotFoundError extends SynapError {
-    constructor(resource, id, context) {
-        const message = id
-            ? `${resource} with id "${id}" not found`
-            : `${resource} not found`;
-        super(message, "NOT_FOUND", 404, { resource, id, ...context });
-        this.name = "NotFoundError";
-    }
+  constructor(resource, id, context) {
+    const message = id
+      ? `${resource} with id "${id}" not found`
+      : `${resource} not found`;
+    super(message, "NOT_FOUND", 404, { resource, id, ...context });
+    this.name = "NotFoundError";
+  }
 }
 /**
  * Unauthorized error (401 Unauthorized)
@@ -97,10 +97,10 @@ export class NotFoundError extends SynapError {
  * ```
  */
 export class UnauthorizedError extends SynapError {
-    constructor(message = "Authentication required", context) {
-        super(message, "UNAUTHORIZED", 401, context);
-        this.name = "UnauthorizedError";
-    }
+  constructor(message = "Authentication required", context) {
+    super(message, "UNAUTHORIZED", 401, context);
+    this.name = "UnauthorizedError";
+  }
 }
 /**
  * Forbidden error (403 Forbidden)
@@ -115,10 +115,10 @@ export class UnauthorizedError extends SynapError {
  * ```
  */
 export class ForbiddenError extends SynapError {
-    constructor(message = "Insufficient permissions", context) {
-        super(message, "FORBIDDEN", 403, context);
-        this.name = "ForbiddenError";
-    }
+  constructor(message = "Insufficient permissions", context) {
+    super(message, "FORBIDDEN", 403, context);
+    this.name = "ForbiddenError";
+  }
 }
 /**
  * Conflict error (409 Conflict)
@@ -133,10 +133,10 @@ export class ForbiddenError extends SynapError {
  * ```
  */
 export class ConflictError extends SynapError {
-    constructor(message, context) {
-        super(message, "CONFLICT", 409, context);
-        this.name = "ConflictError";
-    }
+  constructor(message, context) {
+    super(message, "CONFLICT", 409, context);
+    this.name = "ConflictError";
+  }
 }
 /**
  * Rate limit error (429 Too Many Requests)
@@ -151,10 +151,10 @@ export class ConflictError extends SynapError {
  * ```
  */
 export class RateLimitError extends SynapError {
-    constructor(message = "Rate limit exceeded", retryAfter, context) {
-        super(message, "RATE_LIMIT_EXCEEDED", 429, { retryAfter, ...context });
-        this.name = "RateLimitError";
-    }
+  constructor(message = "Rate limit exceeded", retryAfter, context) {
+    super(message, "RATE_LIMIT_EXCEEDED", 429, { retryAfter, ...context });
+    this.name = "RateLimitError";
+  }
 }
 /**
  * Internal server error (500 Internal Server Error)
@@ -172,10 +172,10 @@ export class RateLimitError extends SynapError {
  * ```
  */
 export class InternalServerError extends SynapError {
-    constructor(message, context) {
-        super(message, "INTERNAL_SERVER_ERROR", 500, context);
-        this.name = "InternalServerError";
-    }
+  constructor(message, context) {
+    super(message, "INTERNAL_SERVER_ERROR", 500, context);
+    this.name = "InternalServerError";
+  }
 }
 /**
  * Service unavailable error (503 Service Unavailable)
@@ -190,16 +190,16 @@ export class InternalServerError extends SynapError {
  * ```
  */
 export class ServiceUnavailableError extends SynapError {
-    constructor(message, context) {
-        super(message, "SERVICE_UNAVAILABLE", 503, context);
-        this.name = "ServiceUnavailableError";
-    }
+  constructor(message, context) {
+    super(message, "SERVICE_UNAVAILABLE", 503, context);
+    this.name = "ServiceUnavailableError";
+  }
 }
 /**
  * Check if error is a SynapError instance
  */
 export function isSynapError(error) {
-    return error instanceof SynapError;
+  return error instanceof SynapError;
 }
 /**
  * Convert unknown error to SynapError
@@ -216,17 +216,17 @@ export function isSynapError(error) {
  * ```
  */
 export function toSynapError(error, defaultMessage = "An error occurred") {
-    if (isSynapError(error)) {
-        return error;
-    }
-    if (error instanceof Error) {
-        return new InternalServerError(defaultMessage, {
-            originalError: error.message,
-            stack: error.stack,
-        });
-    }
+  if (isSynapError(error)) {
+    return error;
+  }
+  if (error instanceof Error) {
     return new InternalServerError(defaultMessage, {
-        originalError: String(error),
+      originalError: error.message,
+      stack: error.stack,
     });
+  }
+  return new InternalServerError(defaultMessage, {
+    originalError: String(error),
+  });
 }
 //# sourceMappingURL=index.js.map

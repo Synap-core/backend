@@ -5,7 +5,7 @@
  * Uses entity_property_index when available, falls back to JSONB queries.
  */
 
-import { sql, eq, and, SQL } from "drizzle-orm";
+import { sql, eq, and, type SQL } from "drizzle-orm";
 import { entities, entityPropertyIndex } from "../schema/index.js";
 import { PropertyMergingService } from "./property-merging-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";

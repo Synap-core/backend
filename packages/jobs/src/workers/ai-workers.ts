@@ -20,5 +20,8 @@ export async function handleAiAnalysis(
   // Placeholder — the AI analyzer logic uses the Anthropic SDK
   // and is complex. For now, keep it as a passthrough.
   // The original ai-analyzer.ts can be imported directly if needed.
-  logger.info({ thoughtId: job.data.thoughtId }, "AI analysis job received (placeholder)");
+  logger.info(
+    { thoughtId: job.data.thoughtId },
+    "AI analysis job received (placeholder)"
+  );
 }

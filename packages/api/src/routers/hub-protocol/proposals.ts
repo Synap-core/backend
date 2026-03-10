@@ -10,13 +10,7 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
-import {
-  db,
-  proposals,
-  eq,
-  and,
-  desc,
-} from "@synap/database";
+import { db, proposals, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 
 export const proposalsRouter = router({

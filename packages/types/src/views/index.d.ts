@@ -15,29 +15,41 @@ export * from "./view-type-enum.js";
 /**
  * View types - categorized by rendering approach
  */
-export type ViewType = "whiteboard" | "table" | "kanban" | "list" | "grid" | "gallery" | "calendar" | "gantt" | "timeline" | "mindmap" | "graph" | "bento";
+export type ViewType =
+  | "whiteboard"
+  | "table"
+  | "kanban"
+  | "list"
+  | "grid"
+  | "gallery"
+  | "calendar"
+  | "gantt"
+  | "timeline"
+  | "mindmap"
+  | "graph"
+  | "bento";
 import type { EntityQuery } from "./query.js";
 export interface CreateViewInput {
-    workspaceId?: string;
-    type: ViewType;
-    name: string;
-    description?: string;
-    scopeProfileIds?: string[];
-    scopeMode?: "explicit" | "observed";
-    query?: EntityQuery;
-    config?: Record<string, unknown>;
-    embeddedViewIds?: string[];
-    initialContent?: unknown;
+  workspaceId?: string;
+  type: ViewType;
+  name: string;
+  description?: string;
+  scopeProfileIds?: string[];
+  scopeMode?: "explicit" | "observed";
+  query?: EntityQuery;
+  config?: Record<string, unknown>;
+  embeddedViewIds?: string[];
+  initialContent?: unknown;
 }
 export interface UpdateViewInput {
-    name?: string;
-    description?: string;
-    scopeProfileIds?: string[];
-    scopeMode?: "explicit" | "observed";
-    query?: EntityQuery;
-    config?: Record<string, unknown>;
-    embeddedViewIds?: string[];
-    schemaSnapshot?: Record<string, unknown>;
-    snapshotUpdatedAt?: Date;
+  name?: string;
+  description?: string;
+  scopeProfileIds?: string[];
+  scopeMode?: "explicit" | "observed";
+  query?: EntityQuery;
+  config?: Record<string, unknown>;
+  embeddedViewIds?: string[];
+  schemaSnapshot?: Record<string, unknown>;
+  snapshotUpdatedAt?: Date;
 }
 //# sourceMappingURL=index.d.ts.map

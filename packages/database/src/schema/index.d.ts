@@ -28,7 +28,20 @@ export * from "./command-runs.js";
 export * from "./workspaces.js";
 export * from "./project-members.js";
 export * from "./views.js";
-export { userPreferences, type UserPreference, type NewUserPreference, type CustomTheme, type DefaultTemplates, type CustomEntityType, type EntityMetadataSchemas, type EntityOpenMode, type UIPreferences, type GraphPreferences, insertUserPreferenceSchema, selectUserPreferenceSchema, } from "./user-preferences.js";
+export {
+  userPreferences,
+  type UserPreference,
+  type NewUserPreference,
+  type CustomTheme,
+  type DefaultTemplates,
+  type CustomEntityType,
+  type EntityMetadataSchemas,
+  type EntityOpenMode,
+  type UIPreferences,
+  type GraphPreferences,
+  insertUserPreferenceSchema,
+  selectUserPreferenceSchema,
+} from "./user-preferences.js";
 export * from "./proposals.js";
 export * from "./entity-templates.js";
 export * from "./skills.js";

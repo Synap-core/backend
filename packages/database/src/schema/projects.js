@@ -3,8 +3,17 @@
  *
  * User projects for organizing threads and entities.
  */
-import { pgTable, uuid, text, timestamp, jsonb, index, } from "drizzle-orm/pg-core";
-export const projects = pgTable("projects", {
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
+export const projects = pgTable(
+  "projects",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // Context
@@ -15,22 +24,24 @@ export const projects = pgTable("projects", {
     description: text("description"),
     // Status
     status: text("status", {
-        enum: ["active", "archived", "completed"],
+      enum: ["active", "archived", "completed"],
     })
-        .notNull()
-        .default("active"),
+      .notNull()
+      .default("active"),
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),
     metadata: jsonb("metadata"),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     userIdIdx: index("projects_user_id_idx").on(table.userId),
     statusIdx: index("projects_status_idx").on(table.status),
-}));
+  })
+);
 //# sourceMappingURL=projects.js.map

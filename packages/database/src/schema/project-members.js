@@ -4,15 +4,24 @@
  * Provides project-level access control within workspaces.
  * A user can be in a workspace but only have access to specific projects.
  */
-import { pgTable, uuid, text, timestamp, index, unique, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  index,
+  unique,
+} from "drizzle-orm/pg-core";
 import { projects } from "./projects.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-export const projectMembers = pgTable("project_members", {
+export const projectMembers = pgTable(
+  "project_members",
+  {
     id: uuid("id").defaultRandom().primaryKey(),
     // Relationships
     projectId: uuid("project_id")
-        .notNull()
-        .references(() => projects.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
     // Role in this specific project
     // Uses same roles as workspace for consistency
@@ -20,20 +29,28 @@ export const projectMembers = pgTable("project_members", {
     // Metadata
     invitedBy: text("invited_by"), // Who added them to this project
     invitedAt: timestamp("invited_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
+      .defaultNow()
+      .notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     // Unique: one role per user per project
-    uniqueProjectUser: unique("project_user_unique").on(table.projectId, table.userId),
+    uniqueProjectUser: unique("project_user_unique").on(
+      table.projectId,
+      table.userId
+    ),
     // Indexes for fast lookups
     projectIdx: index("idx_project_members_project").on(table.projectId),
     userIdx: index("idx_project_members_user").on(table.userId),
-    userProjectIdx: index("idx_project_members_user_project").on(table.userId, table.projectId),
-}));
+    userProjectIdx: index("idx_project_members_user_project").on(
+      table.userId,
+      table.projectId
+    ),
+  })
+);
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */

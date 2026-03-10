@@ -13,36 +13,36 @@ import { entities } from "./entities.js";
 import { apiKeys } from "./api-keys.js";
 import { userPreferences } from "./user-preferences.js";
 export const users = pgTable("users", {
-    // Kratos identity ID (UUID as text)
-    id: text("id").primaryKey(),
-    // Cached from Kratos traits
-    email: text("email").notNull().unique(),
-    name: text("name"),
-    emailVerified: boolean("email_verified").default(false).notNull(),
-    // Synap-specific fields
-    avatarUrl: text("avatar_url"),
-    timezone: text("timezone").default("UTC").notNull(),
-    locale: text("locale").default("en").notNull(),
-    // Sync metadata
-    kratosIdentityId: text("kratos_identity_id").notNull(),
-    lastSyncedAt: timestamp("last_synced_at", {
-        mode: "date",
-        withTimezone: true,
-    }),
-    // Timestamps
-    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
+  // Kratos identity ID (UUID as text)
+  id: text("id").primaryKey(),
+  // Cached from Kratos traits
+  email: text("email").notNull().unique(),
+  name: text("name"),
+  emailVerified: boolean("email_verified").default(false).notNull(),
+  // Synap-specific fields
+  avatarUrl: text("avatar_url"),
+  timezone: text("timezone").default("UTC").notNull(),
+  locale: text("locale").default("en").notNull(),
+  // Sync metadata
+  kratosIdentityId: text("kratos_identity_id").notNull(),
+  lastSyncedAt: timestamp("last_synced_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  // Timestamps
+  createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+    .defaultNow()
+    .notNull(),
 });
 // Relations to other Synap tables
 export const usersRelations = relations(users, ({ many }) => ({
-    workspaces: many(workspaces),
-    workspaceMemberships: many(workspaceMembers),
-    entities: many(entities),
-    apiKeys: many(apiKeys),
-    preferences: many(userPreferences),
+  workspaces: many(workspaces),
+  workspaceMemberships: many(workspaceMembers),
+  entities: many(entities),
+  apiKeys: many(apiKeys),
+  preferences: many(userPreferences),
 }));
 //# sourceMappingURL=users.js.map

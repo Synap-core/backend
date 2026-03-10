@@ -838,7 +838,7 @@ export async function createWorkspaceFromDefinition(
       // 4. Create property definitions.
       // For reused profiles (system/shared), only add properties that don't already exist
       // so templates can extend system profiles with custom fields without breaking them.
-      let existingPropSlugs = new Set<string>();
+      const existingPropSlugs = new Set<string>();
       if (profileIsReused && (resolvedProperties ?? []).length > 0) {
         try {
           const existingLinks = await profilePropRepo.getByProfile(created!.id);

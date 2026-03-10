@@ -4,14 +4,15 @@
  * TypeScript types for entities with profile-based dynamic types.
  * Entity types are now dynamic (profiles), not hardcoded enums.
  */
-import { z } from "zod";
+import { type z } from "zod";
 /**
  * Entity Schema - Profile-Based (Dynamic Types)
  *
  * Entities now use profiles for dynamic type definitions.
  * Properties are validated against profile schemas.
  */
-export declare const EntitySchema: z.ZodObject<{
+export declare const EntitySchema: z.ZodObject<
+  {
     id: z.ZodString;
     userId: z.ZodString;
     workspaceId: z.ZodNullable<z.ZodString>;
@@ -30,7 +31,9 @@ export declare const EntitySchema: z.ZodObject<{
     createdAt: z.ZodDate;
     updatedAt: z.ZodDate;
     deletedAt: z.ZodNullable<z.ZodDate>;
-}, z.core.$strip>;
+  },
+  z.core.$strip
+>;
 /**
  * Entity - The main type used across the application
  */
@@ -42,15 +45,29 @@ export type BaseEntity = Entity;
 /**
  * New entity type (for creation)
  */
-export type NewEntity = Omit<Entity, "id" | "version" | "createdAt" | "updatedAt" | "deletedAt"> & {
-    profileSlug: string;
-    properties: Record<string, unknown>;
+export type NewEntity = Omit<
+  Entity,
+  "id" | "version" | "createdAt" | "updatedAt" | "deletedAt"
+> & {
+  profileSlug: string;
+  properties: Record<string, unknown>;
 };
 /**
  * Entity update type (for updates)
  */
-export type UpdateEntity = Partial<Omit<Entity, "id" | "userId" | "type" | "profileId" | "createdAt" | "updatedAt" | "deletedAt">> & {
-    properties?: Record<string, unknown>;
+export type UpdateEntity = Partial<
+  Omit<
+    Entity,
+    | "id"
+    | "userId"
+    | "type"
+    | "profileId"
+    | "createdAt"
+    | "updatedAt"
+    | "deletedAt"
+  >
+> & {
+  properties?: Record<string, unknown>;
 };
 /**
  * @deprecated EntityType enum - Use profile slugs (strings) instead

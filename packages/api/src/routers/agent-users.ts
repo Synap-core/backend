@@ -41,7 +41,9 @@ export const agentUsersRouter = router({
       if (!perm.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: perm.reason || "Only workspace owners and admins can manage agent users",
+          message:
+            perm.reason ||
+            "Only workspace owners and admins can manage agent users",
         });
       }
 
@@ -81,7 +83,11 @@ export const agentUsersRouter = router({
         subjectId: agentId,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
-        data: { agentType: input.agentType, name: input.name, role: input.role },
+        data: {
+          agentType: input.agentType,
+          name: input.name,
+          role: input.role,
+        },
       });
 
       return {
@@ -147,7 +153,9 @@ export const agentUsersRouter = router({
       if (!perm.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: perm.reason || "Only workspace owners and admins can manage agent users",
+          message:
+            perm.reason ||
+            "Only workspace owners and admins can manage agent users",
         });
       }
 
@@ -155,11 +163,16 @@ export const agentUsersRouter = router({
       const [agent] = await db
         .select()
         .from(users)
-        .where(and(eq(users.id, input.agentUserId), eq(users.userType, "agent")))
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
         .limit(1);
 
       if (!agent) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Agent user not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
       }
 
       // Update user record
@@ -169,12 +182,19 @@ export const agentUsersRouter = router({
         const existing = (agent.agentMetadata || {}) as Record<string, unknown>;
         updates.agentMetadata = {
           ...existing,
-          ...(input.description !== undefined ? { description: input.description } : {}),
-          ...(input.capabilities !== undefined ? { capabilities: input.capabilities } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+          ...(input.capabilities !== undefined
+            ? { capabilities: input.capabilities }
+            : {}),
         };
       }
 
-      await db.update(users).set(updates).where(eq(users.id, input.agentUserId));
+      await db
+        .update(users)
+        .set(updates)
+        .where(eq(users.id, input.agentUserId));
 
       // Update role if changed
       if (input.role) {
@@ -224,7 +244,9 @@ export const agentUsersRouter = router({
       if (!perm.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: perm.reason || "Only workspace owners and admins can manage agent users",
+          message:
+            perm.reason ||
+            "Only workspace owners and admins can manage agent users",
         });
       }
 
@@ -232,11 +254,16 @@ export const agentUsersRouter = router({
       const [agent] = await db
         .select()
         .from(users)
-        .where(and(eq(users.id, input.agentUserId), eq(users.userType, "agent")))
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
         .limit(1);
 
       if (!agent) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Agent user not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
       }
 
       // Remove workspace membership

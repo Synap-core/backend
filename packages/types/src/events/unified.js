@@ -16,47 +16,42 @@
 // SUBJECT TYPES — always singular
 // ============================================================================
 export const SUBJECT_TYPES = [
-    "entity",
-    "document",
-    "workspace",
-    "view",
-    "relation",
-    "tag",
-    "project",
-    "proposal",
-    "message",
-    "user",
-    "role",
-    "apiKey",
-    "skill",
-    "backgroundTask",
-    "agent",
-    "chatThread",
-    "template",
-    "inboxItem",
-    "sharing",
-    "workspaceMember",
-    "projectMember",
+  "entity",
+  "document",
+  "workspace",
+  "view",
+  "relation",
+  "tag",
+  "project",
+  "proposal",
+  "message",
+  "user",
+  "role",
+  "apiKey",
+  "skill",
+  "backgroundTask",
+  "agent",
+  "chatThread",
+  "template",
+  "inboxItem",
+  "sharing",
+  "workspaceMember",
+  "projectMember",
 ];
 // ============================================================================
 // EVENT ACTIONS
 // ============================================================================
 export const EVENT_ACTIONS = [
-    "create",
-    "update",
-    "delete",
-    "archive",
-    "restore",
+  "create",
+  "update",
+  "delete",
+  "archive",
+  "restore",
 ];
 // ============================================================================
 // EVENT PHASES — lifecycle stages
 // ============================================================================
-export const EVENT_PHASES = [
-    "requested",
-    "validated",
-    "completed",
-    "denied",
-];
+export const EVENT_PHASES = ["requested", "validated", "completed", "denied"];
 /**
  * Build a type-safe event name at compile time.
  *
@@ -64,7 +59,7 @@ export const EVENT_PHASES = [
  * buildEventName("entity", "create", "requested") // "entity.create.requested"
  */
 export function buildEventName(subject, action, phase) {
-    return `${subject}.${action}.${phase}`;
+  return `${subject}.${action}.${phase}`;
 }
 // ============================================================================
 // INNGEST TRIGGER HELPERS
@@ -77,6 +72,6 @@ export function buildEventName(subject, action, phase) {
  * subjectTrigger("entity") // { event: "entity.*" }
  */
 export function subjectTrigger(subject) {
-    return { event: `${subject}.*` };
+  return { event: `${subject}.*` };
 }
 //# sourceMappingURL=unified.js.map

@@ -5,5 +5,14 @@
  *
  * @see {@link @synap/database/schema}
  */
-export type { UserEntityState, NewUserEntityState, EntityEnrichment, NewEntityEnrichment, EntityRelationship, NewEntityRelationship, ReasoningTrace, NewReasoningTrace, } from "../../../database/src/schema/index.js";
+export type {
+  UserEntityState,
+  NewUserEntityState,
+  EntityEnrichment,
+  NewEntityEnrichment,
+  EntityRelationship,
+  NewEntityRelationship,
+  ReasoningTrace,
+  NewReasoningTrace,
+} from "../../../database/src/schema/index.js";
 //# sourceMappingURL=index.d.ts.map

@@ -201,8 +201,12 @@ export default function ProposalsPage() {
             <Table.Tr>
               <Table.Th style={{ width: 40 }}>
                 <Checkbox
-                  checked={selected.size === proposals.length && proposals.length > 0}
-                  indeterminate={selected.size > 0 && selected.size < proposals.length}
+                  checked={
+                    selected.size === proposals.length && proposals.length > 0
+                  }
+                  indeterminate={
+                    selected.size > 0 && selected.size < proposals.length
+                  }
                   onChange={selectAll}
                 />
               </Table.Th>

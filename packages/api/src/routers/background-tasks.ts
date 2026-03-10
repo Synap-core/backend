@@ -119,7 +119,11 @@ export const backgroundTasksRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { id: taskId, status: "proposed" as const, proposalId: perm.proposalId };
+        return {
+          id: taskId,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
       }
 
       // 2. Direct DB operation
@@ -222,7 +226,9 @@ export const backgroundTasksRouter = router({
           ...updateData,
           updatedAt: new Date(),
         })
-        .where(and(eq(backgroundTasks.id, id), eq(backgroundTasks.userId, userId)))
+        .where(
+          and(eq(backgroundTasks.id, id), eq(backgroundTasks.userId, userId))
+        )
         .returning();
 
       // 3. Audit log
@@ -296,7 +302,12 @@ export const backgroundTasksRouter = router({
       // 2. Direct DB operation
       await db
         .delete(backgroundTasks)
-        .where(and(eq(backgroundTasks.id, input.id), eq(backgroundTasks.userId, userId)));
+        .where(
+          and(
+            eq(backgroundTasks.id, input.id),
+            eq(backgroundTasks.userId, userId)
+          )
+        );
 
       // 3. Audit log
       auditLog({

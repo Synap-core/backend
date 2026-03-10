@@ -37,7 +37,11 @@ export * from "./project-members.js";
 // NEW: Views system (whiteboards, timelines, etc.)
 export * from "./views.js";
 // NEW: User preferences
-export { userPreferences, insertUserPreferenceSchema, selectUserPreferenceSchema, } from "./user-preferences.js";
+export {
+  userPreferences,
+  insertUserPreferenceSchema,
+  selectUserPreferenceSchema,
+} from "./user-preferences.js";
 // NEW: Universal Proposals
 export * from "./proposals.js";
 // NEW: Entity Templates

@@ -38,7 +38,7 @@ import {
   ChannelAgentType,
   MessageRole,
   MessageAuthorType,
-  ChannelContextObjectType,
+  type ChannelContextObjectType,
   ChannelContextRelationshipType,
   proposals,
   ProposalStatus,
@@ -1509,7 +1509,12 @@ export const channelsRouter = router({
           message: "Access denied to this channel",
         });
       }
+      // Personal channels are pod-wide — accessible from any workspace.
+      const isPersonalMsg =
+        (channel.metadata as { isPersonal?: boolean } | null)?.isPersonal ===
+        true;
       if (
+        !isPersonalMsg &&
         ctx.workspaceId &&
         channel.workspaceId &&
         channel.workspaceId !== ctx.workspaceId
@@ -1557,7 +1562,13 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        conditions.push(eq(channels.workspaceId, input.workspaceId));
+        // Include workspace channels + personal channels (pod-wide)
+        conditions.push(
+          or(
+            eq(channels.workspaceId, input.workspaceId),
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+          )!
+        );
       }
 
       if (input.channelType) {
@@ -1628,7 +1639,13 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        conditions.push(eq(channels.workspaceId, input.workspaceId));
+        // Include workspace channels + personal channels (pod-wide)
+        conditions.push(
+          or(
+            eq(channels.workspaceId, input.workspaceId),
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+          )!
+        );
       }
 
       if (input.channelType) {
@@ -1898,7 +1915,12 @@ export const channelsRouter = router({
           message: "Channel not found",
         });
       }
+      // Personal channels are pod-wide — accessible from any workspace.
+      const isPersonal =
+        (channel.metadata as { isPersonal?: boolean } | null)?.isPersonal ===
+        true;
       if (
+        !isPersonal &&
         ctx.workspaceId &&
         channel.workspaceId &&
         channel.workspaceId !== ctx.workspaceId

@@ -10,48 +10,51 @@ import { z } from "zod";
 // ============================================================================
 // Custom Theme Schema (nested JSONB validation for UI)
 export const CustomThemeSchema = z
-    .object({
+  .object({
     colors: z
-        .object({
+      .object({
         primary: z.string().optional(),
         accent: z.string().optional(),
         background: z.string().optional(),
         border: z.string().optional(),
         text: z.string().optional(),
-    })
-        .optional(),
+      })
+      .optional(),
     spacing: z
-        .object({
+      .object({
         small: z.string().optional(),
         medium: z.string().optional(),
         large: z.string().optional(),
-    })
-        .optional(),
+      })
+      .optional(),
     radii: z
-        .object({
+      .object({
         small: z.string().optional(),
         medium: z.string().optional(),
         large: z.string().optional(),
-    })
-        .optional(),
+      })
+      .optional(),
     animations: z
-        .object({
+      .object({
         enabled: z.boolean().optional(),
         speed: z.enum(["slow", "normal", "fast"]).optional(),
-    })
-        .optional(),
-})
-    .optional();
+      })
+      .optional(),
+  })
+  .optional();
 // UI Preferences Schema (nested JSONB validation for UI)
 export const UIPreferencesSchema = z
-    .object({
+  .object({
     sidebarCollapsed: z.boolean().optional(),
     panelPositions: z
-        .record(z.string(), z.object({
-        x: z.number(),
-        y: z.number(),
-    }))
-        .optional(),
+      .record(
+        z.string(),
+        z.object({
+          x: z.number(),
+          y: z.number(),
+        })
+      )
+      .optional(),
     lastActiveView: z.string().optional(),
     compactMode: z.boolean().optional(),
     fontSize: z.string().optional(),
@@ -59,49 +62,49 @@ export const UIPreferencesSchema = z
     defaultView: z.enum(["list", "grid", "timeline"]).optional(),
     /** Where to open entity detail: floating | side | modal */
     entityOpenMode: z.enum(["floating", "side", "modal"]).optional(),
-})
-    .optional();
+  })
+  .optional();
 // Graph Preferences Schema (nested JSONB validation for UI)
 export const GraphPreferencesSchema = z
-    .object({
+  .object({
     forceSettings: z
-        .object({
+      .object({
         linkDistance: z.number().optional(),
         chargeStrength: z.number().optional(),
         alphaDecay: z.number().optional(),
         velocityDecay: z.number().optional(),
-    })
-        .optional(),
+      })
+      .optional(),
     defaultFilters: z
-        .object({
+      .object({
         entityTypes: z.array(z.string()).optional(),
         relationTypes: z.array(z.string()).optional(),
-    })
-        .optional(),
+      })
+      .optional(),
     zoom: z.number().optional(),
     pan: z
-        .object({
+      .object({
         x: z.number(),
         y: z.number(),
-    })
-        .optional(),
+      })
+      .optional(),
     showMinimap: z.boolean().optional(),
-})
-    .optional();
+  })
+  .optional();
 // ============================================================================
 // API INPUT SCHEMAS (All fields optional for partial updates)
 // ============================================================================
 export const UpdatePreferencesInputSchema = z.object({
-    theme: z.enum(["light", "dark", "system"]).optional(),
-    customTheme: CustomThemeSchema,
-    defaultTemplates: z.record(z.string(), z.string()).optional(),
-    customEntityTypes: z.array(z.any()).optional(),
-    entityMetadataSchemas: z
-        .record(z.string(), z.record(z.string(), z.any()))
-        .optional(),
-    uiPreferences: UIPreferencesSchema,
-    graphPreferences: GraphPreferencesSchema,
-    onboardingCompleted: z.boolean().optional(),
-    onboardingStep: z.string().optional(),
+  theme: z.enum(["light", "dark", "system"]).optional(),
+  customTheme: CustomThemeSchema,
+  defaultTemplates: z.record(z.string(), z.string()).optional(),
+  customEntityTypes: z.array(z.any()).optional(),
+  entityMetadataSchemas: z
+    .record(z.string(), z.record(z.string(), z.any()))
+    .optional(),
+  uiPreferences: UIPreferencesSchema,
+  graphPreferences: GraphPreferencesSchema,
+  onboardingCompleted: z.boolean().optional(),
+  onboardingStep: z.string().optional(),
 });
 //# sourceMappingURL=schemas.js.map

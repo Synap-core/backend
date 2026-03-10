@@ -4,16 +4,25 @@
  * Universal linking system for messages.
  * Allows messages to link to ANY object in the system.
  */
-import { pgTable, uuid, text, timestamp, jsonb, index, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
 import { conversationMessages } from "./conversation-messages.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-export const messageLinks = pgTable("message_links", {
+export const messageLinks = pgTable(
+  "message_links",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // Message reference
     messageId: uuid("message_id")
-        .notNull()
-        .references(() => conversationMessages.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => conversationMessages.id, { onDelete: "cascade" }),
     // Universal link (polymorphic)
     targetType: text("target_type").notNull(), // "entity" | "document" | "proposal" | "message" | "event" | "user" | ...
     targetId: uuid("target_id").notNull(),
@@ -28,19 +37,28 @@ export const messageLinks = pgTable("message_links", {
     workspaceId: uuid("workspace_id").notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     // Index for querying by message
     messageIdIdx: index("message_links_message_id_idx").on(table.messageId),
     // Index for querying by target (polymorphic)
-    targetIdx: index("message_links_target_idx").on(table.targetType, table.targetId),
+    targetIdx: index("message_links_target_idx").on(
+      table.targetType,
+      table.targetId
+    ),
     // Index for querying by relationship type
-    relationshipIdx: index("message_links_relationship_idx").on(table.relationshipType),
+    relationshipIdx: index("message_links_relationship_idx").on(
+      table.relationshipType
+    ),
     // Index for user/workspace filtering
     userIdIdx: index("message_links_user_id_idx").on(table.userId),
-    workspaceIdIdx: index("message_links_workspace_id_idx").on(table.workspaceId),
-}));
+    workspaceIdIdx: index("message_links_workspace_id_idx").on(
+      table.workspaceId
+    ),
+  })
+);
 // Zod schemas (for validation)
 export const insertMessageLinkSchema = createInsertSchema(messageLinks);
 export const selectMessageLinkSchema = createSelectSchema(messageLinks);

@@ -2,12 +2,23 @@
  * Documents Schema
  * For collaborative document editing with AI
  */
-import { pgTable, text, timestamp, integer, jsonb, boolean, index, uuid, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  integer,
+  jsonb,
+  boolean,
+  index,
+  uuid,
+} from "drizzle-orm/pg-core";
 /**
  * Documents table
  * Stores metadata about uploaded documents
  */
-export const documents = pgTable("documents", {
+export const documents = pgTable(
+  "documents",
+  {
     id: uuid("id").defaultRandom().primaryKey(),
     // Context
     userId: text("user_id").notNull(),
@@ -31,7 +42,7 @@ export const documents = pgTable("documents", {
     // Stores the periodic binary dump of the Yjs doc for the *current working version*
     workingState: text("working_state"),
     workingStateUpdatedAt: timestamp("working_state_updated_at", {
-        withTimezone: true,
+      withTimezone: true,
     }),
     // Relationships
     // Option B: symmetric document–entity link (entity has documentId; document can reference entity)
@@ -40,25 +51,29 @@ export const documents = pgTable("documents", {
     metadata: jsonb("metadata"), // Custom metadata
     // Timestamps
     createdAt: timestamp("created_at", { withTimezone: true })
-        .notNull()
-        .defaultNow(),
+      .notNull()
+      .defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
-        .notNull()
-        .defaultNow(),
+      .notNull()
+      .defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
-}, (table) => ({
+  },
+  (table) => ({
     userIdIdx: index("documents_user_id_idx").on(table.userId),
     typeIdx: index("documents_type_idx").on(table.type),
-}));
+  })
+);
 /**
  * Document versions table
  * Stores each version of the document for history
  */
-export const documentVersions = pgTable("document_versions", {
+export const documentVersions = pgTable(
+  "document_versions",
+  {
     id: uuid("id").defaultRandom().primaryKey(),
     documentId: uuid("document_id")
-        .notNull()
-        .references(() => documents.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
     // Version info
     version: integer("version").notNull(),
     content: text("content").notNull(), // Full content at this version (snapshot)
@@ -68,21 +83,30 @@ export const documentVersions = pgTable("document_versions", {
     message: text("message"), // Optional commit message (for UI display in version history)
     // Timestamps
     createdAt: timestamp("created_at", { withTimezone: true })
-        .notNull()
-        .defaultNow(),
-}, (table) => ({
-    documentIdIdx: index("document_versions_document_id_idx").on(table.documentId),
-    versionIdx: index("document_versions_version_idx").on(table.documentId, table.version),
-}));
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    documentIdIdx: index("document_versions_document_id_idx").on(
+      table.documentId
+    ),
+    versionIdx: index("document_versions_version_idx").on(
+      table.documentId,
+      table.version
+    ),
+  })
+);
 /**
  * Document sessions table
  * Tracks active editing sessions with AI collaboration
  */
-export const documentSessions = pgTable("document_sessions", {
+export const documentSessions = pgTable(
+  "document_sessions",
+  {
     id: uuid("id").defaultRandom().primaryKey(),
     documentId: uuid("document_id")
-        .notNull()
-        .references(() => documents.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
     // Chat integration
     chatThreadId: uuid("chat_thread_id").notNull(), // Dedicated chat for this document
@@ -91,14 +115,18 @@ export const documentSessions = pgTable("document_sessions", {
     activeCollaborators: jsonb("active_collaborators"), // Array of {type, id, cursor}
     // Timestamps
     startedAt: timestamp("started_at", { withTimezone: true })
-        .notNull()
-        .defaultNow(),
+      .notNull()
+      .defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
-}, (table) => ({
-    documentIdIdx: index("document_sessions_document_id_idx").on(table.documentId),
+  },
+  (table) => ({
+    documentIdIdx: index("document_sessions_document_id_idx").on(
+      table.documentId
+    ),
     userIdIdx: index("document_sessions_user_id_idx").on(table.userId),
     activeIdx: index("document_sessions_active_idx").on(table.isActive),
-}));
+  })
+);
 // Type exports
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 /**

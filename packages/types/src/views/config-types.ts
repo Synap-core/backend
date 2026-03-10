@@ -7,18 +7,18 @@
 
 import type { z } from "zod";
 import {
-  TableViewConfigSchema,
-  KanbanViewConfigSchema,
-  ListViewConfigSchema,
-  GridViewConfigSchema,
-  GalleryViewConfigSchema,
-  CalendarViewConfigSchema,
-  GanttViewConfigSchema,
-  TimelineViewConfigSchema,
-  GraphViewConfigSchema,
-  BentoViewConfigSchema,
-  WhiteboardViewConfigSchema,
-  MindmapViewConfigSchema,
+  type TableViewConfigSchema,
+  type KanbanViewConfigSchema,
+  type ListViewConfigSchema,
+  type GridViewConfigSchema,
+  type GalleryViewConfigSchema,
+  type CalendarViewConfigSchema,
+  type GanttViewConfigSchema,
+  type TimelineViewConfigSchema,
+  type GraphViewConfigSchema,
+  type BentoViewConfigSchema,
+  type WhiteboardViewConfigSchema,
+  type MindmapViewConfigSchema,
 } from "./config-schemas.js";
 
 // =============================================================================

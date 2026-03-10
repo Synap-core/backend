@@ -11,19 +11,19 @@ import { z } from "zod";
  * Entity filter schema
  */
 const EntityFilterSchema = z.object({
-    field: z.string(),
-    operator: z.enum([
-        "equals",
-        "contains",
-        "gt",
-        "gte",
-        "lt",
-        "lte",
-        "in",
-        "notIn",
-        "between",
-    ]),
-    value: z.unknown(),
+  field: z.string(),
+  operator: z.enum([
+    "equals",
+    "contains",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "notIn",
+    "between",
+  ]),
+  value: z.unknown(),
 });
 /**
  * Entity query schema
@@ -32,8 +32,8 @@ const EntityFilterSchema = z.object({
  * Sort rule schema
  */
 const SortRuleSchema = z.object({
-    field: z.string(),
-    direction: z.enum(["asc", "desc"]),
+  field: z.string(),
+  direction: z.enum(["asc", "desc"]),
 });
 /**
  * Entity query schema
@@ -41,20 +41,20 @@ const SortRuleSchema = z.object({
  * This schema only validates filters, sorts, search, pagination, and groupBy
  */
 export const EntityQuerySchema = z.object({
-    /** @deprecated - Profile IDs now stored in views.scopeProfileIds */
-    profileIds: z.array(z.string().uuid()).optional(),
-    /** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
-    profileSlugs: z.array(z.string()).optional(),
-    /** @deprecated - Use profileSlugs instead, which is also deprecated */
-    entityTypes: z.array(z.string()).optional(),
-    /** Specific entity IDs (for fixed sets) */
-    entityIds: z.array(z.string().uuid()).optional(),
-    filters: z.array(EntityFilterSchema).optional(),
-    sorts: z.array(SortRuleSchema).optional(),
-    search: z.string().optional(),
-    limit: z.number().int().positive().max(1000).optional(),
-    offset: z.number().int().nonnegative().optional(),
-    groupBy: z.string().optional(),
+  /** @deprecated - Profile IDs now stored in views.scopeProfileIds */
+  profileIds: z.array(z.string().uuid()).optional(),
+  /** @deprecated - Profile slugs now stored in views.scopeProfileIds (resolved to IDs) */
+  profileSlugs: z.array(z.string()).optional(),
+  /** @deprecated - Use profileSlugs instead, which is also deprecated */
+  entityTypes: z.array(z.string()).optional(),
+  /** Specific entity IDs (for fixed sets) */
+  entityIds: z.array(z.string().uuid()).optional(),
+  filters: z.array(EntityFilterSchema).optional(),
+  sorts: z.array(SortRuleSchema).optional(),
+  search: z.string().optional(),
+  limit: z.number().int().positive().max(1000).optional(),
+  offset: z.number().int().nonnegative().optional(),
+  groupBy: z.string().optional(),
 });
 // =============================================================================
 // Structured View Config Schemas
@@ -63,12 +63,12 @@ export const EntityQuerySchema = z.object({
  * Kanban column schema
  */
 const KanbanColumnSchema = z.object({
-    id: z.string(),
-    value: z.string(),
-    label: z.string(),
-    order: z.number(),
-    color: z.string().optional(),
-    limit: z.number().optional(),
+  id: z.string(),
+  value: z.string(),
+  label: z.string(),
+  order: z.number(),
+  color: z.string().optional(),
+  limit: z.number().optional(),
 });
 /**
  * Structured view configuration schema
@@ -78,9 +78,9 @@ const KanbanColumnSchema = z.object({
  * Defines layout and display options
  */
 export const RenderSettingsSchema = z
-    .object({
+  .object({
     layout: z
-        .enum([
+      .enum([
         "table",
         "kanban",
         "list",
@@ -90,8 +90,8 @@ export const RenderSettingsSchema = z
         "gantt",
         "timeline",
         "graph",
-    ])
-        .optional(),
+      ])
+      .optional(),
     // Common fields (flexible to allow frontend-specific structures)
     columns: z.array(z.any()).optional(),
     filters: z.array(z.any()).optional(), // Legacy UI filters
@@ -103,16 +103,16 @@ export const RenderSettingsSchema = z
     timelineTimeField: z.string().optional(),
     graphLayout: z.enum(["force", "hierarchical", "circular"]).optional(),
     graphRelationshipTypes: z.array(z.string()).optional(),
-})
-    .passthrough();
+  })
+  .passthrough();
 /**
  * Structured view configuration schema
  * Combines query and render settings
  */
 export const StructuredViewConfigSchema = z.object({
-    category: z.literal("structured"),
-    query: EntityQuerySchema,
-    render: RenderSettingsSchema.optional(),
+  category: z.literal("structured"),
+  query: EntityQuerySchema,
+  render: RenderSettingsSchema.optional(),
 });
 // =============================================================================
 // View Content Schemas
@@ -121,30 +121,30 @@ export const StructuredViewConfigSchema = z.object({
  * Structured view content schema
  */
 const StructuredViewContentSchema = z
-    .object({
+  .object({
     version: z.literal(1),
     category: z.literal("structured"),
     // We use the StructuredViewConfigSchema but unwrap it or use it as part of the content
     // Actually, ViewContent usually IS the config for structured views
     query: EntityQuerySchema,
     render: RenderSettingsSchema.optional(),
-})
-    .passthrough(); // Allow extra fields for backward compatibility
+  })
+  .passthrough(); // Allow extra fields for backward compatibility
 /**
  * Canvas view content schema
  */
 const CanvasViewContentSchema = z.object({
-    version: z.literal(1),
-    category: z.literal("canvas"),
-    elements: z.array(z.unknown()),
-    embeddedEntities: z.array(z.string().uuid()).optional(),
+  version: z.literal(1),
+  category: z.literal("canvas"),
+  elements: z.array(z.unknown()),
+  embeddedEntities: z.array(z.string().uuid()).optional(),
 });
 /**
  * Discriminated union schema for all view content types
  */
 export const ViewContentSchema = z.discriminatedUnion("category", [
-    StructuredViewContentSchema,
-    CanvasViewContentSchema,
+  StructuredViewContentSchema,
+  CanvasViewContentSchema,
 ]);
 // =============================================================================
 // Validation Functions
@@ -157,7 +157,7 @@ export const ViewContentSchema = z.discriminatedUnion("category", [
  * @returns Validated view content
  */
 export function parseViewContent(raw) {
-    return ViewContentSchema.parse(raw);
+  return ViewContentSchema.parse(raw);
 }
 /**
  * Safe parse view content
@@ -167,7 +167,7 @@ export function parseViewContent(raw) {
  * @returns Parse result with success flag and data/error
  */
 export function safeParseViewContent(raw) {
-    return ViewContentSchema.safeParse(raw);
+  return ViewContentSchema.safeParse(raw);
 }
 /**
  * Validate that content category matches view type
@@ -177,11 +177,11 @@ export function safeParseViewContent(raw) {
  * @returns true if category matches, false otherwise
  */
 export function validateContentCategoryForViewType(viewType, content) {
-    // Map view types to expected categories
-    const canvasTypes = ["whiteboard", "mindmap"];
-    const expectedCategory = canvasTypes.includes(viewType)
-        ? "canvas"
-        : "structured";
-    return content.category === expectedCategory;
+  // Map view types to expected categories
+  const canvasTypes = ["whiteboard", "mindmap"];
+  const expectedCategory = canvasTypes.includes(viewType)
+    ? "canvas"
+    : "structured";
+  return content.category === expectedCategory;
 }
 //# sourceMappingURL=schemas.js.map

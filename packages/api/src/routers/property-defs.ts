@@ -11,7 +11,7 @@ import {
   getDb,
   PropertyDefRepository,
   ProfileRepository,
-  PropertyValueType,
+  type PropertyValueType,
   eq,
   drizzleSql,
 } from "@synap/database";

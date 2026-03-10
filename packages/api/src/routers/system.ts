@@ -11,7 +11,12 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { publicProcedure, protectedProcedure, podAdminProcedure, router } from "../trpc.js";
+import {
+  publicProcedure,
+  protectedProcedure,
+  podAdminProcedure,
+  router,
+} from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
 import { getAllEventTypes } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";

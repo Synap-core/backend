@@ -17,11 +17,22 @@ import {
   buildEventName,
   subjectTrigger,
 } from "@synap-core/types";
-import type { SubjectType, EventAction, EventPhase, EventName } from "@synap-core/types";
+import type {
+  SubjectType,
+  EventAction,
+  EventPhase,
+  EventName,
+} from "@synap-core/types";
 
 // Re-export canonical type definitions from @synap-core/types
 export type { SubjectType, EventAction, EventPhase, EventName };
-export { SUBJECT_TYPES, EVENT_ACTIONS, EVENT_PHASES, buildEventName, subjectTrigger };
+export {
+  SUBJECT_TYPES,
+  EVENT_ACTIONS,
+  EVENT_PHASES,
+  buildEventName,
+  subjectTrigger,
+};
 
 // ============================================================================
 // GENERIC EVENT TYPE GENERATOR

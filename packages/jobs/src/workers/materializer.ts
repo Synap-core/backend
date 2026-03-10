@@ -24,7 +24,7 @@ import {
   EventRepository,
   ViewRepository,
   ProfileRepository,
-  ProfileScope,
+  type ProfileScope,
   sql,
   db as sharedDb,
   eq,

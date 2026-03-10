@@ -6,7 +6,16 @@
  *
  * @module @synap/database/schema/enrichments
  */
-import { pgTable, uuid, text, timestamp, decimal, jsonb, index, unique, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  decimal,
+  jsonb,
+  index,
+  unique,
+} from "drizzle-orm/pg-core";
 import { entities } from "./entities.js";
 // ============================================================================
 // ENTITY ENRICHMENTS TABLE
@@ -17,16 +26,18 @@ import { entities } from "./entities.js";
  * Stores enrichments for entities (extraction metadata, inferred properties, etc.)
  * Each enrichment links back to its source event for full traceability.
  */
-export const entityEnrichments = pgTable("entity_enrichments", {
+export const entityEnrichments = pgTable(
+  "entity_enrichments",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // What was enriched
     entityId: uuid("entity_id")
-        .notNull()
-        .references(() => entities.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
     // Enrichment type
     enrichmentType: text("enrichment_type", {
-        enum: ["extraction", "properties", "classification", "knowledge"],
+      enum: ["extraction", "properties", "classification", "knowledge"],
     }).notNull(),
     // Source event (for traceability - can rebuild from events)
     sourceEventId: uuid("source_event_id").notNull(),
@@ -39,9 +50,10 @@ export const entityEnrichments = pgTable("entity_enrichments", {
     userId: text("user_id").notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     // Index for fast entity lookups
     entityIdIdx: index("entity_enrichments_entity_id_idx").on(table.entityId),
     // Index for user filtering (RLS)
@@ -49,8 +61,12 @@ export const entityEnrichments = pgTable("entity_enrichments", {
     // Index for type filtering
     typeIdx: index("entity_enrichments_type_idx").on(table.enrichmentType),
     // Composite index for common query pattern
-    entityUserIdx: index("entity_enrichments_entity_user_idx").on(table.entityId, table.userId),
-}));
+    entityUserIdx: index("entity_enrichments_entity_user_idx").on(
+      table.entityId,
+      table.userId
+    ),
+  })
+);
 // ============================================================================
 // ENTITY RELATIONSHIPS TABLE
 // ============================================================================
@@ -60,28 +76,30 @@ export const entityEnrichments = pgTable("entity_enrichments", {
  * Stores AI-discovered relationships between entities.
  * Enables knowledge graph queries and traversal.
  */
-export const entityRelationships = pgTable("entity_relationships", {
+export const entityRelationships = pgTable(
+  "entity_relationships",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // Relationship endpoints
     sourceEntityId: uuid("source_entity_id")
-        .notNull()
-        .references(() => entities.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
     targetEntityId: uuid("target_entity_id")
-        .notNull()
-        .references(() => entities.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
     // Relationship type
     relationshipType: text("relationship_type", {
-        enum: [
-            "related_to",
-            "part_of",
-            "depends_on",
-            "mentioned_in",
-            "created_from",
-            "supersedes",
-            "similar_to",
-            "contradicts",
-        ],
+      enum: [
+        "related_to",
+        "part_of",
+        "depends_on",
+        "mentioned_in",
+        "created_from",
+        "supersedes",
+        "similar_to",
+        "contradicts",
+      ],
     }).notNull(),
     // AI metadata
     sourceEventId: uuid("source_event_id").notNull(),
@@ -93,17 +111,27 @@ export const entityRelationships = pgTable("entity_relationships", {
     userId: text("user_id").notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     // Graph traversal indexes
-    sourceIdx: index("entity_relationships_source_idx").on(table.sourceEntityId),
-    targetIdx: index("entity_relationships_target_idx").on(table.targetEntityId),
+    sourceIdx: index("entity_relationships_source_idx").on(
+      table.sourceEntityId
+    ),
+    targetIdx: index("entity_relationships_target_idx").on(
+      table.targetEntityId
+    ),
     // User filtering (RLS)
     userIdIdx: index("entity_relationships_user_id_idx").on(table.userId),
     // Prevent duplicate relationships
-    uniqueRelationship: unique("entity_relationships_unique").on(table.sourceEntityId, table.targetEntityId, table.relationshipType),
-}));
+    uniqueRelationship: unique("entity_relationships_unique").on(
+      table.sourceEntityId,
+      table.targetEntityId,
+      table.relationshipType
+    ),
+  })
+);
 // ============================================================================
 // REASONING TRACES TABLE
 // ============================================================================
@@ -113,12 +141,14 @@ export const entityRelationships = pgTable("entity_relationships", {
  * Stores AI reasoning traces for transparency.
  * Enables users to understand why AI made certain decisions.
  */
-export const reasoningTraces = pgTable("reasoning_traces", {
+export const reasoningTraces = pgTable(
+  "reasoning_traces",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // What this reasoning is about
     subjectType: text("subject_type", {
-        enum: ["entity", "message", "thread", "query", "task"],
+      enum: ["entity", "message", "thread", "query", "task"],
     }).notNull(),
     subjectId: uuid("subject_id").notNull(),
     // Source event
@@ -133,14 +163,19 @@ export const reasoningTraces = pgTable("reasoning_traces", {
     userId: text("user_id").notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     // Subject lookup
-    subjectIdx: index("reasoning_traces_subject_idx").on(table.subjectType, table.subjectId),
+    subjectIdx: index("reasoning_traces_subject_idx").on(
+      table.subjectType,
+      table.subjectId
+    ),
     // User filtering (RLS)
     userIdIdx: index("reasoning_traces_user_id_idx").on(table.userId),
     // Agent analytics
     agentIdx: index("reasoning_traces_agent_idx").on(table.agentId),
-}));
+  })
+);
 //# sourceMappingURL=enrichments.js.map

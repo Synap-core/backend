@@ -12,26 +12,26 @@ import { z } from "zod";
  * Properties are validated against profile schemas.
  */
 export const EntitySchema = z.object({
-    id: z.string().uuid(),
-    userId: z.string(),
-    workspaceId: z.string().nullable(),
-    type: z.string(), // Profile slug (dynamic, not enum)
-    profileId: z.string().uuid().nullable(), // FK to profiles table
-    title: z.string().nullable(),
-    preview: z.string().nullable(),
-    documentId: z.string().uuid().nullable(),
-    properties: z.record(z.string(), z.unknown()), // Validated properties (source of truth)
-    // metadata field removed - use properties instead
-    fileUrl: z.string().nullable(),
-    filePath: z.string().nullable(),
-    fileSize: z.number().nullable(),
-    fileType: z.string().nullable(),
-    checksum: z.string().nullable(),
-    // Projects: Removed projectIds (use relations table with type "belongs_to_project")
-    version: z.number(),
-    createdAt: z.date(),
-    updatedAt: z.date(),
-    deletedAt: z.date().nullable(),
+  id: z.string().uuid(),
+  userId: z.string(),
+  workspaceId: z.string().nullable(),
+  type: z.string(), // Profile slug (dynamic, not enum)
+  profileId: z.string().uuid().nullable(), // FK to profiles table
+  title: z.string().nullable(),
+  preview: z.string().nullable(),
+  documentId: z.string().uuid().nullable(),
+  properties: z.record(z.string(), z.unknown()), // Validated properties (source of truth)
+  // metadata field removed - use properties instead
+  fileUrl: z.string().nullable(),
+  filePath: z.string().nullable(),
+  fileSize: z.number().nullable(),
+  fileType: z.string().nullable(),
+  checksum: z.string().nullable(),
+  // Projects: Removed projectIds (use relations table with type "belongs_to_project")
+  version: z.number(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+  deletedAt: z.date().nullable(),
 });
 /**
  * @deprecated EntityType enum - Use profile slugs (strings) instead

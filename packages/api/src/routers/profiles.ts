@@ -837,8 +837,13 @@ export const profilesRouter = router({
       const profileRepo = new ProfileRepository(db);
       const profilePropertyRepo = new ProfilePropertyRepository(db);
 
-      // Verify profile exists and is accessible
-      const profile = await profileRepo.getById(input.profileId);
+      // Verify profile exists and is accessible to this workspace
+      const resolutionService = new ProfileResolutionService(db);
+      const profile = await resolutionService.resolveProfile(
+        input.profileId,
+        ctx.userId,
+        ctx.workspaceId
+      );
       if (!profile) {
         throw new TRPCError({
           code: "NOT_FOUND",

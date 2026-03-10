@@ -19,7 +19,7 @@ import {
   channels,
   channelContextItems,
   ChannelContextObjectType,
-  ChannelContextRelationshipType,
+  type ChannelContextRelationshipType,
   ChannelContextConflictStatus,
 } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";

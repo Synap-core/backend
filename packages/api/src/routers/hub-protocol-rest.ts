@@ -18,6 +18,7 @@ import {
   users,
   eq,
   and,
+  or,
   asc,
   desc,
   knowledgeRepository,
@@ -160,8 +161,15 @@ app.get("/threads", async (c) => {
   const limit = parseInt(c.req.query("limit") ?? "50", 10);
   if (!userId) return c.json({ error: "userId is required" }, 400);
   try {
+    // Include personal channels (pod-wide) alongside workspace channels
     const whereClause = workspaceId
-      ? and(eq(channels.userId, userId), eq(channels.workspaceId, workspaceId))
+      ? and(
+          eq(channels.userId, userId),
+          or(
+            eq(channels.workspaceId, workspaceId),
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+          )
+        )
       : eq(channels.userId, userId);
     const threads = await db
       .select({

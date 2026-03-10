@@ -23,7 +23,12 @@ import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export type SkillKind = "instruction" | "code";
-export type SkillScope = "user" | "workspace";
+/**
+ * pod       — visible to all users on the data pod (default)
+ * user      — visible only to the owning user
+ * workspace — visible to all members of the workspace
+ */
+export type SkillScope = "pod" | "user" | "workspace";
 
 export const skills = pgTable(
   "skills",
@@ -49,12 +54,13 @@ export const skills = pgTable(
       .$type<SkillKind>(),
 
     /**
+     * pod       — visible to all users on the data pod (default)
      * user      — visible only to the owning user
      * workspace — visible to all members of the workspace
      */
-    scope: text("scope", { enum: ["user", "workspace"] })
+    scope: text("scope", { enum: ["pod", "user", "workspace"] })
       .notNull()
-      .default("workspace")
+      .default("pod")
       .$type<SkillScope>(),
 
     /**

@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc } from "@synap/database";
+import { db, eq, and, or, desc, isNull } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -30,7 +30,7 @@ export const skillsRouter = router({
         .object({
           workspaceId: z.string().uuid().optional(),
           kind: z.enum(["instruction", "code"]).optional(),
-          scope: z.enum(["user", "workspace"]).optional(),
+          scope: z.enum(["pod", "user", "workspace"]).optional(),
           status: z.enum(["active", "inactive", "error", "all"]).optional(),
           limit: z.number().min(1).max(100).default(50),
           offset: z.number().min(0).default(0),
@@ -39,10 +39,31 @@ export const skillsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const conditions = [eq(skills.userId, userId)];
+      const conditions: any[] = [];
 
+      // Three-tier scope filtering:
+      //   pod       — visible to all users on the data pod (no userId/workspaceId filter)
+      //   user      — visible only to the owning user
+      //   workspace — visible to all members of the workspace
       if (input?.workspaceId) {
-        conditions.push(eq(skills.workspaceId, input.workspaceId));
+        conditions.push(
+          or(
+            eq(skills.scope, "pod"),
+            and(eq(skills.scope, "user"), eq(skills.userId, userId)),
+            and(
+              eq(skills.scope, "workspace"),
+              eq(skills.workspaceId, input.workspaceId)
+            )
+          )!
+        );
+      } else {
+        // No workspace context — pod-wide + user-owned only
+        conditions.push(
+          or(
+            eq(skills.scope, "pod"),
+            and(eq(skills.scope, "user"), eq(skills.userId, userId))
+          )!
+        );
       }
 
       if (input?.kind) {
@@ -79,7 +100,11 @@ export const skillsRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const skill = await ctx.db.query.skills.findFirst({
-        where: and(eq(skills.id, input.id), eq(skills.userId, userId)),
+        where: and(
+          eq(skills.id, input.id),
+          // Pod-scoped: any user. User-scoped: owner only.
+          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+        ),
       });
 
       if (!skill) {
@@ -100,7 +125,7 @@ export const skillsRouter = router({
       z.object({
         workspaceId: z.string().uuid().optional(),
         kind: z.enum(["instruction", "code"]).default("code"),
-        scope: z.enum(["user", "workspace"]).default("workspace"),
+        scope: z.enum(["pod", "user", "workspace"]).default("pod"),
         agentTypes: z.array(z.string()).optional(),
         name: z.string().min(1).max(255),
         description: z.string().optional(),
@@ -190,7 +215,7 @@ export const skillsRouter = router({
       z.object({
         id: z.string().uuid(),
         kind: z.enum(["instruction", "code"]).optional(),
-        scope: z.enum(["user", "workspace"]).optional(),
+        scope: z.enum(["pod", "user", "workspace"]).optional(),
         agentTypes: z.array(z.string()).nullable().optional(),
         name: z.string().min(1).max(255).optional(),
         description: z.string().optional(),
@@ -205,9 +230,12 @@ export const skillsRouter = router({
       const userId = requireUserId(ctx.userId);
       const { id, ...updateData } = input;
 
-      // Verify skill exists and belongs to user
+      // Verify skill exists and user has access (owner or pod-scoped)
       const existingSkill = await ctx.db.query.skills.findFirst({
-        where: and(eq(skills.id, id), eq(skills.userId, userId)),
+        where: and(
+          eq(skills.id, id),
+          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+        ),
       });
 
       if (!existingSkill) {
@@ -240,7 +268,7 @@ export const skillsRouter = router({
           ...updateData,
           updatedAt: new Date(),
         })
-        .where(and(eq(skills.id, id), eq(skills.userId, userId)))
+        .where(eq(skills.id, id))
         .returning();
 
       // 3. Audit log
@@ -280,9 +308,12 @@ export const skillsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Verify skill exists and belongs to user
+      // Verify skill exists and user has access (owner or pod-scoped)
       const existingSkill = await ctx.db.query.skills.findFirst({
-        where: and(eq(skills.id, input.id), eq(skills.userId, userId)),
+        where: and(
+          eq(skills.id, input.id),
+          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+        ),
       });
 
       if (!existingSkill) {
@@ -309,9 +340,7 @@ export const skillsRouter = router({
       }
 
       // 2. Direct DB operation
-      await db
-        .delete(skills)
-        .where(and(eq(skills.id, input.id), eq(skills.userId, userId)));
+      await db.delete(skills).where(eq(skills.id, input.id));
 
       // 3. Audit log
       auditLog({
@@ -355,9 +384,12 @@ export const skillsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Verify skill exists and belongs to user
+      // Verify skill exists and user has access (owner or pod-scoped)
       const skill = await ctx.db.query.skills.findFirst({
-        where: and(eq(skills.id, input.id), eq(skills.userId, userId)),
+        where: and(
+          eq(skills.id, input.id),
+          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+        ),
       });
 
       if (!skill) {
@@ -553,7 +585,7 @@ export const skillsRouter = router({
           userId,
           workspaceId: input.workspaceId,
           kind: "instruction",
-          scope: "workspace",
+          scope: "pod",
           name: parsed.name,
           description: parsed.description,
           code: parsed.instructions, // instructions text, not executable code

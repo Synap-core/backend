@@ -46,7 +46,11 @@ export default function WorkspacesPage() {
   const [description, setDescription] = useState("");
   const [type, setType] = useState<"personal" | "team" | "enterprise">("team");
 
-  const { data: workspaces, isLoading, refetch } = trpc.workspaces.list.useQuery();
+  const {
+    data: workspaces,
+    isLoading,
+    refetch,
+  } = trpc.workspaces.list.useQuery();
 
   const createMutation = trpc.workspaces.create.useMutation({
     onSuccess: () => {
@@ -62,7 +66,11 @@ export default function WorkspacesPage() {
 
   function handleCreate() {
     if (!name.trim()) return;
-    createMutation.mutate({ name: name.trim(), description: description || undefined, type });
+    createMutation.mutate({
+      name: name.trim(),
+      description: description || undefined,
+      type,
+    });
   }
 
   return (
@@ -71,7 +79,10 @@ export default function WorkspacesPage() {
       <Group justify="space-between" mb={spacing[6]}>
         <div>
           <Group gap="sm" mb={spacing[1]}>
-            <IconBuildingCommunity size={22} color={colors.eventTypes.created} />
+            <IconBuildingCommunity
+              size={22}
+              color={colors.eventTypes.created}
+            />
             <Text size="xl" fw={700}>
               Workspaces
             </Text>
@@ -143,7 +154,9 @@ export default function WorkspacesPage() {
                   <Group gap={4}>
                     <IconUsers size={14} color={colors.text.tertiary} />
                     <Text size="xs" c="dimmed">
-                      {ws.settings?.intelligenceServiceId ? "AI connected" : "No AI service"}
+                      {ws.settings?.intelligenceServiceId
+                        ? "AI connected"
+                        : "No AI service"}
                     </Text>
                   </Group>
                   <Text size="xs" c="dimmed">
@@ -168,7 +181,12 @@ export default function WorkspacesPage() {
           ))}
 
           {workspaces?.length === 0 && (
-            <Text c="dimmed" ta="center" py={spacing[10]} style={{ gridColumn: "1 / -1" }}>
+            <Text
+              c="dimmed"
+              ta="center"
+              py={spacing[10]}
+              style={{ gridColumn: "1 / -1" }}
+            >
               No workspaces found.
             </Text>
           )}

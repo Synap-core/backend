@@ -4,7 +4,17 @@
  * Profiles define entity types as configuration, not code.
  * Supports inheritance via parent_profile_id (e.g., "webinar" extends "event").
  */
-import { pgTable, uuid, text, jsonb, boolean, integer, timestamp, index, unique, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  jsonb,
+  boolean,
+  integer,
+  timestamp,
+  index,
+  unique,
+} from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 /**
@@ -12,11 +22,13 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  */
 export var ProfileScope;
 (function (ProfileScope) {
-    ProfileScope["SYSTEM"] = "system";
-    ProfileScope["WORKSPACE"] = "workspace";
-    ProfileScope["USER"] = "user";
+  ProfileScope["SYSTEM"] = "system";
+  ProfileScope["WORKSPACE"] = "workspace";
+  ProfileScope["USER"] = "user";
 })(ProfileScope || (ProfileScope = {}));
-export const profiles = pgTable("profiles", {
+export const profiles = pgTable(
+  "profiles",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // Profile identity (unique slug)
@@ -32,30 +44,38 @@ export const profiles = pgTable("profiles", {
     uiHints: jsonb("ui_hints").default("{}").notNull(),
     // Scope (who can use this profile)
     scope: text("scope", {
-        enum: [ProfileScope.SYSTEM, ProfileScope.WORKSPACE, ProfileScope.USER],
+      enum: [ProfileScope.SYSTEM, ProfileScope.WORKSPACE, ProfileScope.USER],
     })
-        .notNull()
-        .default(ProfileScope.WORKSPACE),
+      .notNull()
+      .default(ProfileScope.WORKSPACE),
     // Ownership (based on scope)
     userId: text("user_id"), // If scope = "user"
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
-        onDelete: "cascade",
+      onDelete: "cascade",
     }), // If scope = "workspace"
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),
     version: integer("version").default(1).notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     slugIdx: unique("profiles_slug_unique").on(table.slug),
-    parentProfileIdx: index("profiles_parent_profile_id_idx").on(table.parentProfileId),
-    scopeIdx: index("profiles_scope_idx").on(table.scope, table.workspaceId, table.userId),
-}));
+    parentProfileIdx: index("profiles_parent_profile_id_idx").on(
+      table.parentProfileId
+    ),
+    scopeIdx: index("profiles_scope_idx").on(
+      table.scope,
+      table.workspaceId,
+      table.userId
+    ),
+  })
+);
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */

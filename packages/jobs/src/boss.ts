@@ -18,7 +18,10 @@ const logger = createLogger({ module: "pg-boss" });
 const GLOBAL_KEY = "__synap_pg_boss__";
 
 function getGlobal(): PgBoss | null {
-  return (globalThis as Record<string, unknown>)[GLOBAL_KEY] as PgBoss | null ?? null;
+  return (
+    ((globalThis as Record<string, unknown>)[GLOBAL_KEY] as PgBoss | null) ??
+    null
+  );
 }
 
 function setGlobal(boss: PgBoss | null): void {

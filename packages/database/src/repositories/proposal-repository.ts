@@ -8,7 +8,7 @@
 
 import { eq, and, desc } from "drizzle-orm";
 import { proposals } from "../schema/index.js";
-import { ProposalStatus } from "../schema/proposals.js";
+import { type ProposalStatus } from "../schema/proposals.js";
 
 export interface CreateProposalInput {
   workspaceId: string;

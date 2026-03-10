@@ -50,7 +50,8 @@ export const projectsRouter = router({
       if (!projectProfile) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Project profile not found. Please run seed-profiles script.",
+          message:
+            "Project profile not found. Please run seed-profiles script.",
         });
       }
 
@@ -119,7 +120,8 @@ export const projectsRouter = router({
       if (!projectProfile) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Project profile not found. Please run seed-profiles script.",
+          message:
+            "Project profile not found. Please run seed-profiles script.",
         });
       }
 
@@ -133,7 +135,10 @@ export const projectsRouter = router({
       });
 
       if (!entity) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
       }
 
       const project = {
@@ -188,7 +193,11 @@ export const projectsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed", projectId: "", proposalId: perm.proposalId };
+        return {
+          status: "proposed",
+          projectId: "",
+          proposalId: perm.proposalId,
+        };
       }
 
       const properties: Record<string, unknown> = { status: input.status };
@@ -289,16 +298,23 @@ export const projectsRouter = router({
       });
 
       if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
       }
 
       const currentProperties =
         (current.properties as Record<string, unknown>) || {};
-      const updatedProperties: Record<string, unknown> = { ...currentProperties };
+      const updatedProperties: Record<string, unknown> = {
+        ...currentProperties,
+      };
 
       if (input.status !== undefined) updatedProperties.status = input.status;
-      if (input.settings !== undefined) updatedProperties.settings = input.settings;
-      if (input.metadata !== undefined) updatedProperties.metadata = input.metadata;
+      if (input.settings !== undefined)
+        updatedProperties.settings = input.settings;
+      if (input.metadata !== undefined)
+        updatedProperties.metadata = input.metadata;
 
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(db, eventRepo);

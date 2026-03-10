@@ -36,7 +36,6 @@ const WorkspaceContext = createContext<WorkspaceState>({
   setWorkspace: () => {},
 });
 
-// eslint-disable-next-line react-refresh/only-export-components
 export function useWorkspace(): WorkspaceState {
   return useContext(WorkspaceContext);
 }

@@ -1254,6 +1254,8 @@ export const workspacesRouter = router({
             layoutConfig: z
               .object({
                 pinnedApps: z.array(z.string()).optional(),
+                /** Browser: which app to open by default (e.g. 'intelligence' for chat-first) */
+                defaultApp: z.string().optional(),
                 defaultView: z.string().optional(),
                 theme: z.string().optional(),
                 sidebarItems: z

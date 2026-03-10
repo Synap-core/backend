@@ -8,14 +8,20 @@
  * Self-hosted backends don't have provisioning tokens, so the control plane cannot call them.
  */
 import { pgTable, text, timestamp, uuid, index } from "drizzle-orm/pg-core";
-export const provisioningTokens = pgTable("provisioning_tokens", {
+export const provisioningTokens = pgTable(
+  "provisioning_tokens",
+  {
     id: uuid("id").defaultRandom().primaryKey(),
     tokenHash: text("token_hash").notNull().unique(), // SHA256 hash of token
     usedAt: timestamp("used_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
-    tokenHashIdx: index("idx_provisioning_tokens_token_hash").on(table.tokenHash),
-}));
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tokenHashIdx: index("idx_provisioning_tokens_token_hash").on(
+      table.tokenHash
+    ),
+  })
+);
 //# sourceMappingURL=provisioning-tokens.js.map

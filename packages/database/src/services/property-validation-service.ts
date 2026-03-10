@@ -5,7 +5,7 @@
  */
 
 import {
-  ProfileResolutionService,
+  type ProfileResolutionService,
   type EffectiveProperty,
 } from "./profile-resolution-service.js";
 import { PropertyValueType } from "../schema/property-defs.js";

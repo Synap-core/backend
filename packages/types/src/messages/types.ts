@@ -6,8 +6,8 @@
 
 import { z } from "zod";
 import {
-  MessageLinkTargetType,
-  MessageLinkRelationshipType,
+  type MessageLinkTargetType,
+  type MessageLinkRelationshipType,
   MessageLinkTargetTypeSchema,
   MessageLinkRelationshipTypeSchema,
 } from "./enums.js";

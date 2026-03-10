@@ -34,7 +34,11 @@ interface MemoryFact {
   createdAt: string;
 }
 
-async function fetchFacts(userId: string, query: string, limit = 50): Promise<MemoryFact[]> {
+async function fetchFacts(
+  userId: string,
+  query: string,
+  limit = 50
+): Promise<MemoryFact[]> {
   const params = new URLSearchParams({ userId, limit: String(limit) });
   if (query.trim()) params.append("query", query.trim());
   const res = await fetch(`${API_URL}/api/hub/memory?${params}`, {
@@ -84,7 +88,8 @@ export default function MemoryPage() {
       setFacts(data);
     } catch (err) {
       showErrorNotification({
-        message: err instanceof Error ? err.message : "Failed to load memory facts",
+        message:
+          err instanceof Error ? err.message : "Failed to load memory facts",
       });
     } finally {
       setLoading(false);
@@ -239,12 +244,7 @@ export default function MemoryPage() {
         size="md"
       >
         <Stack gap={spacing[4]}>
-          <TextInput
-            label="User ID"
-            value={userId}
-            readOnly
-            disabled
-          />
+          <TextInput label="User ID" value={userId} readOnly disabled />
           <TextInput
             label="Fact"
             placeholder="Enter a fact about this user..."

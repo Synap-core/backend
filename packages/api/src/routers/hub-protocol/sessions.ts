@@ -143,7 +143,6 @@ export const sessionsRouter = router({
     .mutation(async ({ input }) => {
       const { sessionId, ...updates } = input;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const updateData: Record<string, any> = {};
       if (updates.status !== undefined)
         updateData.status = updates.status as SessionStatus;

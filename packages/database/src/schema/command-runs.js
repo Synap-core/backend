@@ -4,17 +4,26 @@
  * Audit / operational log for command executions.
  * Every run has a thread_id (provenance); permissions_snapshot preserves command state at run time.
  */
-import { pgTable, uuid, text, timestamp, jsonb, index, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
 import { chatThreads } from "./chat-threads.js";
 import { intelligenceCommands } from "./intelligence-commands.js";
-export const commandRuns = pgTable("command_runs", {
+export const commandRuns = pgTable(
+  "command_runs",
+  {
     id: uuid("id").defaultRandom().primaryKey(),
     threadId: uuid("thread_id")
-        .notNull()
-        .references(() => chatThreads.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => chatThreads.id, { onDelete: "cascade" }),
     commandId: uuid("command_id")
-        .notNull()
-        .references(() => intelligenceCommands.id, { onDelete: "cascade" }),
+      .notNull()
+      .references(() => intelligenceCommands.id, { onDelete: "cascade" }),
     workspaceId: uuid("workspace_id").notNull(),
     userId: text("user_id").notNull(),
     /** Snapshot of command permissions at run time */
@@ -25,23 +34,27 @@ export const commandRuns = pgTable("command_runs", {
     proposedActions: jsonb("proposed_actions").$type(),
     approvedActions: jsonb("approved_actions").$type(),
     status: text("status", {
-        enum: ["running", "completed", "failed"],
+      enum: ["running", "completed", "failed"],
     })
-        .notNull()
-        .default("running"),
+      .notNull()
+      .default("running"),
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
+      .defaultNow()
+      .notNull(),
     completedAt: timestamp("completed_at", {
-        mode: "date",
-        withTimezone: true,
+      mode: "date",
+      withTimezone: true,
     }),
     errorMessage: text("error_message"),
-}, (table) => ({
+  },
+  (table) => ({
     commandIdIdx: index("command_runs_command_id_idx").on(table.commandId),
-    workspaceIdIdx: index("command_runs_workspace_id_idx").on(table.workspaceId),
+    workspaceIdIdx: index("command_runs_workspace_id_idx").on(
+      table.workspaceId
+    ),
     userIdIdx: index("command_runs_user_id_idx").on(table.userId),
     threadIdIdx: index("command_runs_thread_id_idx").on(table.threadId),
     startedAtIdx: index("command_runs_started_at_idx").on(table.startedAt),
-}));
+  })
+);
 //# sourceMappingURL=command-runs.js.map

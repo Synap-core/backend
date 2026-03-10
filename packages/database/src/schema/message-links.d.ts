@@ -5,186 +5,229 @@
  * Allows messages to link to ANY object in the system.
  */
 export declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
-    name: "message_links";
-    schema: undefined;
-    columns: {
-        id: import("drizzle-orm/pg-core").PgColumn<{
-            name: "id";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: true;
-            isPrimaryKey: true;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        messageId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "message_id";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        targetType: import("drizzle-orm/pg-core").PgColumn<{
-            name: "target_type";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        targetId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "target_id";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        relationshipType: import("drizzle-orm/pg-core").PgColumn<{
-            name: "relationship_type";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        position: import("drizzle-orm/pg-core").PgColumn<{
-            name: "position";
-            tableName: "message_links";
-            dataType: "json";
-            columnType: "PgJsonb";
-            data: unknown;
-            driverParam: unknown;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        metadata: import("drizzle-orm/pg-core").PgColumn<{
-            name: "metadata";
-            tableName: "message_links";
-            dataType: "json";
-            columnType: "PgJsonb";
-            data: unknown;
-            driverParam: unknown;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        userId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "user_id";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        workspaceId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "workspace_id";
-            tableName: "message_links";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        createdAt: import("drizzle-orm/pg-core").PgColumn<{
-            name: "created_at";
-            tableName: "message_links";
-            dataType: "date";
-            columnType: "PgTimestamp";
-            data: Date;
-            driverParam: string;
-            notNull: true;
-            hasDefault: true;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-    };
-    dialect: "pg";
+  name: "message_links";
+  schema: undefined;
+  columns: {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: true;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    messageId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "message_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    targetType: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "target_type";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    targetId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "target_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    relationshipType: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "relationship_type";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    position: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "position";
+        tableName: "message_links";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    metadata: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "metadata";
+        tableName: "message_links";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "user_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "workspace_id";
+        tableName: "message_links";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "created_at";
+        tableName: "message_links";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+  };
+  dialect: "pg";
 }>;
 export type MessageLink = typeof messageLinks.$inferSelect;
 export type NewMessageLink = typeof messageLinks.$inferInsert;
-export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<"insert", {
-    id: import("drizzle-orm/pg-core").PgColumn<{
+export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
+  "insert",
+  {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "id";
         tableName: "message_links";
         dataType: "string";
@@ -200,8 +243,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    messageId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    messageId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "message_id";
         tableName: "message_links";
         dataType: "string";
@@ -217,8 +264,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    targetType: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    targetType: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "target_type";
         tableName: "message_links";
         dataType: "string";
@@ -234,8 +285,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    targetId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    targetId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "target_id";
         tableName: "message_links";
         dataType: "string";
@@ -251,8 +306,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    relationshipType: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    relationshipType: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "relationship_type";
         tableName: "message_links";
         dataType: "string";
@@ -268,8 +327,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    position: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    position: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "position";
         tableName: "message_links";
         dataType: "json";
@@ -285,8 +348,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    metadata: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    metadata: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "metadata";
         tableName: "message_links";
         dataType: "json";
@@ -302,8 +369,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    userId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "user_id";
         tableName: "message_links";
         dataType: "string";
@@ -319,8 +390,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "workspace_id";
         tableName: "message_links";
         dataType: "string";
@@ -336,8 +411,12 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "created_at";
         tableName: "message_links";
         dataType: "date";
@@ -353,10 +432,19 @@ export declare const insertMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-}, undefined, undefined>;
-export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<"select", {
-    id: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+  },
+  undefined,
+  undefined
+>;
+export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
+  "select",
+  {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "id";
         tableName: "message_links";
         dataType: "string";
@@ -372,8 +460,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    messageId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    messageId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "message_id";
         tableName: "message_links";
         dataType: "string";
@@ -389,8 +481,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    targetType: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    targetType: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "target_type";
         tableName: "message_links";
         dataType: "string";
@@ -406,8 +502,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    targetId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    targetId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "target_id";
         tableName: "message_links";
         dataType: "string";
@@ -423,8 +523,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    relationshipType: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    relationshipType: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "relationship_type";
         tableName: "message_links";
         dataType: "string";
@@ -440,8 +544,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    position: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    position: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "position";
         tableName: "message_links";
         dataType: "json";
@@ -457,8 +565,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    metadata: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    metadata: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "metadata";
         tableName: "message_links";
         dataType: "json";
@@ -474,8 +586,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    userId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "user_id";
         tableName: "message_links";
         dataType: "string";
@@ -491,8 +607,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "workspace_id";
         tableName: "message_links";
         dataType: "string";
@@ -508,8 +628,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "created_at";
         tableName: "message_links";
         dataType: "date";
@@ -525,6 +649,12 @@ export declare const selectMessageLinkSchema: import("drizzle-zod").BuildSchema<
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-}, undefined, undefined>;
+      },
+      {},
+      {}
+    >;
+  },
+  undefined,
+  undefined
+>;
 //# sourceMappingURL=message-links.d.ts.map

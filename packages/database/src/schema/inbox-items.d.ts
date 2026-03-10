@@ -5,375 +5,463 @@
  * Lifecycle: External source → inbox_items → processed → archived or converted to entity
  */
 export declare const inboxItems: import("drizzle-orm/pg-core").PgTableWithColumns<{
-    name: "inbox_items";
-    schema: undefined;
-    columns: {
-        id: import("drizzle-orm/pg-core").PgColumn<{
-            name: "id";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: true;
-            isPrimaryKey: true;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        userId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "user_id";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        workspaceId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "workspace_id";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgUUID";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        provider: import("drizzle-orm/pg-core").PgColumn<{
-            name: "provider";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgVarchar";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            length: 50;
-        }>;
-        account: import("drizzle-orm/pg-core").PgColumn<{
-            name: "account";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgVarchar";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            length: 255;
-        }>;
-        externalId: import("drizzle-orm/pg-core").PgColumn<{
-            name: "external_id";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgVarchar";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            length: 500;
-        }>;
-        deepLink: import("drizzle-orm/pg-core").PgColumn<{
-            name: "deep_link";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        type: import("drizzle-orm/pg-core").PgColumn<{
-            name: "type";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgVarchar";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            length: 50;
-        }>;
-        title: import("drizzle-orm/pg-core").PgColumn<{
-            name: "title";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        preview: import("drizzle-orm/pg-core").PgColumn<{
-            name: "preview";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgText";
-            data: string;
-            driverParam: string;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        timestamp: import("drizzle-orm/pg-core").PgColumn<{
-            name: "timestamp";
-            tableName: "inbox_items";
-            dataType: "date";
-            columnType: "PgTimestamp";
-            data: Date;
-            driverParam: string;
-            notNull: true;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        status: import("drizzle-orm/pg-core").PgColumn<{
-            name: "status";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgVarchar";
-            data: string;
-            driverParam: string;
-            notNull: false;
-            hasDefault: true;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            length: 20;
-        }>;
-        snoozedUntil: import("drizzle-orm/pg-core").PgColumn<{
-            name: "snoozed_until";
-            tableName: "inbox_items";
-            dataType: "date";
-            columnType: "PgTimestamp";
-            data: Date;
-            driverParam: string;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        priority: import("drizzle-orm/pg-core").PgColumn<{
-            name: "priority";
-            tableName: "inbox_items";
-            dataType: "string";
-            columnType: "PgVarchar";
-            data: string;
-            driverParam: string;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: [string, ...string[]];
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            length: 20;
-        }>;
-        tags: import("drizzle-orm/pg-core").PgColumn<{
+  name: "inbox_items";
+  schema: undefined;
+  columns: {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "id";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: true;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "user_id";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "workspace_id";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgUUID";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    provider: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "provider";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgVarchar";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        length: 50;
+      }
+    >;
+    account: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "account";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgVarchar";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        length: 255;
+      }
+    >;
+    externalId: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "external_id";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgVarchar";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        length: 500;
+      }
+    >;
+    deepLink: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "deep_link";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    type: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "type";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgVarchar";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        length: 50;
+      }
+    >;
+    title: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "title";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    preview: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "preview";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgText";
+        data: string;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    timestamp: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "timestamp";
+        tableName: "inbox_items";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    status: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "status";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgVarchar";
+        data: string;
+        driverParam: string;
+        notNull: false;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        length: 20;
+      }
+    >;
+    snoozedUntil: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "snoozed_until";
+        tableName: "inbox_items";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    priority: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "priority";
+        tableName: "inbox_items";
+        dataType: "string";
+        columnType: "PgVarchar";
+        data: string;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        length: 20;
+      }
+    >;
+    tags: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "tags";
+        tableName: "inbox_items";
+        dataType: "array";
+        columnType: "PgArray";
+        data: string[];
+        driverParam: string | string[];
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: [string, ...string[]];
+        baseColumn: import("drizzle-orm").Column<
+          {
             name: "tags";
             tableName: "inbox_items";
-            dataType: "array";
-            columnType: "PgArray";
-            data: string[];
-            driverParam: string | string[];
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            driverParam: string;
             notNull: false;
             hasDefault: false;
             isPrimaryKey: false;
             isAutoincrement: false;
             hasRuntimeDefault: false;
             enumValues: [string, ...string[]];
-            baseColumn: import("drizzle-orm").Column<{
-                name: "tags";
-                tableName: "inbox_items";
-                dataType: "string";
-                columnType: "PgText";
-                data: string;
-                driverParam: string;
-                notNull: false;
-                hasDefault: false;
-                isPrimaryKey: false;
-                isAutoincrement: false;
-                hasRuntimeDefault: false;
-                enumValues: [string, ...string[]];
-                baseColumn: never;
-                identity: undefined;
-                generated: undefined;
-            }, {}, {}>;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {
-            size: undefined;
-            baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
-                name: "tags";
-                dataType: "string";
-                columnType: "PgText";
-                data: string;
-                enumValues: [string, ...string[]];
-                driverParam: string;
-            }, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-        }>;
-        data: import("drizzle-orm/pg-core").PgColumn<{
-            name: "data";
-            tableName: "inbox_items";
-            dataType: "json";
-            columnType: "PgJsonb";
-            data: unknown;
-            driverParam: unknown;
-            notNull: true;
-            hasDefault: true;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
             baseColumn: never;
             identity: undefined;
             generated: undefined;
-        }, {}, {}>;
-        processedAt: import("drizzle-orm/pg-core").PgColumn<{
-            name: "processed_at";
-            tableName: "inbox_items";
-            dataType: "date";
-            columnType: "PgTimestamp";
-            data: Date;
+          },
+          {},
+          {}
+        >;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {
+        size: undefined;
+        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
+          {
+            name: "tags";
+            dataType: "string";
+            columnType: "PgText";
+            data: string;
+            enumValues: [string, ...string[]];
             driverParam: string;
-            notNull: false;
-            hasDefault: false;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        createdAt: import("drizzle-orm/pg-core").PgColumn<{
-            name: "created_at";
-            tableName: "inbox_items";
-            dataType: "date";
-            columnType: "PgTimestamp";
-            data: Date;
-            driverParam: string;
-            notNull: true;
-            hasDefault: true;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-        updatedAt: import("drizzle-orm/pg-core").PgColumn<{
-            name: "updated_at";
-            tableName: "inbox_items";
-            dataType: "date";
-            columnType: "PgTimestamp";
-            data: Date;
-            driverParam: string;
-            notNull: true;
-            hasDefault: true;
-            isPrimaryKey: false;
-            isAutoincrement: false;
-            hasRuntimeDefault: false;
-            enumValues: undefined;
-            baseColumn: never;
-            identity: undefined;
-            generated: undefined;
-        }, {}, {}>;
-    };
-    dialect: "pg";
+          },
+          {},
+          {},
+          import("drizzle-orm").ColumnBuilderExtraConfig
+        >;
+      }
+    >;
+    data: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "data";
+        tableName: "inbox_items";
+        dataType: "json";
+        columnType: "PgJsonb";
+        data: unknown;
+        driverParam: unknown;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    processedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "processed_at";
+        tableName: "inbox_items";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "created_at";
+        tableName: "inbox_items";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "updated_at";
+        tableName: "inbox_items";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+  };
+  dialect: "pg";
 }>;
-export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"insert", {
-    id: import("drizzle-orm/pg-core").PgColumn<{
+export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<
+  "insert",
+  {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "id";
         tableName: "inbox_items";
         dataType: "string";
@@ -389,8 +477,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    userId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "user_id";
         tableName: "inbox_items";
         dataType: "string";
@@ -406,8 +498,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "workspace_id";
         tableName: "inbox_items";
         dataType: "string";
@@ -423,8 +519,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    provider: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    provider: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "provider";
         tableName: "inbox_items";
         dataType: "string";
@@ -440,10 +540,14 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 50;
-    }>;
-    account: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    account: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "account";
         tableName: "inbox_items";
         dataType: "string";
@@ -459,10 +563,14 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 255;
-    }>;
-    externalId: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    externalId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "external_id";
         tableName: "inbox_items";
         dataType: "string";
@@ -478,10 +586,14 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 500;
-    }>;
-    deepLink: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    deepLink: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "deep_link";
         tableName: "inbox_items";
         dataType: "string";
@@ -497,8 +609,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    type: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    type: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "type";
         tableName: "inbox_items";
         dataType: "string";
@@ -514,10 +630,14 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 50;
-    }>;
-    title: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    title: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "title";
         tableName: "inbox_items";
         dataType: "string";
@@ -533,8 +653,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    preview: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    preview: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "preview";
         tableName: "inbox_items";
         dataType: "string";
@@ -550,8 +674,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    timestamp: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    timestamp: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "timestamp";
         tableName: "inbox_items";
         dataType: "date";
@@ -567,8 +695,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    status: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    status: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "status";
         tableName: "inbox_items";
         dataType: "string";
@@ -584,10 +716,14 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 20;
-    }>;
-    snoozedUntil: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    snoozedUntil: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "snoozed_until";
         tableName: "inbox_items";
         dataType: "date";
@@ -603,8 +739,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    priority: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    priority: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "priority";
         tableName: "inbox_items";
         dataType: "string";
@@ -620,10 +760,14 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 20;
-    }>;
-    tags: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    tags: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "tags";
         tableName: "inbox_items";
         dataType: "array";
@@ -636,7 +780,8 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         isAutoincrement: false;
         hasRuntimeDefault: false;
         enumValues: [string, ...string[]];
-        baseColumn: import("drizzle-orm").Column<{
+        baseColumn: import("drizzle-orm").Column<
+          {
             name: "tags";
             tableName: "inbox_items";
             dataType: "string";
@@ -652,21 +797,33 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
             baseColumn: never;
             identity: undefined;
             generated: undefined;
-        }, {}, {}>;
+          },
+          {},
+          {}
+        >;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         size: undefined;
-        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
+        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
+          {
             name: "tags";
             dataType: "string";
             columnType: "PgText";
             data: string;
             enumValues: [string, ...string[]];
             driverParam: string;
-        }, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-    }>;
-    data: import("drizzle-orm/pg-core").PgColumn<{
+          },
+          {},
+          {},
+          import("drizzle-orm").ColumnBuilderExtraConfig
+        >;
+      }
+    >;
+    data: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "data";
         tableName: "inbox_items";
         dataType: "json";
@@ -682,8 +839,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    processedAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    processedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "processed_at";
         tableName: "inbox_items";
         dataType: "date";
@@ -699,8 +860,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "created_at";
         tableName: "inbox_items";
         dataType: "date";
@@ -716,8 +881,12 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "updated_at";
         tableName: "inbox_items";
         dataType: "date";
@@ -733,10 +902,19 @@ export declare const insertInboxItemSchema: import("drizzle-zod").BuildSchema<"i
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-}, undefined, undefined>;
-export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"select", {
-    id: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+  },
+  undefined,
+  undefined
+>;
+export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<
+  "select",
+  {
+    id: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "id";
         tableName: "inbox_items";
         dataType: "string";
@@ -752,8 +930,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    userId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    userId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "user_id";
         tableName: "inbox_items";
         dataType: "string";
@@ -769,8 +951,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    workspaceId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "workspace_id";
         tableName: "inbox_items";
         dataType: "string";
@@ -786,8 +972,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    provider: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    provider: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "provider";
         tableName: "inbox_items";
         dataType: "string";
@@ -803,10 +993,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 50;
-    }>;
-    account: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    account: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "account";
         tableName: "inbox_items";
         dataType: "string";
@@ -822,10 +1016,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 255;
-    }>;
-    externalId: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    externalId: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "external_id";
         tableName: "inbox_items";
         dataType: "string";
@@ -841,10 +1039,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 500;
-    }>;
-    deepLink: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    deepLink: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "deep_link";
         tableName: "inbox_items";
         dataType: "string";
@@ -860,8 +1062,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    type: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    type: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "type";
         tableName: "inbox_items";
         dataType: "string";
@@ -877,10 +1083,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 50;
-    }>;
-    title: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    title: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "title";
         tableName: "inbox_items";
         dataType: "string";
@@ -896,8 +1106,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    preview: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    preview: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "preview";
         tableName: "inbox_items";
         dataType: "string";
@@ -913,8 +1127,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    timestamp: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    timestamp: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "timestamp";
         tableName: "inbox_items";
         dataType: "date";
@@ -930,8 +1148,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    status: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    status: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "status";
         tableName: "inbox_items";
         dataType: "string";
@@ -947,10 +1169,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 20;
-    }>;
-    snoozedUntil: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    snoozedUntil: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "snoozed_until";
         tableName: "inbox_items";
         dataType: "date";
@@ -966,8 +1192,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    priority: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    priority: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "priority";
         tableName: "inbox_items";
         dataType: "string";
@@ -983,10 +1213,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         length: 20;
-    }>;
-    tags: import("drizzle-orm/pg-core").PgColumn<{
+      }
+    >;
+    tags: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "tags";
         tableName: "inbox_items";
         dataType: "array";
@@ -999,7 +1233,8 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         isAutoincrement: false;
         hasRuntimeDefault: false;
         enumValues: [string, ...string[]];
-        baseColumn: import("drizzle-orm").Column<{
+        baseColumn: import("drizzle-orm").Column<
+          {
             name: "tags";
             tableName: "inbox_items";
             dataType: "string";
@@ -1015,21 +1250,33 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
             baseColumn: never;
             identity: undefined;
             generated: undefined;
-        }, {}, {}>;
+          },
+          {},
+          {}
+        >;
         identity: undefined;
         generated: undefined;
-    }, {}, {
+      },
+      {},
+      {
         size: undefined;
-        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
+        baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<
+          {
             name: "tags";
             dataType: "string";
             columnType: "PgText";
             data: string;
             enumValues: [string, ...string[]];
             driverParam: string;
-        }, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-    }>;
-    data: import("drizzle-orm/pg-core").PgColumn<{
+          },
+          {},
+          {},
+          import("drizzle-orm").ColumnBuilderExtraConfig
+        >;
+      }
+    >;
+    data: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "data";
         tableName: "inbox_items";
         dataType: "json";
@@ -1045,8 +1292,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    processedAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    processedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "processed_at";
         tableName: "inbox_items";
         dataType: "date";
@@ -1062,8 +1313,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    createdAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    createdAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "created_at";
         tableName: "inbox_items";
         dataType: "date";
@@ -1079,8 +1334,12 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-    updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+      },
+      {},
+      {}
+    >;
+    updatedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
         name: "updated_at";
         tableName: "inbox_items";
         dataType: "date";
@@ -1096,8 +1355,14 @@ export declare const selectInboxItemSchema: import("drizzle-zod").BuildSchema<"s
         baseColumn: never;
         identity: undefined;
         generated: undefined;
-    }, {}, {}>;
-}, undefined, undefined>;
+      },
+      {},
+      {}
+    >;
+  },
+  undefined,
+  undefined
+>;
 export type InboxItem = typeof inboxItems.$inferSelect;
 export type NewInboxItem = typeof inboxItems.$inferInsert;
 //# sourceMappingURL=inbox-items.d.ts.map

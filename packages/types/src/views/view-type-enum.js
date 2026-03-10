@@ -9,20 +9,20 @@ import { z } from "zod";
  * Array of all view types (for iteration, validation, etc.)
  */
 export const VIEW_TYPES = [
-    "whiteboard",
-    "table",
-    "kanban",
-    "list",
-    "grid",
-    "gallery",
-    "calendar",
-    "gantt",
-    "timeline",
-    "mindmap",
-    "graph",
-    "flow",
-    "bento",
-    "branch_tree",
+  "whiteboard",
+  "table",
+  "kanban",
+  "list",
+  "grid",
+  "gallery",
+  "calendar",
+  "gantt",
+  "timeline",
+  "mindmap",
+  "graph",
+  "flow",
+  "bento",
+  "branch_tree",
 ];
 /**
  * Zod validator for view types (open string — accepts any non-empty type)
@@ -33,5 +33,5 @@ export const ViewTypeEnum = z.string().min(1);
  * Type guard: Check if a string is a valid ViewType
  */
 export function isViewType(value) {
-    return VIEW_TYPES.includes(value);
+  return VIEW_TYPES.includes(value);
 }

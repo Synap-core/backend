@@ -14,13 +14,13 @@
  * Add new types here as needed (extensible enum pattern).
  */
 export declare enum AgentType {
-    DEFAULT = "default",
-    META = "meta",
-    PROMPTING = "prompting",
-    KNOWLEDGE_SEARCH = "knowledge-search",
-    CODE = "code",
-    WRITING = "writing",
-    ACTION = "action"
+  DEFAULT = "default",
+  META = "meta",
+  PROMPTING = "prompting",
+  KNOWLEDGE_SEARCH = "knowledge-search",
+  CODE = "code",
+  WRITING = "writing",
+  ACTION = "action",
 }
 /**
  * Agent type as string literal union (for flexibility)
@@ -30,103 +30,103 @@ export type AgentTypeString = `${AgentType}` | (string & {});
  * Context provided to Intelligence Service
  */
 export interface HubContext {
-    documents?: Array<{
-        id: string;
-        title: string;
-        content?: string;
-    }>;
-    entities?: Array<{
-        id: string;
-        type: string;
-        title: string;
-        data?: Record<string, unknown>;
-    }>;
-    branches?: Array<{
-        id: string;
-        agentType: string;
-        purpose?: string;
-    }>;
+  documents?: Array<{
+    id: string;
+    title: string;
+    content?: string;
+  }>;
+  entities?: Array<{
+    id: string;
+    type: string;
+    title: string;
+    data?: Record<string, unknown>;
+  }>;
+  branches?: Array<{
+    id: string;
+    agentType: string;
+    purpose?: string;
+  }>;
 }
 /**
  * Request sent from Backend to Intelligence Service
  */
 export interface HubRequest {
-    /** User's query/message */
-    query: string;
-    /** Thread ID for conversation context */
-    threadId: string;
-    /** User ID for personalization */
-    userId: string;
-    /** Requested agent type (optional, Intelligence Service can auto-select) */
-    agentType?: AgentTypeString;
-    /** Opaque configuration for agent (Intelligence Service interprets) */
-    agentConfig?: Record<string, unknown>;
-    /** Context for agent (documents, entities, etc.) */
-    context?: HubContext;
-    /** Whether to stream response */
-    stream?: boolean;
+  /** User's query/message */
+  query: string;
+  /** Thread ID for conversation context */
+  threadId: string;
+  /** User ID for personalization */
+  userId: string;
+  /** Requested agent type (optional, Intelligence Service can auto-select) */
+  agentType?: AgentTypeString;
+  /** Opaque configuration for agent (Intelligence Service interprets) */
+  agentConfig?: Record<string, unknown>;
+  /** Context for agent (documents, entities, etc.) */
+  context?: HubContext;
+  /** Whether to stream response */
+  stream?: boolean;
 }
 /**
  * Action proposal from the AI (in-stream or in complete)
  */
 export interface ProposedAction {
-    id: string;
-    toolName: string;
-    description: string;
-    args: Record<string, unknown>;
+  id: string;
+  toolName: string;
+  description: string;
+  args: Record<string, unknown>;
 }
 /**
  * Response from Intelligence Service to Backend
  */
 export interface HubResponse {
-    /** Generated content */
-    content: string;
-    /** AI thinking steps (optional) */
-    aiSteps?: AIStep[];
-    /** Extracted entities (optional) */
-    entities?: ExtractedEntity[];
-    /** Branch decision from meta-agent (optional) */
-    branchDecision?: BranchDecision;
-    /** Token usage statistics (optional) */
-    usage?: TokenUsage;
-    /** Action proposals (create/update entity or document) for user approval */
-    proposedActions?: ProposedAction[];
+  /** Generated content */
+  content: string;
+  /** AI thinking steps (optional) */
+  aiSteps?: AIStep[];
+  /** Extracted entities (optional) */
+  entities?: ExtractedEntity[];
+  /** Branch decision from meta-agent (optional) */
+  branchDecision?: BranchDecision;
+  /** Token usage statistics (optional) */
+  usage?: TokenUsage;
+  /** Action proposals (create/update entity or document) for user approval */
+  proposedActions?: ProposedAction[];
 }
 /**
  * SSE event types
  */
 export declare enum StreamEventType {
-    CONTENT = "content",
-    STEP = "step",
-    PROPOSAL = "proposal",
-    ENTITIES = "entities",
-    BRANCH_DECISION = "branch_decision",
-    COMPLETE = "complete",
-    ERROR = "error"
+  CONTENT = "content",
+  STEP = "step",
+  PROPOSAL = "proposal",
+  ENTITIES = "entities",
+  BRANCH_DECISION = "branch_decision",
+  COMPLETE = "complete",
+  ERROR = "error",
 }
 /**
  * SSE event from Intelligence Service
  */
 export interface HubStreamEvent {
-    type: StreamEventType | string;
-    content?: string;
-    step?: AIStep;
-    /** Incremental proposal (one per action proposal in stream) */
-    proposal?: ProposedAction;
-    entities?: ExtractedEntity[];
-    decision?: BranchDecision;
-    data?: unknown;
-    error?: string;
+  type: StreamEventType | string;
+  content?: string;
+  step?: AIStep;
+  /** Incremental proposal (one per action proposal in stream) */
+  proposal?: ProposedAction;
+  entities?: ExtractedEntity[];
+  decision?: BranchDecision;
+  data?: unknown;
+  error?: string;
 }
 /**
  * AI step types
  */
 export declare enum AIStepType {
-    THINKING = "thinking",
-    TOOL_CALL = "tool_call",
-    TOOL_RESULT = "tool_result",
-    DECISION = "decision",
-    ERROR = "error"
+  THINKING = "thinking",
+  TOOL_CALL = "tool_call",
+  TOOL_RESULT = "tool_result",
+  DECISION = "decision",
+  ERROR = "error",
 }
 /**
  * AI step - shows what the AI is doing
@@ -139,46 +139,46 @@ export declare enum AIStepType {
  * - error: Error during processing
  */
 export interface AIStep {
-    id: string;
-    type: AIStepType | string;
-    content: string;
-    toolName?: string;
-    toolInput?: unknown;
-    toolOutput?: unknown;
-    timestamp: string;
-    duration?: number;
-    error?: string;
-    title?: string;
-    description?: string;
-    status?: "pending" | "running" | "complete" | "error";
+  id: string;
+  type: AIStepType | string;
+  content: string;
+  toolName?: string;
+  toolInput?: unknown;
+  toolOutput?: unknown;
+  timestamp: string;
+  duration?: number;
+  error?: string;
+  title?: string;
+  description?: string;
+  status?: "pending" | "running" | "complete" | "error";
 }
 /**
  * Entity extracted by AI
  */
 export interface ExtractedEntity {
-    type: string;
-    title: string;
-    description?: string;
-    data: Record<string, unknown>;
-    confidence?: number;
+  type: string;
+  title: string;
+  description?: string;
+  data: Record<string, unknown>;
+  confidence?: number;
 }
 /**
  * Branch decision from meta-agent
  */
 export interface BranchDecision {
-    shouldBranch: boolean;
-    reason: string;
-    suggestedAgentType?: AgentTypeString;
-    suggestedTitle?: string;
-    suggestedPurpose?: string;
+  shouldBranch: boolean;
+  reason: string;
+  suggestedAgentType?: AgentTypeString;
+  suggestedTitle?: string;
+  suggestedPurpose?: string;
 }
 /**
  * Token usage statistics
  */
 export interface TokenUsage {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 /**
  * Metadata stored in conversation_messages.metadata (and emitted in chat:message).
@@ -187,19 +187,19 @@ export interface TokenUsage {
  * Intelligence Service can add custom fields beyond these.
  */
 export interface MessageMetadata {
-    /** AI steps (thinking, tool_call, tool_result) for this message */
-    aiSteps?: AIStep[];
-    /** Extracted entities (legacy/optional) */
-    entities?: ExtractedEntity[];
-    /** Branch decision from meta-agent (optional) */
-    branchDecision?: BranchDecision;
-    /** Token usage (optional) */
-    usage?: TokenUsage;
-    /** In-stream action proposals (create/update entity or document) for user approval */
-    proposedActions?: ProposedAction[];
-    /** Proposal row IDs (same order as proposedActions) – use with proposals.approve/reject */
-    proposalIds?: string[];
-    [key: string]: unknown;
+  /** AI steps (thinking, tool_call, tool_result) for this message */
+  aiSteps?: AIStep[];
+  /** Extracted entities (legacy/optional) */
+  entities?: ExtractedEntity[];
+  /** Branch decision from meta-agent (optional) */
+  branchDecision?: BranchDecision;
+  /** Token usage (optional) */
+  usage?: TokenUsage;
+  /** In-stream action proposals (create/update entity or document) for user approval */
+  proposedActions?: ProposedAction[];
+  /** Proposal row IDs (same order as proposedActions) – use with proposals.approve/reject */
+  proposalIds?: string[];
+  [key: string]: unknown;
 }
 /**
  * Intelligence Service capabilities
@@ -208,19 +208,19 @@ export interface MessageMetadata {
  * Allows frontend to discover what the Intelligence Service supports
  */
 export interface IntelligenceCapabilities {
-    /** Available agent types */
-    agents: AgentCapability[];
-    /** Available tools */
-    tools?: ToolCapability[];
-    /** Supported features */
-    features: {
-        streaming: boolean;
-        branching: boolean;
-        entityExtraction: boolean;
-        customAgents: boolean;
-    };
-    /** Protocol version */
-    version: string;
+  /** Available agent types */
+  agents: AgentCapability[];
+  /** Available tools */
+  tools?: ToolCapability[];
+  /** Supported features */
+  features: {
+    streaming: boolean;
+    branching: boolean;
+    entityExtraction: boolean;
+    customAgents: boolean;
+  };
+  /** Protocol version */
+  version: string;
 }
 /**
  * Agent capability metadata
@@ -228,13 +228,13 @@ export interface IntelligenceCapabilities {
  * Describes an available agent type for UI display
  */
 export interface AgentCapability {
-    type: AgentTypeString;
-    name: string;
-    description: string;
-    icon?: string;
-    color?: string;
-    capabilities: string[];
-    examples?: string[];
+  type: AgentTypeString;
+  name: string;
+  description: string;
+  icon?: string;
+  color?: string;
+  capabilities: string[];
+  examples?: string[];
 }
 /**
  * Tool capability metadata
@@ -242,10 +242,10 @@ export interface AgentCapability {
  * Describes an available tool for UI display
  */
 export interface ToolCapability {
-    name: string;
-    description: string;
-    category: string;
-    requiresApproval: boolean;
-    icon?: string;
+  name: string;
+  description: string;
+  category: string;
+  requiresApproval: boolean;
+  icon?: string;
 }
 //# sourceMappingURL=index.d.ts.map

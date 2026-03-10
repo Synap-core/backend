@@ -13,7 +13,7 @@ import {
   createCipheriv,
   createDecipheriv,
   scrypt,
-  ScryptOptions,
+  type ScryptOptions,
 } from "crypto";
 import { promisify } from "util";
 

@@ -4,37 +4,47 @@
  * Defines reusable property definitions that can be attached to profiles.
  * Properties are the building blocks of entity metadata schemas.
  */
-import { pgTable, uuid, text, jsonb, timestamp, index, unique, } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  jsonb,
+  timestamp,
+  index,
+  unique,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 /**
  * Property Value Types
  */
 export var PropertyValueType;
 (function (PropertyValueType) {
-    PropertyValueType["STRING"] = "string";
-    PropertyValueType["NUMBER"] = "number";
-    PropertyValueType["BOOLEAN"] = "boolean";
-    PropertyValueType["DATE"] = "date";
-    PropertyValueType["ENTITY_ID"] = "entity_id";
-    PropertyValueType["ARRAY"] = "array";
-    PropertyValueType["OBJECT"] = "object";
+  PropertyValueType["STRING"] = "string";
+  PropertyValueType["NUMBER"] = "number";
+  PropertyValueType["BOOLEAN"] = "boolean";
+  PropertyValueType["DATE"] = "date";
+  PropertyValueType["ENTITY_ID"] = "entity_id";
+  PropertyValueType["ARRAY"] = "array";
+  PropertyValueType["OBJECT"] = "object";
 })(PropertyValueType || (PropertyValueType = {}));
-export const propertyDefs = pgTable("property_defs", {
+export const propertyDefs = pgTable(
+  "property_defs",
+  {
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     // Property identity (unique slug)
     slug: text("slug").notNull(),
     // Value type
     valueType: text("value_type", {
-        enum: [
-            PropertyValueType.STRING,
-            PropertyValueType.NUMBER,
-            PropertyValueType.BOOLEAN,
-            PropertyValueType.DATE,
-            PropertyValueType.ENTITY_ID,
-            PropertyValueType.ARRAY,
-            PropertyValueType.OBJECT,
-        ],
+      enum: [
+        PropertyValueType.STRING,
+        PropertyValueType.NUMBER,
+        PropertyValueType.BOOLEAN,
+        PropertyValueType.DATE,
+        PropertyValueType.ENTITY_ID,
+        PropertyValueType.ARRAY,
+        PropertyValueType.OBJECT,
+      ],
     }).notNull(),
     // Constraints (JSONB)
     // Examples:
@@ -51,15 +61,17 @@ export const propertyDefs = pgTable("property_defs", {
     uiHints: jsonb("ui_hints").default("{}").notNull(),
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
-        .defaultNow()
-        .notNull(),
-}, (table) => ({
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
     slugUnique: unique("property_defs_slug_unique_idx").on(table.slug),
     valueTypeIdx: index("property_defs_value_type_idx").on(table.valueType),
-}));
+  })
+);
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
