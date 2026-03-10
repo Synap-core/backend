@@ -31,6 +31,7 @@ import { hubRelationsRouter } from "./relations.js";
 import { sessionsRouter } from "./sessions.js";
 import { compactedStatesRouter } from "./compacted-states.js";
 import { hubWidgetDefinitionsRouter } from "./widget-definitions.js";
+import { migrationRouter } from "./migration.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -58,4 +59,5 @@ export const hubProtocolRouter = router({
   sessions: sessionsRouter,
   compactedStates: compactedStatesRouter,
   widgetDefinitions: hubWidgetDefinitionsRouter,
+  migration: migrationRouter,
 });

@@ -1,18 +1,21 @@
 /**
  * Personal Channel Utility
  *
- * Every user in a workspace has exactly one personal AI timeline channel —
- * auto-provisioned on workspace join and used as the default destination for
- * all AI interactions that don't specify an explicit channelId.
+ * Every user has exactly ONE personal AI timeline channel, pod-wide.
+ * It is NOT scoped to a workspace — it's the user's global AI inbox.
  *
- * SELECT-or-INSERT — safe to call concurrently (idempotent by intent;
- * duplicates are resolved by returning the first match).
+ * When a workspaceId is provided, it is set on the channel for context
+ * (e.g. the workspace that was active when the channel was first created).
+ * But lookup always uses userId only — the channel is pod-wide.
+ *
+ * SELECT-or-INSERT — safe to call concurrently (idempotent).
  */
 
 import {
   db,
   eq,
   and,
+  isNull,
   drizzleSql,
   channels,
   ChannelType,
@@ -22,17 +25,17 @@ import {
 import type { Channel } from "@synap/database/schema";
 
 /**
- * Get or create the user's personal AI timeline for a workspace.
- * Identified by: userId + workspaceId + channelType=ai_thread + metadata.isPersonal=true.
+ * Get or create the user's personal AI timeline (pod-wide).
+ * workspaceId is optional context — not used for lookup.
  */
 export async function ensurePersonalChannel(
   userId: string,
-  workspaceId: string
+  workspaceId?: string
 ): Promise<Channel> {
+  // Pod-wide lookup: find personal channel for this user (any workspace or none)
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.workspaceId, workspaceId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
       drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
@@ -45,7 +48,7 @@ export async function ensurePersonalChannel(
     .insert(channels)
     .values({
       userId,
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       channelType: ChannelType.AI_THREAD,
       status: ChannelStatus.ACTIVE,
       agentId: "personal",

@@ -199,6 +199,19 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
       headers["Content-Type"] = contentType;
     }
 
+    // Forward Accept header — critical for Kratos to return JSON for API flows
+    // Without this, some Kratos versions may default to browser-flow behavior
+    const accept = c.req.header("accept");
+    if (accept) {
+      headers["Accept"] = accept;
+    }
+
+    // Forward X-Session-Token if present (for API-flow token auth)
+    const sessionToken = c.req.header("x-session-token");
+    if (sessionToken) {
+      headers["X-Session-Token"] = sessionToken;
+    }
+
     // Get request body for POST/PUT/PATCH
     let body: string | undefined;
     if (["POST", "PUT", "PATCH"].includes(c.req.method)) {
@@ -214,6 +227,7 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
       method: c.req.method,
       headers,
       body,
+      redirect: "manual",
     });
 
     // Get all response headers as plain object
@@ -238,10 +252,10 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
   }
 };
 
-// Production route: /.ory/kratos/public/* (matches Caddy routing)
-// This allows the frontend middleware to always use the same path
+// Route: /.ory/kratos/public/* (matches Caddy handle_path routing)
+// Caddy strips the /.ory/kratos/public prefix before forwarding to backend,
+// so Kratos internally sees /self-service/... paths directly.
 app.all("/.ory/kratos/public/*", async (c) => {
-  // Remove /.ory/kratos/public prefix, keep the rest
   const kratosPath = c.req.path.replace("/.ory/kratos/public", "");
   return proxyKratosRequest(c, kratosPath);
 });
@@ -530,6 +544,10 @@ app.route("/webhooks", webhookRouter);
 app.route("/api/hub", hubProtocolRestApp);
 // Alias: some hub clients use /api/hub-protocol prefix
 app.route("/api/hub-protocol", hubProtocolRestApp);
+
+// Channel Gateway REST adapter (for external channel bots; X-Channel-Key auth)
+import { channelGatewayApp } from "./routers/channel-gateway.js";
+app.route("/api/channels/gateway", channelGatewayApp);
 
 // MCP Server endpoint (for external agents: ZeroClaw, OpenClaw, Claude Desktop, Cursor)
 // Auth: Hub Protocol API key via Authorization: Bearer <key>

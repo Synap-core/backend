@@ -9,7 +9,7 @@
 
 import { createLogger } from "@synap-core/core";
 import { db, webhookSubscriptions, eq } from "@synap/database";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -108,11 +108,31 @@ export async function configureLangFlow(): Promise<void> {
 }
 
 /**
+ * Auto-generate CHANNEL_GATEWAY_KEY if not set.
+ *
+ * The key is stored in process.env so both the REST handler
+ * and the channel-gateway service can read it. In production
+ * users should pre-set this via environment/docker-compose;
+ * this auto-generation covers dev/local setups.
+ */
+function ensureChannelGatewayKey(): void {
+  if (process.env.CHANNEL_GATEWAY_KEY) return;
+
+  const generated = randomBytes(32).toString("hex");
+  process.env.CHANNEL_GATEWAY_KEY = generated;
+  logger.warn(
+    "CHANNEL_GATEWAY_KEY was not set — auto-generated for this session. " +
+      "Set it in your environment for production use."
+  );
+}
+
+/**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
+  ensureChannelGatewayKey();
   await configureN8NWebhook();
   await configureLangFlow();
 

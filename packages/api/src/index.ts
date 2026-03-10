@@ -22,6 +22,8 @@ export { suggestionsRouter } from "./routers/suggestions.js";
 export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
 export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
+export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
+export { ensurePersonalChannel } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
@@ -101,6 +103,7 @@ import { relationDefsRouter } from "./routers/relation-defs.js";
 import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
+import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -337,6 +340,11 @@ registerRouter("widgetDefinitions", widgetDefinitionsRouter, {
   source: "core",
   description:
     "Dynamic widget registry — built-in + AI-generated bento widget types",
+});
+registerRouter("channelGateway", channelGatewayRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "External channel connections (Telegram, WhatsApp) management",
 });
 
 import { coreRouter } from "./root.js";

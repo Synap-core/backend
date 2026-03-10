@@ -40,6 +40,7 @@ import { agentUsersRouter } from "./routers/agent-users.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
+import { channelGatewayRouter } from "./routers/channel-gateway.js";
 
 /**
  * Core API Router
@@ -87,6 +88,7 @@ export const coreRouter = router({
   mcpServers: mcpServersRouter,
   agentConfigs: agentConfigsRouter,
   widgetDefinitions: widgetDefinitionsRouter,
+  channelGateway: channelGatewayRouter,
 });
 
 export type AppRouter = typeof coreRouter;
