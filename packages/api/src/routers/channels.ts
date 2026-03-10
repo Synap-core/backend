@@ -1218,6 +1218,7 @@ export const channelsRouter = router({
       const proposalToolNameSet = new Set(
         createdProposals.map((cp) => cp.toolName)
       );
+      // Build enriched auto-approved actions with human-readable labels
       const autoApprovedActions = effectiveAiSteps
         .filter(
           (s) =>
@@ -1225,8 +1226,63 @@ export const channelsRouter = router({
             s.toolName &&
             !proposalToolNameSet.has(s.toolName)
         )
-        .map((s) => s.toolName as string)
-        .filter((name, idx, arr) => arr.indexOf(name) === idx); // deduplicate
+        .map((s) => {
+          const step = s as Record<string, unknown>;
+          const toolName = step.toolName as string;
+          const input = (step.toolInput ?? {}) as Record<string, unknown>;
+
+          // Find corresponding tool_result step to get the created resource ID
+          const resultStep = effectiveAiSteps.find(
+            (r) =>
+              (r as Record<string, unknown>).type === "tool_result" &&
+              (r as Record<string, unknown>).toolName === toolName
+          );
+          const result = ((resultStep as Record<string, unknown>)?.result ??
+            {}) as Record<string, unknown>;
+
+          // Build human-readable label from tool args + result
+          let label = toolName.replace(/_/g, " ");
+          const title =
+            (input.title as string) ??
+            (input.name as string) ??
+            (input.displayName as string);
+          const profileSlug =
+            (input.profileSlug as string) ??
+            (input.type as string) ??
+            (input.slug as string);
+
+          if (toolName === "create_entity" && title) {
+            label = `Created ${profileSlug ?? "entity"}: ${title}`;
+          } else if (toolName === "create_profile" && title) {
+            label = `Created type: ${title}`;
+          } else if (toolName === "create_relation") {
+            label = "Linked entities";
+          } else if (toolName === "create_view" && title) {
+            label = `Created view: ${title}`;
+          } else if (toolName === "create_document" && title) {
+            label = `Created doc: ${title}`;
+          } else if (toolName === "update_entity") {
+            label = `Updated entity`;
+          } else if (toolName === "create_property_def") {
+            label = `Added field: ${(input.slug as string) ?? ""}`;
+          } else if (toolName === "remember_fact") {
+            label = "Saved to memory";
+          }
+
+          return {
+            toolName,
+            label,
+            profileSlug: profileSlug ?? undefined,
+            entityId: (result.id as string) ?? undefined,
+          };
+        })
+        // Deduplicate by toolName+label
+        .filter(
+          (a, idx, arr) =>
+            arr.findIndex(
+              (b) => b.toolName === a.toolName && b.label === a.label
+            ) === idx
+        );
 
       const messageMetadata = {
         aiSteps: effectiveAiSteps,

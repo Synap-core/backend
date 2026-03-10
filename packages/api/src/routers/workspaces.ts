@@ -1303,6 +1303,12 @@ export const workspacesRouter = router({
           .enum(["personal", "agent", "project", "operational"])
           .optional(),
         linkedAgentId: z.string().optional(),
+        /**
+         * Optional: populate an existing workspace instead of creating a new one.
+         * Used by the chat-first onboarding flow where a minimal workspace is
+         * created first, then the AI proposes a definition to populate it.
+         */
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1398,7 +1404,10 @@ export const workspacesRouter = router({
             "createFromDefinition: returning existing workspace (idempotent)"
           );
           return {
-            status: provStatus === "active" ? ("created" as const) : ("pending" as const),
+            status:
+              provStatus === "active"
+                ? ("created" as const)
+                : ("pending" as const),
             workspaceId: ws.id,
           };
         }
@@ -1417,6 +1426,17 @@ export const workspacesRouter = router({
           createdBy: "user",
           workspaceType: input.workspaceType,
           linkedAgentId: input.linkedAgentId,
+          // When workspaceId is provided, populate the existing workspace
+          // instead of creating a new one (chat-first onboarding flow).
+          // "workspace" is in completedSteps to skip the CREATE step.
+          ...(input.workspaceId
+            ? {
+                resumeFrom: {
+                  workspaceId: input.workspaceId,
+                  completedSteps: ["workspace"],
+                },
+              }
+            : {}),
           onProgress: (step, pct, label) => {
             emitChatEvent({
               event: "workspace:creation_progress",
@@ -1431,7 +1451,12 @@ export const workspacesRouter = router({
         const stepMatch = message.match(/at step '([^']+)'/);
         const failedStep = stepMatch?.[1];
         logger.error(
-          { err, userId: ctx.userId, packageSlug: input.packageSlug, failedStep },
+          {
+            err,
+            userId: ctx.userId,
+            packageSlug: input.packageSlug,
+            failedStep,
+          },
           "createFromDefinition failed"
         );
         // Emit error progress event so the frontend loading state can show

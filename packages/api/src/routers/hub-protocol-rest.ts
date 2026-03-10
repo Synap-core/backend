@@ -1657,6 +1657,9 @@ app.post("/profiles", async (c) => {
     displayName: string;
     description?: string;
     defaultValues?: Record<string, unknown>;
+    parentProfileId?: string;
+    uiHints?: Record<string, unknown>;
+    reasoning?: string;
     agentUserId?: string;
     sourceMessageId?: string;
   };
@@ -1677,6 +1680,9 @@ app.post("/profiles", async (c) => {
       displayName: body.displayName,
       description: body.description,
       defaultValues: body.defaultValues,
+      parentProfileId: body.parentProfileId,
+      uiHints: body.uiHints,
+      reasoning: body.reasoning,
       agentUserId: body.agentUserId,
     });
     return c.json(result);

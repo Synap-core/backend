@@ -58,6 +58,9 @@ export const hubProfilesRouter = router({
         displayName: z.string().min(1).max(200),
         description: z.string().optional(),
         defaultValues: z.record(z.string(), z.unknown()).optional(),
+        parentProfileId: z.string().uuid().optional(),
+        uiHints: z.record(z.string(), z.unknown()).optional(),
+        reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
       })
     )
@@ -74,6 +77,9 @@ export const hubProfilesRouter = router({
         slug: input.slug,
         displayName: input.displayName,
         defaultValues: input.defaultValues,
+        parentProfileId: input.parentProfileId,
+        uiHints: input.uiHints,
+        reasoning: input.reasoning,
         scope: "workspace",
         source: "intelligence",
         agentUserId: input.agentUserId ?? ctx.userId ?? undefined,

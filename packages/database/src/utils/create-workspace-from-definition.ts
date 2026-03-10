@@ -523,6 +523,22 @@ export async function createWorkspaceFromDefinition(
       userId
     );
     completedSteps.push("workspace");
+  } else if (isResume) {
+    // When resuming (populating an existing workspace), update the workspace
+    // name and settings from the definition so the AI-proposed name is applied.
+    const resolvedName = workspaceName ?? definition.workspaceName ?? undefined;
+    if (resolvedName || Object.keys(settings).length > 0) {
+      await workspaceRepo.mergeSettings(workspaceId, settings, userId);
+      if (resolvedName) {
+        // Update workspace name via direct DB update
+        const { workspaces } = await import("../schema/workspaces.js");
+        const { eq } = await import("drizzle-orm");
+        await dbConn
+          .update(workspaces)
+          .set({ name: resolvedName })
+          .where(eq(workspaces.id, workspaceId));
+      }
+    }
   }
   onProgress?.(
     "workspace",
