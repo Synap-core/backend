@@ -15,7 +15,6 @@ import {
   db,
   eq,
   and,
-  isNull,
   drizzleSql,
   channels,
   ChannelType,

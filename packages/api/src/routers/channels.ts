@@ -1227,18 +1227,17 @@ export const channelsRouter = router({
             !proposalToolNameSet.has(s.toolName)
         )
         .map((s) => {
-          const step = s as Record<string, unknown>;
-          const toolName = step.toolName as string;
-          const input = (step.toolInput ?? {}) as Record<string, unknown>;
+          const toolName = s.toolName!;
+          const input = (s.toolInput ?? {}) as Record<string, unknown>;
 
           // Find corresponding tool_result step to get the created resource ID
           const resultStep = effectiveAiSteps.find(
-            (r) =>
-              (r as Record<string, unknown>).type === "tool_result" &&
-              (r as Record<string, unknown>).toolName === toolName
+            (r) => r.type === "tool_result" && r.toolName === toolName
           );
-          const result = ((resultStep as Record<string, unknown>)?.result ??
-            {}) as Record<string, unknown>;
+          const result = (resultStep?.toolOutput ?? {}) as Record<
+            string,
+            unknown
+          >;
 
           // Build human-readable label from tool args + result
           let label = toolName.replace(/_/g, " ");
