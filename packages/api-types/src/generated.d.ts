@@ -629,20 +629,162 @@ declare enum PropertyValueType {
 	OBJECT = "object",
 	SECRET = "secret"
 }
-/**
- * Inlined PropertyDef — matches Drizzle $inferSelect for the property_defs table.
- * Inlined to avoid requiring drizzle-orm as a dependency in frontend consumers.
- */
-export interface PropertyDef {
-	id: string;
-	slug: string;
-	profileId: string | null;
-	valueType: PropertyValueType;
-	constraints: unknown;
-	uiHints: unknown;
-	createdAt: Date;
-	updatedAt: Date;
-}
+declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "property_defs";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		slug: import("drizzle-orm/pg-core").PgColumn<{
+			name: "slug";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		profileId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "profile_id";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		valueType: import("drizzle-orm/pg-core").PgColumn<{
+			name: "value_type";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgText";
+			data: PropertyValueType;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				PropertyValueType.STRING,
+				PropertyValueType.NUMBER,
+				PropertyValueType.BOOLEAN,
+				PropertyValueType.DATE,
+				PropertyValueType.ENTITY_ID,
+				PropertyValueType.ARRAY,
+				PropertyValueType.OBJECT,
+				PropertyValueType.SECRET
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		constraints: import("drizzle-orm/pg-core").PgColumn<{
+			name: "constraints";
+			tableName: "property_defs";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		uiHints: import("drizzle-orm/pg-core").PgColumn<{
+			name: "ui_hints";
+			tableName: "property_defs";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "property_defs";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "updated_at";
+			tableName: "property_defs";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
+export type PropertyDef = typeof propertyDefs.$inferSelect;
 declare enum ProfileScope {
 	SYSTEM = "system",// Available to all users (pod-wide)
 	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
