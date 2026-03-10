@@ -104,6 +104,7 @@ import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
+import { automationsRouter } from "./routers/automations.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -345,6 +346,11 @@ registerRouter("channelGateway", channelGatewayRouter, {
   version: "1.0.0",
   source: "core",
   description: "External channel connections (Telegram, WhatsApp) management",
+});
+registerRouter("automations", automationsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Workflow automation CRUD and run history",
 });
 
 import { coreRouter } from "./root.js";

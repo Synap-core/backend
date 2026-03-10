@@ -64,3 +64,6 @@ export * from "./vault/index.js";
 
 // Unified event naming system (SubjectType, EventAction, EventPhase, EventName)
 export * from "./events/unified.js";
+
+// Automations (workflow DAGs)
+export * from "./automations/index.js";

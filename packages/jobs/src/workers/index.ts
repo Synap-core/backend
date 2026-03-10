@@ -33,6 +33,9 @@ import {
   A2AI_TRIGGER_QUEUE,
 } from "./a2ai-response-trigger.js";
 import { handleIntelligenceHealthCheck } from "./intelligence-health-check.js";
+import { handleAutomationTriggerMatch } from "./automation-trigger-matcher.js";
+import { handleAutomationExecute } from "./automation-executor.js";
+import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -61,6 +64,9 @@ const ALL_QUEUES = [
   "side-effects",
   "search-reindex",
   A2AI_TRIGGER_QUEUE,
+  "automation-trigger-match",
+  "automation-execute",
+  "automation-cron-scheduler",
 ];
 
 /**
@@ -187,6 +193,24 @@ export async function registerAllWorkers(): Promise<void> {
     handleIntelligenceHealthCheck()
   );
   logger.info("Registered worker: intelligence-health-check");
+
+  // Automation trigger matching (event → automation run)
+  await boss.work("automation-trigger-match", async ([job]: any[]) =>
+    handleAutomationTriggerMatch(job)
+  );
+  logger.info("Registered worker: automation-trigger-match");
+
+  // Automation execution (walk DAG, execute steps)
+  await boss.work("automation-execute", async ([job]: any[]) =>
+    handleAutomationExecute(job)
+  );
+  logger.info("Registered worker: automation-execute");
+
+  // Automation cron scheduler (polls due cron automations every minute)
+  await boss.work("automation-cron-scheduler", async () =>
+    handleAutomationCronScheduler()
+  );
+  logger.info("Registered worker: automation-cron-scheduler");
 
   logger.info("All workers registered");
 }

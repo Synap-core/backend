@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -78,6 +78,10 @@
     "./vault": {
       "types": "./dist/vault/index.d.ts",
       "import": "./dist/vault/index.js"
+    },
+    "./automations": {
+      "types": "./dist/automations/index.d.ts",
+      "import": "./dist/automations/index.js"
     }
   },
   "scripts": {

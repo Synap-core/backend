@@ -74,6 +74,9 @@ export * from "./skills.js";
 // NEW: Background Tasks (proactive AI automation)
 export * from "./background-tasks.js";
 
+// Automations (trigger → step chain workflow engine)
+export * from "./automations.js";
+
 // NEW: Admin Invitations (for control plane flow)
 export * from "./admin-invitations.js";
 

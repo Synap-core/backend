@@ -43,5 +43,9 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("intelligence-health-check", "*/2 * * * *", {});
   logger.info("Registered cron: intelligence-health-check (every 2min)");
 
+  // Automation cron scheduler (every 1 minute — checks due cron-triggered automations)
+  await boss.schedule("automation-cron-scheduler", "* * * * *", {});
+  logger.info("Registered cron: automation-cron-scheduler (every 1min)");
+
   logger.info("All cron schedules registered");
 }
