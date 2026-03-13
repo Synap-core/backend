@@ -460,6 +460,176 @@ app.post("/api/handshake", async (c) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Telegram Mini App Auth Endpoint
+// Accepts raw Telegram initData, validates HMAC using this pod's
+// TELEGRAM_BOT_TOKEN, looks up channel_connections, creates Kratos session.
+//
+// No shared secret needed — the pod validates everything itself.
+// The Mini App (Vercel) is a zero-secret proxy.
+//
+// Auth: Telegram initData HMAC-SHA256 (validated server-side using bot token).
+//
+// Flow:
+//   Mini App → POST ${podUrl}/api/auth/telegram { initData } →
+//   Pod validates HMAC → channel_connections lookup → Kratos session
+// ---------------------------------------------------------------------------
+app.post("/api/auth/telegram", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { initData } = body as { initData?: string };
+
+    if (!initData || typeof initData !== "string") {
+      return c.json({ error: "initData is required" }, 400);
+    }
+
+    // 0. Validate Telegram initData HMAC
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      apiLogger.error(
+        "TELEGRAM_BOT_TOKEN not configured — cannot validate Mini App auth"
+      );
+      return c.json({ error: "Telegram not configured on this pod" }, 503);
+    }
+
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    if (!hash) {
+      return c.json({ error: "Missing hash in initData" }, 401);
+    }
+
+    // Remove hash from params, sort, build check string
+    params.delete("hash");
+    const entries = Array.from(params.entries()).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
+    const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join("\n");
+
+    // HMAC-SHA256 validation
+    const secretKey = crypto
+      .createHmac("sha256", "WebAppData")
+      .update(botToken)
+      .digest();
+    const computedHash = crypto
+      .createHmac("sha256", secretKey)
+      .update(dataCheckString)
+      .digest("hex");
+
+    if (computedHash !== hash) {
+      return c.json({ error: "Invalid initData signature" }, 401);
+    }
+
+    // Check auth_date freshness (24 hours)
+    const authDate = parseInt(params.get("auth_date") ?? "0", 10);
+    const now = Math.floor(Date.now() / 1000);
+    if (now - authDate > 86400) {
+      return c.json({ error: "initData expired" }, 401);
+    }
+
+    // Extract Telegram user
+    const userRaw = params.get("user");
+    if (!userRaw) {
+      return c.json({ error: "Missing user in initData" }, 401);
+    }
+
+    let telegramUser: { id: number; username?: string; first_name?: string };
+    try {
+      telegramUser = JSON.parse(userRaw);
+    } catch {
+      return c.json({ error: "Invalid user JSON in initData" }, 401);
+    }
+
+    const telegramUserId = String(telegramUser.id);
+
+    // 1. Look up channel connection
+    const { db, eq, and } = await import("@synap/database");
+    const { channelConnections } = await import("@synap/database/schema");
+    const { ensurePersonalChannel } = await import("@synap/api");
+
+    const connection = await db.query.channelConnections.findFirst({
+      where: and(
+        eq(channelConnections.channel, "telegram"),
+        eq(channelConnections.channelUserId, telegramUserId)
+      ),
+    });
+
+    if (!connection) {
+      return c.json(
+        { error: "not_linked", message: "Telegram account not linked" },
+        404
+      );
+    }
+
+    const { userId, workspaceId } = connection;
+
+    // 2. Find Kratos identity for this user
+    const kratosAdminUrl =
+      process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+
+    // The userId in channel_connections IS the Kratos identity ID
+    // (set during the /link flow from the authenticated Synap user)
+    const identityId = userId;
+
+    // 3. Create a Kratos session for the identity
+    const sessionResp = await fetch(
+      `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }
+    );
+
+    if (!sessionResp.ok) {
+      const errBody = await sessionResp.text();
+      apiLogger.error(
+        { status: sessionResp.status, body: errBody, userId },
+        "Failed to create Kratos session for Telegram user"
+      );
+      return c.json({ error: "Failed to create session" }, 500);
+    }
+
+    const sessionData = (await sessionResp.json()) as {
+      session?: { id: string };
+      session_token?: string;
+    };
+
+    const sessionToken = sessionData.session_token;
+    if (!sessionToken) {
+      return c.json({ error: "No session token returned" }, 500);
+    }
+
+    // 4. Ensure the user has a dedicated Telegram channel
+    let telegramChannelId = connection.defaultChannelId;
+    if (!telegramChannelId) {
+      const personalChannel = await ensurePersonalChannel(
+        userId,
+        workspaceId ?? undefined
+      );
+      telegramChannelId = personalChannel.id;
+    }
+
+    apiLogger.info(
+      { telegramUserId, userId, workspaceId },
+      "Telegram Mini App auth successful"
+    );
+
+    return c.json({
+      token: sessionToken,
+      userId,
+      workspaceId,
+      telegramChannelId,
+      podUrl:
+        process.env.PUBLIC_URL ||
+        process.env.BACKEND_URL ||
+        "http://localhost:3000",
+    });
+  } catch (error) {
+    apiLogger.error({ err: error }, "Telegram auth endpoint error");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 apiLogger.info(
   "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
 );

@@ -11,9 +11,20 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
+import { randomUUID, createHash, createHmac } from "crypto";
 import { createLogger } from "@synap-core/core";
-import { db, eq, and } from "@synap/database";
-import { channelConnections, channelLinkTokens } from "@synap/database/schema";
+import { db, eq, and, drizzleSql } from "@synap/database";
+import {
+  channelConnections,
+  channelLinkTokens,
+  messages,
+  sessions,
+} from "@synap/database/schema";
+import {
+  MessageRole,
+  MessageAuthorType,
+  SessionStatus,
+} from "@synap/database/schema";
 import { resolveIntelligenceService, ensurePersonalChannel } from "@synap/api";
 
 const logger = createLogger({ module: "channel-gateway-rest" });
@@ -239,7 +250,72 @@ channelGatewayApp.post("/inbound", async (c) => {
     );
   }
 
-  // 4. Call IS (non-streaming)
+  // 4. Get or create active session for this channel (session-scoped memory)
+  let activeSessionId: string | undefined;
+  try {
+    const existingSession = await db.query.sessions.findFirst({
+      where: and(
+        eq(sessions.channelId, threadId),
+        eq(sessions.status, SessionStatus.ACTIVE)
+      ),
+      columns: { id: true },
+    });
+
+    if (existingSession) {
+      activeSessionId = existingSession.id;
+    } else {
+      const newSessionId = randomUUID();
+      await db
+        .insert(sessions)
+        .values({
+          id: newSessionId,
+          channelId: threadId,
+          status: SessionStatus.ACTIVE,
+        })
+        .onConflictDoNothing();
+      // Re-query to handle race
+      const canonical = await db.query.sessions.findFirst({
+        where: and(
+          eq(sessions.channelId, threadId),
+          eq(sessions.status, SessionStatus.ACTIVE)
+        ),
+        columns: { id: true },
+      });
+      activeSessionId = canonical?.id ?? newSessionId;
+    }
+  } catch (err) {
+    logger.warn({ err, threadId }, "Session creation failed (non-blocking)");
+  }
+
+  // 5. Save the user's inbound message to the DB
+  const userMessageId = randomUUID();
+  const userMessageHash = createHash("sha256")
+    .update(`${userMessageId}:${message}`)
+    .digest("hex");
+
+  try {
+    await db.insert(messages).values({
+      id: userMessageId,
+      channelId: threadId,
+      role: MessageRole.USER,
+      authorType: MessageAuthorType.EXTERNAL,
+      externalSource: channel,
+      content: message,
+      userId,
+      previousHash: "",
+      hash: userMessageHash,
+      ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+      metadata: {
+        externalChannel: channel,
+        externalUserId: channelUserId,
+      } as any,
+    });
+  } catch (err) {
+    logger.error({ err, threadId }, "Failed to save inbound message");
+    // Don't fail the request — still try to get AI response
+  }
+
+  // 6. Call IS (non-streaming)
   let aiReply: string;
   try {
     const hubResponse = await resolvedService.client.sendMessage({
@@ -264,6 +340,39 @@ channelGatewayApp.post("/inbound", async (c) => {
       },
       502
     );
+  }
+
+  // 7. Save the AI response to the DB
+  try {
+    const assistantMessageId = randomUUID();
+    const assistantHash = createHash("sha256")
+      .update(`${assistantMessageId}:${aiReply}`)
+      .digest("hex");
+
+    await db.insert(messages).values({
+      id: assistantMessageId,
+      channelId: threadId,
+      role: MessageRole.ASSISTANT,
+      authorType: MessageAuthorType.AI_AGENT,
+      content: aiReply,
+      userId,
+      previousHash: userMessageHash,
+      hash: assistantHash,
+      ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+    });
+  } catch (err) {
+    logger.error({ err, threadId }, "Failed to save AI response message");
+  }
+
+  // 8. Update session activity (fire-and-forget)
+  if (activeSessionId) {
+    db.update(sessions)
+      .set({
+        lastActivityAt: new Date(),
+        messageCount: drizzleSql`COALESCE(message_count, 0) + 2`,
+      })
+      .where(eq(sessions.id, activeSessionId))
+      .catch(() => {});
   }
 
   // Cache for deduplication
