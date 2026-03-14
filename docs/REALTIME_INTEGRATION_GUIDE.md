@@ -47,10 +47,10 @@ npm install tldraw @tldraw/yjs
 
 ## 2. Connection URLs
 
-| Environment | WebSocket URL | tRPC URL |
-|-------------|---------------|----------|
-| Local dev | `ws://localhost:4001` | `http://localhost:4000` |
-| Production | `wss://backend.synap.live` | `https://backend.synap.live` |
+| Environment | WebSocket URL              | tRPC URL                     |
+| ----------- | -------------------------- | ---------------------------- |
+| Local dev   | `ws://localhost:4001`      | `http://localhost:4000`      |
+| Production  | `wss://backend.synap.live` | `https://backend.synap.live` |
 
 In production, Caddy routes `/socket.io/*` to the realtime service automatically. The frontend connects to the same domain for both WebSocket and HTTP.
 
@@ -71,9 +71,9 @@ const presenceSocket = io(`${REALTIME_URL}/presence`, {
   auth: {
     userId: "user-uuid",
     userName: "John Doe",
-    viewId: "document-or-view-uuid",   // specific view
-    viewType: "document",              // "document" | "whiteboard" | "ai-chat"
-    workspaceId: "workspace-uuid",     // for workspace-level events
+    viewId: "document-or-view-uuid", // specific view
+    viewType: "document", // "document" | "whiteboard" | "ai-chat"
+    workspaceId: "workspace-uuid", // for workspace-level events
   },
   transports: ["websocket", "polling"],
   withCredentials: true,
@@ -82,13 +82,13 @@ const presenceSocket = io(`${REALTIME_URL}/presence`, {
 
 ### Required auth fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `userId` | Yes | User's UUID. Connection rejected without it. |
-| `userName` | No | Display name. Defaults to "Anonymous". |
-| `viewId` | One of viewId/workspaceId | ID of the document/view being viewed. |
-| `viewType` | No | Type hint: `"document"`, `"whiteboard"`, `"ai-chat"`, etc. |
-| `workspaceId` | One of viewId/workspaceId | For workspace-level presence. |
+| Field         | Required                  | Description                                                |
+| ------------- | ------------------------- | ---------------------------------------------------------- |
+| `userId`      | Yes                       | User's UUID. Connection rejected without it.               |
+| `userName`    | No                        | Display name. Defaults to "Anonymous".                     |
+| `viewId`      | One of viewId/workspaceId | ID of the document/view being viewed.                      |
+| `viewType`    | No                        | Type hint: `"document"`, `"whiteboard"`, `"ai-chat"`, etc. |
+| `workspaceId` | One of viewId/workspaceId | For workspace-level presence.                              |
 
 ### Listen for events
 
@@ -116,8 +116,8 @@ presenceSocket.on("presence:update", (users) => {
 presenceSocket.emit("cursor:move", { x: 100, y: 200 });
 
 // Typing indicator — simple boolean, NOT "typing:start"/"typing:stop"
-presenceSocket.emit("typing", true);   // user is typing
-presenceSocket.emit("typing", false);  // user stopped typing
+presenceSocket.emit("typing", true); // user is typing
+presenceSocket.emit("typing", false); // user stopped typing
 
 // Heartbeat (keeps session alive)
 presenceSocket.emit("heartbeat");
@@ -171,12 +171,12 @@ const ydoc = new Y.Doc();
 // 2. Connect to Yjs server
 const provider = new SocketIOProvider(
   REALTIME_URL,
-  documentId,         // Room name = document UUID
+  documentId, // Room name = document UUID
   ydoc,
   {
     autoConnect: true,
-    resyncInterval: 5000,  // Re-sync every 5s for consistency
-    disableBc: false,      // Enable broadcast channel for same-tab sync
+    resyncInterval: 5000, // Re-sync every 5s for consistency
+    disableBc: false, // Enable broadcast channel for same-tab sync
   }
 );
 
@@ -217,7 +217,7 @@ const editor = new Editor({
       provider: provider,
       user: {
         name: "John Doe",
-        color: "#f59e0b",  // Use the color from presence:init
+        color: "#f59e0b", // Use the color from presence:init
       },
     }),
   ],
@@ -230,7 +230,7 @@ const editor = new Editor({
 // React example
 useEffect(() => {
   return () => {
-    provider.destroy();  // Disconnects socket, clears Yjs state
+    provider.destroy(); // Disconnects socket, clears Yjs state
     ydoc.destroy();
     editor?.destroy();
   };
@@ -241,11 +241,11 @@ useEffect(() => {
 
 The server handles all persistence — no frontend action needed for saving content:
 
-| Trigger | What happens | Timing |
-|---------|-------------|--------|
-| Yjs update | Debounced write to `document_versions` table | Every 10 seconds |
-| Last user disconnects | Version snapshot created in `document_versions` | On room close |
-| Auto-save cron | Snapshot for active sessions | Every 30 minutes |
+| Trigger               | What happens                                    | Timing           |
+| --------------------- | ----------------------------------------------- | ---------------- |
+| Yjs update            | Debounced write to `document_versions` table    | Every 10 seconds |
+| Last user disconnects | Version snapshot created in `document_versions` | On room close    |
+| Auto-save cron        | Snapshot for active sessions                    | Every 30 minutes |
 
 ---
 
@@ -276,7 +276,7 @@ const ydoc = new Y.Doc();
 // 2. Connect to Yjs server
 const provider = new SocketIOProvider(
   REALTIME_URL,
-  `whiteboard-${documentId}`,   // Must match server's parseRoomName()
+  `whiteboard-${documentId}`, // Must match server's parseRoomName()
   ydoc,
   {
     autoConnect: true,
@@ -310,7 +310,9 @@ function WhiteboardEditor({ documentId }: { documentId: string }) {
 import { createTLStore, defaultShapeUtils } from "tldraw";
 
 function useTldrawYjsStore(ydoc: Y.Doc, documentId: string) {
-  const [store] = useState(() => createTLStore({ shapeUtils: defaultShapeUtils }));
+  const [store] = useState(() =>
+    createTLStore({ shapeUtils: defaultShapeUtils })
+  );
   const yMap = ydoc.getMap(`tl_map_${documentId}`);
 
   useEffect(() => {
@@ -327,19 +329,22 @@ function useTldrawYjsStore(ydoc: Y.Doc, documentId: string) {
     yMap.observe(observer);
 
     // Sync Tldraw → Yjs
-    const unsub = store.listen((entry) => {
-      ydoc.transact(() => {
-        for (const record of Object.values(entry.changes.added)) {
-          yMap.set(record.id, record);
-        }
-        for (const [_, to] of Object.values(entry.changes.updated)) {
-          yMap.set(to.id, to);
-        }
-        for (const record of Object.values(entry.changes.removed)) {
-          yMap.delete(record.id);
-        }
-      });
-    }, { source: "user", scope: "document" });
+    const unsub = store.listen(
+      (entry) => {
+        ydoc.transact(() => {
+          for (const record of Object.values(entry.changes.added)) {
+            yMap.set(record.id, record);
+          }
+          for (const [_, to] of Object.values(entry.changes.updated)) {
+            yMap.set(to.id, to);
+          }
+          for (const record of Object.values(entry.changes.removed)) {
+            yMap.delete(record.id);
+          }
+        });
+      },
+      { source: "user", scope: "document" }
+    );
 
     // Load initial state from Yjs
     if (yMap.size > 0) observer();
@@ -380,11 +385,11 @@ function handleSave(store: TLStore) {
 
 ### Server-side persistence (automatic for Yjs path)
 
-| Trigger | What happens | Storage |
-|---------|-------------|---------|
-| Yjs update | Debounced write to MinIO | Every 10 seconds |
-| Last user disconnects | Final flush to MinIO | On room close |
-| `views.save` tRPC | Write to MinIO + `document_versions` row | On explicit save |
+| Trigger               | What happens                             | Storage          |
+| --------------------- | ---------------------------------------- | ---------------- |
+| Yjs update            | Debounced write to MinIO                 | Every 10 seconds |
+| Last user disconnects | Final flush to MinIO                     | On room close    |
+| `views.save` tRPC     | Write to MinIO + `document_versions` row | On explicit save |
 
 Whiteboards do NOT create versioned snapshots automatically (no `document_versions` rows on disconnect). The MinIO file is always the latest state. Use `whiteboards.saveVersion` tRPC for explicit version history.
 
@@ -440,7 +445,7 @@ Note: Even if the frontend doesn't call `endSession`, the Yjs server marks sessi
 // Explicit save (Cmd+S) — creates immutable version snapshot
 await trpc.documents.saveVersion.mutate({
   documentId,
-  message: "Manual save",  // optional
+  message: "Manual save", // optional
 });
 
 // List versions
@@ -461,7 +466,7 @@ await trpc.documents.restoreVersion.mutate({
 ```typescript
 // Explicit save — snapshots current MinIO state to document_versions
 await trpc.whiteboards.saveVersion.mutate({
-  viewId,            // Note: viewId, not documentId
+  viewId, // Note: viewId, not documentId
   message: "Before major change",
 });
 
@@ -498,10 +503,18 @@ presenceSocket.on("document.restored", (data) => {
 });
 
 // Chat events (AI responses, entity extraction, etc.)
-presenceSocket.on("chat_response", (data) => { /* ... */ });
-presenceSocket.on("ai_step", (data) => { /* ... */ });
-presenceSocket.on("entity_created", (data) => { /* ... */ });
-presenceSocket.on("branch_decision", (data) => { /* ... */ });
+presenceSocket.on("chat_response", (data) => {
+  /* ... */
+});
+presenceSocket.on("ai_step", (data) => {
+  /* ... */
+});
+presenceSocket.on("entity_created", (data) => {
+  /* ... */
+});
+presenceSocket.on("branch_decision", (data) => {
+  /* ... */
+});
 ```
 
 ---
@@ -707,12 +720,12 @@ export function WhiteboardEditor({ viewId, documentId, userId }: Props) {
 ```typescript
 // For whiteboards: fetch the view, which contains documentId
 const { data } = trpc.views.get.useQuery({ id: viewId });
-const documentId = data?.view.documentId;    // UUID for Yjs room
-const yjsRoomId = data?.view.yjsRoomId;     // "whiteboard-{documentId}" (or compute it)
-const initialContent = data?.content;         // JSON from MinIO (fallback if Yjs not yet synced)
+const documentId = data?.view.documentId; // UUID for Yjs room
+const yjsRoomId = data?.view.yjsRoomId; // "whiteboard-{documentId}" (or compute it)
+const initialContent = data?.content; // JSON from MinIO (fallback if Yjs not yet synced)
 
 // For documents: the documentId IS the room name
-const documentId = routeParams.documentId;   // From URL
+const documentId = routeParams.documentId; // From URL
 ```
 
 ---
@@ -746,18 +759,18 @@ Old behavior (now fixed). `currentVersion` used to increment on every metadata u
 
 ## Quick Reference
 
-| What | Room Name | Map/Fragment | Storage |
-|------|-----------|-------------|---------|
-| Document (TipTap) | `{documentId}` | Default Yjs fragment | `document_versions` table |
-| Whiteboard (Tldraw) | `whiteboard-{documentId}` | `tl_map_{documentId}` | MinIO (`storageKey`) |
+| What                | Room Name                 | Map/Fragment          | Storage                   |
+| ------------------- | ------------------------- | --------------------- | ------------------------- |
+| Document (TipTap)   | `{documentId}`            | Default Yjs fragment  | `document_versions` table |
+| Whiteboard (Tldraw) | `whiteboard-{documentId}` | `tl_map_{documentId}` | MinIO (`storageKey`)      |
 
-| Action | Endpoint | Type |
-|--------|----------|------|
-| Start editing | `documents.startSession` | tRPC mutation |
-| Stop editing | `documents.endSession` | tRPC mutation |
-| Manual save (doc) | `documents.saveVersion` | tRPC mutation |
-| Manual save (whiteboard) | `whiteboards.saveVersion` | tRPC mutation |
-| Load whiteboard | `views.get` | tRPC query |
-| Save whiteboard (REST) | `views.save` | tRPC mutation |
-| List versions | `documents.listVersions` / `whiteboards.listVersions` | tRPC query |
-| Restore version | `documents.restoreVersion` / `whiteboards.restoreVersion` | tRPC mutation |
+| Action                   | Endpoint                                                  | Type          |
+| ------------------------ | --------------------------------------------------------- | ------------- |
+| Start editing            | `documents.startSession`                                  | tRPC mutation |
+| Stop editing             | `documents.endSession`                                    | tRPC mutation |
+| Manual save (doc)        | `documents.saveVersion`                                   | tRPC mutation |
+| Manual save (whiteboard) | `whiteboards.saveVersion`                                 | tRPC mutation |
+| Load whiteboard          | `views.get`                                               | tRPC query    |
+| Save whiteboard (REST)   | `views.save`                                              | tRPC mutation |
+| List versions            | `documents.listVersions` / `whiteboards.listVersions`     | tRPC query    |
+| Restore version          | `documents.restoreVersion` / `whiteboards.restoreVersion` | tRPC mutation |

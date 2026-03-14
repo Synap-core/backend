@@ -29,14 +29,14 @@ Synap backend is a pnpm monorepo managed with Turborepo. The packages build in a
 @synap-core/core  -->  @synap/database  -->  @synap-core/types  -->  @synap/jobs  -->  @synap/api
 ```
 
-| Package | Purpose |
-|---------|---------|
-| `@synap-core/core` | Shared utilities: logging, config, constants |
-| `@synap/database` | Drizzle ORM schema, migrations, repositories, pgvector |
+| Package             | Purpose                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------- |
+| `@synap-core/core`  | Shared utilities: logging, config, constants                                          |
+| `@synap/database`   | Drizzle ORM schema, migrations, repositories, pgvector                                |
 | `@synap-core/types` | Shared TypeScript types, event definitions (uses relative paths into database schema) |
-| `@synap/jobs` | pg-boss job definitions, background workers, side-effect emitter |
-| `@synap/api` | tRPC routers, REST routes, permission checks, audit logging |
-| `apps/api` | Entrypoint that boots the API server on port 4000 |
+| `@synap/jobs`       | pg-boss job definitions, background workers, side-effect emitter                      |
+| `@synap/api`        | tRPC routers, REST routes, permission checks, audit logging                           |
+| `apps/api`          | Entrypoint that boots the API server on port 4000                                     |
 
 Additional packages: `packages/realtime` (Yjs WebSocket server), `packages/hub-protocol` (REST bridge to Intelligence Hub), `packages/search` (Typesense integration), `packages/storage` (MinIO abstraction), `packages/auth` (Ory Kratos/Hydra integration), `packages/ai-embeddings` (embedding generation).
 
@@ -46,17 +46,17 @@ Additional packages: `packages/realtime` (Yjs WebSocket server), `packages/hub-p
 
 All infrastructure is defined in `deploy/docker-compose.yml`. Services:
 
-| Service | Technology | Purpose |
-|---------|-----------|---------|
-| `backend` | Node.js (port 4000) | API server (tRPC + REST) |
-| `realtime` | Node.js (port 4001) | Yjs WebSocket server for document collaboration |
-| `postgres` | PostgreSQL + pgvector | Primary database |
-| `minio` | MinIO | Object storage for document content, files, snapshots |
-| `typesense` | Typesense | Full-text search engine |
-| `kratos` | Ory Kratos | Identity and authentication |
-| `hydra` | Ory Hydra | OAuth2/OIDC provider |
-| `caddy` | Caddy | Reverse proxy / TLS termination |
-| `backend-migrate` | Node.js (one-shot) | Runs Drizzle migrations on startup |
+| Service           | Technology            | Purpose                                               |
+| ----------------- | --------------------- | ----------------------------------------------------- |
+| `backend`         | Node.js (port 4000)   | API server (tRPC + REST)                              |
+| `realtime`        | Node.js (port 4001)   | Yjs WebSocket server for document collaboration       |
+| `postgres`        | PostgreSQL + pgvector | Primary database                                      |
+| `minio`           | MinIO                 | Object storage for document content, files, snapshots |
+| `typesense`       | Typesense             | Full-text search engine                               |
+| `kratos`          | Ory Kratos            | Identity and authentication                           |
+| `hydra`           | Ory Hydra             | OAuth2/OIDC provider                                  |
+| `caddy`           | Caddy                 | Reverse proxy / TLS termination                       |
+| `backend-migrate` | Node.js (one-shot)    | Runs Drizzle migrations on startup                    |
 
 Database credentials: user `synap`, database `synap`.
 
@@ -153,11 +153,11 @@ The central permission function is `checkPermissionOrPropose()` in `packages/api
 
 The three possible outcomes:
 
-| Result | Meaning |
-|--------|---------|
-| `{ granted: true }` | Permission granted, proceed with operation |
-| `{ granted: false, proposalId }` | Proposal created, awaiting human review |
-| `{ denied: true, reason }` | Hard deny (no membership or insufficient role) |
+| Result                           | Meaning                                        |
+| -------------------------------- | ---------------------------------------------- |
+| `{ granted: true }`              | Permission granted, proceed with operation     |
+| `{ granted: false, proposalId }` | Proposal created, awaiting human review        |
+| `{ denied: true, reason }`       | Hard deny (no membership or insufficient role) |
 
 ### AI Agent Users
 
@@ -208,26 +208,28 @@ The `events` table serves as an immutable audit log. Every mutation records an e
 
 The Intelligence Hub runs 7 agent types:
 
-| Agent | Purpose |
-|-------|---------|
-| `mvp-chat` | General-purpose conversational agent |
-| `dispatch` | Routes requests to specialized agents, creates child threads |
-| `knowledge-search` | Searches entities, memory facts, and graph relations |
-| `code` | Code generation and analysis |
-| `writing` | Long-form writing assistance |
-| `action` | Executes mutations (create/update entities, remember facts) |
-| `meta` | Self-reflective agent for system introspection |
+| Agent              | Purpose                                                      |
+| ------------------ | ------------------------------------------------------------ |
+| `mvp-chat`         | General-purpose conversational agent                         |
+| `dispatch`         | Routes requests to specialized agents, creates child threads |
+| `knowledge-search` | Searches entities, memory facts, and graph relations         |
+| `code`             | Code generation and analysis                                 |
+| `writing`          | Long-form writing assistance                                 |
+| `action`           | Executes mutations (create/update entities, remember facts)  |
+| `meta`             | Self-reflective agent for system introspection               |
 
 ### Tools
 
 Agents have access to two categories of tools:
 
 **Context tools** (read-only):
+
 - `search_entities` -- full-text and semantic entity search
 - `memory_search` -- recall knowledge facts (semantic first, keyword fallback)
 - `graph_traverse` -- walk the entity relation graph
 
 **Action tools** (mutating):
+
 - `create_entity`, `update_entity` -- entity CRUD via Hub Protocol
 - `remember_fact` -- persist a knowledge fact to semantic memory
 
@@ -278,13 +280,13 @@ Events are now purely an audit trail. They are written directly by `auditLog()` 
 
 Background jobs are managed by pg-boss, a PostgreSQL-based job queue. Key workers:
 
-| Job | Purpose |
-|-----|---------|
-| `search-index` | Sync entity/document changes to Typesense |
-| `entity-embedding` | Generate/update pgvector embeddings via Intelligence Hub |
-| `webhook-delivery` | Deliver outbound webhooks to registered endpoints |
-| `workspace-init` | Initialize new workspace defaults (roles, settings) |
-| `background-task-scheduler` | Proactive AI automation (scheduled tasks) |
+| Job                         | Purpose                                                  |
+| --------------------------- | -------------------------------------------------------- |
+| `search-index`              | Sync entity/document changes to Typesense                |
+| `entity-embedding`          | Generate/update pgvector embeddings via Intelligence Hub |
+| `webhook-delivery`          | Deliver outbound webhooks to registered endpoints        |
+| `workspace-init`            | Initialize new workspace defaults (roles, settings)      |
+| `background-task-scheduler` | Proactive AI automation (scheduled tasks)                |
 
 ### Cron Jobs
 
@@ -295,33 +297,33 @@ Background jobs are managed by pg-boss, a PostgreSQL-based job queue. Key worker
 
 ## 9. Key Files Quick Reference
 
-| File | Purpose |
-|------|---------|
-| `packages/types/src/events/unified.ts` | SubjectType, EventAction, EventPhase enums (source of truth) |
-| `packages/database/src/repositories/base-repository.ts` | Base class -- auto-emits completed events after DB writes |
-| `packages/database/src/repositories/entity-repository.ts` | Entity CRUD with property indexing |
-| `packages/database/src/repositories/document-repository.ts` | Document CRUD, versioning, session management |
-| `packages/database/src/repositories/relation-repository.ts` | Entity relations + `traverseEntityGraph()` |
-| `packages/database/src/repositories/knowledge-repository.ts` | Knowledge facts + `searchFactsSemantic()` |
-| `packages/database/src/repositories/event-repository.ts` | Events table access (audit log) |
-| `packages/api/src/utils/permission-check.ts` | `checkPermissionOrPropose()` -- central permission gate |
-| `packages/api/src/utils/workspace-permissions.ts` | `requireWorkspaceRole()` -- RBAC enforcement |
-| `packages/api/src/utils/audit-log.ts` | `auditLog()` -- fire-and-forget event recording |
-| `packages/api/src/routers/agent-users.ts` | AI agent user CRUD endpoints |
-| `packages/api/src/routers/hub-protocol-rest.ts` | Hub Protocol REST routes (entity, memory, graph) |
-| `packages/api/src/routers/entities.ts` | Entity tRPC router |
-| `packages/api/src/routers/documents.ts` | Document tRPC router |
-| `packages/api/src/routers/proposals.ts` | Proposal review/approve/reject |
-| `packages/jobs/src/boss.ts` | pg-boss client (start/stop) |
-| `packages/jobs/src/emit-side-effects.ts` | Enqueue async side-effects after CRUD |
-| `packages/jobs/src/workers/index.ts` | Register all pg-boss queue handlers |
-| `packages/jobs/src/cron.ts` | Cron schedule registration |
-| `packages/hub-protocol/` | REST client for Intelligence Hub communication |
-| `packages/realtime/` | Yjs WebSocket server for document collaboration |
-| `packages/search/` | Typesense search integration |
-| `packages/storage/` | MinIO object storage abstraction |
-| `deploy/docker-compose.yml` | Full infrastructure definition |
-| `migrations/` | Drizzle SQL migrations |
+| File                                                         | Purpose                                                      |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `packages/types/src/events/unified.ts`                       | SubjectType, EventAction, EventPhase enums (source of truth) |
+| `packages/database/src/repositories/base-repository.ts`      | Base class -- auto-emits completed events after DB writes    |
+| `packages/database/src/repositories/entity-repository.ts`    | Entity CRUD with property indexing                           |
+| `packages/database/src/repositories/document-repository.ts`  | Document CRUD, versioning, session management                |
+| `packages/database/src/repositories/relation-repository.ts`  | Entity relations + `traverseEntityGraph()`                   |
+| `packages/database/src/repositories/knowledge-repository.ts` | Knowledge facts + `searchFactsSemantic()`                    |
+| `packages/database/src/repositories/event-repository.ts`     | Events table access (audit log)                              |
+| `packages/api/src/utils/permission-check.ts`                 | `checkPermissionOrPropose()` -- central permission gate      |
+| `packages/api/src/utils/workspace-permissions.ts`            | `requireWorkspaceRole()` -- RBAC enforcement                 |
+| `packages/api/src/utils/audit-log.ts`                        | `auditLog()` -- fire-and-forget event recording              |
+| `packages/api/src/routers/agent-users.ts`                    | AI agent user CRUD endpoints                                 |
+| `packages/api/src/routers/hub-protocol-rest.ts`              | Hub Protocol REST routes (entity, memory, graph)             |
+| `packages/api/src/routers/entities.ts`                       | Entity tRPC router                                           |
+| `packages/api/src/routers/documents.ts`                      | Document tRPC router                                         |
+| `packages/api/src/routers/proposals.ts`                      | Proposal review/approve/reject                               |
+| `packages/jobs/src/boss.ts`                                  | pg-boss client (start/stop)                                  |
+| `packages/jobs/src/emit-side-effects.ts`                     | Enqueue async side-effects after CRUD                        |
+| `packages/jobs/src/workers/index.ts`                         | Register all pg-boss queue handlers                          |
+| `packages/jobs/src/cron.ts`                                  | Cron schedule registration                                   |
+| `packages/hub-protocol/`                                     | REST client for Intelligence Hub communication               |
+| `packages/realtime/`                                         | Yjs WebSocket server for document collaboration              |
+| `packages/search/`                                           | Typesense search integration                                 |
+| `packages/storage/`                                          | MinIO object storage abstraction                             |
+| `deploy/docker-compose.yml`                                  | Full infrastructure definition                               |
+| `migrations/`                                                | Drizzle SQL migrations                                       |
 
 ---
 
@@ -381,14 +383,14 @@ The test suite covers health checks, entity CRUD, document operations, permissio
 
 ### Key Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string |
+| Variable               | Purpose                                                            |
+| ---------------------- | ------------------------------------------------------------------ |
+| `DATABASE_URL`         | PostgreSQL connection string                                       |
 | `INTELLIGENCE_HUB_URL` | Intelligence Hub internal URL (`http://intelligence-service:3001`) |
-| `HUB_PROTOCOL_API_KEY` | API key for Hub Protocol authentication |
-| `ADMIN_EMAIL` | Email address for admin user (bypasses invite requirement) |
-| `MINIO_ENDPOINT` | MinIO endpoint (`http://minio:9000` in Docker) |
-| `TYPESENSE_HOST` | Typesense hostname |
+| `HUB_PROTOCOL_API_KEY` | API key for Hub Protocol authentication                            |
+| `ADMIN_EMAIL`          | Email address for admin user (bypasses invite requirement)         |
+| `MINIO_ENDPOINT`       | MinIO endpoint (`http://minio:9000` in Docker)                     |
+| `TYPESENSE_HOST`       | Typesense hostname                                                 |
 
 ### Common Operations
 

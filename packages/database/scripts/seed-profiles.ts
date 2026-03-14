@@ -276,6 +276,68 @@ async function seedProfiles() {
           suffix: "min",
         },
       },
+      // File upload properties
+      {
+        slug: "fileName",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: {
+          label: "File Name",
+          inputType: "text",
+          readonly: true,
+        },
+      },
+      {
+        slug: "mimeType",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 255 },
+        uiHints: {
+          label: "MIME Type",
+          inputType: "text",
+          readonly: true,
+        },
+      },
+      {
+        slug: "fileSize",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: {
+          label: "File Size",
+          inputType: "number",
+          suffix: "bytes",
+          readonly: true,
+        },
+      },
+      {
+        slug: "storageKey",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 2000 },
+        uiHints: {
+          label: "Storage Key",
+          inputType: "text",
+          readonly: true,
+        },
+      },
+      {
+        slug: "width",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: {
+          label: "Width",
+          inputType: "number",
+          suffix: "px",
+        },
+      },
+      {
+        slug: "height",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: {
+          label: "Height",
+          inputType: "number",
+          suffix: "px",
+        },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -361,6 +423,12 @@ async function seedProfiles() {
         displayName: "Article",
         parentProfileSlug: "bookmark", // Extends bookmark
         uiHints: { icon: "newspaper", color: "#A855F7" }, // Purple
+      },
+      // File upload profile
+      {
+        slug: "file",
+        displayName: "File",
+        uiHints: { icon: "file", color: "#64748B" }, // Slate
       },
     ];
 
@@ -777,6 +845,38 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'article'`);
+        }
+      }
+    }
+
+    // File profile properties
+    const fileProfileId = createdProfiles.get("file");
+    if (fileProfileId) {
+      const fileProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "fileName", required: true, displayOrder: 0 },
+        { slug: "mimeType", required: true, displayOrder: 1 },
+        { slug: "fileSize", required: true, displayOrder: 2 },
+        { slug: "storageKey", required: true, displayOrder: 3 },
+        { slug: "width", required: false, displayOrder: 4 },
+        { slug: "height", required: false, displayOrder: 5 },
+      ];
+
+      for (const prop of fileProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: fileProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'file'`);
         }
       }
     }

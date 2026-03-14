@@ -27,6 +27,7 @@ Browser
 ```
 
 The backend **never sends raw SSE to the browser**. It:
+
 1. Receives tRPC `sendMessage` → internally streams hub SSE
 2. Bridges each event to Socket.IO → browser receives in real-time
 3. Returns final `{ content, aiSteps, proposedActions, branchDecision }` when mutation resolves
@@ -47,17 +48,17 @@ socket.on("connect", () => socket.emit("join-workspace", { workspaceId }));
 
 ### Complete event reference
 
-| Event | Payload shape | When emitted |
-|---|---|---|
-| `chat:stream` | `{ threadId, type: "chunk"\|"complete", content?, isComplete }` | Each streamed token |
-| `ai:step` | `{ threadId, messageId, step: AIStep }` | Each reasoning / tool step |
-| `ai:proposal` | `{ threadId, messageId, proposal: ProposedAction }` | Tool needs user approval |
-| `branch_decision` | `{ threadId, decision: BranchDecision }` | Sub-agent spawned (⚠ see §12) |
-| `chat:message` | `{ threadId, message, userId }` | Full message persisted to DB |
-| `thread:created` | `{ threadId, userId }` | New thread or branch created |
-| `thread:updated` | `{ threadId, userId }` | Thread title/agent changed |
-| `thread:archived` | `{ threadId, userId }` | Thread soft-deleted |
-| `chat:stream:error` | `{ threadId, error, fallback }` | Stream failure |
+| Event               | Payload shape                                                   | When emitted                  |
+| ------------------- | --------------------------------------------------------------- | ----------------------------- |
+| `chat:stream`       | `{ threadId, type: "chunk"\|"complete", content?, isComplete }` | Each streamed token           |
+| `ai:step`           | `{ threadId, messageId, step: AIStep }`                         | Each reasoning / tool step    |
+| `ai:proposal`       | `{ threadId, messageId, proposal: ProposedAction }`             | Tool needs user approval      |
+| `branch_decision`   | `{ threadId, decision: BranchDecision }`                        | Sub-agent spawned (⚠ see §12) |
+| `chat:message`      | `{ threadId, message, userId }`                                 | Full message persisted to DB  |
+| `thread:created`    | `{ threadId, userId }`                                          | New thread or branch created  |
+| `thread:updated`    | `{ threadId, userId }`                                          | Thread title/agent changed    |
+| `thread:archived`   | `{ threadId, userId }`                                          | Thread soft-deleted           |
+| `chat:stream:error` | `{ threadId, error, fallback }`                                 | Stream failure                |
 
 ### Core types
 
@@ -100,25 +101,25 @@ All procedures on the `infiniteChat` router (mounted at backend:4000).
 
 ### Thread Management
 
-| Procedure | Type | Key inputs | Returns |
-|---|---|---|---|
-| `createThread` | mutation | `parentThreadId?, branchPurpose?, agentType?, agentConfig?, inheritContext?` | `{ threadId }` |
-| `getThread` | query | `threadId, includeContext?, includeBranches?` | `{ thread, entities?, documents?, branchTree? }` |
-| `listThreads` | query | `workspaceId?, threadType?, limit?` | `{ threads }` |
-| `getBranches` | query | `parentThreadId` | `{ branches }` |
-| `getBranchTree` | query | `rootThreadId` | `{ tree, flatBranches, activeBranches, mergedBranches }` |
-| `updateThread` | mutation | `threadId, title?, agentType?` | `{ status }` |
-| `archiveThread` | mutation | `threadId` | `{ status }` |
-| `mergeBranch` | mutation | `branchId, summary?` | `{ status }` |
-| `createDocumentComment` | mutation | `documentId, position: {start,end}, content` | `{ threadId, messageId }` |
+| Procedure               | Type     | Key inputs                                                                   | Returns                                                  |
+| ----------------------- | -------- | ---------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `createThread`          | mutation | `parentThreadId?, branchPurpose?, agentType?, agentConfig?, inheritContext?` | `{ threadId }`                                           |
+| `getThread`             | query    | `threadId, includeContext?, includeBranches?`                                | `{ thread, entities?, documents?, branchTree? }`         |
+| `listThreads`           | query    | `workspaceId?, threadType?, limit?`                                          | `{ threads }`                                            |
+| `getBranches`           | query    | `parentThreadId`                                                             | `{ branches }`                                           |
+| `getBranchTree`         | query    | `rootThreadId`                                                               | `{ tree, flatBranches, activeBranches, mergedBranches }` |
+| `updateThread`          | mutation | `threadId, title?, agentType?`                                               | `{ status }`                                             |
+| `archiveThread`         | mutation | `threadId`                                                                   | `{ status }`                                             |
+| `mergeBranch`           | mutation | `branchId, summary?`                                                         | `{ status }`                                             |
+| `createDocumentComment` | mutation | `documentId, position: {start,end}, content`                                 | `{ threadId, messageId }`                                |
 
 ### Messages
 
-| Procedure | Type | Key inputs | Returns |
-|---|---|---|---|
-| `sendMessage` | mutation | `threadId?, content, workspaceId?` | `{ threadId, messageId, content, entities, branchDecision, aiSteps }` |
-| `getMessages` | query | `threadId, cursor?, limit?` | `{ messages, nextCursor, hasMore }` |
-| `getThreadContext` | query | `threadId, relationshipTypes?` | `{ entities, documents }` |
+| Procedure          | Type     | Key inputs                         | Returns                                                               |
+| ------------------ | -------- | ---------------------------------- | --------------------------------------------------------------------- |
+| `sendMessage`      | mutation | `threadId?, content, workspaceId?` | `{ threadId, messageId, content, entities, branchDecision, aiSteps }` |
+| `getMessages`      | query    | `threadId, cursor?, limit?`        | `{ messages, nextCursor, hasMore }`                                   |
+| `getThreadContext` | query    | `threadId, relationshipTypes?`     | `{ entities, documents }`                                             |
 
 ---
 
@@ -127,6 +128,7 @@ All procedures on the `infiniteChat` router (mounted at backend:4000).
 Accessed via `trpc.hubProtocol.*` or REST (`/api/hub/*`).
 
 ### Context
+
 ```
 getThreadContext(threadId)          → { contextSummary, metadata, messages, linkedEntities, linkedDocs }
 getUserContext(userId)              → { recentEntities, recentThreads, preferences }
@@ -134,6 +136,7 @@ updateThreadContext(threadId, body) → { success }  body: { contextSummary?, pe
 ```
 
 ### Entities
+
 ```
 getEntities(userId, workspaceId?, type?, limit?)          → Entity[]
 createEntity(userId, type, title, description?)            → { id }
@@ -141,6 +144,7 @@ updateEntity(entityId, userId, title?, preview?, metadata?) → { success }
 ```
 
 ### Documents
+
 ```
 getDocument(documentId, userId)                            → { document }
 createDocument(userId, title, content?, type?)             → { id }
@@ -148,6 +152,7 @@ createDocumentProposal(documentId, userId, changes, proposedContent, originalCon
 ```
 
 ### Search
+
 ```
 search(userId, query, workspaceId?, collections?, limit?)     → unified results
 searchCollection(userId, collection, query)                    → collection results
@@ -157,6 +162,7 @@ vectorSearch(userId, query, types?, limit?)                   → semantic resul
 ```
 
 ### Proposals
+
 ```
 listProposals(userId, workspaceId?, targetType?, status?, limit?) → Proposal[]
   status: "pending"|"approved"|"rejected"|"all"
@@ -166,6 +172,7 @@ denyProposal(proposalId, userId)                                  → { success 
 ```
 
 ### Skills
+
 ```
 getSkills(userId, workspaceId?, status?)   → Skill[]
 getSkill(userId, skillId)                  → Skill
@@ -173,18 +180,21 @@ createSkill(userId, name, code, params?)   → { id }
 ```
 
 ### Branches
+
 ```
 createBranch(userId, parentThreadId, branchPurpose, agentType?, agentConfig?, inheritContext?) → { branchId }
 mergeBranch(userId, branchId, summary?)   → { status }
 ```
 
 ### Linking (fast-path, no event pipeline)
+
 ```
 linkEntity(userId, threadId, entityId, relationshipType?)   → { success }
 linkDocument(userId, threadId, documentId, relationshipType?) → { success }
 ```
 
 ### Background Tasks
+
 ```
 getBackgroundTasks(userId, workspaceId?, status?, type?)   → Task[]
 getBackgroundTask(userId, taskId)                           → Task
@@ -291,38 +301,98 @@ GET  /errors/stats?since=                            → ErrorStats
 
 ```typescript
 const AGENTS = {
-  default:           { label: "General purpose",         tools: ["search_unified","search_entities","search_documents","vector_search","memory_search"] },
-  meta:              { label: "Strategic orchestrator",   tools: ["...all...", "dispatch_agent","create_branch","update_proposal"] },
-  code:              { label: "Code generation",          tools: ["search_unified","search_documents","get_document","create_document","update_document"] },
-  writing:           { label: "Writing & editing",        tools: ["search_unified","search_documents","get_document","create_document","update_document"] },
-  "knowledge-search":{ label: "Knowledge synthesis",      tools: ["search_unified","vector_search","search_documents","search_entities","get_document","memory_search","remember_fact","graph_traverse"] },
-  action:            { label: "CRUD operations",          tools: ["search_unified","search_entities","vector_search","create_entity","update_entity"] },
-  prompting:         { label: "Prompt specialist",        tools: ["search_unified","vector_search","search_entities","search_documents","get_document"] },
+  default: {
+    label: "General purpose",
+    tools: [
+      "search_unified",
+      "search_entities",
+      "search_documents",
+      "vector_search",
+      "memory_search",
+    ],
+  },
+  meta: {
+    label: "Strategic orchestrator",
+    tools: ["...all...", "dispatch_agent", "create_branch", "update_proposal"],
+  },
+  code: {
+    label: "Code generation",
+    tools: [
+      "search_unified",
+      "search_documents",
+      "get_document",
+      "create_document",
+      "update_document",
+    ],
+  },
+  writing: {
+    label: "Writing & editing",
+    tools: [
+      "search_unified",
+      "search_documents",
+      "get_document",
+      "create_document",
+      "update_document",
+    ],
+  },
+  "knowledge-search": {
+    label: "Knowledge synthesis",
+    tools: [
+      "search_unified",
+      "vector_search",
+      "search_documents",
+      "search_entities",
+      "get_document",
+      "memory_search",
+      "remember_fact",
+      "graph_traverse",
+    ],
+  },
+  action: {
+    label: "CRUD operations",
+    tools: [
+      "search_unified",
+      "search_entities",
+      "vector_search",
+      "create_entity",
+      "update_entity",
+    ],
+  },
+  prompting: {
+    label: "Prompt specialist",
+    tools: [
+      "search_unified",
+      "vector_search",
+      "search_entities",
+      "search_documents",
+      "get_document",
+    ],
+  },
 } as const;
 ```
 
 ### All tools (for Settings / tool toggle UI)
 
-| Tool | Category | Auto-exec | Description |
-|---|---|---|---|
-| `search_unified` | context | ✓ | Unified Typesense search (primary) |
-| `search_entities` | context | ✓ | Entity database search |
-| `search_documents` | context | ✓ | Document keyword search |
-| `vector_search` | context | ✓ | Semantic embedding search |
-| `get_document` | context | ✓ | Fetch full document by ID |
-| `memory_search` | context | ✓ | Long-term memory / knowledge facts |
-| `graph_traverse` | context | ✓ | Entity relation graph BFS |
-| `create_entity` | action | ✗ | Create entity (needs approval) |
-| `update_entity` | action | ✗ | Update entity (needs approval) |
-| `create_document` | action | ✗ | Create document |
-| `update_document` | action | ✗ | Update document |
-| `create_skill` | action | ✗ | Create user-defined skill |
-| `link_entity_to_thread` | action | ✗ | Link entity to thread sidebar |
-| `link_document_to_thread` | action | ✗ | Link document to thread sidebar |
-| `remember_fact` | action | ✗ | Persist fact to long-term memory |
-| `update_proposal` | action | ✗ | AI self-revision of pending proposal |
-| `dispatch_agent` | action | ✗ | Delegate to specialist sub-agent |
-| `create_branch` | coordination | ✗ | Create conversation branch |
+| Tool                      | Category     | Auto-exec | Description                          |
+| ------------------------- | ------------ | --------- | ------------------------------------ |
+| `search_unified`          | context      | ✓         | Unified Typesense search (primary)   |
+| `search_entities`         | context      | ✓         | Entity database search               |
+| `search_documents`        | context      | ✓         | Document keyword search              |
+| `vector_search`           | context      | ✓         | Semantic embedding search            |
+| `get_document`            | context      | ✓         | Fetch full document by ID            |
+| `memory_search`           | context      | ✓         | Long-term memory / knowledge facts   |
+| `graph_traverse`          | context      | ✓         | Entity relation graph BFS            |
+| `create_entity`           | action       | ✗         | Create entity (needs approval)       |
+| `update_entity`           | action       | ✗         | Update entity (needs approval)       |
+| `create_document`         | action       | ✗         | Create document                      |
+| `update_document`         | action       | ✗         | Update document                      |
+| `create_skill`            | action       | ✗         | Create user-defined skill            |
+| `link_entity_to_thread`   | action       | ✗         | Link entity to thread sidebar        |
+| `link_document_to_thread` | action       | ✗         | Link document to thread sidebar      |
+| `remember_fact`           | action       | ✗         | Persist fact to long-term memory     |
+| `update_proposal`         | action       | ✗         | AI self-revision of pending proposal |
+| `dispatch_agent`          | action       | ✗         | Delegate to specialist sub-agent     |
+| `create_branch`           | coordination | ✗         | Create conversation branch           |
 
 ---
 
@@ -333,7 +403,7 @@ interface IntelligenceCommand {
   id: string;
   workspaceId: string;
   title: string;
-  promptTemplate: string;        // {argument name="X" options="[a,b]"} and {selection} placeholders
+  promptTemplate: string; // {argument name="X" options="[a,b]"} and {selection} placeholders
   derivedInputs: DerivedInput[]; // pre-parsed for form generation
   outputMode: "text" | "proposal" | "view";
   permissionsProfile: "read_only" | "propose_writes";
@@ -353,12 +423,17 @@ interface DerivedInput {
 ```
 
 Template compiler (matches CLI `src/utils/template.ts`):
+
 ```typescript
-function compileTemplate(template: string, values: Record<string, string>, selection = ""): string {
+function compileTemplate(
+  template: string,
+  values: Record<string, string>,
+  selection = ""
+): string {
   return template
     .replace(/\{argument\s+([^}]+)\}/g, (_, attrs) => {
       const name = attrs.match(/name="([^"]+)"/)?.[1] ?? "";
-      const def  = attrs.match(/default="([^"]+)"/)?.[1] ?? "";
+      const def = attrs.match(/default="([^"]+)"/)?.[1] ?? "";
       return values[name] ?? def ?? `[${name}]`;
     })
     .replace(/\{selection\}/g, selection || "[selection]")
@@ -393,17 +468,23 @@ function buildBranchTree(threads: Thread[]): BranchNode[] {
   const map = new Map<string, BranchNode>();
   const roots: BranchNode[] = [];
 
-  threads.forEach(t => map.set(t.id, {
-    id: t.id, threadId: t.id,
-    parentId: t.parentThreadId ?? undefined,
-    children: [], depth: 0,
-    agentType: t.agentType ?? "default",
-    status: t.mergedAt ? "merged" : "active",
-    title: t.title, branchPurpose: t.branchPurpose,
-    createdAt: t.createdAt, mergedAt: t.mergedAt,
-  }));
+  threads.forEach((t) =>
+    map.set(t.id, {
+      id: t.id,
+      threadId: t.id,
+      parentId: t.parentThreadId ?? undefined,
+      children: [],
+      depth: 0,
+      agentType: t.agentType ?? "default",
+      status: t.mergedAt ? "merged" : "active",
+      title: t.title,
+      branchPurpose: t.branchPurpose,
+      createdAt: t.createdAt,
+      mergedAt: t.mergedAt,
+    })
+  );
 
-  threads.forEach(t => {
+  threads.forEach((t) => {
     const node = map.get(t.id)!;
     if (t.parentThreadId && map.has(t.parentThreadId)) {
       const parent = map.get(t.parentThreadId)!;
@@ -421,7 +502,7 @@ function buildBranchTree(threads: Thread[]): BranchNode[] {
 
 ```typescript
 // Convert tree to ReactFlow nodes/edges
-function treeToFlow(nodes: BranchNode[]): { nodes: Node[], edges: Edge[] } {
+function treeToFlow(nodes: BranchNode[]): { nodes: Node[]; edges: Edge[] } {
   const flowNodes: Node[] = [];
   const flowEdges: Edge[] = [];
 
@@ -430,12 +511,13 @@ function treeToFlow(nodes: BranchNode[]): { nodes: Node[], edges: Edge[] } {
       id: node.threadId,
       position: { x: x * 220, y: node.depth * 120 },
       data: { label: node.title ?? node.branchPurpose ?? node.agentType, node },
-      type: "threadNode",  // custom node type
+      type: "threadNode", // custom node type
     });
     node.children.forEach((child, i) => {
       flowEdges.push({
         id: `${node.threadId}-${child.threadId}`,
-        source: node.threadId, target: child.threadId,
+        source: node.threadId,
+        target: child.threadId,
         label: child.branchPurpose?.slice(0, 30),
         animated: child.status === "active",
         style: { stroke: child.status === "merged" ? "#4ade80" : "#60a5fa" },
@@ -457,19 +539,25 @@ function treeToFlow(nodes: BranchNode[]): { nodes: Node[], edges: Edge[] } {
 const traverse = await fetch(
   `/api/hub/graph/traverse?userId=${userId}&startEntityId=${entityId}&maxDepth=2`,
   { headers: { Authorization: `Bearer ${apiKey}` } }
-).then(r => r.json());
+).then((r) => r.json());
 
 // traverse: Array<{ entityId, depth, relationshipType, direction, path }>
 
 // Convert to ReactFlow
-function graphToFlow(startId: string, results: TraversalResult[]): { nodes: Node[], edges: Edge[] } {
-  const nodes = [{ id: startId, data: { label: "Start" }, position: { x: 0, y: 0 } }];
-  const edges = results.map(r => ({
+function graphToFlow(
+  startId: string,
+  results: TraversalResult[]
+): { nodes: Node[]; edges: Edge[] } {
+  const nodes = [
+    { id: startId, data: { label: "Start" }, position: { x: 0, y: 0 } },
+  ];
+  const edges = results.map((r) => ({
     id: `${r.path[r.path.length - 2]}-${r.entityId}`,
     source: r.path[r.path.length - 2],
     target: r.entityId,
     label: r.relationshipType,
-    markerEnd: r.direction === "outbound" ? { type: MarkerType.Arrow } : undefined,
+    markerEnd:
+      r.direction === "outbound" ? { type: MarkerType.Arrow } : undefined,
   }));
   return { nodes, edges };
 }
@@ -480,6 +568,7 @@ function graphToFlow(startId: string, results: TraversalResult[]): { nodes: Node
 ## 11. AI-to-AI Channels
 
 When the `meta` or `dispatch_agent` tool creates a sub-agent thread, it:
+
 1. Creates a child thread (`parentThreadId` = current thread)
 2. Runs the sub-agent in that thread
 3. Posts the result back as a `system` role message via `POST /threads/:parentId/messages`
@@ -489,12 +578,12 @@ This creates a visible "inter-agent message trail". To display it:
 ```typescript
 // Fetch all system messages injected by sub-agents in this thread
 const messages = await trpc.infiniteChat.getMessages.query({ threadId });
-const interAgentMessages = messages.filter(m =>
-  m.role === "system" && m.content.startsWith("[Sub-agent:")
+const interAgentMessages = messages.filter(
+  (m) => m.role === "system" && m.content.startsWith("[Sub-agent:")
 );
 
 // A "channel inbox" view: per-thread list of sub-agent results
-const childResults = interAgentMessages.map(m => ({
+const childResults = interAgentMessages.map((m) => ({
   agentType: m.content.match(/\[Sub-agent: (\w+)\]/)?.[1],
   content: m.content.replace(/^\[Sub-agent: [^\]]+\] /, ""),
   createdAt: m.createdAt,
@@ -536,7 +625,7 @@ await fetch("/api/hub/memory", {
 const { executions } = await fetch(
   `/intelligence/api/executions?userId=${userId}&limit=20`,
   { headers: { "X-API-Key": apiKey } }
-).then(r => r.json());
+).then((r) => r.json());
 
 // Execution shape
 interface ExecutionLog {
@@ -553,7 +642,10 @@ interface ExecutionLog {
 }
 
 // Stats for dashboard
-const { stats } = await fetch("/intelligence/api/executions/stats?since=2026-02-18T00:00:00Z", { headers }).then(r => r.json());
+const { stats } = await fetch(
+  "/intelligence/api/executions/stats?since=2026-02-18T00:00:00Z",
+  { headers }
+).then((r) => r.json());
 ```
 
 ---
@@ -562,78 +654,83 @@ const { stats } = await fetch("/intelligence/api/executions/stats?since=2026-02-
 
 ### Hooks / State
 
-| File | Purpose |
-|---|---|
-| `hooks/useSocket.ts` | Socket.IO singleton, workspace room join, typed event emitter |
-| `store/chatStore.ts` | Per-thread `ChatUIState` { isStreaming, content, aiSteps, proposals, branchDecision } |
-| `hooks/useChat.ts` | `sendMessage()` → tRPC mutation + socket subscription |
-| `hooks/useStreamingMessage.ts` | Accumulate `chat:stream` chunks + `ai:step` events |
-| `hooks/useProposals.ts` | Subscribe to `ai:proposal`, expose `approve/deny` |
-| `hooks/useBranchTree.ts` | `getBranchTree` tRPC + `buildBranchTree()` |
-| `hooks/useEntityGraph.ts` | `/graph/traverse` + build ReactFlow nodes/edges |
-| `hooks/useMemory.ts` | `listMemory` + `searchMemory` (keyword + semantic) |
-| `hooks/useThreadContext.ts` | Thread's linked entities + documents |
+| File                           | Purpose                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| `hooks/useSocket.ts`           | Socket.IO singleton, workspace room join, typed event emitter                         |
+| `store/chatStore.ts`           | Per-thread `ChatUIState` { isStreaming, content, aiSteps, proposals, branchDecision } |
+| `hooks/useChat.ts`             | `sendMessage()` → tRPC mutation + socket subscription                                 |
+| `hooks/useStreamingMessage.ts` | Accumulate `chat:stream` chunks + `ai:step` events                                    |
+| `hooks/useProposals.ts`        | Subscribe to `ai:proposal`, expose `approve/deny`                                     |
+| `hooks/useBranchTree.ts`       | `getBranchTree` tRPC + `buildBranchTree()`                                            |
+| `hooks/useEntityGraph.ts`      | `/graph/traverse` + build ReactFlow nodes/edges                                       |
+| `hooks/useMemory.ts`           | `listMemory` + `searchMemory` (keyword + semantic)                                    |
+| `hooks/useThreadContext.ts`    | Thread's linked entities + documents                                                  |
 
 ### Chat UI Components
 
-| Component | Purpose |
-|---|---|
-| `ChatPane` | Full thread view: messages + stream + input + sidebar |
-| `MessageList` | Scrollable history with react-markdown + shiki |
-| `StreamingMessage` | Live token accumulator with cursor |
-| `ThinkingSteps` | Collapsible tool call timeline (type-aware icons) |
-| `ProposalCard` | Inline approve/deny with args preview |
-| `BranchCard` | Sub-agent branch info → link to child thread |
-| `AgentSelector` | Dropdown to switch agent type mid-conversation |
-| `CommandPalette` | `/command` picker with workspace commands + template form |
-| `ContextSidebar` | Linked entities + documents panel beside chat |
+| Component          | Purpose                                                   |
+| ------------------ | --------------------------------------------------------- |
+| `ChatPane`         | Full thread view: messages + stream + input + sidebar     |
+| `MessageList`      | Scrollable history with react-markdown + shiki            |
+| `StreamingMessage` | Live token accumulator with cursor                        |
+| `ThinkingSteps`    | Collapsible tool call timeline (type-aware icons)         |
+| `ProposalCard`     | Inline approve/deny with args preview                     |
+| `BranchCard`       | Sub-agent branch info → link to child thread              |
+| `AgentSelector`    | Dropdown to switch agent type mid-conversation            |
+| `CommandPalette`   | `/command` picker with workspace commands + template form |
+| `ContextSidebar`   | Linked entities + documents panel beside chat             |
 
 ### Navigation & Graph Views
 
-| Component | Purpose |
-|---|---|
-| `ThreadBranchTree` | Git-like thread graph using `@xyflow/react` |
-| `EntityGraph` | Interactive entity relation graph (`@xyflow/react`) |
-| `AIChannelInbox` | Cross-thread sub-agent messages timeline |
-| `ExecutionTimeline` | Chronological AI activity (steps, tools, errors) |
-| `KnowledgeTimeline` | Memory facts + entity creation over time |
-| `MemoryBrowser` | Search + browse knowledge facts |
-| `CommandRunner` | Raycast-style command palette → argument form → stream |
+| Component           | Purpose                                                |
+| ------------------- | ------------------------------------------------------ |
+| `ThreadBranchTree`  | Git-like thread graph using `@xyflow/react`            |
+| `EntityGraph`       | Interactive entity relation graph (`@xyflow/react`)    |
+| `AIChannelInbox`    | Cross-thread sub-agent messages timeline               |
+| `ExecutionTimeline` | Chronological AI activity (steps, tools, errors)       |
+| `KnowledgeTimeline` | Memory facts + entity creation over time               |
+| `MemoryBrowser`     | Search + browse knowledge facts                        |
+| `CommandRunner`     | Raycast-style command palette → argument form → stream |
 
 ### Settings & Admin UI
 
-| Component | Purpose |
-|---|---|
-| `AgentConfigPanel` | Per-user agent overrides (systemPrompt, tools, model) |
-| `ToolToggleGrid` | Enable/disable tools per agent type |
-| `SkillManager` | List + install skills (matches `synap skills` / `synap install`) |
+| Component          | Purpose                                                          |
+| ------------------ | ---------------------------------------------------------------- |
+| `AgentConfigPanel` | Per-user agent overrides (systemPrompt, tools, model)            |
+| `ToolToggleGrid`   | Enable/disable tools per agent type                              |
+| `SkillManager`     | List + install skills (matches `synap skills` / `synap install`) |
 
 ---
 
 ## 15. Implementation Phases
 
 ### Phase 1 — Real-time chat plumbing
+
 1. `useSocket.ts` + `store/chatStore.ts`
 2. `useStreamingMessage.ts` + `ChatPane` + `MessageList` + `StreamingMessage`
 3. `ThinkingSteps` with type-aware icons (tool_call / tool_result / thinking / decision)
 4. Wire `sendMessage` tRPC mutation → streaming chunks appear
 
 ### Phase 2 — Proposals + branching
+
 5. `ProposalCard` + `useProposals.ts`
 6. `BranchCard` (active + completed states)
 7. `AgentSelector` dropdown
 
 ### Phase 3 — Commands + context
+
 8. `CommandPalette` + `CommandRunner` with workspace commands + template form
 9. `ContextSidebar` (linked entities + documents per thread)
 10. `useMemory.ts` + `MemoryBrowser`
 
 ### Phase 4 — Graph views
+
 11. `useBranchTree.ts` + `ThreadBranchTree` (ReactFlow)
 12. `useEntityGraph.ts` + `EntityGraph` (ReactFlow)
 13. `AIChannelInbox` (sub-agent cross-thread messages)
 
 ### Phase 5 — Timeline + Admin
+
 14. `ExecutionTimeline` (agent activity feed)
 15. `KnowledgeTimeline` (memory + entity creation)
 16. `AgentConfigPanel` + `ToolToggleGrid`
@@ -659,15 +756,15 @@ const { stats } = await fetch("/intelligence/api/executions/stats?since=2026-02-
 
 ## 17. Known Backend Gaps to Fix Before Phase 2+
 
-| # | Gap | Where | Fix needed |
-|---|---|---|---|
-| 1 | `branch_decision` not Socket.IO-broadcast | `infinite-chat.ts` ~line 362 | Add `emitChatEvent("branch_decision", { threadId, decision })` |
-| 2 | Stream errors not Socket.IO-broadcast | `infinite-chat.ts` | Add `emitChatEvent("chat:stream:error", { threadId, error })` on `error` SSE event |
-| 3 | `approveProposal` / `denyProposal` missing from tRPC | `proposals.ts` router | Add two mutations wrapping existing REST handler |
-| 4 | Thread `parentThreadId` missing from `getMessages` response | `infinite-chat.ts` | Include `parentThreadId` in `listThreads` output |
-| 5 | No `GET /api/hub/threads` list endpoint | `hub-protocol-rest.ts` | Add endpoint (needed for thread tree without tRPC) |
+| #   | Gap                                                         | Where                        | Fix needed                                                                         |
+| --- | ----------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | `branch_decision` not Socket.IO-broadcast                   | `infinite-chat.ts` ~line 362 | Add `emitChatEvent("branch_decision", { threadId, decision })`                     |
+| 2   | Stream errors not Socket.IO-broadcast                       | `infinite-chat.ts`           | Add `emitChatEvent("chat:stream:error", { threadId, error })` on `error` SSE event |
+| 3   | `approveProposal` / `denyProposal` missing from tRPC        | `proposals.ts` router        | Add two mutations wrapping existing REST handler                                   |
+| 4   | Thread `parentThreadId` missing from `getMessages` response | `infinite-chat.ts`           | Include `parentThreadId` in `listThreads` output                                   |
+| 5   | No `GET /api/hub/threads` list endpoint                     | `hub-protocol-rest.ts`       | Add endpoint (needed for thread tree without tRPC)                                 |
 
 ---
 
-*CLI source reference: `/opt/intelligence-hub/apps/cli/src/`*
-*Monitor app reference: `/opt/intelligence-hub/apps/monitor/src/`*
+_CLI source reference: `/opt/intelligence-hub/apps/cli/src/`_
+_Monitor app reference: `/opt/intelligence-hub/apps/monitor/src/`_

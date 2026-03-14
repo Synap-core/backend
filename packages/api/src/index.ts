@@ -25,6 +25,7 @@ export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
 export { ensurePersonalChannel } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
+export { fileUploadApp } from "./routers/file-upload.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
