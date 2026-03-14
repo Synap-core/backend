@@ -11,7 +11,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { randomUUID, createHash, createHmac } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and, drizzleSql } from "@synap/database";
 import {
