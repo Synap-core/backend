@@ -92,18 +92,22 @@ export const contextRouter = router({
         id: string;
         type: string;
         title: string | null;
+        properties?: Record<string, unknown>;
       }> = [];
       let linkedDocuments: Array<{ id: string; title: string | null }> = [];
 
       if (linkedEntityIds.length > 0) {
         const rows = await db.query.entities.findMany({
           where: inArray(entities.id, linkedEntityIds),
-          columns: { id: true, type: true, title: true },
+          columns: { id: true, type: true, title: true, properties: true },
         });
         linkedEntities = rows.map((r) => ({
           id: r.id,
           type: r.type,
           title: r.title ?? null,
+          ...(r.type === "file"
+            ? { properties: r.properties as Record<string, unknown> }
+            : {}),
         }));
       }
       if (linkedDocumentIds.length > 0) {

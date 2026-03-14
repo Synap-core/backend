@@ -33,6 +33,7 @@ import {
   channels,
   messages,
   channelContextItems,
+  entities,
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
@@ -704,6 +705,8 @@ export const channelsRouter = router({
         agentHandle: z.string().optional(),
         /** Originating channel ID when spawning a new AI_THREAD from a non-AI channel */
         parentChannelId: z.string().uuid().optional(),
+        /** Entity IDs of uploaded files to attach to this message */
+        attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -867,6 +870,57 @@ export const channelsRouter = router({
         hash: userMessageHash,
         ...(activeSessionId ? { sessionId: activeSessionId } : {}),
       });
+
+      // Link attachment entities to channel context
+      if (input.attachmentEntityIds?.length) {
+        const attachmentMeta: Array<{
+          entityId: string;
+          fileName: unknown;
+          mimeType: unknown;
+        }> = [];
+
+        for (const attachEntityId of input.attachmentEntityIds) {
+          // Verify entity exists and is a file belonging to this user
+          const entity = await db.query.entities.findFirst({
+            where: and(
+              eq(entities.id, attachEntityId),
+              eq(entities.type, "file")
+            ),
+            columns: { id: true, properties: true },
+          });
+          if (!entity) continue;
+
+          const props = entity.properties as Record<string, unknown>;
+          attachmentMeta.push({
+            entityId: attachEntityId,
+            fileName: props.fileName,
+            mimeType: props.mimeType,
+          });
+
+          // Link to channel context
+          await db
+            .insert(channelContextItems)
+            .values({
+              channelId,
+              objectType: "entity",
+              objectId: attachEntityId,
+              relationshipType: "used_as_context",
+              userId: userId,
+              workspaceId: channel.workspaceId!,
+            })
+            .onConflictDoNothing();
+        }
+
+        // Update message metadata with attachments
+        if (attachmentMeta.length > 0) {
+          await db
+            .update(messages)
+            .set({
+              metadata: drizzleSql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ attachments: attachmentMeta })}::jsonb`,
+            })
+            .where(eq(messages.id, userMessageId));
+        }
+      }
 
       // Auto-provision agent user for this human+workspace pair (idempotent)
       let agentUserId: string | undefined;

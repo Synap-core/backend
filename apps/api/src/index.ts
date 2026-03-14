@@ -35,6 +35,7 @@ import {
   createContext as createApiContext,
   hubProtocolRestApp,
   mcpHttpApp,
+  fileUploadApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -724,6 +725,10 @@ app.route("/api/channels/gateway", channelGatewayApp);
 // Auth: Hub Protocol API key via Authorization: Bearer <key>
 // Protocol: JSON-RPC 2.0 over HTTP POST
 app.route("/mcp", mcpHttpApp);
+
+// File Upload REST endpoint (multipart/form-data — not tRPC)
+// Auth: Kratos session cookie (applied inside fileUploadApp)
+app.route("/api/files", fileUploadApp);
 
 // AI rate limiting for chat/send message path
 app.use("/trpc/chat.sendMessage", aiRateLimitMiddleware);
