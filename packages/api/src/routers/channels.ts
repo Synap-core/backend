@@ -62,6 +62,9 @@ import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "channels" });
 
 // ── MCP server list cache ────────────────────────────────────────────────────
 // Avoid a DB query on every message send. TTL = 30s (short enough to pick up
@@ -548,7 +551,7 @@ export const channelsRouter = router({
           start: z.number().int().nonnegative(),
           end: z.number().int().nonnegative(),
         }),
-        content: z.string().min(1),
+        content: z.string().min(1).max(50_000),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -618,7 +621,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         entityId: z.string().uuid(),
-        content: z.string().min(1),
+        content: z.string().min(1).max(50_000),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -689,7 +692,7 @@ export const channelsRouter = router({
       z.object({
         /** When omitted, backend creates a new channel and returns its id. */
         channelId: z.string().uuid().optional(),
-        content: z.string().min(1),
+        content: z.string().min(1).max(50_000),
         workspaceId: z.string().uuid().optional(),
         agentType: z
           .string()
@@ -872,7 +875,7 @@ export const channelsRouter = router({
           agentUserId = await ensureAgentUser(userId, workspaceId);
         } catch (err) {
           // Non-critical — degrade gracefully
-          console.error("Failed to ensure agent user:", err);
+          logger.error({ err, channelId }, "Failed to ensure agent user");
         }
       }
 
@@ -964,9 +967,7 @@ export const channelsRouter = router({
       const streamDeadline = new AbortController();
       const streamDeadlineTimer = setTimeout(
         () => {
-          console.error(
-            `[Chat] Stream deadline exceeded for channel ${channelId} — aborting`
-          );
+          logger.error({ channelId }, "Stream deadline exceeded — aborting");
           streamDeadline.abort();
         },
         8 * 60 * 1000
@@ -1112,9 +1113,9 @@ export const channelsRouter = router({
           }
         }
       } catch (streamError) {
-        console.error(
-          "Streaming error, falling back to non-streaming:",
-          streamError
+        logger.error(
+          { err: streamError, channelId },
+          "Streaming error, falling back to non-streaming"
         );
 
         emitChatEvent({
@@ -1394,9 +1395,9 @@ export const channelsRouter = router({
           externalChannelId: channel.externalChannelId,
           content: fullContent,
         }).catch((err) => {
-          console.error(
-            "[channels] Outbound relay to external channel failed:",
-            err
+          logger.error(
+            { err, channelId, externalSource: channel.externalSource },
+            "Outbound relay to external channel failed"
           );
         });
       }

@@ -17,6 +17,9 @@
  */
 
 import type PgBoss from "pg-boss";
+import { execFileSync } from "child_process";
+import { realpathSync, existsSync } from "fs";
+import { resolve as resolvePath } from "path";
 import {
   getDb,
   EntityRepository,
@@ -95,6 +98,16 @@ export async function handleMaterialize(
         break;
       case "view":
         await materializeView(action, subjectId, userId, workspaceId, data);
+        break;
+      case "command":
+        await materializeCommand(
+          action,
+          subjectId,
+          userId,
+          workspaceId,
+          data,
+          correlationId
+        );
         break;
       default:
         logger.warn(
@@ -426,5 +439,153 @@ async function materializeView(
     );
   } else if (action === "delete") {
     await viewRepo.delete(subjectId, userId);
+  }
+}
+
+// ── CLI Command Execution (proposal-approved) ────────────────────────────────
+
+/** Allowlisted environment variables — mirrors hub-protocol-rest.ts */
+const SAFE_ENV_VARS = [
+  "PATH",
+  "HOME",
+  "USER",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "NODE_ENV",
+  "NODE_PATH",
+  "NPM_CONFIG_PREFIX",
+  "EDITOR",
+  "VISUAL",
+  "PAGER",
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+];
+
+function buildSafeEnv(): Record<string, string> {
+  const env: Record<string, string> = { TERM: "dumb" };
+  for (const key of SAFE_ENV_VARS) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  return env;
+}
+
+function validateWorkingDir(dir: string | undefined): string {
+  if (!dir) return process.cwd();
+  const resolved = resolvePath(dir);
+  if (!existsSync(resolved)) return process.cwd();
+  try {
+    const real = realpathSync(resolved);
+    const BLOCKED = [
+      "/etc",
+      "/var",
+      "/usr",
+      "/bin",
+      "/sbin",
+      "/boot",
+      "/sys",
+      "/proc",
+      "/dev",
+      "/root",
+    ];
+    for (const b of BLOCKED) {
+      if (real === b || real.startsWith(b + "/")) return process.cwd();
+    }
+    return real;
+  } catch {
+    return process.cwd();
+  }
+}
+
+/**
+ * Execute a CLI command that was previously proposed and now approved.
+ * Re-applies the same security controls as the original REST endpoint.
+ */
+async function materializeCommand(
+  action: string,
+  subjectId: string,
+  userId: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>,
+  correlationId?: string
+): Promise<void> {
+  if (action !== "execute") {
+    logger.warn({ action }, "Unknown command action for materialization");
+    return;
+  }
+
+  const command = data.command as string;
+  if (!command) {
+    logger.error({ subjectId }, "No command in materialization payload");
+    return;
+  }
+
+  const workingDir = validateWorkingDir(data.workingDir as string | undefined);
+  const timeoutMs = Math.min(Number(data.timeoutMs) || 30_000, 300_000);
+
+  logger.info(
+    { command, workingDir, userId, correlationId },
+    "Executing approved command"
+  );
+
+  let stdout = "";
+  let stderr = "";
+  let exitCode = 0;
+
+  try {
+    const result = execFileSync("/bin/sh", ["-c", command], {
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+      cwd: workingDir,
+      encoding: "utf-8",
+      env: buildSafeEnv(),
+    });
+    stdout = typeof result === "string" ? result : (result?.toString() ?? "");
+  } catch (execErr: unknown) {
+    const err = execErr as {
+      stdout?: string;
+      stderr?: string;
+      status?: number;
+      message?: string;
+    };
+    stdout = err.stdout ?? "";
+    stderr = err.stderr ?? err.message ?? "";
+    exitCode = err.status ?? 1;
+  }
+
+  // Truncate
+  const MAX = 50_000;
+  if (stdout.length > MAX) stdout = stdout.slice(0, MAX) + "\n... (truncated)";
+  if (stderr.length > MAX) stderr = stderr.slice(0, MAX) + "\n... (truncated)";
+
+  logger.info(
+    { command, exitCode, stdoutLen: stdout.length, correlationId },
+    "Approved command executed"
+  );
+
+  // Emit side effects so automations can fire
+  if (workspaceId) {
+    await emitSideEffects({
+      subjectType: "command",
+      action: "execute",
+      subjectId,
+      userId,
+      workspaceId,
+      data: {
+        command,
+        workingDir,
+        exitCode,
+        reason: data.reason as string | undefined,
+        stdoutPreview: stdout.slice(0, 500),
+        approvedExecution: true,
+      },
+    });
   }
 }

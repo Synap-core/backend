@@ -19,6 +19,7 @@ export type ViewType =
   | "whiteboard"
   | "table"
   | "kanban"
+  | "matrix"
   | "list"
   | "grid"
   | "gallery"
@@ -27,7 +28,9 @@ export type ViewType =
   | "timeline"
   | "mindmap"
   | "graph"
-  | "bento";
+  | "flow"
+  | "bento"
+  | "branch_tree";
 import type { EntityQuery } from "./query.js";
 export interface CreateViewInput {
   workspaceId?: string;

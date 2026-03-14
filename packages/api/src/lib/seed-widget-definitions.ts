@@ -1,489 +1,212 @@
 /**
  * Seed Widget Definitions
  *
- * Ensures all built-in widget types are present in the widget_definitions table.
- * Called once at backend startup after migrations.
+ * Syncs the widget_definitions table with the capabilities manifest generated
+ * by @synap/capabilities (the single source of truth for all widget types).
+ *
+ * Called at backend startup after migrations. Reads the manifest from:
+ *   1. CAPABILITIES_MANIFEST_PATH env var (override for production deploys)
+ *   2. ../../../synap-app/packages/core/capabilities/dist/capabilities.json (dev)
  *
  * Uses INSERT ... ON CONFLICT DO UPDATE so re-running is always safe (idempotent).
  * workspaceId = null means system-wide (available in every workspace).
+ *
+ * Any frontend can register its OWN set of widgets (via cellRegistry) — the backend
+ * catalog is the ecosystem-wide registry. Frontends that don't support a widget
+ * gracefully show "Widget not available in this app".
  */
 
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { getDb } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "seed-widget-definitions" });
 
-interface BuiltinWidgetSeed {
-  typeKey: string;
+// ─── Manifest types (matches @synap/capabilities output) ─────────────────────
+
+interface ManifestWidget {
+  key: string;
   name: string;
   description: string;
-  icon?: string;
+  icon: string;
   category: string;
-  configSchema: Record<string, unknown>;
-  defaultConfig?: Record<string, unknown>;
+  displayModes: string[];
   defaultSize: { w: number; h: number };
+  minSize?: { w: number; h: number };
+  configSchema: Array<{
+    key: string;
+    label: string;
+    type: string;
+    required?: boolean;
+    defaultValue?: unknown;
+    options?: Array<{ value: string; label: string }>;
+    description?: string;
+  }>;
+  requiresWorkspace?: boolean;
+  aliasOf?: string;
 }
 
-/**
- * Built-in widget catalog — mirrors BENTO_CELL_CATALOG in the IS tool
- * and the cellRegistry entries in the frontend.
- */
-const BUILTIN_WIDGETS: BuiltinWidgetSeed[] = [
-  {
-    typeKey: "welcome-header",
-    name: "Welcome Header",
-    description:
-      "Full-width welcome banner with workspace name, subtitle, and current date. Always place at the top of a dashboard.",
-    icon: "home",
-    category: "core",
-    configSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Workspace name or greeting" },
-        subtitle: { type: "string", description: "Optional tagline" },
-        showDate: {
-          type: "boolean",
-          description: "Show current date",
-          default: true,
-        },
-      },
-      required: [],
-    },
-    defaultConfig: { showDate: true },
-    defaultSize: { w: 12, h: 2 },
-  },
-  {
-    typeKey: "entity-count",
-    name: "Entity Count",
-    description:
-      "Compact count card for a profile type. Shows total entities or filtered subset.",
-    icon: "hash",
-    category: "data",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: {
-          type: "string",
-          description: "Profile slug to count (e.g. 'deal')",
-        },
-        label: {
-          type: "string",
-          description: "Display label (e.g. 'Open Deals')",
-        },
-        icon: { type: "string", description: "Lucide icon name" },
-        filter: {
-          type: "object",
-          description: "Optional property filter { field, operator, value }",
-        },
-      },
-      required: ["profileSlug", "label"],
-    },
-    defaultSize: { w: 3, h: 2 },
-  },
-  {
-    typeKey: "entity-list",
-    name: "Entity List",
-    description:
-      "Scrollable list of entities with optional title and sort/filter.",
-    icon: "list",
-    category: "data",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: {
-          type: "string",
-          description: "Profile slug (e.g. 'task')",
-        },
-        title: { type: "string", description: "Widget header label" },
-        limit: {
-          type: "number",
-          description: "Max items to show",
-          default: 10,
-        },
-        sort: {
-          type: "object",
-          description: "{ field: string, direction: 'asc' | 'desc' }",
-        },
-        filter: { type: "object", description: "Property filter" },
-      },
-      required: ["profileSlug"],
-    },
-    defaultConfig: { limit: 10 },
-    defaultSize: { w: 6, h: 4 },
-  },
-  {
-    typeKey: "feed",
-    name: "Activity Feed",
-    description:
-      "Activity feed showing recent changes, creations, and events across the workspace.",
-    icon: "activity",
-    category: "core",
-    configSchema: { type: "object", properties: {} },
-    defaultSize: { w: 4, h: 4 },
-  },
-  {
-    typeKey: "calendar",
-    name: "Calendar",
-    description: "Mini calendar view showing entities with date properties.",
-    icon: "calendar",
-    category: "data",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: {
-          type: "string",
-          description: "Filter to a specific profile",
-        },
-        dateField: {
-          type: "string",
-          description: "Property name to use as the date",
-        },
-        title: { type: "string", description: "Widget header label" },
-      },
-    },
-    defaultSize: { w: 4, h: 4 },
-  },
-  {
-    typeKey: "quick-access",
-    name: "Quick Access",
-    description: "Row of shortcut chips linking to views or profiles.",
-    icon: "zap",
-    category: "core",
-    configSchema: {
-      type: "object",
-      properties: {
-        links: {
-          type: "array",
-          description: "Array<{ label, viewId?, profileSlug?, icon? }>",
-          items: {
-            type: "object",
-            properties: {
-              label: { type: "string" },
-              viewId: { type: "string" },
-              profileSlug: { type: "string" },
-              icon: { type: "string" },
-            },
-            required: ["label"],
-          },
-        },
-      },
-      required: ["links"],
-    },
-    defaultSize: { w: 12, h: 2 },
-  },
-  {
-    typeKey: "metrics-summary",
-    name: "Metrics Summary",
-    description:
-      "Aggregated metric card (count, sum, or average) for a numeric property.",
-    icon: "bar-chart-3",
-    category: "data",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: { type: "string", description: "Profile to aggregate" },
-        property: { type: "string", description: "Numeric property slug" },
-        aggregation: {
-          type: "string",
-          enum: ["count", "sum", "average"],
-          description: "Aggregation function",
-        },
-        title: { type: "string", description: "Metric label" },
-        filter: { type: "object", description: "Optional property filter" },
-      },
-      required: ["profileSlug", "property", "aggregation", "title"],
-    },
-    defaultSize: { w: 3, h: 2 },
-  },
-  {
-    typeKey: "recent-documents",
-    name: "Recent Documents",
-    description: "List of recently modified or viewed documents.",
-    icon: "file-text",
-    category: "core",
-    configSchema: {
-      type: "object",
-      properties: {
-        title: {
-          type: "string",
-          description: "Widget header",
-          default: "Recent Documents",
-        },
-        limit: { type: "number", description: "Max items", default: 8 },
-      },
-    },
-    defaultConfig: { limit: 8 },
-    defaultSize: { w: 6, h: 4 },
-  },
-  {
-    typeKey: "entity-gallery",
-    name: "Entity Gallery",
-    description:
-      "Grid of entity cards with cover images — ideal for books, articles, people.",
-    icon: "LayoutGrid",
-    category: "data",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: {
-          type: "string",
-          title: "Profile",
-          description: "Entity type to display",
-        },
-        title: { type: "string", title: "Title" },
-        coverField: {
-          type: "string",
-          title: "Cover Field",
-          description:
-            "Property slug for the cover image (e.g. cover_url, avatar)",
-        },
-        limit: {
-          type: "number",
-          title: "Limit",
-          description: "Max items to show (1–50)",
-          minimum: 1,
-          maximum: 50,
-        },
-        filter: {
-          type: "object",
-          title: "Filter",
-          description: "Property filters as { field: value }",
-        },
-        sort: {
-          type: "object",
-          title: "Sort",
-          properties: {
-            field: { type: "string" },
-            direction: { type: "string", enum: ["asc", "desc"] },
-          },
-        },
-      },
-      required: ["profileSlug"],
-    },
-    defaultConfig: { limit: 12 },
-    defaultSize: { w: 8, h: 4 },
-  },
-  {
-    typeKey: "reading-progress",
-    name: "Reading Progress",
-    description:
-      "Circular progress ring showing how far through a book (or any entity with page tracking) you are.",
-    icon: "BookMarked",
-    category: "knowledge",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: {
-          type: "string",
-          title: "Profile",
-          description: "Profile slug (e.g. book)",
-        },
-        pageField: {
-          type: "string",
-          title: "Current Page Field",
-          description: "Property slug for current page",
-        },
-        totalPagesField: {
-          type: "string",
-          title: "Total Pages Field",
-          description: "Property slug for total pages",
-        },
-        label: { type: "string", title: "Label" },
-      },
-      required: ["profileSlug"],
-    },
-    defaultConfig: {
-      profileSlug: "book",
-      pageField: "current_page",
-      totalPagesField: "pages",
-      label: "Reading Progress",
-    },
-    defaultSize: { w: 4, h: 3 },
-  },
-  {
-    typeKey: "quote-card",
-    name: "Quote Card",
-    description:
-      "Beautiful pull-quote display. Shows a random, daily, or latest quote from your collection.",
-    icon: "Quote",
-    category: "knowledge",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: {
-          type: "string",
-          title: "Profile",
-          description: "Profile containing quotes (e.g. quote)",
-        },
-        textField: { type: "string", title: "Quote Text Field" },
-        authorField: { type: "string", title: "Author Field" },
-        seed: {
-          type: "string",
-          title: "Selection",
-          enum: ["random", "daily", "latest"],
-          description:
-            "random = random each load, daily = same all day, latest = most recently added",
-        },
-        filter: { type: "object", title: "Filter" },
-      },
-      required: ["profileSlug"],
-    },
-    defaultConfig: {
-      profileSlug: "quote",
-      textField: "text",
-      authorField: "author",
-      seed: "daily",
-    },
-    defaultSize: { w: 4, h: 3 },
-  },
-  {
-    typeKey: "bar-chart",
-    name: "Bar Chart",
-    description:
-      "Bar chart showing entity count grouped by a field value — great for status breakdowns and trends.",
-    icon: "BarChart2",
-    category: "analytics",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: { type: "string", title: "Profile" },
-        groupByField: {
-          type: "string",
-          title: "Group By Field",
-          description: "Property slug to group entities by",
-        },
-        title: { type: "string", title: "Chart Title" },
-        limit: { type: "number", title: "Max Bars", minimum: 2, maximum: 20 },
-        metric: {
-          type: "string",
-          title: "Metric",
-          enum: ["count", "sum", "average"],
-        },
-        metricField: {
-          type: "string",
-          title: "Metric Field",
-          description: "For sum/average: which property to aggregate",
-        },
-        filter: { type: "object", title: "Filter" },
-      },
-      required: ["profileSlug", "groupByField"],
-    },
-    defaultConfig: { limit: 8, metric: "count" },
-    defaultSize: { w: 6, h: 3 },
-  },
-  {
-    typeKey: "entity-spotlight",
-    name: "Entity Spotlight",
-    description:
-      "Featured entity card — highlights a single entity (daily pick, latest, or pinned). Perfect for a 'Book of the Day' or 'Today's Focus' block.",
-    icon: "Sparkles",
-    category: "knowledge",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: { type: "string", title: "Profile" },
-        seed: {
-          type: "string",
-          title: "Selection",
-          enum: ["daily", "pinned", "latest"],
-          description:
-            "daily = changes each day, pinned = fixed entity, latest = most recently created",
-        },
-        layout: {
-          type: "string",
-          title: "Layout",
-          enum: ["compact", "detail"],
-          description:
-            "compact = title+icon, detail = full card with properties",
-        },
-        entityId: {
-          type: "string",
-          title: "Pinned Entity ID",
-          description: "UUID of entity to pin (only used when seed=pinned)",
-        },
-        filter: {
-          type: "object",
-          title: "Filter",
-          description: "Restrict pool for random/daily selection",
-        },
-      },
-      required: ["profileSlug"],
-    },
-    defaultConfig: { seed: "daily", layout: "compact" },
-    defaultSize: { w: 8, h: 3 },
-  },
-  {
-    typeKey: "entity-timeline",
-    name: "Entity Timeline",
-    description:
-      "Chronological list of entities grouped by date — great for activity logs, reading history, note archives.",
-    icon: "Clock",
-    category: "data",
-    configSchema: {
-      type: "object",
-      properties: {
-        profileSlug: { type: "string", title: "Profile" },
-        dateField: {
-          type: "string",
-          title: "Date Field",
-          description:
-            "Property slug for the date to sort/group by (e.g. created_at, date_finished)",
-        },
-        title: { type: "string", title: "Title" },
-        limit: { type: "number", title: "Limit", minimum: 1, maximum: 100 },
-        filter: { type: "object", title: "Filter" },
-      },
-      required: ["profileSlug", "dateField"],
-    },
-    defaultConfig: { limit: 10 },
-    defaultSize: { w: 6, h: 4 },
-  },
-];
+interface CapabilitiesManifest {
+  version: string;
+  generatedAt: string;
+  widgets: ManifestWidget[];
+  views: unknown[];
+}
+
+// ─── Manifest loading ────────────────────────────────────────────────────────
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Resolve the path to capabilities.json */
+function resolveManifestPath(): string {
+  // 1. Env override (production: mount the JSON wherever you want)
+  if (process.env.CAPABILITIES_MANIFEST_PATH) {
+    return process.env.CAPABILITIES_MANIFEST_PATH;
+  }
+
+  // 2. Dev: relative to this file → synap-app/packages/core/capabilities/dist/
+  return path.resolve(
+    __dirname,
+    "../../../../..", // → synap root
+    "synap-app/packages/core/capabilities/dist/capabilities.json"
+  );
+}
+
+function loadManifest(): CapabilitiesManifest | null {
+  const manifestPath = resolveManifestPath();
+
+  if (!fs.existsSync(manifestPath)) {
+    logger.warn(
+      { path: manifestPath },
+      "capabilities.json not found — run `pnpm --filter @synap/capabilities build` to generate it. Widget definitions will not be seeded."
+    );
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf-8");
+    return JSON.parse(raw) as CapabilitiesManifest;
+  } catch (err) {
+    logger.error(
+      { err, path: manifestPath },
+      "Failed to parse capabilities.json"
+    );
+    return null;
+  }
+}
+
+// ─── Config schema conversion ────────────────────────────────────────────────
 
 /**
- * Seed all built-in widget definitions.
- * Uses ON CONFLICT DO UPDATE to keep name/description/schema in sync.
+ * Convert the capabilities configSchema array format to a JSONSchema object
+ * that the DB stores and the AI consumes.
+ */
+function configSchemaArrayToJsonSchema(
+  fields: ManifestWidget["configSchema"]
+): Record<string, unknown> {
+  if (!fields || fields.length === 0) {
+    return { type: "object", properties: {} };
+  }
+
+  const properties: Record<string, Record<string, unknown>> = {};
+  const required: string[] = [];
+
+  for (const field of fields) {
+    const prop: Record<string, unknown> = {};
+
+    if (field.options) {
+      prop.type = "string";
+      prop.enum = field.options.map((o) => o.value);
+    } else {
+      prop.type = field.type === "select" ? "string" : field.type;
+    }
+
+    if (field.description) prop.description = field.description;
+    if (field.defaultValue !== undefined) prop.default = field.defaultValue;
+
+    properties[field.key] = prop;
+
+    if (field.required) {
+      required.push(field.key);
+    }
+  }
+
+  return {
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+  };
+}
+
+// ─── Seed function ───────────────────────────────────────────────────────────
+
+/**
+ * Seed all built-in widget definitions from the capabilities manifest.
+ *
+ * Idempotent: uses ON CONFLICT DO UPDATE to keep the DB in sync with
+ * the manifest. Adding a new widget to @synap/capabilities + rebuilding
+ * + restarting the backend is all that's needed.
  */
 export async function seedWidgetDefinitions(): Promise<void> {
+  const manifest = loadManifest();
+
+  if (!manifest) {
+    logger.warn("Skipping widget definition seed — no manifest available");
+    return;
+  }
+
   try {
     const db = await getDb();
 
-    for (const seed of BUILTIN_WIDGETS) {
+    // Filter out aliases — they share the same underlying cell, no separate DB row needed
+    const widgets = manifest.widgets.filter((w) => !w.aliasOf);
+
+    let seeded = 0;
+    for (const widget of widgets) {
+      const configSchema = configSchemaArrayToJsonSchema(widget.configSchema);
+
       await db
         .insert(widgetDefinitions)
         .values({
-          typeKey: seed.typeKey,
-          workspaceId: null,
-          name: seed.name,
-          description: seed.description,
-          icon: seed.icon,
-          category: seed.category,
+          typeKey: widget.key,
+          workspaceId: null, // system-wide
+          name: widget.name,
+          description: widget.description,
+          icon: widget.icon,
+          category: widget.category,
           rendererType: "builtin",
           rendererSource: null,
-          configSchema: seed.configSchema,
-          defaultConfig: seed.defaultConfig ?? {},
-          defaultSize: seed.defaultSize,
+          configSchema,
+          defaultConfig: {},
+          defaultSize: widget.defaultSize,
           isActive: true,
         })
         .onConflictDoUpdate({
           target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
           set: {
-            name: seed.name,
-            description: seed.description,
-            icon: seed.icon ?? null,
-            category: seed.category,
-            configSchema: seed.configSchema,
-            defaultConfig: seed.defaultConfig ?? {},
-            defaultSize: seed.defaultSize,
+            name: widget.name,
+            description: widget.description,
+            icon: widget.icon ?? null,
+            category: widget.category,
+            configSchema,
+            defaultSize: widget.defaultSize,
             updatedAt: new Date(),
           },
         });
+
+      seeded++;
     }
 
     logger.info(
-      { count: BUILTIN_WIDGETS.length },
-      "Widget definitions seeded successfully"
+      {
+        seeded,
+        manifestVersion: manifest.version,
+        generatedAt: manifest.generatedAt,
+      },
+      "Widget definitions synced from capabilities manifest"
     );
   } catch (error) {
     logger.error(

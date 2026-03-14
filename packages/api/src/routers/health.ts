@@ -48,24 +48,31 @@ export const healthRouter = router({
 
   /**
    * Migration status - shows applied database migrations
-   *
-   * NOTE: Temporarily returning placeholder due to drizzle ORM execute() limitations
-   * TODO: Fix after notes.create debugging complete
    */
   migrations: publicProcedure.query(async () => {
-    // Temporary: Return success indicator instead of actual migrations
-    // The migrations are applied successfully (verified by validate-system.sh)
-    return {
-      total: 10,
-      migrations: [
-        {
-          version: "System validated",
-          appliedAt: new Date().toISOString(),
-          description: "All migrations applied successfully",
-        },
-      ],
-      note: "Migration table query temporarily disabled - use ./scripts/validate-system.sh for actual status",
-    };
+    try {
+      const rows = await sql`
+        SELECT id, hash, created_at
+        FROM drizzle.__drizzle_migrations
+        ORDER BY created_at DESC
+        LIMIT 20
+      `;
+      return {
+        total: rows.length,
+        migrations: rows.map((r: Record<string, unknown>) => ({
+          id: r.id,
+          hash: r.hash,
+          appliedAt: r.created_at,
+        })),
+      };
+    } catch {
+      // Table may not exist if using a different migration runner
+      return {
+        total: 0,
+        migrations: [],
+        note: "Could not query drizzle migration table",
+      };
+    }
   }),
 
   /**

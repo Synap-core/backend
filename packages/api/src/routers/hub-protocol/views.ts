@@ -25,9 +25,11 @@ import { and, eq } from "drizzle-orm";
 
 /** A single widget placement in the bento grid */
 const BentoWidgetInputSchema = z.object({
-  /** Cell key (e.g. "entity-detail", "channel-feed", "view") */
+  /** Cell key — any registered widget type (stat-card, entity-list, etc.) */
   key: z.string().min(1),
-  /** Props forwarded to the cell (entityId, channelId, viewId, etc.) */
+  /** Widget configuration (profileSlug, aggregation, chartType, etc.) */
+  config: z.record(z.string(), z.unknown()).optional(),
+  /** Legacy props — merged into config for backward compat */
   props: z.record(z.string(), z.unknown()).optional(),
   /** Grid column (0-11, 12-column grid) */
   x: z.number().int().min(0).max(11),
@@ -252,11 +254,12 @@ export const hubViewsRouter = router({
       }
 
       // Build bento config from widget input
+      // Merge config + props (config takes priority, props is legacy fallback)
       const blocks = input.widgets.map((w, i) => ({
         id: `cell-${i}-${Date.now()}`,
         kind: "widget" as const,
         widgetType: w.key,
-        config: w.props ?? {},
+        config: { ...(w.props ?? {}), ...(w.config ?? {}) },
         pos: { x: w.x, y: w.y, w: w.w, h: w.h },
       }));
 

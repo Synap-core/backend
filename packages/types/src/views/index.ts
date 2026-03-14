@@ -31,6 +31,7 @@ export type ViewType =
   | "whiteboard"
   | "table"
   | "kanban"
+  | "matrix"
   | "list"
   | "grid"
   | "gallery"
