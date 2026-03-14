@@ -40,6 +40,7 @@ import { handleIntelligenceHealthCheck } from "./intelligence-health-check.js";
 import { handleAutomationTriggerMatch } from "./automation-trigger-matcher.js";
 import { handleAutomationExecute } from "./automation-executor.js";
 import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
+import { handleTelegramDigest } from "./telegram-digest.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -71,6 +72,7 @@ const ALL_QUEUES = [
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",
+  "telegram-digest",
 ];
 
 /**
@@ -217,6 +219,10 @@ export async function registerAllWorkers(): Promise<void> {
     handleAutomationCronScheduler()
   );
   logger.info("Registered worker: automation-cron-scheduler");
+
+  // Telegram morning digest (cron: daily at 8:00 AM)
+  await boss.work("telegram-digest", async () => handleTelegramDigest());
+  logger.info("Registered worker: telegram-digest");
 
   logger.info("All workers registered");
 }

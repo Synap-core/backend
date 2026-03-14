@@ -47,5 +47,9 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("automation-cron-scheduler", "* * * * *", {});
   logger.info("Registered cron: automation-cron-scheduler (every 1min)");
 
+  // Telegram morning digest (daily at 8:00 AM)
+  await boss.schedule("telegram-digest", "0 8 * * *", {});
+  logger.info("Registered cron: telegram-digest (daily at 8:00 AM)");
+
   logger.info("All cron schedules registered");
 }

@@ -49,6 +49,12 @@ export {
 // Export JWKS client for CP JWT verification
 export { verifyCpJwt, clearJwksCache } from "./utils/jwks-client.js";
 
+// Export Telegram bot token resolver (3-tier: vault → workspace setting → env)
+export {
+  resolveTelegramBotToken,
+  clearTelegramTokenCache,
+} from "./utils/telegram-bot-token.js";
+
 // Export utilities for default whiteboard creation
 // Re-export ensureDefaultWhiteboard from @synap/database for convenience
 export { ensureDefaultWhiteboard } from "@synap/database";
@@ -105,6 +111,7 @@ import { agentUsersRouter } from "./routers/agent-users.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { automationsRouter } from "./routers/automations.js";
+import { importRouter } from "./routers/import.js";
 import { createContext } from "./context.js";
 import { registerRouter, buildAppRouter } from "./router-registry.js";
 
@@ -351,6 +358,12 @@ registerRouter("automations", automationsRouter, {
   version: "1.0.0",
   source: "core",
   description: "Workflow automation CRUD and run history",
+});
+registerRouter("import", importRouter, {
+  version: "1.0.0",
+  source: "core",
+  description:
+    "Bulk import (JSON/Markdown/CSV) into entities, documents, and channels",
 });
 
 import { coreRouter } from "./root.js";

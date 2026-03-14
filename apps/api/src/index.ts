@@ -484,10 +484,11 @@ app.post("/api/auth/telegram", async (c) => {
     }
 
     // 0. Validate Telegram initData HMAC
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const { resolveTelegramBotToken } = await import("@synap/api");
+    const botToken = await resolveTelegramBotToken();
     if (!botToken) {
       apiLogger.error(
-        "TELEGRAM_BOT_TOKEN not configured — cannot validate Mini App auth"
+        "Telegram bot token not found in vault, workspace settings, or env"
       );
       return c.json({ error: "Telegram not configured on this pod" }, 503);
     }
