@@ -136,7 +136,7 @@ export async function notifyProposalViaTelegram(opts: {
   reasoning?: string;
   workspaceId?: string;
 }): Promise<boolean> {
-  const { userId, proposalId, targetType, action, reasoning, workspaceId } =
+  const { userId, proposalId, targetType, action, reasoning, workspaceId: _ws } =
     opts;
 
   const miniAppUrl =

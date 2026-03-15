@@ -33,7 +33,7 @@ import {
   channels,
   messages,
   channelContextItems,
-  entities,
+  entities as entitiesTable,
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
@@ -883,8 +883,8 @@ export const channelsRouter = router({
           // Verify entity exists and is a file belonging to this user
           const entity = await db.query.entities.findFirst({
             where: and(
-              eq(entities.id, attachEntityId),
-              eq(entities.type, "file")
+              eq(entitiesTable.id, attachEntityId),
+              eq(entitiesTable.type, "file")
             ),
             columns: { id: true, properties: true },
           });

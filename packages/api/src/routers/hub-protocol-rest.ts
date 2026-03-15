@@ -2940,7 +2940,7 @@ app.post("/commands/execute", async (c) => {
         encoding: "utf-8",
         env: buildSafeEnv(),
       });
-      stdout = typeof result === "string" ? result : (result?.toString() ?? "");
+      stdout = String(result ?? "");
     } catch (execErr: unknown) {
       const err = execErr as {
         stdout?: string;

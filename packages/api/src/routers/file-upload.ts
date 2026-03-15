@@ -127,7 +127,7 @@ fileUploadApp.post("/upload", async (c) => {
     };
 
     // Create entity
-    const [entity] = await db
+    const [_entity] = await db
       .insert(entities)
       .values({
         id: entityId,

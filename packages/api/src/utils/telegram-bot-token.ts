@@ -153,7 +153,6 @@ async function resolveFromWorkspaceSettings(): Promise<string | null> {
     const rows = await db
       .select({ settings: workspaces.settings })
       .from(workspaces)
-      .where(isNull(workspaces.deletedAt))
       .limit(5); // pods usually have 1-2 workspaces; check a few
 
     for (const row of rows) {
