@@ -1620,6 +1620,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentType?: string | undefined;
 				agentHandle?: string | undefined;
 				parentChannelId?: string | undefined;
+				attachmentEntityIds?: string[] | undefined;
 			};
 			output: {
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
@@ -2855,10 +2856,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				total: number;
 				migrations: {
-					version: string;
-					appliedAt: string;
-					description: string;
+					id: unknown;
+					hash: unknown;
+					appliedAt: unknown;
 				}[];
+				note?: undefined;
+			} | {
+				total: number;
+				migrations: never[];
 				note: string;
 			};
 			meta: object;
@@ -7788,6 +7793,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				ok: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	import: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		submitBatch: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				items: {
+					path: string;
+					contentBase64: string;
+					mimeType?: string | undefined;
+				}[];
+				workspaceId?: string | undefined;
+			};
+			output: {
+				filesReceived: number;
+				entitiesCreated: number;
+				documentsCreated: number;
+				channelsCreated: number;
+				messagesCreated: number;
+				filesStoredOnly: number;
+				errors: Array<{
+					path: string;
+					message: string;
+				}>;
+				batchId: `${string}-${string}-${string}-${string}-${string}`;
 			};
 			meta: object;
 		}>;
