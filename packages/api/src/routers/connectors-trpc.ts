@@ -1,14 +1,20 @@
 /**
  * Connectors tRPC Router
  *
- * Proxies connector operations to the Control Plane.
- * The browser calls these tRPC procedures, which forward to CP REST endpoints.
+ * Proxies connector operations to a Control Plane.
+ * The frontend sends the CP URL with each request; the pod validates it
+ * against its provisioned allowlist before proxying.
+ *
+ * Security: The pod only proxies to URLs that were established via a
+ * cryptographically verified provisioning flow (ES256 JWT). This prevents
+ * SSRF — the pod never fetches from arbitrary user-supplied URLs.
  *
  * Procedures:
  *   connectors.providers   — List available providers with connection status
  *   connectors.connections — List user's active connections
  *   connectors.session     — Get Nango Connect session token for OAuth UI
  *   connectors.disconnect  — Revoke a connection
+ *   connectors.entitySources — Get external links for an entity (local DB)
  */
 
 import { z } from "zod";
@@ -19,6 +25,124 @@ import { db, eq, entityExternalLinks } from "@synap/database";
 
 const logger = createLogger({ module: "connectors-trpc" });
 
+// ─── CP URL validation (SSRF prevention) ─────────────────────────────────────
+
+const CACHE_TTL = 5 * 60_000; // 5 min
+
+interface CacheEntry<T> {
+  value: T;
+  resolvedAt: number;
+}
+
+let allowedCpUrlsCache: CacheEntry<string[]> | null = null;
+let podIdCache: CacheEntry<string | null> | null = null;
+
+/**
+ * Load the set of trusted CP URLs from provisioning data.
+ * These were set via cryptographically signed JWTs during provisioning.
+ */
+async function getAllowedCpUrls(): Promise<string[]> {
+  if (
+    allowedCpUrlsCache &&
+    Date.now() - allowedCpUrlsCache.resolvedAt < CACHE_TTL
+  ) {
+    return allowedCpUrlsCache.value;
+  }
+
+  const urls: string[] = [];
+
+  // 1. Env var
+  if (config.server.controlPlaneUrl) {
+    urls.push(normalize(config.server.controlPlaneUrl));
+  }
+
+  // 2. DB — workspace.settings.controlPlane.url (set via signed provision JWT)
+  try {
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string; allowedUrls?: string[] } | undefined;
+    if (cp?.url) urls.push(normalize(cp.url));
+    // Future: additional allowed URLs for third-party CPs
+    if (Array.isArray(cp?.allowedUrls)) {
+      for (const u of cp.allowedUrls) {
+        if (typeof u === "string") urls.push(normalize(u));
+      }
+    }
+  } catch {
+    // DB unavailable — only env var URLs are allowed
+  }
+
+  const deduped = [...new Set(urls)];
+  allowedCpUrlsCache = { value: deduped, resolvedAt: Date.now() };
+  return deduped;
+}
+
+function normalize(url: string): string {
+  return url.replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * Validate a frontend-provided CP URL against the provisioned allowlist.
+ * Throws FORBIDDEN if the URL is not trusted.
+ */
+async function validateCpUrl(requestedUrl: string): Promise<string> {
+  const normalized = normalize(requestedUrl);
+  const allowed = await getAllowedCpUrls();
+
+  if (allowed.includes(normalized)) {
+    // Return the original (non-lowercased) URL for actual HTTP calls
+    return requestedUrl.replace(/\/+$/, "");
+  }
+
+  logger.warn({ requestedUrl, allowed }, "Rejected untrusted CP URL");
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message:
+      "Control Plane URL not recognized. The pod only proxies to its provisioned CP.",
+  });
+}
+
+/**
+ * Resolve CP URL: use frontend-provided URL (validated) or fall back to
+ * the first provisioned URL.
+ */
+async function resolveCpUrl(
+  frontendUrl: string | undefined
+): Promise<string | null> {
+  if (frontendUrl) return validateCpUrl(frontendUrl);
+
+  // Fallback: first allowed URL (env var > DB)
+  const allowed = await getAllowedCpUrls();
+  return allowed[0] ?? null;
+}
+
+// ─── Pod ID resolution ────────────────────────────────────────────────────────
+
+async function getPodId(): Promise<string | null> {
+  if (process.env.POD_ID) return process.env.POD_ID;
+
+  if (podIdCache && Date.now() - podIdCache.resolvedAt < CACHE_TTL) {
+    return podIdCache.value;
+  }
+
+  try {
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { podId?: string } | undefined;
+    const id = cp?.podId ?? null;
+    podIdCache = { value: id, resolvedAt: Date.now() };
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+// ─── CP fetch helper ──────────────────────────────────────────────────────────
+
 /** Extract session token from request cookie header. */
 function getSessionToken(req: Request | undefined): string | undefined {
   const cookie = req?.headers.get("cookie") ?? "";
@@ -27,49 +151,10 @@ function getSessionToken(req: Request | undefined): string | undefined {
 }
 
 /**
- * Resolve the CP URL. Follows the established pod pattern:
- *   1. Env var CONTROL_PLANE_URL (fast, no DB hit)
- *   2. workspace.settings.controlPlane.url (set during provisioning)
- */
-let cpUrlCache: { url: string | null; resolvedAt: number } | null = null;
-const CP_URL_CACHE_TTL = 5 * 60_000; // 5 min
-
-async function resolveCpUrl(): Promise<string | null> {
-  // 1. Env var — fast path
-  if (config.server.controlPlaneUrl) return config.server.controlPlaneUrl;
-
-  // 2. Cache hit
-  if (cpUrlCache && Date.now() - cpUrlCache.resolvedAt < CP_URL_CACHE_TTL) {
-    return cpUrlCache.url;
-  }
-
-  // 3. Read from workspace settings (set during CP provisioning)
-  try {
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string } | undefined;
-    const url = cp?.url ?? null;
-    cpUrlCache = { url, resolvedAt: Date.now() };
-    return url;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Build the CP API URL for a given path.
- */
-function buildCpUrl(cpUrl: string, path: string): string {
-  return `${cpUrl}/api/connectors${path}`;
-}
-
-/**
  * Forward a request to the CP connectors API.
- * Uses the user's session for authentication.
  */
 async function cpFetch(
+  cpUrl: string,
   path: string,
   options: {
     method: string;
@@ -78,16 +163,7 @@ async function cpFetch(
     query?: Record<string, string>;
   }
 ): Promise<unknown> {
-  const cpUrl = await resolveCpUrl();
-  if (!cpUrl) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "Control Plane not configured — pod has not been provisioned or CONTROL_PLANE_URL is not set",
-    });
-  }
-
-  const url = new URL(buildCpUrl(cpUrl, path));
+  const url = new URL(`${cpUrl}/api/connectors${path}`);
   if (options.query) {
     for (const [key, value] of Object.entries(options.query)) {
       url.searchParams.set(key, value);
@@ -125,65 +201,115 @@ async function cpFetch(
   return response.json();
 }
 
+// ─── Shared input schema ──────────────────────────────────────────────────────
+
+/** All CP-proxying procedures accept an optional cpUrl from the frontend. */
+const cpUrlInput = z.object({ cpUrl: z.string().url().optional() }).optional();
+
+// ─── Router ───────────────────────────────────────────────────────────────────
+
 export const connectorsRouter = router({
   /**
    * List available providers with their connection status for this pod.
    */
-  providers: protectedProcedure.query(async ({ ctx }) => {
-    const podId = await getPodId();
+  providers: protectedProcedure
+    .input(cpUrlInput)
+    .query(async ({ ctx, input }) => {
+      const cpUrl = await resolveCpUrl(input?.cpUrl);
+      if (!cpUrl) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No Control Plane configured",
+        });
+      }
 
-    const result = (await cpFetch("/providers", {
-      method: "GET",
-      sessionToken: getSessionToken(ctx.req),
-      query: podId ? { podId } : undefined,
-    })) as { providers: unknown[] };
+      const podId = await getPodId();
 
-    return result.providers;
-  }),
+      const result = (await cpFetch(cpUrl, "/providers", {
+        method: "GET",
+        sessionToken: getSessionToken(ctx.req),
+        query: podId ? { podId } : undefined,
+      })) as { providers: unknown[] };
+
+      return result.providers;
+    }),
 
   /**
    * List user's active connections for this pod.
    */
-  connections: protectedProcedure.query(async ({ ctx }) => {
-    const podId = await getPodId();
+  connections: protectedProcedure
+    .input(cpUrlInput)
+    .query(async ({ ctx, input }) => {
+      const cpUrl = await resolveCpUrl(input?.cpUrl);
+      if (!cpUrl) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No Control Plane configured",
+        });
+      }
 
-    const result = (await cpFetch("/connections", {
-      method: "GET",
-      sessionToken: getSessionToken(ctx.req),
-      query: podId ? { podId } : undefined,
-    })) as { connections: unknown[] };
+      const podId = await getPodId();
 
-    return result.connections;
-  }),
+      const result = (await cpFetch(cpUrl, "/connections", {
+        method: "GET",
+        sessionToken: getSessionToken(ctx.req),
+        query: podId ? { podId } : undefined,
+      })) as { connections: unknown[] };
+
+      return result.connections;
+    }),
 
   /**
    * Get a Nango Connect session token for the OAuth UI.
    */
-  session: protectedProcedure.mutation(async ({ ctx }) => {
-    const podId = await getPodId();
-    if (!podId) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "Pod ID not configured",
-      });
-    }
+  session: protectedProcedure
+    .input(cpUrlInput)
+    .mutation(async ({ ctx, input }) => {
+      const cpUrl = await resolveCpUrl(input?.cpUrl);
+      if (!cpUrl) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No Control Plane configured",
+        });
+      }
 
-    const result = (await cpFetch("/session", {
-      method: "POST",
-      sessionToken: getSessionToken(ctx.req),
-      body: { podId },
-    })) as { token: string };
+      const podId = await getPodId();
+      if (!podId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Pod ID not configured",
+        });
+      }
 
-    return { token: result.token };
-  }),
+      const result = (await cpFetch(cpUrl, "/session", {
+        method: "POST",
+        sessionToken: getSessionToken(ctx.req),
+        body: { podId },
+      })) as { token: string };
+
+      return { token: result.token };
+    }),
 
   /**
    * Disconnect a connector.
    */
   disconnect: protectedProcedure
-    .input(z.object({ connectionId: z.string().min(1) }))
+    .input(
+      z.object({
+        connectionId: z.string().min(1),
+        cpUrl: z.string().url().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      await cpFetch("/disconnect", {
+      const cpUrl = await resolveCpUrl(input.cpUrl);
+      if (!cpUrl) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No Control Plane configured",
+        });
+      }
+
+      await cpFetch(cpUrl, "/disconnect", {
         method: "POST",
         sessionToken: getSessionToken(ctx.req),
         body: { connectionId: input.connectionId },
@@ -194,7 +320,7 @@ export const connectorsRouter = router({
 
   /**
    * Get external source links for an entity.
-   * Returns the connector providers that synced this entity.
+   * This is a local DB query — no CP involved.
    */
   entitySources: protectedProcedure
     .input(z.object({ entityId: z.string().uuid() }))
@@ -211,30 +337,3 @@ export const connectorsRouter = router({
       return links;
     }),
 });
-
-/**
- * Get the pod ID from environment / workspace settings.
- * Follows same pattern as CP URL: env var first, then DB fallback.
- */
-let podIdCache: { id: string | null; resolvedAt: number } | null = null;
-
-async function getPodId(): Promise<string | null> {
-  if (process.env.POD_ID) return process.env.POD_ID;
-
-  if (podIdCache && Date.now() - podIdCache.resolvedAt < CP_URL_CACHE_TTL) {
-    return podIdCache.id;
-  }
-
-  try {
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { podId?: string } | undefined;
-    const id = cp?.podId ?? null;
-    podIdCache = { id, resolvedAt: Date.now() };
-    return id;
-  } catch {
-    return null;
-  }
-}
