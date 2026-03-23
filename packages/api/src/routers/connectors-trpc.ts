@@ -9,8 +9,10 @@
  * cryptographically verified provisioning flow (ES256 JWT). This prevents
  * SSRF — the pod never fetches from arbitrary user-supplied URLs.
  *
+ * Tier gating: Solo (free) = 1 connector. Any paid tier = unlimited.
+ *
  * Procedures:
- *   connectors.providers   — List available providers with connection status
+ *   connectors.providers   — List available providers with connection status + limits
  *   connectors.connections — List user's active connections
  *   connectors.session     — Get Nango Connect session token for OAuth UI
  *   connectors.disconnect  — Revoke a connection
@@ -25,78 +27,104 @@ import { getDb, db, eq, entityExternalLinks } from "@synap/database";
 
 const logger = createLogger({ module: "connectors-trpc" });
 
-// ─── CP URL validation (SSRF prevention) ─────────────────────────────────────
+// ─── Connector limits per tier ───────────────────────────────────────────────
+
+/** -1 = unlimited */
+const CONNECTOR_LIMITS: Record<string, number> = {
+  solo: 1,
+  pro: -1,
+  team: -1,
+  enterprise: -1,
+};
+
+function getConnectorLimit(tier: string): number {
+  return CONNECTOR_LIMITS[tier] ?? CONNECTOR_LIMITS.solo!;
+}
+
+// ─── Cached workspace controlPlane settings ──────────────────────────────────
 
 const CACHE_TTL = 5 * 60_000; // 5 min
+
+interface ControlPlaneSettings {
+  url?: string;
+  podId?: string;
+  tier?: string;
+  allowedUrls?: string[];
+}
 
 interface CacheEntry<T> {
   value: T;
   resolvedAt: number;
 }
 
-let allowedCpUrlsCache: CacheEntry<string[]> | null = null;
-let podIdCache: CacheEntry<string | null> | null = null;
+let cpSettingsCache: CacheEntry<ControlPlaneSettings> | null = null;
 
 /**
- * Load the set of trusted CP URLs from provisioning data.
- * Primary source: workspace.settings.controlPlane.url (set via signed ES256 JWT).
- * Fallback: CONTROL_PLANE_URL env var (legacy, not recommended).
+ * Read workspace.settings.controlPlane from the DB (cached 5 min).
+ * This block is written by the provision flow (ES256 JWT from CP).
  */
-async function getAllowedCpUrls(): Promise<string[]> {
-  if (
-    allowedCpUrlsCache &&
-    Date.now() - allowedCpUrlsCache.resolvedAt < CACHE_TTL
-  ) {
-    return allowedCpUrlsCache.value;
+async function getControlPlaneSettings(): Promise<ControlPlaneSettings> {
+  if (cpSettingsCache && Date.now() - cpSettingsCache.resolvedAt < CACHE_TTL) {
+    return cpSettingsCache.value;
   }
 
-  const urls: string[] = [];
-
-  // 1. DB — workspace.settings.controlPlane.url (set via signed provision JWT)
-  //    This is the canonical source. Every provisioned pod has this.
   try {
     const database = await getDb();
     const ws = await database.query.workspaces.findFirst({
       columns: { settings: true },
     });
     const settings = (ws?.settings as Record<string, unknown>) ?? {};
-    const cp = settings.controlPlane as
-      | { url?: string; allowedUrls?: string[] }
-      | undefined;
+    const cp = (settings.controlPlane as ControlPlaneSettings) ?? {};
 
-    if (cp?.url) {
-      urls.push(normalize(cp.url));
-    } else {
+    if (!cp.url) {
       logger.warn(
-        { hasWorkspace: !!ws, hasControlPlane: !!cp },
+        { hasWorkspace: !!ws, hasControlPlane: !!cp.podId },
         "No controlPlane.url in workspace settings — pod may need re-provisioning"
       );
     }
 
-    // Future: additional allowed URLs for third-party CPs
-    if (Array.isArray(cp?.allowedUrls)) {
-      for (const u of cp.allowedUrls) {
-        if (typeof u === "string") urls.push(normalize(u));
-      }
-    }
+    cpSettingsCache = { value: cp, resolvedAt: Date.now() };
+    return cp;
   } catch (err) {
-    logger.error({ err }, "Failed to read CP URL from workspace settings");
+    logger.error(
+      { err },
+      "Failed to read controlPlane settings from workspace"
+    );
+    return {};
+  }
+}
+
+// ─── CP URL validation (SSRF prevention) ─────────────────────────────────────
+
+function normalize(url: string): string {
+  return url.replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * Load the set of trusted CP URLs from provisioning data.
+ * Primary source: workspace.settings.controlPlane.url (set via signed ES256 JWT).
+ * Fallback: CONTROL_PLANE_URL env var (legacy).
+ */
+async function getAllowedCpUrls(): Promise<string[]> {
+  const urls: string[] = [];
+
+  const cp = await getControlPlaneSettings();
+  if (cp.url) urls.push(normalize(cp.url));
+
+  if (Array.isArray(cp.allowedUrls)) {
+    for (const u of cp.allowedUrls) {
+      if (typeof u === "string") urls.push(normalize(u));
+    }
   }
 
-  // 2. Env var fallback (legacy — provisioned URL in DB is preferred)
+  // Env var fallback (legacy — provisioned URL in DB is preferred)
   if (config.server.controlPlaneUrl) {
     urls.push(normalize(config.server.controlPlaneUrl));
   }
 
   const deduped = [...new Set(urls)];
-  allowedCpUrlsCache = { value: deduped, resolvedAt: Date.now() };
-
   logger.debug({ allowedUrls: deduped }, "Resolved CP URL allowlist");
   return deduped;
-}
-
-function normalize(url: string): string {
-  return url.replace(/\/+$/, "").toLowerCase();
 }
 
 /**
@@ -108,7 +136,6 @@ async function validateCpUrl(requestedUrl: string): Promise<string> {
   const allowed = await getAllowedCpUrls();
 
   if (allowed.includes(normalized)) {
-    // Return the original (non-lowercased) URL for actual HTTP calls
     return requestedUrl.replace(/\/+$/, "");
   }
 
@@ -128,33 +155,8 @@ async function resolveCpUrl(
   frontendUrl: string | undefined
 ): Promise<string | null> {
   if (frontendUrl) return validateCpUrl(frontendUrl);
-
-  // Fallback: first allowed URL (env var > DB)
   const allowed = await getAllowedCpUrls();
   return allowed[0] ?? null;
-}
-
-// ─── Pod ID resolution ────────────────────────────────────────────────────────
-
-async function getPodId(): Promise<string | null> {
-  if (podIdCache && Date.now() - podIdCache.resolvedAt < CACHE_TTL) {
-    return podIdCache.value;
-  }
-
-  try {
-    const database = await getDb();
-    const ws = await database.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const settings = (ws?.settings as Record<string, unknown>) ?? {};
-    const cp = settings.controlPlane as { podId?: string } | undefined;
-    const id = cp?.podId ?? process.env.POD_ID ?? null;
-    podIdCache = { value: id, resolvedAt: Date.now() };
-    return id;
-  } catch (err) {
-    logger.warn({ err }, "Failed to read podId from workspace settings");
-    return process.env.POD_ID ?? null;
-  }
 }
 
 // ─── CP fetch helper ──────────────────────────────────────────────────────────
@@ -227,6 +229,7 @@ const cpUrlInput = z.object({ cpUrl: z.string().url().optional() }).optional();
 export const connectorsRouter = router({
   /**
    * List available providers with their connection status for this pod.
+   * Also returns the connector limit for the current tier.
    */
   providers: protectedProcedure
     .input(cpUrlInput)
@@ -239,7 +242,10 @@ export const connectorsRouter = router({
         });
       }
 
-      const podId = await getPodId();
+      const cp = await getControlPlaneSettings();
+      const podId = cp.podId ?? null;
+      const tier = cp.tier ?? "solo";
+      const limit = getConnectorLimit(tier);
 
       const result = (await cpFetch(cpUrl, "/providers", {
         method: "GET",
@@ -247,7 +253,11 @@ export const connectorsRouter = router({
         query: podId ? { podId } : undefined,
       })) as { providers: unknown[] };
 
-      return result.providers;
+      return {
+        providers: result.providers,
+        connectorLimit: limit, // -1 = unlimited
+        tier,
+      };
     }),
 
   /**
@@ -264,7 +274,8 @@ export const connectorsRouter = router({
         });
       }
 
-      const podId = await getPodId();
+      const cp = await getControlPlaneSettings();
+      const podId = cp.podId ?? null;
 
       const result = (await cpFetch(cpUrl, "/connections", {
         method: "GET",
@@ -277,6 +288,7 @@ export const connectorsRouter = router({
 
   /**
    * Get a Nango Connect session token for the OAuth UI.
+   * Enforces tier-based connector limits before issuing the session.
    */
   session: protectedProcedure
     .input(cpUrlInput)
@@ -289,12 +301,41 @@ export const connectorsRouter = router({
         });
       }
 
-      const podId = await getPodId();
+      const cp = await getControlPlaneSettings();
+      const podId = cp.podId ?? null;
       if (!podId) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message: "Pod ID not configured",
         });
+      }
+
+      // ── Tier-based connector limit ──
+      const tier = cp.tier ?? "solo";
+      const limit = getConnectorLimit(tier);
+
+      if (limit >= 0) {
+        const providersResult = (await cpFetch(cpUrl, "/providers", {
+          method: "GET",
+          sessionToken: getSessionToken(ctx.req),
+          query: { podId },
+        })) as {
+          providers: Array<{
+            connected?: boolean;
+            connectionId?: string | null;
+          }>;
+        };
+
+        const connectedCount = providersResult.providers.filter(
+          (p) => p.connected
+        ).length;
+
+        if (connectedCount >= limit) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Free plan allows ${limit} connector${limit === 1 ? "" : "s"}. Upgrade to connect more services.`,
+          });
+        }
       }
 
       const result = (await cpFetch(cpUrl, "/session", {
