@@ -21,7 +21,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
-import { db, eq, entityExternalLinks } from "@synap/database";
+import { getDb, db, eq, entityExternalLinks } from "@synap/database";
 
 const logger = createLogger({ module: "connectors-trpc" });
 
@@ -39,7 +39,8 @@ let podIdCache: CacheEntry<string | null> | null = null;
 
 /**
  * Load the set of trusted CP URLs from provisioning data.
- * These were set via cryptographically signed JWTs during provisioning.
+ * Primary source: workspace.settings.controlPlane.url (set via signed ES256 JWT).
+ * Fallback: CONTROL_PLANE_URL env var (legacy, not recommended).
  */
 async function getAllowedCpUrls(): Promise<string[]> {
   if (
@@ -51,31 +52,46 @@ async function getAllowedCpUrls(): Promise<string[]> {
 
   const urls: string[] = [];
 
-  // 1. Env var
-  if (config.server.controlPlaneUrl) {
-    urls.push(normalize(config.server.controlPlaneUrl));
-  }
-
-  // 2. DB — workspace.settings.controlPlane.url (set via signed provision JWT)
+  // 1. DB — workspace.settings.controlPlane.url (set via signed provision JWT)
+  //    This is the canonical source. Every provisioned pod has this.
   try {
-    const ws = await db.query.workspaces.findFirst({
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
       columns: { settings: true },
     });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string; allowedUrls?: string[] } | undefined;
-    if (cp?.url) urls.push(normalize(cp.url));
+    const settings = (ws?.settings as Record<string, unknown>) ?? {};
+    const cp = settings.controlPlane as
+      | { url?: string; allowedUrls?: string[] }
+      | undefined;
+
+    if (cp?.url) {
+      urls.push(normalize(cp.url));
+    } else {
+      logger.warn(
+        { hasWorkspace: !!ws, hasControlPlane: !!cp },
+        "No controlPlane.url in workspace settings — pod may need re-provisioning"
+      );
+    }
+
     // Future: additional allowed URLs for third-party CPs
     if (Array.isArray(cp?.allowedUrls)) {
       for (const u of cp.allowedUrls) {
         if (typeof u === "string") urls.push(normalize(u));
       }
     }
-  } catch {
-    // DB unavailable — only env var URLs are allowed
+  } catch (err) {
+    logger.error({ err }, "Failed to read CP URL from workspace settings");
+  }
+
+  // 2. Env var fallback (legacy — provisioned URL in DB is preferred)
+  if (config.server.controlPlaneUrl) {
+    urls.push(normalize(config.server.controlPlaneUrl));
   }
 
   const deduped = [...new Set(urls)];
   allowedCpUrlsCache = { value: deduped, resolvedAt: Date.now() };
+
+  logger.debug({ allowedUrls: deduped }, "Resolved CP URL allowlist");
   return deduped;
 }
 
@@ -121,23 +137,23 @@ async function resolveCpUrl(
 // ─── Pod ID resolution ────────────────────────────────────────────────────────
 
 async function getPodId(): Promise<string | null> {
-  if (process.env.POD_ID) return process.env.POD_ID;
-
   if (podIdCache && Date.now() - podIdCache.resolvedAt < CACHE_TTL) {
     return podIdCache.value;
   }
 
   try {
-    const ws = await db.query.workspaces.findFirst({
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
       columns: { settings: true },
     });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { podId?: string } | undefined;
-    const id = cp?.podId ?? null;
+    const settings = (ws?.settings as Record<string, unknown>) ?? {};
+    const cp = settings.controlPlane as { podId?: string } | undefined;
+    const id = cp?.podId ?? process.env.POD_ID ?? null;
     podIdCache = { value: id, resolvedAt: Date.now() };
     return id;
-  } catch {
-    return null;
+  } catch (err) {
+    logger.warn({ err }, "Failed to read podId from workspace settings");
+    return process.env.POD_ID ?? null;
   }
 }
 

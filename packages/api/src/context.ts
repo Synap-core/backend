@@ -62,15 +62,7 @@ export async function createContext(
         });
       }
 
-      // Debug logging for cookie presence
       const cookieHeader = req.headers.get("cookie");
-      contextLogger.info(
-        {
-          hasCookie: !!cookieHeader,
-          cookieLength: cookieHeader?.length || 0,
-        },
-        "Attempting to get session from request"
-      );
 
       // Try cache first (optional optimization)
       const cachedSession = sessionCache.get(cookieHeader || "");
@@ -91,29 +83,6 @@ export async function createContext(
       req.headers.get("X-Workspace-Id") ||
       req.headers.get("x-workspace-id") ||
       null;
-
-    // Debug logging for workspace ID extraction
-    if (process.env.NODE_ENV === "development" || process.env.DEBUG_WORKSPACE) {
-      // Convert Headers to array of [key, value] tuples
-      // Use forEach which is more widely supported than entries()
-      const allHeaders: Array<[string, string]> = [];
-      req.headers.forEach((value, key) => {
-        allHeaders.push([key, value]);
-      });
-
-      const workspaceHeaders = allHeaders.filter(([key]) =>
-        key.toLowerCase().includes("workspace")
-      );
-      contextLogger.debug(
-        {
-          workspaceId,
-          hasWorkspaceHeader: !!workspaceId,
-          workspaceHeaders,
-          allHeaderKeys: allHeaders.map(([key]) => key),
-        },
-        "Workspace ID extraction from headers"
-      );
-    }
 
     // Kratos session structure: { identity: { id, traits: { email, name } } }
     if (session && session.identity) {

@@ -59,9 +59,6 @@ export async function getKratosSession(cookie: string): Promise<any | null> {
     const { data: session } = await kratosPublic.toSession({
       cookie,
     });
-    console.log(
-      `[getKratosSession] Successfully validated session with Kratos at ${kratosPublicUrl}`
-    );
     return session;
   } catch (error: any) {
     console.error("[getKratosSession] Error validating session:", {
@@ -93,12 +90,43 @@ export async function getIdentityById(identityId: string): Promise<any | null> {
 }
 
 /**
+ * Get session from Kratos using an API session token (X-Session-Token header).
+ * Used by Telegram Mini App and other API clients that authenticate via
+ * Kratos API flows (which return session tokens, not cookies).
+ */
+export async function getKratosSessionByToken(
+  token: string
+): Promise<any | null> {
+  try {
+    const { data: session } = await kratosPublic.toSession({
+      xSessionToken: token,
+    });
+    return session;
+  } catch (error: any) {
+    console.error("[getKratosSessionByToken] Error validating token:", {
+      message: error.message,
+      status: error.response?.status,
+    });
+    return null;
+  }
+}
+
+/**
  * Get session from request headers
+ *
+ * Checks both cookie-based auth (browser) and X-Session-Token header (API clients).
  *
  * @param headers - Request headers
  * @returns Session data or null if invalid
  */
 export async function getSession(headers: Headers): Promise<any | null> {
+  // Check X-Session-Token first (API clients like Telegram Mini App)
+  const sessionToken = headers.get("x-session-token");
+  if (sessionToken) {
+    return getKratosSessionByToken(sessionToken);
+  }
+
+  // Fall back to cookie-based auth (browser)
   const cookie = headers.get("cookie") || "";
   return getKratosSession(cookie);
 }

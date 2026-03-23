@@ -6,8 +6,11 @@
 
 import type { MiddlewareHandler } from "hono";
 import { introspectToken } from "./ory-hydra.js";
-import { getIdentityById } from "./ory-kratos.js";
-import { getKratosSession } from "./ory-kratos.js";
+import {
+  getIdentityById,
+  getKratosSession,
+  getKratosSessionByToken,
+} from "./ory-kratos.js";
 
 /**
  * Middleware for OAuth2 token authentication (Bearer tokens)
@@ -57,9 +60,13 @@ export const oryAuthMiddleware: MiddlewareHandler = async (c, next) => {
  */
 export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") || "";
+  const sessionToken = c.req.header("x-session-token") || "";
 
-  if (!cookie) {
-    return c.json({ error: "Unauthorized", details: "No session cookie" }, 401);
+  if (!cookie && !sessionToken) {
+    return c.json(
+      { error: "Unauthorized", details: "No session cookie or token" },
+      401
+    );
   }
 
   // MOCK AUTH BYPASS (Development/Test Only)
@@ -90,8 +97,11 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
     return next();
   }
 
-  // Get session from Kratos
-  const session = await getKratosSession(cookie);
+  // Get session from Kratos — try X-Session-Token first (API clients),
+  // then fall back to cookie-based auth (browser)
+  const session = sessionToken
+    ? await getKratosSessionByToken(sessionToken)
+    : await getKratosSession(cookie);
 
   if (!session || !session.identity) {
     return c.json({ error: "Invalid session" }, 401);

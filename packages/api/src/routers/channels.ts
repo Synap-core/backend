@@ -1171,8 +1171,19 @@ export const channelsRouter = router({
           }
         }
       } catch (streamError) {
+        const streamErrMsg =
+          streamError instanceof Error
+            ? streamError.message
+            : String(streamError);
         logger.error(
-          { err: streamError, channelId },
+          {
+            err: streamError,
+            channelId,
+            serviceId: resolvedService.serviceId,
+            endpoint: resolvedService.endpoint,
+            isCircuit: streamErrMsg.includes("circuit open"),
+            isAbort: streamErrMsg.includes("abort"),
+          },
           "Streaming error, falling back to non-streaming"
         );
 
@@ -1205,14 +1216,36 @@ export const channelsRouter = router({
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down
-          // Save a service-unavailable message so the user isn't left with an orphaned user message
-          fullContent =
-            "The AI service is temporarily unavailable. Please try again in a moment.";
+          const errorDetail =
+            fallbackError instanceof Error
+              ? fallbackError.message
+              : String(fallbackError);
+          const isCircuit = errorDetail.includes("circuit open");
+          const isTimeout =
+            errorDetail.includes("abort") || errorDetail.includes("timeout");
+
+          logger.error(
+            { err: fallbackError, channelId, isCircuit, isTimeout },
+            "Both streaming and non-streaming IS calls failed"
+          );
+
+          // User-facing message with actionable context
+          if (isCircuit) {
+            fullContent =
+              "The AI service is recovering from a temporary overload. Please wait 30 seconds and try again.";
+          } else if (isTimeout) {
+            fullContent =
+              "The AI service took too long to respond. This usually resolves on its own — please try again.";
+          } else {
+            fullContent =
+              "The AI service is temporarily unavailable. Please try again in a moment.";
+          }
+
           emitChatEvent({
             event: "chat:stream:error",
             data: {
               threadId: channelId,
-              error: "AI service unavailable",
+              error: errorDetail,
               fallback: false,
             },
             workspaceId: workspaceId ?? null,

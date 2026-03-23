@@ -7859,17 +7859,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		providers: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				cpUrl?: string | undefined;
+			} | undefined;
 			output: unknown[];
 			meta: object;
 		}>;
 		connections: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				cpUrl?: string | undefined;
+			} | undefined;
 			output: unknown[];
 			meta: object;
 		}>;
 		session: import("@trpc/server").TRPCMutationProcedure<{
-			input: void;
+			input: {
+				cpUrl?: string | undefined;
+			} | undefined;
 			output: {
 				token: string;
 			};
@@ -7878,6 +7884,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		disconnect: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				connectionId: string;
+				cpUrl?: string | undefined;
 			};
 			output: {
 				success: boolean;
