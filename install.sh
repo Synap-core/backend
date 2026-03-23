@@ -365,6 +365,9 @@ services:
     command: >
       sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
              (node node_modules/@synap/database/dist/scripts/init-hub-keys.js 2>/dev/null || true)"
+  kratos:
+    environment:
+      SMTP_CONNECTION_URI: "smtp://localhost:1025/"
 OVERRIDE_EOF
 docker compose up -d kratos hydra-migrate hydra backend-migrate
 
