@@ -356,6 +356,14 @@ info "Waiting 8s for databases to initialize..."
 sleep 8
 
 info "Running database migrations..."
+# Ensure init-hub-keys.js failure is non-fatal for images that don't include it yet
+cat > "$INSTALL_DIR/docker-compose.override.yml" << 'OVERRIDE_EOF'
+services:
+  backend-migrate:
+    command: >
+      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
+             (node node_modules/@synap/database/dist/scripts/init-hub-keys.js 2>/dev/null || true)"
+OVERRIDE_EOF
 docker compose up -d kratos hydra-migrate hydra backend-migrate
 
 info "Waiting 5s for migrations to complete..."
