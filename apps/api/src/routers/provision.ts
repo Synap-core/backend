@@ -93,6 +93,8 @@ provisionRouter.post("/connect", async (c) => {
     resendApiKey?: string;
     resendFromEmail?: string;
     appUrl?: string;
+    nangoHost?: string;
+    nangoRecordsApiKey?: string;
   }>(token, cpUrl);
 
   if (!payload) {
@@ -147,6 +149,11 @@ provisionRouter.post("/connect", async (c) => {
       // Authorized IS URL — used by /register-intelligence to validate the registering IS
       ...(payload.intelligenceHubUrl
         ? { authorizedIntelligenceHubUrl: payload.intelligenceHubUrl }
+        : {}),
+      // Nango connector config — pod uses these to pull sync records directly from Nango
+      ...(payload.nangoHost ? { nangoHost: payload.nangoHost } : {}),
+      ...(payload.nangoRecordsApiKey
+        ? { nangoRecordsApiKey: payload.nangoRecordsApiKey }
         : {}),
     };
     // Intelligence service registration is handled by POST /api/provision/register-intelligence.

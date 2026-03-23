@@ -361,6 +361,56 @@ export class IntelligenceHubClient {
   }
 
   /**
+   * Extract structured entity data from a web page.
+   * Used by the browser Save button's AI extraction strategy.
+   *
+   * Falls back gracefully — never throws (returns null on failure).
+   */
+  async extractEntity(input: {
+    url: string;
+    html: string;
+    title?: string;
+  }): Promise<{
+    profileSlug: string;
+    title: string;
+    description?: string;
+    properties?: Record<string, unknown>;
+    confidence: number;
+  } | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6_000); // 6s max
+      try {
+        const response = await fetch(`${this.baseUrl}/api/extract`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": this.apiKey,
+          },
+          body: JSON.stringify(input),
+          signal: controller.signal,
+        });
+        if (!response.ok) return null;
+        const data = (await response.json()) as {
+          success: boolean;
+          data: {
+            profileSlug: string;
+            title: string;
+            description?: string;
+            properties?: Record<string, unknown>;
+            confidence: number;
+          };
+        };
+        return data.success ? data.data : null;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Health check
    */
   async healthCheck(): Promise<boolean> {

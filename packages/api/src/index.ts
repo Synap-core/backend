@@ -366,6 +366,12 @@ registerRouter("import", importRouter, {
   description:
     "Bulk import (JSON/Markdown/CSV) into entities, documents, and channels",
 });
+import { connectorsRouter as connectorsTrpcRouter } from "./routers/connectors-trpc.js";
+registerRouter("connectors", connectorsTrpcRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "External connector management (proxy to Control Plane)",
+});
 
 import { coreRouter } from "./root.js";
 export type { AppRouter } from "./root.js";

@@ -1325,4 +1325,30 @@ export const intelligenceRouter = router({
       },
     };
   }),
+
+  /**
+   * extractEntity
+   *
+   * Uses the Intelligence Service to extract structured entity data from a web page.
+   * Called by the browser Save button's AI extraction strategy.
+   * Returns null on failure — callers fall back to the simple IPC strategy.
+   */
+  extractEntity: workspaceProcedure
+    .input(
+      z.object({
+        url: z.string().url(),
+        html: z.string().max(50_000),
+        title: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { client } = await resolveIntelligenceService({
+        userId,
+        workspaceId: ctx.workspaceId,
+        capability: "default",
+      });
+      const result = await client.extractEntity(input);
+      return result;
+    }),
 });

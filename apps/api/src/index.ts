@@ -454,7 +454,11 @@ app.post("/api/handshake", async (c) => {
       "Handshake successful — session created"
     );
 
-    return c.json({ success: true, session: sessionData.session });
+    return c.json({
+      success: true,
+      session: sessionData.session,
+      session_token: sessionToken,
+    });
   } catch (error) {
     apiLogger.error({ err: error }, "Handshake endpoint error");
     return c.json({ error: "Internal server error" }, 500);
@@ -632,11 +636,188 @@ app.post("/api/auth/telegram", async (c) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Telegram Auto-Link Endpoint
+// Called after Cloud/Direct login when user already has a session.
+// Accepts initData + session token → validates HMAC → upserts channel_connection.
+// This bridges the gap: user logged in via CP but hasn't done /link yet.
+// ---------------------------------------------------------------------------
+app.post("/api/auth/telegram-link", async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { initData } = body as { initData?: string };
+
+    if (!initData || typeof initData !== "string") {
+      return c.json({ error: "initData is required" }, 400);
+    }
+
+    // Authenticate the caller via session cookie/header
+    const authHeader = c.req.header("Authorization");
+    const cookieHeader = c.req.header("Cookie");
+    const kratosPublicUrl =
+      process.env.KRATOS_PUBLIC_URL || "http://localhost:4433";
+
+    let sessionIdentityId: string | null = null;
+
+    // Try session token from Authorization header
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.slice(7);
+      const whoamiRes = await fetch(`${kratosPublicUrl}/sessions/whoami`, {
+        headers: { "X-Session-Token": token },
+      });
+      if (whoamiRes.ok) {
+        const session = (await whoamiRes.json()) as {
+          identity?: { id?: string };
+        };
+        sessionIdentityId = session.identity?.id ?? null;
+      }
+    }
+
+    // Try session from cookie
+    if (!sessionIdentityId && cookieHeader) {
+      const match = cookieHeader.match(/ory_kratos_session=([^;]+)/);
+      if (match) {
+        const whoamiRes = await fetch(`${kratosPublicUrl}/sessions/whoami`, {
+          headers: { Cookie: `ory_kratos_session=${match[1]}` },
+        });
+        if (whoamiRes.ok) {
+          const session = (await whoamiRes.json()) as {
+            identity?: { id?: string };
+          };
+          sessionIdentityId = session.identity?.id ?? null;
+        }
+      }
+    }
+
+    if (!sessionIdentityId) {
+      return c.json({ error: "Not authenticated" }, 401);
+    }
+
+    // Validate Telegram initData HMAC
+    const { resolveTelegramBotToken } = await import("@synap/api");
+    const botToken = await resolveTelegramBotToken();
+    if (!botToken) {
+      return c.json({ error: "Telegram not configured on this pod" }, 503);
+    }
+
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    if (!hash) {
+      return c.json({ error: "Missing hash in initData" }, 401);
+    }
+
+    params.delete("hash");
+    const entries = Array.from(params.entries()).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
+    const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join("\n");
+
+    const secretKey = crypto
+      .createHmac("sha256", "WebAppData")
+      .update(botToken)
+      .digest();
+    const computedHash = crypto
+      .createHmac("sha256", secretKey)
+      .update(dataCheckString)
+      .digest("hex");
+
+    if (computedHash !== hash) {
+      return c.json({ error: "Invalid initData signature" }, 401);
+    }
+
+    // Extract Telegram user
+    const userRaw = params.get("user");
+    if (!userRaw) {
+      return c.json({ error: "Missing user in initData" }, 401);
+    }
+
+    let telegramUser: { id: number; username?: string; first_name?: string };
+    try {
+      telegramUser = JSON.parse(userRaw);
+    } catch {
+      return c.json({ error: "Invalid user JSON" }, 401);
+    }
+
+    const telegramUserId = String(telegramUser.id);
+
+    // Upsert channel_connection
+    const { db, eq, and } = await import("@synap/database");
+    const { channelConnections } = await import("@synap/database/schema");
+    const { ensurePersonalChannel } = await import("@synap/api");
+
+    // Check if connection already exists
+    const existing = await db.query.channelConnections.findFirst({
+      where: and(
+        eq(channelConnections.channel, "telegram"),
+        eq(channelConnections.channelUserId, telegramUserId)
+      ),
+    });
+
+    if (existing) {
+      // Already linked — return success with existing data
+      return c.json({
+        linked: true,
+        alreadyExisted: true,
+        userId: existing.userId,
+        workspaceId: existing.workspaceId,
+        telegramChannelId: existing.defaultChannelId,
+      });
+    }
+
+    // Find user's first workspace
+    const { workspaces: wsTable } = await import("@synap/database/schema");
+    const userWorkspaces = await db.query.workspaces.findMany({
+      limit: 1,
+    });
+    const workspaceId = userWorkspaces[0]?.id ?? null;
+
+    // Ensure a personal channel exists
+    let telegramChannelId: string | null = null;
+    if (workspaceId) {
+      const personalChannel = await ensurePersonalChannel(
+        sessionIdentityId,
+        workspaceId
+      );
+      telegramChannelId = personalChannel.id;
+    }
+
+    // Insert the connection
+    await db.insert(channelConnections).values({
+      channel: "telegram",
+      channelUserId: telegramUserId,
+      userId: sessionIdentityId,
+      workspaceId,
+      defaultChannelId: telegramChannelId,
+      externalUsername:
+        telegramUser.username || telegramUser.first_name || null,
+    });
+
+    apiLogger.info(
+      { telegramUserId, userId: sessionIdentityId, workspaceId },
+      "Telegram auto-linked via Mini App"
+    );
+
+    return c.json({
+      linked: true,
+      alreadyExisted: false,
+      userId: sessionIdentityId,
+      workspaceId,
+      telegramChannelId,
+    });
+  } catch (error) {
+    apiLogger.error({ err: error }, "Telegram auto-link endpoint error");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 apiLogger.info(
   "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
 );
 apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
 apiLogger.info("Control Plane handshake endpoint enabled at /api/handshake");
+apiLogger.info(
+  "Telegram auto-link endpoint enabled at /api/auth/telegram-link"
+);
 
 // SSE endpoint for real-time event streaming (admin dashboard)
 // Server-Sent Events endpoint for event broadcasting
@@ -707,6 +888,10 @@ app.route("/api/admin", adminRouter);
 // Control Plane provisioning endpoint (ES256 JWT, verified via JWKS)
 import { provisionRouter } from "./routers/provision.js";
 app.route("/api/provision", provisionRouter);
+
+// Connector sync endpoint (ES256 JWT from CP, pulls records from Nango)
+import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
+app.route("/api/connectors", connectorsRestRouter);
 
 // Webhook routes (before auth - uses webhook secret auth)
 import { webhookRouter } from "./webhooks/index.js";

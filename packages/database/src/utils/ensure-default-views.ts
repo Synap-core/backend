@@ -180,36 +180,70 @@ export async function ensureDefaultViews(
       const DEFAULT_HOME_CONFIG = {
         layout: "bento",
         breakpoints: {
-          lg: { cols: 12, rowHeight: 100, gap: 16 },
-          md: { cols: 8, rowHeight: 100, gap: 16 },
-          sm: { cols: 4, rowHeight: 100, gap: 16 },
+          lg: { cols: 12, rowHeight: 60, gap: 12 },
+          md: { cols: 8, rowHeight: 60, gap: 12 },
+          sm: { cols: 4, rowHeight: 60, gap: 12 },
         },
         blocks: [
-          // Top row: Welcome + Tabs + Settings (left 2/3), DataPod (right 1/3)
+          // Row 0: Welcome greeting (full width)
           {
             id: "welcome-header",
             kind: "widget",
-            widgetType: "welcome-header",
-            pos: { x: 0, y: 0, w: 8, h: 2 },
+            widgetType: "welcome",
+            pos: { x: 0, y: 0, w: 12, h: 2 },
+          },
+          // Row 2: Quick capture + stat cards
+          {
+            id: "quick-capture",
+            kind: "widget",
+            widgetType: "quick-capture",
+            config: { placeholder: "Save a note, bookmark, or idea..." },
+            pos: { x: 0, y: 2, w: 4, h: 3 },
           },
           {
-            id: "workspace-card",
+            id: "stat-bookmarks",
+            kind: "widget",
+            widgetType: "stat-card",
+            config: {
+              profileSlug: "bookmark",
+              label: "Bookmarks",
+              aggregation: "count",
+              icon: "Bookmark",
+              chartType: "sparkline",
+            },
+            pos: { x: 4, y: 2, w: 3, h: 3 },
+          },
+          {
+            id: "stat-notes",
+            kind: "widget",
+            widgetType: "stat-card",
+            config: {
+              profileSlug: "note",
+              label: "Notes",
+              aggregation: "count",
+              icon: "FileText",
+              chartType: "sparkline",
+            },
+            pos: { x: 7, y: 2, w: 3, h: 3 },
+          },
+          {
+            id: "workspace-info",
             kind: "widget",
             widgetType: "workspace-info",
-            pos: { x: 8, y: 0, w: 4, h: 2 },
+            pos: { x: 10, y: 2, w: 2, h: 3 },
           },
-          // Bottom row: Calendar (2/3 width), Feed (1/3 width)
-          {
-            id: "calendar",
-            kind: "widget",
-            widgetType: "calendar",
-            pos: { x: 0, y: 2, w: 8, h: 8 },
-          },
+          // Row 5: Feed + Calendar
           {
             id: "feed",
             kind: "widget",
             widgetType: "feed",
-            pos: { x: 8, y: 2, w: 4, h: 8 },
+            pos: { x: 0, y: 5, w: 4, h: 6 },
+          },
+          {
+            id: "calendar",
+            kind: "widget",
+            widgetType: "calendar",
+            pos: { x: 4, y: 5, w: 8, h: 6 },
           },
         ],
       };

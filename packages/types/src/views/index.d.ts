@@ -20,6 +20,7 @@ export type ViewType =
   | "table"
   | "kanban"
   | "matrix"
+  | "masonry"
   | "list"
   | "grid"
   | "gallery"

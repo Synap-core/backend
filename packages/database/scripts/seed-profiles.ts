@@ -78,6 +78,36 @@ async function seedProfiles() {
         uiHints: { label: "End Time", inputType: "datetime-local" },
       },
       {
+        slug: "startDate",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Start Date", inputType: "datetime-local" },
+      },
+      {
+        slug: "endDate",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "End Date", inputType: "datetime-local" },
+      },
+      {
+        slug: "attendees",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Attendees", inputType: "tags" },
+      },
+      {
+        slug: "calendarLink",
+        valueType: PropertyValueType.STRING,
+        constraints: { format: "url", maxLength: 2000 },
+        uiHints: { label: "Calendar Link", inputType: "url" },
+      },
+      {
+        slug: "isAllDay",
+        valueType: PropertyValueType.BOOLEAN,
+        constraints: {},
+        uiHints: { label: "All Day", inputType: "checkbox" },
+      },
+      {
         slug: "assignee",
         valueType: PropertyValueType.ENTITY_ID,
         constraints: {},
@@ -518,9 +548,18 @@ async function seedProfiles() {
         defaultValue?: any;
       }> = [
         { slug: "title", required: true, displayOrder: 0 },
-        { slug: "startTime", required: false, displayOrder: 1 },
-        { slug: "endTime", required: false, displayOrder: 2 },
-        { slug: "tags", required: false, displayOrder: 3 },
+        { slug: "startDate", required: false, displayOrder: 1 },
+        { slug: "endDate", required: false, displayOrder: 2 },
+        {
+          slug: "isAllDay",
+          required: false,
+          displayOrder: 3,
+          defaultValue: false,
+        },
+        { slug: "location", required: false, displayOrder: 4 },
+        { slug: "attendees", required: false, displayOrder: 5 },
+        { slug: "calendarLink", required: false, displayOrder: 6 },
+        { slug: "tags", required: false, displayOrder: 7 },
       ];
 
       for (const prop of eventProperties) {

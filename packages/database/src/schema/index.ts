@@ -111,3 +111,6 @@ export * from "./compacted-states.js";
 
 // NEW: Dynamic Widget Registry
 export * from "./widget-definitions.js";
+
+// NEW: Entity External Links (connector sync tracking)
+export * from "./entity-external-links.js";

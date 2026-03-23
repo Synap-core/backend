@@ -1377,7 +1377,12 @@ export const channelsRouter = router({
               : { messageCount: drizzleSql`COALESCE(message_count, 0) + 2` }),
           })
           .where(eq(sessions.id, activeSessionId))
-          .catch(() => {}); // silent — non-critical
+          .catch((err) => {
+            logger.warn(
+              { err, sessionId: activeSessionId },
+              "Session activity/token update failed"
+            );
+          });
       }
 
       // Create entities via event chain

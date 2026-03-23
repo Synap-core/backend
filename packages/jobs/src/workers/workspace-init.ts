@@ -35,7 +35,16 @@ export async function handleWorkspaceInit(
     ensureDefaultViews,
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
+    ensureSystemProfiles,
   } = await import("@synap/database");
+
+  // Ensure system profiles exist (idempotent — creates bookmark, note, task, etc. if missing)
+  try {
+    const profileResult = await ensureSystemProfiles();
+    logger.info({ ...profileResult }, "System profiles check complete");
+  } catch (err) {
+    logger.warn({ err }, "Failed to ensure system profiles (non-fatal)");
+  }
 
   // Whiteboard + commands + relation defs always run. Default views only for non-template/non-package workspaces.
   const tasks: Array<{ name: string; promise: Promise<any> }> = [

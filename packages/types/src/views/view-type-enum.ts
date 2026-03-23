@@ -16,6 +16,7 @@ export const VIEW_TYPES: ViewType[] = [
   "table",
   "kanban",
   "matrix",
+  "masonry",
   "list",
   "grid",
   "gallery",
