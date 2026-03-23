@@ -327,7 +327,7 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 
 # ── Email (optional — configure SMTP for user notifications) ──────────────────
 # Default: local mailpit/catchall (no real email sent). Override to enable real email.
-SMTP_CONNECTION_URI=smtp://localhost:1025/?skip_ssl_verify=true
+SMTP_CONNECTION_URI=smtp://localhost:1025/
 # SMTP_CONNECTION_URI=smtps://user:pass@smtp.example.com:465
 
 # ── Frontend / CORS ───────────────────────────────────────────────────────────
@@ -365,6 +365,9 @@ services:
     command: >
       sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
              (node node_modules/@synap/database/dist/scripts/init-hub-keys.js 2>/dev/null || true)"
+  kratos:
+    environment:
+      SMTP_CONNECTION_URI: "smtp://localhost:1025/"
 OVERRIDE_EOF
 docker compose up -d kratos hydra-migrate hydra backend-migrate
 
