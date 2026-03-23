@@ -19,6 +19,13 @@ import { db, eq, entityExternalLinks } from "@synap/database";
 
 const logger = createLogger({ module: "connectors-trpc" });
 
+/** Extract session token from request cookie header. */
+function getSessionToken(req: Request | undefined): string | undefined {
+  const cookie = req?.headers.get("cookie") ?? "";
+  const match = cookie.match(/better-auth\.session_token=([^;]+)/);
+  return match?.[1] ?? undefined;
+}
+
 /**
  * Build the CP API URL for a given path.
  * Pod communicates with CP via its stored controlPlaneUrl.
@@ -98,7 +105,7 @@ export const connectorsRouter = router({
 
     const result = (await cpFetch("/providers", {
       method: "GET",
-      sessionToken: ctx.sessionToken,
+      sessionToken: getSessionToken(ctx.req),
       query: podId ? { podId } : undefined,
     })) as { providers: unknown[] };
 
@@ -113,7 +120,7 @@ export const connectorsRouter = router({
 
     const result = (await cpFetch("/connections", {
       method: "GET",
-      sessionToken: ctx.sessionToken,
+      sessionToken: getSessionToken(ctx.req),
       query: podId ? { podId } : undefined,
     })) as { connections: unknown[] };
 
@@ -134,7 +141,7 @@ export const connectorsRouter = router({
 
     const result = (await cpFetch("/session", {
       method: "POST",
-      sessionToken: ctx.sessionToken,
+      sessionToken: getSessionToken(ctx.req),
       body: { podId },
     })) as { token: string };
 
@@ -149,7 +156,7 @@ export const connectorsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await cpFetch("/disconnect", {
         method: "POST",
-        sessionToken: ctx.sessionToken,
+        sessionToken: getSessionToken(ctx.req),
         body: { connectionId: input.connectionId },
       });
 

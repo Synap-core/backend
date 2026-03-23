@@ -4159,6 +4159,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | null;
 			meta: object;
 		}>;
+		extractEntity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				url: string;
+				html: string;
+				title?: string | undefined;
+			};
+			output: {
+				profileSlug: string;
+				title: string;
+				description?: string;
+				properties?: Record<string, unknown>;
+				confidence: number;
+			} | null;
+			meta: object;
+		}>;
 	}>>;
 	capabilities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

@@ -18,13 +18,8 @@ import {
   and,
   EntityRepository,
   EventRepository,
-  ProfileResolutionService,
 } from "@synap/database";
-import {
-  entities,
-  entityExternalLinks,
-  workspaces,
-} from "@synap/database/schema";
+import { entityExternalLinks } from "@synap/database/schema";
 import { verifyCpJwt } from "@synap/api";
 import { config, createLogger } from "@synap-core/core";
 import crypto from "crypto";
@@ -219,8 +214,8 @@ connectorsRouter.post("/pull-sync", async (c) => {
       return c.json({ error: "Failed to fetch records from Nango" }, 502);
     }
 
-    const data = await response.json();
-    records = data.records || data.data || [];
+    const data = (await response.json()) as Record<string, unknown>;
+    records = (data.records || data.data || []) as NangoRecord[];
   } catch (err) {
     logger.error({ err }, "Nango records fetch failed");
     return c.json({ error: "Failed to fetch records" }, 502);

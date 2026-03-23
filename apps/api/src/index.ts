@@ -765,7 +765,6 @@ app.post("/api/auth/telegram-link", async (c) => {
     }
 
     // Find user's first workspace
-    const { workspaces: wsTable } = await import("@synap/database/schema");
     const userWorkspaces = await db.query.workspaces.findMany({
       limit: 1,
     });
