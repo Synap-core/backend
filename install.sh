@@ -224,7 +224,7 @@ identity:
 
 courier:
   smtp:
-    connection_uri: \${SMTP_CONNECTION_URI:-smtp://localhost:1025/?skip_ssl_verify=true}
+    connection_uri: \${SMTP_CONNECTION_URI}
     from_address: noreply@$DOMAIN
     from_name: Synap
 KRATOS_EOF
@@ -247,7 +247,7 @@ else
   JWT_SECRET=$(_gen)
   ENCRYPTION_KEY=$(_gen)
   KRATOS_SECRETS_COOKIE=$(_gen)
-  KRATOS_SECRETS_CIPHER=$(_gen)
+  KRATOS_SECRETS_CIPHER=$(openssl rand -hex 16)  # 32 chars = 16-byte AES key (kratos max=32)
   KRATOS_WEBHOOK_SECRET=$(_gen)
   ORY_HYDRA_SECRETS_SYSTEM=$(_gen)
   HUB_PROTOCOL_API_KEY=$(_gen)
@@ -326,6 +326,8 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 # GOOGLE_AI_API_KEY=
 
 # ── Email (optional — configure SMTP for user notifications) ──────────────────
+# Default: local mailpit/catchall (no real email sent). Override to enable real email.
+SMTP_CONNECTION_URI=smtp://localhost:1025/?skip_ssl_verify=true
 # SMTP_CONNECTION_URI=smtps://user:pass@smtp.example.com:465
 
 # ── Frontend / CORS ───────────────────────────────────────────────────────────
