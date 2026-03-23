@@ -42,6 +42,7 @@ import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
+import { connectorsRouter } from "./routers/connectors-trpc.js";
 
 /**
  * Core API Router
@@ -91,6 +92,7 @@ export const coreRouter = router({
   widgetDefinitions: widgetDefinitionsRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
+  connectors: connectorsRouter,
 });
 
 export type AppRouter = typeof coreRouter;

@@ -51,6 +51,8 @@ export interface IntelligenceHubRequest {
   mcpServers?: McpServerConfig[];
   /** Distributed trace ID — propagated from the originating tRPC request */
   requestId?: string;
+  /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
+  deepAnalysis?: boolean;
 }
 
 // Re-export from types package
@@ -292,6 +294,7 @@ export class IntelligenceHubClient {
             dataPodApiKey:
               request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
             mcpServers: request.mcpServers,
+            deepAnalysis: request.deepAnalysis,
           }),
         },
         STREAM_TIMEOUT_MS

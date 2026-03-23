@@ -707,6 +707,8 @@ export const channelsRouter = router({
         parentChannelId: z.string().uuid().optional(),
         /** Entity IDs of uploaded files to attach to this message */
         attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
+        /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
+        deepAnalysis: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1073,6 +1075,8 @@ export const channelsRouter = router({
           agentUserId: agentUserId ?? resolvedService.agentUserId,
           // MCP servers configured for this workspace
           mcpServers: mcpServersList,
+          // Deep Analysis: user opted into COMPLEX tier for this message
+          deepAnalysis: input.deepAnalysis,
         });
 
         for await (const chunk of stream) {
