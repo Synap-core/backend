@@ -1621,6 +1621,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentHandle?: string | undefined;
 				parentChannelId?: string | undefined;
 				attachmentEntityIds?: string[] | undefined;
+				deepAnalysis?: boolean | undefined;
 			};
 			output: {
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
@@ -7844,6 +7845,54 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}>;
 				batchId: `${string}-${string}-${string}-${string}-${string}`;
 			};
+			meta: object;
+		}>;
+	}>>;
+	connectors: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		providers: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: unknown[];
+			meta: object;
+		}>;
+		connections: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: unknown[];
+			meta: object;
+		}>;
+		session: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				token: string;
+			};
+			meta: object;
+		}>;
+		disconnect: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				connectionId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		entitySources: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				entityId: string;
+			};
+			output: {
+				provider: string;
+				status: string;
+				lastSyncedAt: Date;
+			}[];
 			meta: object;
 		}>;
 	}>>;

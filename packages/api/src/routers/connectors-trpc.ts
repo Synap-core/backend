@@ -27,12 +27,41 @@ function getSessionToken(req: Request | undefined): string | undefined {
 }
 
 /**
- * Build the CP API URL for a given path.
- * Pod communicates with CP via its stored controlPlaneUrl.
+ * Resolve the CP URL. Follows the established pod pattern:
+ *   1. Env var CONTROL_PLANE_URL (fast, no DB hit)
+ *   2. workspace.settings.controlPlane.url (set during provisioning)
  */
-function getCpUrl(path: string): string | null {
-  const cpUrl = config.server.controlPlaneUrl;
-  if (!cpUrl) return null;
+let cpUrlCache: { url: string | null; resolvedAt: number } | null = null;
+const CP_URL_CACHE_TTL = 5 * 60_000; // 5 min
+
+async function resolveCpUrl(): Promise<string | null> {
+  // 1. Env var — fast path
+  if (config.server.controlPlaneUrl) return config.server.controlPlaneUrl;
+
+  // 2. Cache hit
+  if (cpUrlCache && Date.now() - cpUrlCache.resolvedAt < CP_URL_CACHE_TTL) {
+    return cpUrlCache.url;
+  }
+
+  // 3. Read from workspace settings (set during CP provisioning)
+  try {
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string } | undefined;
+    const url = cp?.url ?? null;
+    cpUrlCache = { url, resolvedAt: Date.now() };
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the CP API URL for a given path.
+ */
+function buildCpUrl(cpUrl: string, path: string): string {
   return `${cpUrl}/api/connectors${path}`;
 }
 
@@ -49,15 +78,16 @@ async function cpFetch(
     query?: Record<string, string>;
   }
 ): Promise<unknown> {
-  const baseUrl = getCpUrl(path);
-  if (!baseUrl) {
+  const cpUrl = await resolveCpUrl();
+  if (!cpUrl) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: "Control Plane not configured",
+      message:
+        "Control Plane not configured — pod has not been provisioned or CONTROL_PLANE_URL is not set",
     });
   }
 
-  const url = new URL(baseUrl);
+  const url = new URL(buildCpUrl(cpUrl, path));
   if (options.query) {
     for (const [key, value] of Object.entries(options.query)) {
       url.searchParams.set(key, value);
@@ -100,8 +130,7 @@ export const connectorsRouter = router({
    * List available providers with their connection status for this pod.
    */
   providers: protectedProcedure.query(async ({ ctx }) => {
-    // Get the pod ID from workspace settings (stored during CP provisioning)
-    const podId = getPodId();
+    const podId = await getPodId();
 
     const result = (await cpFetch("/providers", {
       method: "GET",
@@ -116,7 +145,7 @@ export const connectorsRouter = router({
    * List user's active connections for this pod.
    */
   connections: protectedProcedure.query(async ({ ctx }) => {
-    const podId = getPodId();
+    const podId = await getPodId();
 
     const result = (await cpFetch("/connections", {
       method: "GET",
@@ -131,7 +160,7 @@ export const connectorsRouter = router({
    * Get a Nango Connect session token for the OAuth UI.
    */
   session: protectedProcedure.mutation(async ({ ctx }) => {
-    const podId = getPodId();
+    const podId = await getPodId();
     if (!podId) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
@@ -185,8 +214,27 @@ export const connectorsRouter = router({
 
 /**
  * Get the pod ID from environment / workspace settings.
- * This is set during CP provisioning.
+ * Follows same pattern as CP URL: env var first, then DB fallback.
  */
-function getPodId(): string | null {
-  return process.env.POD_ID || null;
+let podIdCache: { id: string | null; resolvedAt: number } | null = null;
+
+async function getPodId(): Promise<string | null> {
+  if (process.env.POD_ID) return process.env.POD_ID;
+
+  if (podIdCache && Date.now() - podIdCache.resolvedAt < CP_URL_CACHE_TTL) {
+    return podIdCache.id;
+  }
+
+  try {
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { podId?: string } | undefined;
+    const id = cp?.podId ?? null;
+    podIdCache = { id, resolvedAt: Date.now() };
+    return id;
+  } catch {
+    return null;
+  }
 }
