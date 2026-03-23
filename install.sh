@@ -327,7 +327,7 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 
 # ── Email (optional — configure SMTP for user notifications) ──────────────────
 # Default: local mailpit/catchall (no real email sent). Override to enable real email.
-SMTP_CONNECTION_URI=smtp://localhost:1025/?skip_ssl_verify=true
+SMTP_CONNECTION_URI=smtp://localhost:1025/
 # SMTP_CONNECTION_URI=smtps://user:pass@smtp.example.com:465
 
 # ── Frontend / CORS ───────────────────────────────────────────────────────────
