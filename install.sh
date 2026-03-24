@@ -224,7 +224,8 @@ identity:
 
 courier:
   smtp:
-    connection_uri: \${SMTP_CONNECTION_URI}
+    # connection_uri is set via COURIER_SMTP_CONNECTION_URI env var in docker-compose
+    # (kratos reads COURIER_SMTP_* env vars natively; file-level substitution is unreliable)
     from_address: noreply@$DOMAIN
     from_name: Synap
 KRATOS_EOF
@@ -358,16 +359,32 @@ info "Waiting 8s for databases to initialize..."
 sleep 8
 
 info "Running database migrations..."
-# Ensure init-hub-keys.js failure is non-fatal for images that don't include it yet
+
+# Write migration patch script: empties 0000_broad_mathemanic.sql so only
+# 0000_core_infrastructure.sql + numbered migrations (0001-0009) define the schema.
+# 0000_broad_mathemanic.sql is a stale full-schema dump that conflicts with incremental migrations:
+# - different table schemas (e.g. inbox_items, roles)
+# - duplicate indexes without IF NOT EXISTS
+# - invalid FK refs to TimescaleDB hypertables
+cat > "$INSTALL_DIR/patch_migration.js" << 'PATCH_EOF'
+const fs = require('fs');
+const file = '/app/migrations-drizzle/0000_broad_mathemanic.sql';
+if (!fs.existsSync(file)) { console.log('Migration file not found, skipping patch'); process.exit(0); }
+// Empty the file so Drizzle marks it as applied without running conflicting statements
+fs.writeFileSync(file, '-- patched: emptied to avoid conflicts with incremental migrations\n');
+console.log('Migration patched: 0000_broad_mathemanic.sql emptied');
+PATCH_EOF
+
+# Override backend-migrate to: patch SQL, run migrations, gracefully skip missing init-hub-keys
 cat > "$INSTALL_DIR/docker-compose.override.yml" << 'OVERRIDE_EOF'
 services:
   backend-migrate:
     command: >
-      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
+      sh -c "node /patch/patch_migration.js &&
+             node node_modules/@synap/database/dist/scripts/migrate.js &&
              (node node_modules/@synap/database/dist/scripts/init-hub-keys.js 2>/dev/null || true)"
-  kratos:
-    environment:
-      SMTP_CONNECTION_URI: "smtp://localhost:1025/"
+    volumes:
+      - ./patch_migration.js:/patch/patch_migration.js:ro
 OVERRIDE_EOF
 docker compose up -d kratos hydra-migrate hydra backend-migrate
 

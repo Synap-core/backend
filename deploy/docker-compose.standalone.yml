@@ -279,6 +279,7 @@ services:
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
       KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
+      COURIER_SMTP_CONNECTION_URI: ${SMTP_CONNECTION_URI:-smtp://localhost:1025/}
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     volumes:
       - ./config/kratos:/etc/config/kratos
