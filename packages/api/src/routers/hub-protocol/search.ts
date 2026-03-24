@@ -111,6 +111,7 @@ export const searchRouter = router({
           ])
           .optional(),
         limit: z.number().min(1).max(100).default(20),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input }) => {
@@ -122,6 +123,7 @@ export const searchRouter = router({
         input.query,
         {
           userId: input.userId,
+          workspaceId: input.workspaceId,
           limit: input.limit,
         }
       );
@@ -150,6 +152,7 @@ export const searchRouter = router({
         query: z.string(),
         type: z.enum(["text", "markdown", "code", "pdf", "docx"]).optional(),
         limit: z.number().min(1).max(50).default(10),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input }) => {
@@ -160,6 +163,7 @@ export const searchRouter = router({
         input.query,
         {
           userId: input.userId,
+          workspaceId: input.workspaceId,
           limit: input.limit,
         }
       );
@@ -202,6 +206,7 @@ export const searchRouter = router({
         query: z.string(),
         types: z.array(z.string()).optional(),
         limit: z.number().min(1).max(50).default(10),
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input }) => {
@@ -222,7 +227,7 @@ export const searchRouter = router({
 
       // 2. Vector similarity search using pgvector
       const results = await sql`
-        SELECT 
+        SELECT
           e.id,
           e.type,
           e.title,
@@ -231,10 +236,11 @@ export const searchRouter = router({
           1 - (ev.embedding <=> ${embeddingStr}::vector) as similarity
         FROM entity_vectors ev
         JOIN entities e ON ev.entity_id = e.id
-        WHERE 
+        WHERE
           ev.user_id = ${input.userId}
           AND e.deleted_at IS NULL
           ${input.types ? sql`AND e.type = ANY(${input.types})` : sql``}
+          ${input.workspaceId ? sql`AND (e.workspace_id = ${input.workspaceId} OR e.workspace_id IS NULL)` : sql``}
         ORDER BY similarity DESC
         LIMIT ${input.limit}
       `;

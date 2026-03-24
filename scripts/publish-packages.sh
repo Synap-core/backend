@@ -30,17 +30,19 @@ echo "🔨 Building all packages..."
 pnpm build
 
 # Publish each package
+# IMPORTANT: Use --filter from workspace root so pnpm resolves workspace:* → real versions
 for package in "${PACKAGES[@]}"; do
   echo ""
-  echo "📤 Publishing $package..."
-  
+  PKG_NAME=$(node -p "require('./$package/package.json').name")
+  echo "📤 Publishing $PKG_NAME ($package)..."
+
   if [ "$DRY_RUN" == "--dry-run" ]; then
-    cd "$package" && pnpm publish --dry-run && cd ../..
+    pnpm --filter "$PKG_NAME" publish --dry-run
   else
-    cd "$package" && pnpm publish --no-git-checks && cd ../..
+    pnpm --filter "$PKG_NAME" publish --no-git-checks
   fi
-  
-  echo "✅ Published $package"
+
+  echo "✅ Published $PKG_NAME"
 done
 
 echo ""

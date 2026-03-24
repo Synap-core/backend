@@ -547,16 +547,18 @@ app.get("/vector-search", async (c) => {
   const query = c.req.query("query");
   const types = c.req.query("types"); // comma-separated
   const limit = c.req.query("limit");
+  const workspaceId = c.req.query("workspaceId");
   if (!userId || !query) {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    const caller = await getCaller(c);
+    const caller = await getCaller(c, { workspaceId: workspaceId || null });
     const result = await (caller as any).search.vectorSearch({
       userId,
       query,
       types: types ? types.split(",") : undefined,
       limit: limit ? parseInt(limit, 10) : 10,
+      workspaceId: workspaceId || undefined,
     });
     return c.json(result);
   } catch (err) {
