@@ -358,13 +358,38 @@ info "Waiting 8s for databases to initialize..."
 sleep 8
 
 info "Running database migrations..."
-# Ensure init-hub-keys.js failure is non-fatal for images that don't include it yet
+
+# Write migration patch script: removes conflicting statements from 0000_broad_mathemanic.sql
+# that duplicate 0000_core_infrastructure.sql (events table, indexes, invalid FK refs to hypertable)
+cat > "$INSTALL_DIR/patch_migration.js" << 'PATCH_EOF'
+const fs = require('fs');
+const file = '/app/migrations-drizzle/0000_broad_mathemanic.sql';
+if (!fs.existsSync(file)) { console.log('Migration file not found, skipping patch'); process.exit(0); }
+const bad = [
+  'CREATE TABLE "events"',
+  'webhook_deliveries_event_id_events_id_fk',
+  'thread_entities_source_event_id_events_id_fk',
+  'thread_documents_source_event_id_events_id_fk',
+  'idx_events_subject',
+  'idx_events_user_type',
+  'idx_events_timestamp'
+];
+const parts = fs.readFileSync(file, 'utf8').split('--> statement-breakpoint');
+const kept = parts.filter(p => !bad.some(b => p.includes(b)));
+fs.writeFileSync(file, kept.join('--> statement-breakpoint'));
+console.log('Migration patched: ' + (parts.length - kept.length) + ' conflicting statements removed');
+PATCH_EOF
+
+# Override backend-migrate to: patch SQL, run migrations, gracefully skip missing init-hub-keys
 cat > "$INSTALL_DIR/docker-compose.override.yml" << 'OVERRIDE_EOF'
 services:
   backend-migrate:
     command: >
-      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
+      sh -c "node /patch/patch_migration.js &&
+             node node_modules/@synap/database/dist/scripts/migrate.js &&
              (node node_modules/@synap/database/dist/scripts/init-hub-keys.js 2>/dev/null || true)"
+    volumes:
+      - ./patch_migration.js:/patch/patch_migration.js:ro
   kratos:
     environment:
       SMTP_CONNECTION_URI: "smtp://localhost:1025/"
