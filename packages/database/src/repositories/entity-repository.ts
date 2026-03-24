@@ -174,9 +174,17 @@ export class EntityRepository extends BaseRepository<
     if (data.skipValidation) {
       // Trusted seed data (template provisioning) — store as-is without schema enforcement
       validatedProperties = data.properties ?? {};
-    } else if (profileId && data.properties) {
+    } else if (profileId) {
+      // Merge top-level title into properties before validation so profiles that
+      // declare a required "title" property_def don't fail when the caller only
+      // passes title at the entity level (which is the common frontend pattern).
+      const propsToValidate: Record<string, unknown> = { ...data.properties };
+      if (data.title !== undefined && !("title" in propsToValidate)) {
+        propsToValidate["title"] = data.title;
+      }
+
       const validationResult = await this.propertyValidation.validateProperties(
-        data.properties,
+        propsToValidate,
         profileId
       );
 
@@ -189,7 +197,7 @@ export class EntityRepository extends BaseRepository<
       }
 
       validatedProperties = validationResult.normalized;
-    } else if (data.properties) {
+    } else if (!profileId && data.properties) {
       // No profile - just store properties as-is (flexible)
       validatedProperties = data.properties;
     }
