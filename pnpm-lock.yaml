@@ -404,6 +404,9 @@ importers:
       drizzle-zod:
         specifier: 0.8.3
         version: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3

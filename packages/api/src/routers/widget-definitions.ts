@@ -18,6 +18,7 @@ import { getDb } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { and, eq, or, isNull } from "drizzle-orm";
 import { requireUserId } from "../utils/user-scoped.js";
+import { compileWidgetSource } from "../utils/widget-compiler.js";
 
 function requireAdminRole(role: string | undefined | null) {
   if (!["owner", "admin"].includes(role ?? "")) {
@@ -41,8 +42,10 @@ const WidgetUpsertSchema = z.object({
   description: z.string().max(500).optional(),
   icon: z.string().max(64).optional(),
   category: z.string().max(64).optional(),
-  rendererType: z.enum(["builtin", "iframe"]).default("iframe"),
+  rendererType: z.enum(["builtin", "iframe", "native"]).default("iframe"),
   rendererSource: z.string().optional(),
+  /** Original JSX/TSX source for native widgets (compiled server-side) */
+  source: z.string().optional(),
   configSchema: z.record(z.string(), z.unknown()).default({}),
   defaultConfig: z.record(z.string(), z.unknown()).optional(),
   defaultSize: z
@@ -119,6 +122,26 @@ export const widgetDefinitionsRouter = router({
         });
       }
 
+      if (input.rendererType === "native" && !input.source) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "source (JSX/TSX) is required for native widgets",
+        });
+      }
+
+      // Compile native widget source to IIFE bundle
+      let bundleSource: string | undefined;
+      if (input.rendererType === "native" && input.source) {
+        try {
+          bundleSource = await compileWidgetSource(input.source);
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Widget compilation failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+
       const db = await getDb();
       const [row] = await db
         .insert(widgetDefinitions)
@@ -131,6 +154,8 @@ export const widgetDefinitionsRouter = router({
           category: input.category ?? "app-specific",
           rendererType: input.rendererType,
           rendererSource: input.rendererSource,
+          source: input.source,
+          bundleSource,
           configSchema: input.configSchema,
           defaultConfig: input.defaultConfig ?? {},
           defaultSize: input.defaultSize ?? { w: 6, h: 4 },
@@ -146,6 +171,8 @@ export const widgetDefinitionsRouter = router({
             category: input.category ?? "app-specific",
             rendererType: input.rendererType,
             rendererSource: input.rendererSource ?? null,
+            source: input.source ?? null,
+            bundleSource: bundleSource ?? null,
             configSchema: input.configSchema,
             defaultConfig: input.defaultConfig ?? {},
             ...(input.defaultSize && { defaultSize: input.defaultSize }),

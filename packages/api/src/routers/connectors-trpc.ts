@@ -393,9 +393,13 @@ export const connectorsRouter = router({
         method: "POST",
         sessionToken: getSessionToken(ctx.req),
         body: { podId },
-      })) as { token: string };
+      })) as { token: string; nangoHost?: string; connectLink?: string };
 
-      return { token: result.token };
+      return {
+        token: result.token,
+        nangoHost: result.nangoHost,
+        connectLink: result.connectLink,
+      };
     }),
 
   /**

@@ -89,6 +89,16 @@ export interface RenderSettings {
     visibleFields?: string[];
     colorField?: string;
   };
+  /** Persisted kanban columns. When present overrides enum-derived columns. */
+  kanbanColumns?: Array<{
+    id: string;
+    value: string;
+    label: string;
+    order: number;
+    color?: string;
+    limit?: number | null;
+    visible?: boolean;
+  }>;
 
   // Calendar settings
   dateField?: string;
