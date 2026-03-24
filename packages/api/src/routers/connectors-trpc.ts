@@ -432,7 +432,11 @@ export const connectorsRouter = router({
    */
   status: protectedProcedure.query(async () => {
     const cp = await getControlPlaneSettings();
-    const allowed = await getAllowedCpUrls();
+    const allowedUrls: string[] = [];
+    if (cp.url) allowedUrls.push(cp.url);
+    if (Array.isArray(cp.allowedUrls)) allowedUrls.push(...cp.allowedUrls);
+    if (config.server.controlPlaneUrl)
+      allowedUrls.push(config.server.controlPlaneUrl);
     return {
       controlPlane: {
         url: cp.url ?? null,
@@ -440,7 +444,7 @@ export const connectorsRouter = router({
         tier: cp.tier ?? null,
         hasSettings: !!(cp.url || cp.podId),
       },
-      allowedCpUrls: allowed,
+      allowedCpUrls: allowedUrls,
       envVar: config.server.controlPlaneUrl ?? null,
     };
   }),
