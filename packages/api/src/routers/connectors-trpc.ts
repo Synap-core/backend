@@ -100,63 +100,114 @@ function normalize(url: string): string {
   return url.replace(/\/+$/, "").toLowerCase();
 }
 
-/**
- * Load the set of trusted CP URLs from provisioning data.
- * Primary source: workspace.settings.controlPlane.url (set via signed ES256 JWT).
- * Fallback: CONTROL_PLANE_URL env var (legacy).
- */
-async function getAllowedCpUrls(): Promise<string[]> {
-  const urls: string[] = [];
-
-  const cp = await getControlPlaneSettings();
-  if (cp.url) urls.push(normalize(cp.url));
-
-  if (Array.isArray(cp.allowedUrls)) {
-    for (const u of cp.allowedUrls) {
-      if (typeof u === "string") urls.push(normalize(u));
-    }
-  }
-
-  // Env var fallback (legacy — provisioned URL in DB is preferred)
-  if (config.server.controlPlaneUrl) {
-    urls.push(normalize(config.server.controlPlaneUrl));
-  }
-
-  const deduped = [...new Set(urls)];
-  logger.debug({ allowedUrls: deduped }, "Resolved CP URL allowlist");
-  return deduped;
-}
+/** Blocked hostnames / IP patterns for SSRF prevention. */
+const SSRF_BLOCKED = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^192\.168\./,
+  /^0\./,
+  /^169\.254\./,
+  /\.(internal|local|localhost)$/i,
+];
 
 /**
- * Validate a frontend-provided CP URL against the provisioned allowlist.
- * Throws FORBIDDEN if the URL is not trusted.
+ * Validate a CP URL for safety (SSRF prevention).
+ *
+ * Strategy (layered):
+ *   1. If the pod has a provisioned allowlist (DB or env var), validate against it.
+ *   2. Otherwise, allow any public HTTPS URL (the pod is already auth-gated).
+ *      This handles pods that were provisioned before controlPlane.url was stored.
+ *
+ * Always blocked: private IPs, localhost, non-HTTPS.
  */
 async function validateCpUrl(requestedUrl: string): Promise<string> {
-  const normalized = normalize(requestedUrl);
-  const allowed = await getAllowedCpUrls();
+  const cleaned = requestedUrl.replace(/\/+$/, "");
 
-  if (allowed.includes(normalized)) {
-    return requestedUrl.replace(/\/+$/, "");
+  // Basic safety: must be HTTPS, no private/internal targets
+  let parsed: URL;
+  try {
+    parsed = new URL(cleaned);
+  } catch {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid Control Plane URL",
+    });
   }
 
-  logger.warn({ requestedUrl, allowed }, "Rejected untrusted CP URL");
+  if (parsed.protocol !== "https:") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Control Plane URL must use HTTPS",
+    });
+  }
+
+  if (SSRF_BLOCKED.some((re) => re.test(parsed.hostname))) {
+    logger.warn({ requestedUrl }, "Blocked SSRF attempt on CP URL");
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Control Plane URL points to a private network",
+    });
+  }
+
+  // Prefer explicit allowlist when available
+  const cp = await getControlPlaneSettings();
+  const allowedUrls: string[] = [];
+
+  if (cp.url) allowedUrls.push(normalize(cp.url));
+  if (Array.isArray(cp.allowedUrls)) {
+    for (const u of cp.allowedUrls) {
+      if (typeof u === "string") allowedUrls.push(normalize(u));
+    }
+  }
+  if (config.server.controlPlaneUrl) {
+    allowedUrls.push(normalize(config.server.controlPlaneUrl));
+  }
+
+  if (allowedUrls.length > 0) {
+    // Strict mode: check against provisioned allowlist
+    if (allowedUrls.includes(normalize(cleaned))) {
+      return cleaned;
+    }
+    logger.warn(
+      { requestedUrl, allowedUrls },
+      "CP URL not in provisioned allowlist"
+    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Control Plane URL not in allowlist. Allowed: ${allowedUrls.join(", ")}`,
+    });
+  }
+
+  // No allowlist configured — pod may need re-provisioning.
+  logger.warn(
+    { requestedUrl, hasPodId: !!cp.podId },
+    "No CP URL allowlist configured — rejecting request"
+  );
   throw new TRPCError({
-    code: "FORBIDDEN",
+    code: "PRECONDITION_FAILED",
     message:
-      "Control Plane URL not recognized. The pod only proxies to its provisioned CP.",
+      "No Control Plane URL configured. The pod needs to be re-provisioned.",
   });
 }
 
 /**
  * Resolve CP URL: use frontend-provided URL (validated) or fall back to
- * the first provisioned URL.
+ * the provisioned URL.
  */
 async function resolveCpUrl(
   frontendUrl: string | undefined
 ): Promise<string | null> {
   if (frontendUrl) return validateCpUrl(frontendUrl);
-  const allowed = await getAllowedCpUrls();
-  return allowed[0] ?? null;
+
+  // Fallback: provisioned URL
+  const cp = await getControlPlaneSettings();
+  if (cp.url) return cp.url.replace(/\/+$/, "");
+  if (config.server.controlPlaneUrl) {
+    return config.server.controlPlaneUrl.replace(/\/+$/, "");
+  }
+  return null;
 }
 
 // ─── CP fetch helper ──────────────────────────────────────────────────────────
@@ -374,6 +425,25 @@ export const connectorsRouter = router({
 
       return { success: true };
     }),
+
+  /**
+   * Diagnostic: returns what the pod sees for CP connection settings.
+   * Helps debug provisioning issues.
+   */
+  status: protectedProcedure.query(async () => {
+    const cp = await getControlPlaneSettings();
+    const allowed = await getAllowedCpUrls();
+    return {
+      controlPlane: {
+        url: cp.url ?? null,
+        podId: cp.podId ?? null,
+        tier: cp.tier ?? null,
+        hasSettings: !!(cp.url || cp.podId),
+      },
+      allowedCpUrls: allowed,
+      envVar: config.server.controlPlaneUrl ?? null,
+    };
+  }),
 
   /**
    * Get external source links for an entity.
