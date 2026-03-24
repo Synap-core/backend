@@ -7862,7 +7862,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				cpUrl?: string | undefined;
 			} | undefined;
-			output: unknown[];
+			output: {
+				providers: unknown[];
+				connectorLimit: number;
+				tier: string;
+			};
 			meta: object;
 		}>;
 		connections: import("@trpc/server").TRPCQueryProcedure<{
@@ -7888,6 +7892,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
+			};
+			meta: object;
+		}>;
+		status: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				controlPlane: {
+					url: string | null;
+					podId: string | null;
+					tier: string | null;
+					hasSettings: boolean;
+				};
+				allowedCpUrls: string[];
+				envVar: string | null;
 			};
 			meta: object;
 		}>;

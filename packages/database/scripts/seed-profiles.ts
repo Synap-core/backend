@@ -306,6 +306,31 @@ async function seedProfiles() {
           suffix: "min",
         },
       },
+      // Anchor properties (pinned chat moments)
+      {
+        slug: "channelId",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 255 },
+        uiHints: { label: "Channel ID", inputType: "text", readonly: true },
+      },
+      {
+        slug: "messageId",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 255 },
+        uiHints: { label: "Message ID", inputType: "text", readonly: true },
+      },
+      {
+        slug: "messageRole",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["user", "assistant", "system"] },
+        uiHints: { label: "Message Role", inputType: "select", readonly: true },
+      },
+      {
+        slug: "threadTitle",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: { label: "Thread Title", inputType: "text", readonly: true },
+      },
       // File upload properties
       {
         slug: "fileName",
@@ -459,6 +484,16 @@ async function seedProfiles() {
         slug: "file",
         displayName: "File",
         uiHints: { icon: "file", color: "#64748B" }, // Slate
+      },
+      // Anchor — pinned conversation moment
+      {
+        slug: "anchor",
+        displayName: "Anchor",
+        uiHints: {
+          icon: "pin",
+          color: "#10B981",
+          description: "Pinned conversation moment",
+        },
       },
     ];
 
@@ -916,6 +951,39 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'file'`);
+        }
+      }
+    }
+
+    // Anchor profile properties
+    const anchorProfileId = createdProfiles.get("anchor");
+    if (anchorProfileId) {
+      const anchorProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: false, displayOrder: 0 },
+        { slug: "channelId", required: true, displayOrder: 1 },
+        { slug: "messageId", required: true, displayOrder: 2 },
+        { slug: "messageRole", required: false, displayOrder: 3 },
+        { slug: "threadTitle", required: false, displayOrder: 4 },
+        { slug: "content", required: false, displayOrder: 5 },
+        { slug: "tags", required: false, displayOrder: 6 },
+      ];
+
+      for (const prop of anchorProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: anchorProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'anchor'`);
         }
       }
     }

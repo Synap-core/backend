@@ -272,6 +272,30 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         uiHints: { label: "File Name", inputType: "text" },
       },
       {
+        slug: "channelId",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Channel", inputType: "text" },
+      },
+      {
+        slug: "messageId",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Message", inputType: "text" },
+      },
+      {
+        slug: "messageRole",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["user", "assistant", "system"] },
+        uiHints: { label: "Message Role", inputType: "text" },
+      },
+      {
+        slug: "threadTitle",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Thread Title", inputType: "text" },
+      },
+      {
         slug: "mimeType",
         valueType: PropertyValueType.STRING,
         constraints: {},
@@ -413,6 +437,16 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           icon: "file",
           color: "#64748B",
           description: "Uploaded file",
+        },
+      },
+      // AI Anchor — pinned reference to a specific message in a conversation
+      {
+        slug: "anchor",
+        displayName: "Anchor",
+        uiHints: {
+          icon: "pin",
+          color: "#10B981",
+          description: "Pinned conversation moment",
         },
       },
     ];
@@ -618,6 +652,19 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "mimeType", required: false, displayOrder: 2 },
           { slug: "fileSize", required: false, displayOrder: 3 },
           { slug: "tags", required: false, displayOrder: 4 },
+        ],
+      },
+      // Anchor — pinned conversation moment
+      {
+        profileSlug: "anchor",
+        propertySlugs: [
+          { slug: "title", required: false, displayOrder: 0 },
+          { slug: "channelId", required: true, displayOrder: 1 },
+          { slug: "messageId", required: true, displayOrder: 2 },
+          { slug: "messageRole", required: false, displayOrder: 3 },
+          { slug: "threadTitle", required: false, displayOrder: 4 },
+          { slug: "content", required: false, displayOrder: 5 },
+          { slug: "tags", required: false, displayOrder: 6 },
         ],
       },
     ];
