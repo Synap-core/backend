@@ -12,7 +12,8 @@
  * elapsed grant. The rejectionReason distinguishes these from user rejections.
  */
 
-import { db, eq, and, isNotNull, sql } from "@synap/database";
+import { db, eq, and, isNotNull } from "@synap/database";
+import { sql } from "drizzle-orm";
 import { proposals, ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
