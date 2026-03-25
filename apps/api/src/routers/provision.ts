@@ -339,7 +339,10 @@ provisionRouter.post("/register-intelligence", async (c) => {
       { podId: payload.podId, serviceId: SERVICE_ID, serviceUrl },
       "Intelligence service self-registered and activated"
     );
-    return c.json({ success: true });
+    // Return the pod's Hub Protocol API key so IS can store it in customer_refs.
+    // IS uses this key for proactive outbound Hub Protocol calls (event-triggered skills, background tasks).
+    const hubProtocolApiKey = process.env.HUB_PROTOCOL_API_KEY ?? "";
+    return c.json({ success: true, hubProtocolApiKey });
   } catch (err: any) {
     const msg = err?.message ?? String(err);
     logger.error({ err }, "Failed to register intelligence service");

@@ -24,6 +24,7 @@
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
     "gen-types": "node scripts/gen-types.mjs",
+    "gen-docs": "node scripts/gen-sdk-docs.mjs",
     "typecheck": "tsc --noEmit",
     "provision": "export $(grep -v '^#' ../../.env | xargs) && tsx src/scripts/provision.ts",
     "provision-agent": "export $(grep -v '^#' ../../.env | xargs) && tsx src/scripts/provision-agent.ts"

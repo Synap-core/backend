@@ -35,6 +35,10 @@ import {
   workspaceMembers,
 } from "@synap/database/schema";
 import { count } from "drizzle-orm";
+import {
+  getDynamicCorsOrigins,
+  setDynamicCorsOrigins,
+} from "../utils/cors-cache.js";
 
 /**
  * System Router
@@ -883,5 +887,80 @@ export const systemRouter = router({
           hasMore: input.offset + userList.length < (totalResult?.value ?? 0),
         },
       };
+    }),
+
+  /**
+   * Get CORS settings for this pod.
+   *
+   * Returns the env-var origins (read-only) and the DB-stored origins (editable).
+   * Pod admin only.
+   */
+  getCorsSettings: podAdminProcedure.query(async () => {
+    // Find the pod's first workspace (same logic as podAdminProcedure)
+    const ws = await db.query.workspaces.findFirst({
+      orderBy: (ws, { asc }) => [asc(ws.createdAt)],
+    });
+
+    const envOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(",")
+          .map((o) => o.trim())
+          .filter(Boolean)
+      : [];
+
+    const dbOrigins: string[] = (ws?.settings as any)?.corsAllowedOrigins ?? [];
+
+    return {
+      envOrigins, // from ALLOWED_ORIGINS env var (read-only)
+      dbOrigins, // from workspace settings (editable)
+      merged: [...new Set([...envOrigins, ...dbOrigins])],
+    };
+  }),
+
+  /**
+   * Update the DB-stored CORS allowed origins for this pod.
+   *
+   * Immediately updates the in-memory cache so changes take effect without restart.
+   * Pod admin only.
+   */
+  updateCorsSettings: podAdminProcedure
+    .input(
+      z.object({
+        origins: z
+          .array(
+            z
+              .string()
+              .url("Each origin must be a valid URL (no trailing slash)")
+          )
+          .max(50, "Maximum 50 allowed origins"),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const ws = await db.query.workspaces.findFirst({
+        orderBy: (ws, { asc }) => [asc(ws.createdAt)],
+      });
+
+      if (!ws) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No workspace found on this pod",
+        });
+      }
+
+      await db
+        .update(workspaces)
+        .set({
+          settings: sqlDrizzle`settings || ${JSON.stringify({ corsAllowedOrigins: input.origins })}::jsonb`,
+        })
+        .where(eq(workspaces.id, ws.id));
+
+      // Update in-memory cache immediately (no restart required)
+      const envOrigins = process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(",")
+            .map((o) => o.trim())
+            .filter(Boolean)
+        : [];
+      setDynamicCorsOrigins([...new Set([...envOrigins, ...input.origins])]);
+
+      return { origins: input.origins, merged: getDynamicCorsOrigins() };
     }),
 });

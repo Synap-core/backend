@@ -7,10 +7,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, desc } from "@synap/database";
-import { skills } from "@synap/database/schema";
+import type { SQL } from "drizzle-orm";
+import { skills, skillTriggers, automations } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -39,7 +40,7 @@ export const skillsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const conditions: any[] = [];
+      const conditions: SQL[] = [];
 
       // Three-tier scope filtering:
       //   pod       — visible to all users on the data pod (no userId/workspaceId filter)
@@ -623,5 +624,173 @@ export const skillsRouter = router({
         source: parsed.source,
         version: parsed.version,
       };
+    }),
+
+  // ── Skill Triggers ────────────────────────────────────────────────────────
+
+  createTrigger: workspaceProcedure
+    .input(
+      z.object({
+        skillId: z.string().uuid(),
+        type: z.enum(["entity_event", "cron", "manual"]),
+        eventPattern: z.string().optional(),
+        filters: z.record(z.string(), z.unknown()).optional(),
+        cronExpression: z.string().optional(),
+        channelType: z.enum(["personal", "new_thread"]).default("personal"),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Verify skill is accessible (pod-scoped, owned by user, or workspace-scoped for this workspace)
+      const skill = await db.query.skills.findFirst({
+        where: and(
+          eq(skills.id, input.skillId),
+          or(
+            eq(skills.scope, "pod"),
+            eq(skills.userId, ctx.userId),
+            and(
+              eq(skills.scope, "workspace"),
+              eq(skills.workspaceId, ctx.workspaceId)
+            )
+          )
+        ),
+      });
+      if (!skill)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+
+      // Create backing automation for non-manual triggers
+      let automationId: string | undefined;
+      if (input.type !== "manual") {
+        const automation = await db
+          .insert(automations)
+          .values({
+            name: `Skill trigger: ${skill.name}`,
+            description: `Auto-generated automation for skill "${skill.name}"`,
+            createdBy: ctx.userId,
+            workspaceId: ctx.workspaceId,
+            triggerType: input.type === "cron" ? "cron" : "event",
+            triggerConfig: {
+              eventPattern: input.eventPattern,
+              filters: input.filters,
+              expression: input.cronExpression,
+            },
+            flowDefinition: {
+              nodes: [
+                {
+                  id: "trigger",
+                  type: "trigger",
+                  position: { x: 0, y: 0 },
+                  data: {
+                    triggerType: input.type === "cron" ? "cron" : "event",
+                    label: "Trigger",
+                    config: {},
+                  },
+                },
+                {
+                  id: "skill",
+                  type: "command",
+                  position: { x: 0, y: 100 },
+                  data: {
+                    commandTitle: `Run skill: ${skill.name}`,
+                    inputMapping: {
+                      skillId: input.skillId,
+                      entityId: "{{trigger.payload.subjectId}}",
+                      channelType: input.channelType,
+                    },
+                  },
+                },
+              ],
+              edges: [{ id: "e1", source: "trigger", target: "skill" }],
+            },
+            status: "active",
+            metadata: { createdVia: "ai", tags: ["skill_trigger"] } as any,
+          })
+          .returning({ id: automations.id });
+        automationId = automation[0].id;
+      }
+
+      const [trigger] = await db
+        .insert(skillTriggers)
+        .values({
+          skillId: input.skillId,
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          type: input.type,
+          eventPattern: input.eventPattern,
+          filters: input.filters,
+          cronExpression: input.cronExpression,
+          channelType: input.channelType,
+          isActive: true,
+          automationId,
+        })
+        .returning();
+
+      return trigger;
+    }),
+
+  listTriggers: workspaceProcedure
+    .input(z.object({ skillId: z.string().uuid().optional() }))
+    .query(async ({ input, ctx }) => {
+      const conditions = [eq(skillTriggers.workspaceId, ctx.workspaceId)];
+      if (input.skillId)
+        conditions.push(eq(skillTriggers.skillId, input.skillId));
+      return db
+        .select()
+        .from(skillTriggers)
+        .where(and(...conditions));
+    }),
+
+  toggleTrigger: workspaceProcedure
+    .input(z.object({ triggerId: z.string().uuid(), active: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      const trigger = await db.query.skillTriggers.findFirst({
+        where: and(
+          eq(skillTriggers.id, input.triggerId),
+          eq(skillTriggers.workspaceId, ctx.workspaceId)
+        ),
+      });
+      if (!trigger) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Activate/pause backing automation
+      if (trigger.automationId) {
+        await db
+          .update(automations)
+          .set({
+            status: input.active ? "active" : "paused",
+            updatedAt: new Date(),
+          })
+          .where(eq(automations.id, trigger.automationId));
+      }
+
+      const [updated] = await db
+        .update(skillTriggers)
+        .set({ isActive: input.active, updatedAt: new Date() })
+        .where(eq(skillTriggers.id, input.triggerId))
+        .returning();
+
+      return updated;
+    }),
+
+  deleteTrigger: workspaceProcedure
+    .input(z.object({ triggerId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const trigger = await db.query.skillTriggers.findFirst({
+        where: and(
+          eq(skillTriggers.id, input.triggerId),
+          eq(skillTriggers.workspaceId, ctx.workspaceId)
+        ),
+      });
+      if (!trigger) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // Delete backing automation
+      if (trigger.automationId) {
+        await db
+          .delete(automations)
+          .where(eq(automations.id, trigger.automationId));
+      }
+
+      await db
+        .delete(skillTriggers)
+        .where(eq(skillTriggers.id, input.triggerId));
+      return { success: true };
     }),
 });

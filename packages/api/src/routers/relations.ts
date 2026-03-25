@@ -420,6 +420,11 @@ export const relationsRouter = router({
         subjectId: relation.id,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        data: {
+          relationType: input.type,
+          fromEntityId: input.sourceEntityId,
+          toEntityId: input.targetEntityId,
+        },
       });
 
       return {
@@ -676,6 +681,11 @@ export const relationsRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        data: {
+          relationType: relationToDelete?.type,
+          fromEntityId: relationToDelete?.sourceEntityId,
+          toEntityId: relationToDelete?.targetEntityId,
+        },
       });
 
       return {

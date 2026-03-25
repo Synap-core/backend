@@ -41,7 +41,19 @@ export interface AutomationTriggerConfig {
 
 export interface AutomationNodeBase {
   id: string;
-  type: "trigger" | "command" | "condition" | "delay" | "output" | "loop";
+  type:
+    | "trigger"
+    | "command"
+    | "condition"
+    | "delay"
+    | "output"
+    | "loop"
+    | "transform"
+    | "fetch"
+    | "query"
+    | "switch"
+    | "skill"
+    | "sub_automation";
   position: { x: number; y: number };
 }
 
@@ -111,19 +123,107 @@ export interface LoopNodeDef extends AutomationNodeBase {
   };
 }
 
+export interface TransformNodeDef extends AutomationNodeBase {
+  type: "transform";
+  data: {
+    label: string;
+    /** JS-like pipe expression: "{{stepId.output}} | uppercase" */
+    expression: string;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+export interface FetchNodeDef extends AutomationNodeBase {
+  type: "fetch";
+  data: {
+    label: string;
+    method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
+    url: string;
+    headers: Record<string, string>;
+    body: string;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+export interface QueryNodeDef extends AutomationNodeBase {
+  type: "query";
+  data: {
+    label: string;
+    profileSlug: string;
+    filter: string;
+    limit: number;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+export interface SwitchNodeDef extends AutomationNodeBase {
+  type: "switch";
+  data: {
+    label: string;
+    /** Template expression to evaluate: "{{trigger.status}}" */
+    expression: string;
+    /** Cases to match against the resolved expression value */
+    cases: Array<{ value: string; label: string }>;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/** Per-node error handling configuration */
+export interface NodeErrorHandling {
+  /** Don't fail the whole run on error — record error and continue */
+  continueOnError?: boolean;
+  /** Number of retry attempts (0–3) */
+  maxRetries?: number;
+  /** Milliseconds to wait between retries */
+  retryDelay?: number;
+}
+
+export interface SkillNodeDef extends AutomationNodeBase {
+  type: "skill";
+  data: {
+    label: string;
+    skillId: string;
+    skillTitle?: string;
+    inputMapping: Record<string, string>;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+export interface SubAutomationNodeDef extends AutomationNodeBase {
+  type: "sub_automation";
+  data: {
+    label: string;
+    automationId: string;
+    automationName?: string;
+    payloadMapping: Record<string, string>;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
 export type AutomationNode =
   | TriggerNodeDef
   | CommandNodeDef
   | ConditionNodeDef
   | DelayNodeDef
   | OutputNodeDef
-  | LoopNodeDef;
+  | LoopNodeDef
+  | TransformNodeDef
+  | FetchNodeDef
+  | QueryNodeDef
+  | SwitchNodeDef
+  | SkillNodeDef
+  | SubAutomationNodeDef;
 
 export interface AutomationEdge {
   id: string;
   source: string;
   target: string;
-  sourceHandle?: string; // "yes" | "no" for condition nodes
+  /** "yes" | "no" for condition nodes; case value (e.g. "active") for switch nodes */
+  sourceHandle?: string;
   animated?: boolean;
   label?: string;
 }

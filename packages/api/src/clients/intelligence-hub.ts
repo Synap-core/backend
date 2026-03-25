@@ -53,6 +53,8 @@ export interface IntelligenceHubRequest {
   requestId?: string;
   /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
   deepAnalysis?: boolean;
+  /** Workspace settings JSONB — forwarded to IS for agentModelPreferences tier overrides */
+  workspaceSettings?: Record<string, unknown>;
 }
 
 // Re-export from types package
@@ -204,6 +206,7 @@ export class IntelligenceHubClient {
               dataPodApiKey:
                 request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
               mcpServers: request.mcpServers,
+              workspaceSettings: request.workspaceSettings,
             }),
           }
         );
@@ -295,6 +298,7 @@ export class IntelligenceHubClient {
               request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
             mcpServers: request.mcpServers,
             deepAnalysis: request.deepAnalysis,
+            workspaceSettings: request.workspaceSettings,
           }),
         },
         STREAM_TIMEOUT_MS

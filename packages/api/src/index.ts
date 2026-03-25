@@ -41,6 +41,12 @@ export {
 export { eventStreamManager } from "./event-stream-manager.js";
 export { setupEventBroadcasting } from "./setup-event-broadcasting.js";
 
+// Export CORS cache for dynamic origin management
+export {
+  getDynamicCorsOrigins,
+  setDynamicCorsOrigins,
+} from "./utils/cors-cache.js";
+
 // Export utilities for webhook handling
 export {
   syncUserFromKratos,

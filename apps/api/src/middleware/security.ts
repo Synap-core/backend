@@ -8,6 +8,7 @@
  */
 import type { MiddlewareHandler } from "hono";
 import { rateLimiter } from "hono-rate-limiter";
+import { getDynamicCorsOrigins } from "@synap/api";
 
 /**
  * Rate Limiting Middleware (General)
@@ -195,31 +196,34 @@ export const securityHeadersMiddleware: MiddlewareHandler = async (c, next) => {
  *
  * @returns Array of allowed origin URLs
  */
-export const getCorsOrigins = () => {
-  // If ALLOWED_ORIGINS is explicitly set, use it (production)
-  if (process.env.ALLOWED_ORIGINS) {
-    return process.env.ALLOWED_ORIGINS.split(",").map((origin) =>
-      origin.trim()
-    );
+export const getCorsOrigins = (): string[] => {
+  const envOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",")
+        .map((o) => o.trim())
+        .filter(Boolean)
+    : [];
+
+  // Merge with dynamically configured origins (stored in DB, cached in memory)
+  const dynamicOrigins = getDynamicCorsOrigins();
+  const merged = [...new Set([...envOrigins, ...dynamicOrigins])];
+
+  if (merged.length > 0) {
+    return merged;
   }
 
   // Development fallback: common localhost ports
-  // In production, ALLOWED_ORIGINS should always be set
-  const isDevelopment = process.env.NODE_ENV === "development";
-  if (isDevelopment) {
+  if (process.env.NODE_ENV === "development") {
     return [
-      "http://localhost:5173", // Vite dev (default)
-      "http://localhost:5174", // Vite dev (alternative port)
-      "http://localhost:3000", // Next.js dev
-      "http://localhost:3001", // Alternative port
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:3000",
+      "http://localhost:3001",
     ];
   }
 
-  // Production: If not set, return empty array (strict - no origins allowed)
-  // This forces explicit configuration
+  // Production with no origins configured — reject all
   console.warn(
-    "⚠️  ALLOWED_ORIGINS not set in production. CORS will reject all origins. " +
-      "Set ALLOWED_ORIGINS environment variable with comma-separated frontend URLs."
+    "⚠️  ALLOWED_ORIGINS not set in production. CORS will reject all origins."
   );
   return [];
 };

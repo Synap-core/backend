@@ -36,8 +36,38 @@ import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { messages } from "@synap/database/schema";
+import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { emitSideEffects } from "@synap/jobs";
 
 const logger = createLogger({ module: "proposals" });
+
+/**
+ * Fire-and-forget: notify connected clients that a proposal was reviewed.
+ * The bell panel uses this to remove the item immediately without a refetch.
+ * Also enqueues automation-trigger-match for the proposal_event trigger type.
+ */
+function emitProposalReviewed(
+  proposalId: string,
+  workspaceId: string | null | undefined,
+  status: "approved" | "rejected",
+  userId?: string
+): void {
+  if (!workspaceId) return;
+  emitChatEvent({
+    event: "proposal:reviewed",
+    data: { proposalId, status, workspaceId },
+    workspaceId,
+  });
+  // Automation side-effects: proposal.approved.completed / proposal.rejected.completed
+  emitSideEffects({
+    subjectType: "proposal",
+    action: status,
+    subjectId: proposalId,
+    userId: userId ?? "",
+    workspaceId,
+    data: { proposalStatus: status },
+  });
+}
 
 /**
  * Fire-and-forget: report a proposal outcome to the IS telemetry endpoint.
@@ -303,6 +333,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -355,6 +391,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -411,6 +453,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -455,6 +503,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -506,6 +560,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -567,6 +627,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -622,6 +688,12 @@ export const proposalsRouter = router({
           })
           .where(eq(proposals.id, input.proposalId));
 
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
         return { success: true };
       }
 
@@ -707,6 +779,12 @@ export const proposalsRouter = router({
         targetType: proposal.targetType,
       });
 
+      emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
       return { success: true };
     }),
 
@@ -723,10 +801,15 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Fetch first to get sourceMessageId + agentUserId for telemetry
+      // Fetch first to get sourceMessageId + agentUserId for telemetry + workspaceId for realtime
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
-        columns: { sourceMessageId: true, agentUserId: true, targetType: true },
+        columns: {
+          sourceMessageId: true,
+          agentUserId: true,
+          targetType: true,
+          workspaceId: true,
+        },
       });
 
       await db
@@ -749,6 +832,12 @@ export const proposalsRouter = router({
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
         });
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "rejected",
+          userId
+        );
       }
 
       return { success: true };
@@ -905,6 +994,12 @@ export const proposalsRouter = router({
             })
             .where(eq(proposals.id, proposalId));
 
+          emitProposalReviewed(
+            proposalId,
+            proposal.workspaceId,
+            "approved",
+            userId
+          );
           results.push({ proposalId, success: true });
         } catch (error) {
           results.push({
@@ -932,7 +1027,7 @@ export const proposalsRouter = router({
       const userId = requireUserId(ctx.userId);
 
       for (const proposalId of input.proposalIds) {
-        await db
+        const [updated] = await db
           .update(proposals)
           .set({
             status: ProposalStatus.REJECTED,
@@ -946,7 +1041,17 @@ export const proposalsRouter = router({
               eq(proposals.id, proposalId),
               eq(proposals.status, ProposalStatus.PENDING)
             )
+          )
+          .returning({ workspaceId: proposals.workspaceId });
+
+        if (updated) {
+          emitProposalReviewed(
+            proposalId,
+            updated.workspaceId,
+            "rejected",
+            userId
           );
+        }
       }
 
       return { success: true };
@@ -995,6 +1100,20 @@ export const proposalsRouter = router({
           status: ProposalStatus.PENDING,
         })
         .returning();
+
+      // Side-effects: fire proposal.created event for automation triggers
+      emitSideEffects({
+        subjectType: "proposal",
+        action: "created",
+        subjectId: proposal.id,
+        userId,
+        workspaceId: (input.data.workspaceId as string) || undefined,
+        data: {
+          proposalStatus: "created",
+          targetType: input.targetType,
+          changeType: input.changeType,
+        },
+      });
 
       return {
         success: true,

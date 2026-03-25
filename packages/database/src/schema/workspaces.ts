@@ -180,6 +180,14 @@ export interface WorkspaceSettings {
     };
   };
 
+  // ─── Developer / SDK access ──────────────────────────────────────────────────
+  /**
+   * Origins that are allowed to make cross-origin requests to this pod via the SDK.
+   * Merged with ALLOWED_ORIGINS env var at runtime.
+   * Example: ["https://myapp.example.com", "http://localhost:3000"]
+   */
+  corsAllowedOrigins?: string[];
+
   // ─── Template / Package provenance ──────────────────────────────────────────
   /** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
   templateName?: string;

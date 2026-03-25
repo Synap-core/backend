@@ -108,6 +108,20 @@ export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
     isDirectional: true,
     uiHints: { category: "reference" },
   },
+  {
+    slug: "works_at",
+    displayName: "Works At",
+    description: "Person works at an organization",
+    isDirectional: true,
+    uiHints: { category: "social", inverseLabel: "Employs" },
+  },
+  {
+    slug: "deal_for",
+    displayName: "Deal For",
+    description: "Sales deal associated with a contact",
+    isDirectional: true,
+    uiHints: { category: "workflow", inverseLabel: "Has Deal" },
+  },
 ];
 
 /**

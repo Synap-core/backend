@@ -414,6 +414,114 @@ export const automationsRouter = router({
       return { run, steps };
     }),
 
+  // ── AI: Diagnose run ────────────────────────────────────────────────────────
+
+  diagnoseRun: workspaceProcedure
+    .input(
+      z.object({
+        automationName: z.string(),
+        flowDefinition: z.record(z.string(), z.unknown()),
+        run: z.object({
+          id: z.string(),
+          status: z.string(),
+          startedAt: z.string(),
+          finishedAt: z.string().optional(),
+          errorMessage: z.string().optional(),
+        }),
+        steps: z.array(
+          z.object({
+            nodeId: z.string(),
+            nodeType: z.string(),
+            status: z.string(),
+            resolvedInputs: z.record(z.string(), z.unknown()).optional(),
+            output: z.record(z.string(), z.unknown()).optional(),
+            errorMessage: z.string().optional(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const isUrl =
+        process.env.AGENT_HUB_URL ||
+        process.env.INTELLIGENCE_HUB_URL ||
+        "http://localhost:3002";
+      const isApiKey =
+        process.env.AGENT_HUB_API_KEY ||
+        process.env.INTELLIGENCE_HUB_API_KEY ||
+        "";
+
+      const response = await fetch(`${isUrl}/api/automations/diagnose-run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": isApiKey,
+        },
+        body: JSON.stringify({
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          ...input,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "IS call failed",
+        });
+      }
+
+      return response.json() as Promise<{
+        explanation: string;
+        suggestions: string[];
+      }>;
+    }),
+
+  // ── AI: Generate flow ───────────────────────────────────────────────────────
+
+  generateFlow: workspaceProcedure
+    .input(
+      z.object({
+        prompt: z.string().min(1).max(2000),
+        existingFlow: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const isUrl =
+        process.env.AGENT_HUB_URL ||
+        process.env.INTELLIGENCE_HUB_URL ||
+        "http://localhost:3002";
+      const isApiKey =
+        process.env.AGENT_HUB_API_KEY ||
+        process.env.INTELLIGENCE_HUB_API_KEY ||
+        "";
+
+      const response = await fetch(`${isUrl}/api/automations/generate-flow`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": isApiKey,
+        },
+        body: JSON.stringify({
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          ...input,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "IS call failed",
+        });
+      }
+
+      return response.json() as Promise<{
+        flowDefinition: { nodes: unknown[]; edges: unknown[] };
+        name: string;
+        explanation: string;
+      }>;
+    }),
+
   // ── Manual trigger ──────────────────────────────────────────────────────────
 
   trigger: workspaceProcedure

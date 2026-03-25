@@ -87,6 +87,86 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 }
 
 /**
+ * Check trigger-type-specific filter fields stored directly on triggerConfig.
+ *
+ * The frontend TriggerSettings stores per-trigger filters as top-level fields on
+ * triggerConfig (e.g. triggerConfig.channelId, triggerConfig.provider). These are
+ * separate from the generic `triggerConfig.filters` key-value map.
+ *
+ * Returns true if the event passes all configured specific filters (or if none apply).
+ */
+function matchTriggerSpecificFilters(
+  eventType: string,
+  eventData: Record<string, unknown> | undefined,
+  config: AutomationTriggerConfig & Record<string, unknown>
+): boolean {
+  // ── channel_message trigger ─────────────────────────────────────────────
+  if (eventType.startsWith("channel_message.")) {
+    // Filter by specific channel
+    if (config.channelId && eventData?.channelId !== config.channelId) {
+      return false;
+    }
+    // Filter by message role ("user" | "assistant" | "any")
+    if (
+      config.messageRole &&
+      config.messageRole !== "any" &&
+      eventData?.messageRole !== config.messageRole
+    ) {
+      return false;
+    }
+  }
+
+  // ── connector_sync trigger ──────────────────────────────────────────────
+  if (eventType.startsWith("connector_sync.")) {
+    // Filter by connector provider (e.g. "google-calendar", "github")
+    if (config.provider && eventData?.provider !== config.provider) {
+      return false;
+    }
+    // Filter by sync outcome ("success" | "error" | "any")
+    if (
+      config.syncStatus &&
+      config.syncStatus !== "any" &&
+      eventData?.syncStatus !== config.syncStatus
+    ) {
+      return false;
+    }
+  }
+
+  // ── relation_change trigger ─────────────────────────────────────────────
+  if (
+    eventType.startsWith("relation.create.") ||
+    eventType.startsWith("relation.delete.")
+  ) {
+    // Filter by relation type slug
+    if (
+      config.relationType &&
+      eventData?.relationType !== config.relationType
+    ) {
+      return false;
+    }
+    // Filter by change direction ("create" | "delete" | "any")
+    if (config.changeType && config.changeType !== "any") {
+      const action = eventType.includes(".create.") ? "create" : "delete";
+      if (action !== config.changeType) {
+        return false;
+      }
+    }
+  }
+
+  // ── proposal_event trigger ──────────────────────────────────────────────
+  if (eventType.startsWith("proposal.")) {
+    // Filter by specific proposal event type ("created" | "approved" | "rejected" | "any")
+    if (config.proposalEventType && config.proposalEventType !== "any") {
+      if (eventData?.proposalStatus !== config.proposalEventType) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
  * Main handler: match an event against all active automations in the workspace.
  */
 export async function handleAutomationTriggerMatch(job: {
@@ -149,6 +229,16 @@ export async function handleAutomationTriggerMatch(job: {
 
     // ── Filter match ───────────────────────────────────────────────────
     if (!matchFilters(data, config.filters)) continue;
+
+    // ── Trigger-type-specific filter match ─────────────────────────────
+    if (
+      !matchTriggerSpecificFilters(
+        eventType,
+        data,
+        config as AutomationTriggerConfig & Record<string, unknown>
+      )
+    )
+      continue;
 
     // ── Create automation run ──────────────────────────────────────────
     logger.info(

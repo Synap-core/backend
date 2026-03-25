@@ -64,6 +64,7 @@ import { createHash } from "crypto";
 import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { emitSideEffects } from "@synap/jobs";
 
 const logger = createLogger({ module: "channels" });
 
@@ -954,6 +955,19 @@ export const channelsRouter = router({
           !!channel.agentType &&
           channel.agentType !== "default");
 
+      // Automation side-effects: channel.message.created.completed for channel_message triggers
+      emitSideEffects({
+        subjectType: "channel_message",
+        action: "created",
+        subjectId: userMessageId,
+        userId,
+        workspaceId: workspaceId ?? channel.workspaceId ?? undefined,
+        data: {
+          channelId,
+          messageRole: MessageRole.USER,
+        },
+      });
+
       if (!isAiChannel) {
         return { messageId: userMessageId, channelId };
       }
@@ -1035,6 +1049,7 @@ export const channelsRouter = router({
         string,
         unknown
       >;
+      let workspaceSettingsForIS: Record<string, unknown> | undefined;
       if (workspaceId) {
         try {
           const [wsRow] = await db
@@ -1042,17 +1057,27 @@ export const channelsRouter = router({
             .from(workspaces)
             .where(eq(workspaces.id, workspaceId))
             .limit(1);
-          const wsPersonality = (
-            wsRow?.settings as { agentPersonality?: string } | undefined
-          )?.agentPersonality;
+          const wsSettings = wsRow?.settings as
+            | {
+                agentPersonality?: string;
+                agentModelPreferences?: Record<string, unknown>;
+              }
+            | undefined;
+          const wsPersonality = wsSettings?.agentPersonality;
           if (wsPersonality && !effectiveAgentConfig.personality) {
             effectiveAgentConfig = {
               ...effectiveAgentConfig,
               personality: wsPersonality,
             };
           }
+          // Forward agentModelPreferences so IS can apply tier overrides
+          if (wsSettings?.agentModelPreferences) {
+            workspaceSettingsForIS = {
+              agentModelPreferences: wsSettings.agentModelPreferences,
+            };
+          }
         } catch {
-          // Non-critical — skip personality if fetch fails
+          // Non-critical — skip personality and model prefs if fetch fails
         }
       }
 
@@ -1077,6 +1102,8 @@ export const channelsRouter = router({
           mcpServers: mcpServersList,
           // Deep Analysis: user opted into COMPLEX tier for this message
           deepAnalysis: input.deepAnalysis,
+          // Workspace model preferences — IS reads agentModelPreferences
+          workspaceSettings: workspaceSettingsForIS,
         });
 
         for await (const chunk of stream) {
@@ -1398,6 +1425,19 @@ export const channelsRouter = router({
         hash: assistantMessageHash,
         metadata: messageMetadata as any,
         ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+      });
+
+      // Automation side-effects: channel.message.created.completed for assistant reply
+      emitSideEffects({
+        subjectType: "channel_message",
+        action: "created",
+        subjectId: assistantMessageId,
+        userId,
+        workspaceId: workspaceId ?? channel.workspaceId ?? undefined,
+        data: {
+          channelId,
+          messageRole: MessageRole.ASSISTANT,
+        },
       });
 
       // Update session activity + token usage (fire-and-forget — non-critical)

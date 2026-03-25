@@ -14,6 +14,7 @@ import {
   intelligenceCommands,
   commandRuns,
   channels,
+  entities,
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
@@ -333,8 +334,9 @@ export const intelligenceRouter = router({
     .input(
       z.object({
         commandId: z.string().uuid(),
-        argumentValues: z.record(z.string(), z.string()),
+        argumentValues: z.record(z.string(), z.string()).default({}),
         selectionContext: selectionContextSchema.optional(),
+        currentUrl: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -351,7 +353,7 @@ export const intelligenceRouter = router({
         });
       }
 
-      const { substitute } = parseCommandTemplate(cmd.promptTemplate);
+      const parsedTemplate = parseCommandTemplate(cmd.promptTemplate);
       const missing = validateArgumentValues(
         cmd.derivedInputs ?? [],
         input.argumentValues
@@ -363,9 +365,27 @@ export const intelligenceRouter = router({
         });
       }
 
-      const compiledPrompt = substitute(
+      // Resolve static entity refs (@{entity:ID:name}) from the DB
+      const resolvedEntities: Record<string, string> = {};
+      for (const ref of parsedTemplate.staticRefs) {
+        const entity = await db.query.entities.findFirst({
+          where: and(
+            eq(entities.id, ref.entityId),
+            eq(entities.workspaceId, workspaceId)
+          ),
+        });
+        resolvedEntities[ref.entityId] = entity
+          ? `${entity.title ?? entity.type} (${entity.type})`
+          : ref.displayName;
+      }
+
+      const resolvedUrl = input.currentUrl;
+
+      const compiledPrompt = parsedTemplate.substitute(
         input.argumentValues,
-        input.selectionContext as SelectionContext | undefined
+        input.selectionContext as SelectionContext | undefined,
+        resolvedEntities,
+        resolvedUrl
       );
 
       const [thread] = await db
@@ -1324,6 +1344,302 @@ export const intelligenceRouter = router({
             : null,
       },
     };
+  }),
+
+  /**
+   * getServiceManifest
+   *
+   * Returns the AgentManifest for the workspace's active IS.
+   * For Synap IS (default): always fetches live from IS.
+   * For custom IS: returns cached manifest from DB metadata, refreshes if stale (>1h).
+   */
+  getServiceManifest: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    const workspaceId = ctx.workspaceId!;
+
+    const { serviceId, endpoint, serviceApiKey } =
+      await resolveIntelligenceService({
+        userId,
+        workspaceId,
+      });
+
+    const isSynapIS = serviceId === "default";
+
+    // For custom IS: check metadata cache first (1h TTL)
+    if (!isSynapIS) {
+      const record = await db.query.intelligenceServices.findFirst({
+        where: eq(intelligenceServices.serviceId, serviceId),
+      });
+      const meta = (record?.metadata ?? {}) as Record<string, unknown>;
+      const cached = (meta.agentManifest as unknown) ?? null;
+      const fetchedAt = meta.manifestFetchedAt as string | undefined;
+      const isStale =
+        !fetchedAt || Date.now() - new Date(fetchedAt).getTime() > 60 * 60_000;
+
+      if (cached && !isStale) {
+        return { manifest: cached, isSynapIS: false };
+      }
+
+      try {
+        const res = await fetch(`${endpoint}/api/manifest`, {
+          headers: { Authorization: `Bearer ${serviceApiKey}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) {
+          const manifest = (await res.json()) as unknown;
+          const newMeta = {
+            ...meta,
+            agentManifest: manifest,
+            manifestFetchedAt: new Date().toISOString(),
+          };
+          await db
+            .update(intelligenceServices)
+            .set({ metadata: newMeta })
+            .where(eq(intelligenceServices.serviceId, serviceId));
+          return { manifest, isSynapIS: false };
+        }
+      } catch {
+        // IS unreachable — return cached or null
+      }
+      return { manifest: cached, isSynapIS: false };
+    }
+
+    // Synap IS: always fetch live (no hardcoded manifest)
+    try {
+      const res = await fetch(`${endpoint}/api/manifest`, {
+        headers: { Authorization: `Bearer ${serviceApiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const manifest = (await res.json()) as unknown;
+        return { manifest, isSynapIS: true };
+      }
+    } catch {
+      // IS not reachable
+    }
+    return { manifest: null, isSynapIS: true };
+  }),
+
+  /**
+   * listSystemSkills
+   *
+   * Returns the list of system skills served by the active IS.
+   */
+  listSystemSkills: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    try {
+      const { endpoint, serviceApiKey } = await resolveIntelligenceService({
+        userId,
+        workspaceId: ctx.workspaceId,
+      });
+      const res = await fetch(`${endpoint}/api/skills`, {
+        headers: { Authorization: `Bearer ${serviceApiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { skills?: unknown[] };
+        return {
+          skills: Array.isArray(data.skills) ? data.skills : [],
+          source: "live" as const,
+        };
+      }
+    } catch {
+      // IS unreachable
+    }
+    return { skills: [], source: "offline" as const };
+  }),
+
+  /**
+   * testCustomServiceConnection
+   *
+   * Tests connectivity to a candidate custom IS before registering.
+   * Pings /api/capabilities (required) and /api/manifest (optional).
+   */
+  testCustomServiceConnection: workspaceProcedure
+    .input(z.object({ hubUrl: z.string().url(), apiKey: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const { hubUrl, apiKey } = input;
+
+      let capabilities: string[] = [];
+      let hasManifest = false;
+
+      try {
+        const capRes = await fetch(`${hubUrl}/api/capabilities`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!capRes.ok) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Intelligence service returned ${capRes.status}. Check the URL and API key.`,
+          });
+        }
+        const capData = (await capRes.json()) as { capabilities?: string[] };
+        capabilities = Array.isArray(capData.capabilities)
+          ? capData.capabilities
+          : [];
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Could not reach ${hubUrl}. Make sure the service is running and the URL is correct.`,
+        });
+      }
+
+      try {
+        const mfRes = await fetch(`${hubUrl}/api/manifest`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        hasManifest = mfRes.ok;
+      } catch {
+        // manifest is optional
+      }
+
+      return { ok: true, capabilities, hasManifest };
+    }),
+
+  /**
+   * registerCustomService
+   *
+   * Registers a custom IS endpoint for the workspace.
+   * Does NOT auto-activate — use setActiveService to make it active.
+   */
+  registerCustomService: workspaceProcedure
+    .input(
+      z.object({
+        displayName: z.string().min(1).max(80),
+        hubUrl: z.string().url(),
+        apiKey: z.string().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { displayName, hubUrl, apiKey } = input;
+
+      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only workspace owners and admins can register AI services.",
+        });
+      }
+
+      // Fetch capabilities to verify connectivity
+      let capabilities: string[] = [];
+      try {
+        const capRes = await fetch(`${hubUrl}/api/capabilities`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!capRes.ok) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Service returned ${capRes.status}. Verify the URL and API key.`,
+          });
+        }
+        const data = (await capRes.json()) as { capabilities?: string[] };
+        capabilities = Array.isArray(data.capabilities)
+          ? data.capabilities
+          : [];
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Could not reach the service. Make sure it is running.",
+        });
+      }
+
+      // Try fetching manifest (soft-fail)
+      let agentManifest: unknown = null;
+      try {
+        const mfRes = await fetch(`${hubUrl}/api/manifest`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (mfRes.ok) agentManifest = await mfRes.json();
+      } catch {
+        // optional
+      }
+
+      // Generate a stable service ID from display name
+      const slug = displayName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const serviceId = `custom-${slug}-${randomUUID().slice(0, 8)}`;
+      const id = randomUUID();
+
+      await db.insert(intelligenceServices).values({
+        id,
+        serviceId,
+        name: displayName,
+        webhookUrl: hubUrl,
+        apiKey,
+        capabilities,
+        metadata: agentManifest
+          ? {
+              agentManifest,
+              manifestFetchedAt: new Date().toISOString(),
+            }
+          : {},
+      });
+
+      return { serviceId, id, displayName };
+    }),
+
+  /**
+   * setActiveService
+   *
+   * Makes the given serviceId the active IS for the workspace.
+   * Use "default" to switch back to Synap Agent.
+   */
+  setActiveService: workspaceProcedure
+    .input(z.object({ serviceId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId!;
+
+      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only workspace owners and admins can change the active AI service.",
+        });
+      }
+
+      if (input.serviceId !== "default") {
+        const record = await db.query.intelligenceServices.findFirst({
+          where: eq(intelligenceServices.serviceId, input.serviceId),
+        });
+        if (!record) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Intelligence service not found.",
+          });
+        }
+      }
+
+      await db
+        .update(workspaces)
+        .set({
+          settings: drizzleSql`jsonb_set(coalesce(settings, '{}'), '{intelligenceServiceId}', ${JSON.stringify(input.serviceId)}::jsonb, true)`,
+        })
+        .where(eq(workspaces.id, workspaceId));
+
+      return { serviceId: input.serviceId };
+    }),
+
+  /**
+   * listRegisteredServices
+   *
+   * Returns all IS records registered for the workspace.
+   * apiKey is never returned.
+   */
+  listRegisteredServices: workspaceProcedure.query(async () => {
+    const records = await db.query.intelligenceServices.findMany({
+      columns: {
+        apiKey: false, // never expose
+      },
+    });
+    return { services: records };
   }),
 
   /**

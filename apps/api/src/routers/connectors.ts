@@ -21,6 +21,7 @@ import {
 } from "@synap/database";
 import { entityExternalLinks } from "@synap/database/schema";
 import { verifyCpJwt } from "@synap/api";
+import { emitSideEffects } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
 import crypto from "crypto";
 
@@ -218,6 +219,23 @@ connectorsRouter.post("/pull-sync", async (c) => {
     records = (data.records || data.data || []) as NangoRecord[];
   } catch (err) {
     logger.error({ err }, "Nango records fetch failed");
+    // Automation side-effects: connector.sync.completed (error) for connector_sync triggers
+    const wsForErr = await getDb()
+      .then((d) => d.query.workspaces.findFirst())
+      .catch(() => null);
+    if (wsForErr) {
+      emitSideEffects({
+        subjectType: "connector_sync",
+        action: "sync_completed",
+        subjectId: nangoConnectionId,
+        userId,
+        workspaceId: wsForErr.id,
+        data: {
+          provider,
+          syncStatus: "error",
+        },
+      });
+    }
     return c.json({ error: "Failed to fetch records" }, 502);
   }
 
@@ -326,6 +344,22 @@ connectorsRouter.post("/pull-sync", async (c) => {
     { provider, model, created, updated, skipped },
     "Pull-sync completed"
   );
+
+  // Automation side-effects: connector.sync.completed for connector_sync triggers
+  if (ws) {
+    emitSideEffects({
+      subjectType: "connector_sync",
+      action: "sync_completed",
+      subjectId: nangoConnectionId,
+      userId,
+      workspaceId: ws.id,
+      data: {
+        provider,
+        syncStatus: "success",
+        entitiesProcessed: created + updated,
+      },
+    });
+  }
 
   return c.json({
     success: true,

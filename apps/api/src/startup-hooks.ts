@@ -10,6 +10,8 @@
 import { createLogger } from "@synap-core/core";
 import { db, webhookSubscriptions, eq } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
+import { sql as drizzleSql } from "drizzle-orm";
+import { setDynamicCorsOrigins } from "@synap/api";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -127,12 +129,80 @@ function ensureChannelGatewayKey(): void {
 }
 
 /**
+ * Platform origins that every pod must allow so the Synap landing page and
+ * developer dashboard (synap.dev) can reach the pod's tRPC from the browser.
+ *
+ * This runs once per pod lifecycle. If the origins are already present in
+ * corsAllowedOrigins they are skipped — fully idempotent.
+ */
+const PLATFORM_CORS_ORIGINS = [
+  "https://synap.dev",
+  "https://www.synap.dev",
+  "https://app.synap.live",
+] as const;
+
+async function seedDefaultCorsOrigins(): Promise<void> {
+  try {
+    const { workspaces } = await import("@synap/database/schema");
+    const ws = await db.query.workspaces.findFirst({
+      orderBy: (ws, { asc }) => [asc(ws.createdAt)],
+    });
+    if (!ws) return;
+
+    const current: string[] = (ws.settings as any)?.corsAllowedOrigins ?? [];
+    const toAdd = PLATFORM_CORS_ORIGINS.filter((o) => !current.includes(o));
+    if (toAdd.length === 0) return; // Already seeded — nothing to do
+
+    const merged = [...current, ...toAdd];
+    await db
+      .update(workspaces)
+      .set({
+        settings: drizzleSql`settings || ${JSON.stringify({ corsAllowedOrigins: merged })}::jsonb`,
+      })
+      .where(eq(workspaces.id, ws.id));
+
+    logger.info({ added: toAdd }, "Seeded default platform CORS origins");
+  } catch (err) {
+    logger.warn({ err }, "Failed to seed default CORS origins (non-fatal)");
+  }
+}
+
+/**
+ * Load CORS allowed origins from the first workspace's settings into the in-memory cache.
+ * Called at startup so dynamically configured origins are available immediately.
+ */
+async function loadCorsOrigins(): Promise<void> {
+  try {
+    const ws = await db.query.workspaces.findFirst({
+      orderBy: (ws, { asc }) => [asc(ws.createdAt)],
+    });
+    const dbOrigins: string[] = (ws?.settings as any)?.corsAllowedOrigins ?? [];
+    if (dbOrigins.length > 0) {
+      const envOrigins = process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(",")
+            .map((o) => o.trim())
+            .filter(Boolean)
+        : [];
+      setDynamicCorsOrigins([...new Set([...envOrigins, ...dbOrigins])]);
+      logger.info(
+        { count: dbOrigins.length },
+        "Loaded CORS origins from workspace settings"
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to load CORS origins from DB (non-fatal)");
+  }
+}
+
+/**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
   ensureChannelGatewayKey();
+  await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod
+  await loadCorsOrigins();
   await configureN8NWebhook();
   await configureLangFlow();
 

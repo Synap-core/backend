@@ -10,19 +10,23 @@
  * - Complete audit trail
  */
 
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   db,
   sql,
   eq,
+  and,
+  drizzleSql,
   secretVaultKeys,
   SECRET_TYPES,
   SecretsVaultRepository,
   EventRepository,
   encryptionService,
 } from "@synap/database";
+import { proposals, secrets, ProposalStatus } from "@synap/database/schema";
+import { auditLog } from "../utils/audit-log.js";
 
 // ============================================================================
 // Validation Schemas
@@ -552,5 +556,77 @@ export const secretsVaultRouter = router({
       const repo = getRepository();
       await repo.markCompromised(input.id, ctx.userId);
       return { success: true };
+    }),
+
+  // ==========================================================================
+  // AI Access
+  // ==========================================================================
+
+  /**
+   * Grant an AI agent access to a vault secret.
+   * Called from the browser when user approves a vault.request proposal.
+   *
+   * Only works with server-encrypted secrets — client-encrypted secrets
+   * cannot be resolved by the vault resolver (no master password on server).
+   *
+   * Returns the vault:// reference for the approved secret.
+   */
+  grantAIAccess: workspaceProcedure
+    .input(
+      z.object({
+        secretId: z.string().uuid(),
+        proposalId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // 1. Verify secret exists and belongs to this user/workspace
+      const secret = await db.query.secrets.findFirst({
+        where: and(
+          eq(secrets.id, input.secretId),
+          eq(secrets.userId, ctx.userId)
+        ),
+      });
+      if (!secret)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
+
+      // 2. Only server-encrypted secrets can be resolved by the vault resolver
+      if (secret.encryptionMode !== "server") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            'Only server-encrypted secrets can be granted to AI. Re-save the secret with "AI accessible" mode.',
+        });
+      }
+
+      // 3. Build the vault:// reference
+      const vaultRef = `vault://${secret.id}`;
+
+      // 4. Approve the proposal and embed the vault ref in data
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          updatedAt: new Date(),
+          data: drizzleSql`data || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text)`,
+        })
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.workspaceId, ctx.workspaceId)
+          )
+        );
+
+      // 5. Audit log
+      auditLog({
+        subjectType: "vault_secret",
+        action: "grant_ai_access",
+        phase: "completed",
+        subjectId: secret.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { proposalId: input.proposalId, vaultRef },
+      });
+
+      return { vaultRef, secretId: secret.id, proposalId: input.proposalId };
     }),
 });

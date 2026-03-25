@@ -15,9 +15,10 @@ import { users, workspaces, ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
-import { broadcastNotification } from "@synap/jobs";
+import { broadcastNotification, emitSideEffects } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { notifyProposalViaTelegram } from "./telegram-notify.js";
+import { NotificationService } from "../notifications/NotificationService.js";
 
 const logger = createLogger({ module: "permission-check" });
 
@@ -257,6 +258,7 @@ export async function checkPermissionOrPropose(
           "document.create", // AI creates documents
           "relation.create", // AI creates relations between entities
           "channel.create", // AI creates AI thread channels
+          "terminal.read_logs", // AI reads pod service logs (read-only, no side effects)
         ];
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
@@ -456,6 +458,16 @@ async function createProposal(opts: {
     // Broadcast failure is non-critical
   }
 
+  // Automation side-effects: proposal.created.completed for proposal_event triggers
+  emitSideEffects({
+    subjectType: "proposal",
+    action: "created",
+    subjectId: proposal.id,
+    userId,
+    workspaceId,
+    data: { proposalStatus: "created" },
+  });
+
   // Telegram push notification (fire-and-forget, non-critical)
   notifyProposalViaTelegram({
     userId,
@@ -464,6 +476,16 @@ async function createProposal(opts: {
     action,
     reasoning,
     workspaceId,
+  }).catch(() => {});
+
+  // Unified notification system — persist to notifications table + emit notification:new
+  NotificationService.fromProposal({
+    proposalId: proposal.id,
+    workspaceId,
+    userId,
+    proposalType: `${singularType}.${action}`,
+    description: reasoning ?? `${action} ${singularType}`,
+    agentUserId: agentUserId ?? undefined,
   }).catch(() => {});
 
   return { granted: false, proposalId: proposal.id };

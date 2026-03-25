@@ -71,6 +71,9 @@ export * from "./entity-templates.js";
 // NEW: Skills (user-created AI capabilities)
 export * from "./skills.js";
 
+// NEW: Skill Triggers (event-driven + cron-driven skill activation)
+export * from "./skill-triggers.js";
+
 // NEW: Background Tasks (proactive AI automation)
 export * from "./background-tasks.js";
 
@@ -114,3 +117,6 @@ export * from "./widget-definitions.js";
 
 // NEW: Entity External Links (connector sync tracking)
 export * from "./entity-external-links.js";
+
+// NEW: Unified Notification System
+export * from "./notifications.js";

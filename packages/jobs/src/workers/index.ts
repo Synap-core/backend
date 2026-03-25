@@ -42,6 +42,11 @@ import { handleAutomationExecute } from "./automation-executor.js";
 import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
 import { handleTelegramDigest } from "./telegram-digest.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
+import {
+  handleVaultGrantExpiry,
+  VAULT_GRANT_EXPIRY_QUEUE,
+} from "./vault-grant-expiry-worker.js";
+import { handleAutomationPatternDetect } from "./automation-pattern-detector.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -75,6 +80,8 @@ const ALL_QUEUES = [
   "automation-cron-scheduler",
   "telegram-digest",
   "relation-backfill",
+  VAULT_GRANT_EXPIRY_QUEUE,
+  "automation-pattern-detect",
 ];
 
 /**
@@ -231,6 +238,18 @@ export async function registerAllWorkers(): Promise<void> {
     handleRelationBackfill(job)
   );
   logger.info("Registered worker: relation-backfill");
+
+  // Vault grant expiry (cron: every hour — expires TTL-bounded approved vault.request proposals)
+  await boss.work(VAULT_GRANT_EXPIRY_QUEUE, async () =>
+    handleVaultGrantExpiry()
+  );
+  logger.info("Registered worker: vault-grant-expiry");
+
+  // Automation pattern detection (cron: daily at 3:00 AM UTC)
+  await boss.work("automation-pattern-detect", async () =>
+    handleAutomationPatternDetect()
+  );
+  logger.info("Registered worker: automation-pattern-detect");
 
   logger.info("All workers registered");
 }

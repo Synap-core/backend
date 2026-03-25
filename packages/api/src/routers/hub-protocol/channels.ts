@@ -33,6 +33,7 @@ import {
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
+import { ensurePersonalChannel } from "../../utils/personal-channel.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
@@ -576,6 +577,128 @@ export const channelsRouter = router({
           timestamp: m.timestamp.toISOString(),
         })),
         hasMore,
+      };
+    }),
+
+  /**
+   * Get or create the user's personal AI channel for a workspace.
+   * Requires: hub-protocol.write scope (creates the channel if it doesn't exist)
+   *
+   * Idempotent — returns existing channel if already created.
+   * Used by skill triggers that need a channelId to post into.
+   */
+  ensurePersonal: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const channel = await ensurePersonalChannel(
+        input.userId,
+        input.workspaceId
+      );
+      return { channel };
+    }),
+
+  /**
+   * Trigger an AI response in a channel with a skill prompt override.
+   * Requires: hub-protocol.write scope
+   *
+   * Inserts a system message with the skill prompt into the channel, then
+   * emits a chat event that causes the IS to generate an AI response.
+   * Used by skill triggers to fire a skill into a user's personal channel
+   * or a newly created thread.
+   */
+  triggerAI: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        /** The skill prompt injected as the user turn that drives the AI response */
+        systemPromptOverride: z.string().min(1),
+        /** Optional skill ID for attribution / metadata */
+        skillId: z.string().uuid().optional(),
+        /** Optional entity ID that the skill is acting on */
+        entityId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      // Verify channel exists
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.channelId),
+      });
+
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+
+      // Insert a system-role message carrying the skill prompt.
+      // The IS will pick this up as the trigger message and respond.
+      const messageId = randomUUID();
+      const content = input.systemPromptOverride;
+      const hash = createHash("sha256")
+        .update(`${messageId}${content}`)
+        .digest("hex");
+
+      await db.insert(messages).values({
+        id: messageId,
+        channelId: input.channelId,
+        role: MessageRole.SYSTEM,
+        authorType: MessageAuthorType.AI_AGENT,
+        content,
+        userId: input.userId,
+        previousHash: "",
+        hash,
+        metadata: {
+          type: "skill_trigger",
+          systemPromptOverride: input.systemPromptOverride,
+          skillId: input.skillId,
+          entityId: input.entityId,
+        } as any,
+      });
+
+      await db
+        .update(channels)
+        .set({ updatedAt: new Date() })
+        .where(eq(channels.id, input.channelId));
+
+      // Emit chat event — causes IS to generate an AI response in this channel
+      emitChatEvent({
+        event: "chat:message",
+        data: {
+          threadId: input.channelId,
+          message: {
+            id: messageId,
+            threadId: input.channelId,
+            role: MessageRole.SYSTEM,
+            content,
+            userId: input.userId,
+            timestamp: new Date(),
+            previousHash: "",
+            hash,
+            metadata: {
+              type: "skill_trigger",
+              skillId: input.skillId,
+              entityId: input.entityId,
+            },
+          },
+          userId: input.userId,
+          triggerAI: true,
+        },
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+      });
+
+      return {
+        status: "triggered" as const,
+        messageId,
+        channelId: input.channelId,
       };
     }),
 

@@ -51,7 +51,7 @@ Create a proposal for a new view that matches this description. Include:
 - Layout configuration
 
 Output your proposal clearly so it can be turned into a Synap view.`,
-    derivedInputs: [{ name: "Goal", label: "Goal", type: "string" }],
+    derivedInputs: [{ name: "Goal", label: "Goal", type: "text" }],
     outputMode: "view",
     canCreateViews: true,
     permissionsProfile: "propose_writes",

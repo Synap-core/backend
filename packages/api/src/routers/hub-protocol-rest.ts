@@ -10,6 +10,7 @@ import { realpathSync, existsSync } from "fs";
 import { resolve as resolvePath } from "path";
 import { createLogger } from "@synap-core/core";
 import { apiKeyService } from "../services/api-keys.js";
+import { NotificationService } from "../notifications/NotificationService.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import {
@@ -304,6 +305,30 @@ app.get("/users/:userId/entities", async (c) => {
     return c.json(result);
   } catch (err) {
     logger.error({ err, userId }, "getEntities failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /entities/:id?workspaceId=...
+ * Fetch a single entity by ID. Used by skill trigger executor to get entity context.
+ */
+app.get("/entities/:id", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const entityId = c.req.param("id");
+  const workspaceId = c.req.query("workspaceId");
+  try {
+    const caller = await getCaller(c, { workspaceId });
+    const result = await (caller as any).entities.get({ id: entityId });
+    if (!result) return c.json(null, 404);
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, entityId }, "entities.get failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500
@@ -2661,6 +2686,30 @@ app.post("/automations/:automationId/pause", async (c) => {
 
 // ─── CLI Command Execution ──────────────────────────────────────────────────
 
+// ── Rate limiter for terminal commands ─────────────────────────────────────
+const _commandRateLimiter = new Map<
+  string,
+  { count: number; resetAt: number }
+>();
+
+function checkCommandRateLimit(workspaceId: string): boolean {
+  const now = Date.now();
+  const key = `cmd:${workspaceId}`;
+  const entry = _commandRateLimiter.get(key);
+
+  if (!entry || entry.resetAt < now) {
+    _commandRateLimiter.set(key, { count: 1, resetAt: now + 60_000 });
+    return true; // allowed
+  }
+
+  if (entry.count >= 10) {
+    return false; // rate limited
+  }
+
+  entry.count++;
+  return true;
+}
+
 /** Commands that are always blocked regardless of permissions */
 const BLOCKED_COMMAND_PATTERNS = [
   // Filesystem destruction
@@ -2849,12 +2898,25 @@ app.post("/commands/execute", async (c) => {
     string,
     unknown
   >;
+
+  // Rate limit: 10 commands per workspace per minute
+  const workspaceId = body.workspaceId as string | undefined;
+  if (workspaceId && !checkCommandRateLimit(workspaceId)) {
+    return c.json(
+      {
+        error:
+          "Rate limit exceeded: maximum 10 commands per minute per workspace",
+        retryAfter: 60,
+      },
+      429
+    );
+  }
+
   const command = body.command as string;
   const workingDir = (body.workingDir as string) || undefined;
   const timeoutMs = Math.min(Number(body.timeoutMs) || 30_000, 300_000);
   const userId = (body.userId as string) ?? (c.get("userId") as string);
   const agentUserId = body.agentUserId as string | undefined;
-  const workspaceId = body.workspaceId as string | undefined;
   const sourceMessageId = body.sourceMessageId as string | undefined;
   const reason = body.reason as string | undefined;
 
@@ -2992,6 +3054,358 @@ app.post("/commands/execute", async (c) => {
     });
   } catch (err) {
     logger.error({ err, command }, "commands.execute failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+// =============================================================================
+// Vault (secret request)
+// =============================================================================
+
+/**
+ * POST /vault/request
+ * AI requests access to a vault secret — creates a proposal for user approval.
+ * Body: { workspaceId?, agentUserId?, channelId?, secretType, service, purpose, accessLevel, ttl }
+ */
+app.post("/vault/request", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+  const body = (await c.req.json()) as {
+    workspaceId?: string;
+    agentUserId?: string;
+    channelId?: string;
+    sourceMessageId?: string;
+    secretType: string;
+    service: string;
+    purpose: string;
+    accessLevel?: string;
+    ttl?: number;
+  };
+
+  if (!body.secretType || !body.service || !body.purpose) {
+    return c.json(
+      { error: "secretType, service, and purpose are required" },
+      400
+    );
+  }
+
+  const userId = (body.agentUserId as string) ?? (c.get("userId") as string);
+  const workspaceId = body.workspaceId ?? c.req.header("x-workspace-id");
+  if (!workspaceId) {
+    return c.json({ error: "workspaceId is required" }, 400);
+  }
+
+  const accessLevel = body.accessLevel ?? "read";
+  const ttl = body.ttl ?? 60;
+
+  try {
+    const { proposals, ProposalStatus } =
+      await import("@synap/database/schema");
+    const { randomUUID } = await import("crypto");
+    const id = randomUUID();
+    const [row] = await db
+      .insert(proposals)
+      .values({
+        id,
+        workspaceId,
+        targetType: "vault",
+        targetId: `${body.service}:${body.secretType}`,
+        proposalType: "vault.request",
+        data: {
+          secretType: body.secretType,
+          service: body.service,
+          purpose: body.purpose,
+          accessLevel,
+          ttl,
+          requestedBy: "ai",
+          _summary: `AI requests ${body.secretType} for ${body.service}: ${body.purpose}`,
+        },
+        status: ProposalStatus.PENDING,
+        agentUserId: userId ?? null,
+        threadId: body.channelId ?? null,
+        sourceMessageId: body.sourceMessageId ?? null,
+        createdBy: userId ?? null,
+      })
+      .returning({ id: proposals.id });
+
+    // Emit urgent notification — shows as banner (not toast) in the UI
+    NotificationService.create({
+      workspaceId,
+      userId,
+      type: "ai_request.vault_access",
+      sourceType: "proposal",
+      sourceId: row.id,
+      data: {
+        secretType: body.secretType,
+        service: body.service,
+        purpose: body.purpose,
+        proposalId: row.id,
+      },
+    }).catch(() => {});
+
+    return c.json({
+      status: "pending",
+      proposalId: row.id,
+      message: `Vault secret request created. Awaiting user approval.`,
+    });
+  } catch (err) {
+    logger.error({ err, workspaceId }, "vault.request failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /channels/personal?userId=...&workspaceId=...
+ * Get or create the user's personal AI channel.
+ * Used by skill triggers to resolve a channelId before posting.
+ */
+app.get("/channels/personal", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  if (!userId || !workspaceId) {
+    return c.json({ error: "userId and workspaceId are required" }, 400);
+  }
+  try {
+    const caller = await getCaller(c, { workspaceId, userId });
+    const result = await (caller as any).channels.ensurePersonal({
+      userId,
+      workspaceId,
+    });
+    // Unwrap { channel } wrapper — IS hub client expects { id, channelType } directly
+    return c.json(result?.channel ?? result);
+  } catch (err) {
+    logger.error(
+      { err, userId, workspaceId },
+      "channels.ensurePersonal failed"
+    );
+    return c.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      500
+    );
+  }
+});
+
+/**
+ * GET /terminal/logs?service=...&lines=...&since=...&filter=...
+ * Read pod service logs. Auto-approved (read-only).
+ * Allowed services: api, intelligence, realtime, postgres, typesense
+ */
+app.get("/terminal/logs", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+
+  const service = c.req.query("service") ?? "";
+  const lines = Math.min(parseInt(c.req.query("lines") ?? "50", 10), 500);
+  const since = c.req.query("since"); // e.g. "1h", "30m"
+  const filter = c.req.query("filter"); // grep pattern
+
+  // Allowlist of services AI can read logs from
+  const ALLOWED_SERVICES: Record<string, string> = {
+    api: "synap-api",
+    intelligence: "synap-intelligence",
+    realtime: "synap-realtime",
+    postgres: "synap-postgres",
+    typesense: "synap-typesense",
+  };
+
+  if (!service || !ALLOWED_SERVICES[service]) {
+    return c.json(
+      {
+        error: `Unknown service "${service}". Allowed: ${Object.keys(ALLOWED_SERVICES).join(", ")}`,
+      },
+      400
+    );
+  }
+
+  const containerName = ALLOWED_SERVICES[service];
+
+  try {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+
+    // Build docker logs command
+    let cmd = `docker logs --tail=${lines}`;
+    if (since) cmd += ` --since=${since}`;
+    cmd += ` ${containerName} 2>&1`;
+    if (filter) cmd += ` | grep -i ${JSON.stringify(filter)}`;
+
+    let output: string;
+    try {
+      const { stdout } = await execAsync(cmd, {
+        timeout: 10_000,
+        maxBuffer: 100 * 1024,
+      });
+      output = stdout;
+    } catch (_dockerErr) {
+      // Fallback: journalctl
+      let jCmd = `journalctl -u synap-${service} -n ${lines} --no-pager`;
+      if (since) jCmd += ` --since="${since} ago"`;
+      if (filter) jCmd += ` | grep -i ${JSON.stringify(filter)}`;
+      try {
+        const { stdout } = await execAsync(jCmd, {
+          timeout: 10_000,
+          maxBuffer: 100 * 1024,
+        });
+        output = stdout;
+      } catch {
+        output = `[No logs available for service "${service}". Docker and journalctl both unavailable.]`;
+      }
+    }
+
+    // Truncate if over 100KB
+    const MAX_OUTPUT = 100 * 1024;
+    const truncated = Buffer.byteLength(output) > MAX_OUTPUT;
+    if (truncated) {
+      output =
+        output.slice(-MAX_OUTPUT) + "\n[... truncated to last 100KB ...]";
+    }
+
+    return c.json({
+      service,
+      lines,
+      truncated,
+      output,
+    });
+  } catch (err) {
+    logger.error({ err, service }, "terminal.logs failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /channels/trigger-ai
+ * Trigger an AI response in a channel with a skill prompt.
+ * Used by skill triggers (entity_event / cron) to fire a skill into a user's channel.
+ */
+app.post("/channels/trigger-ai", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+  const body = (await c.req.json()) as {
+    channelId: string;
+    userId: string;
+    workspaceId: string;
+    systemPromptOverride: string;
+    skillId?: string;
+    entityId?: string;
+  };
+
+  if (
+    !body.channelId ||
+    !body.systemPromptOverride ||
+    !body.userId ||
+    !body.workspaceId
+  ) {
+    return c.json(
+      {
+        error:
+          "channelId, userId, workspaceId, and systemPromptOverride are required",
+      },
+      400
+    );
+  }
+
+  try {
+    const caller = await getCaller(c, {
+      workspaceId: body.workspaceId,
+      userId: body.userId,
+    });
+    const result = await (caller as any).channels.triggerAI({
+      channelId: body.channelId,
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      systemPromptOverride: body.systemPromptOverride,
+      skillId: body.skillId,
+      entityId: body.entityId,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error(
+      { err, channelId: body.channelId },
+      "channels.triggerAI failed"
+    );
+    return c.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      500
+    );
+  }
+});
+
+// ── Notifications (IS → Backend) ────────────────────────────────────────────
+
+/**
+ * POST /notifications
+ * IS calls this to persist a notification (e.g. skill.triggered) and emit
+ * notification:new to the frontend. Backend-originated notifications (vault,
+ * proposals) use NotificationService directly — this endpoint is for IS-side events.
+ */
+app.post("/notifications", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId: string;
+    type: string;
+    sourceType?: string;
+    sourceId?: string;
+    workspaceUrl?: string;
+    groupKey?: string;
+    data?: Record<string, unknown>;
+  };
+
+  if (!body.userId || !body.workspaceId || !body.type) {
+    return c.json({ error: "userId, workspaceId, and type are required" }, 400);
+  }
+
+  try {
+    const id = await NotificationService.create({
+      workspaceId: body.workspaceId,
+      userId: body.userId,
+      type: body.type,
+      sourceType: (body.sourceType ?? "system") as
+        | "proposal"
+        | "connector"
+        | "agent"
+        | "system"
+        | "inbox_item",
+      sourceId: body.sourceId,
+      workspaceUrl: body.workspaceUrl,
+      groupKey: body.groupKey,
+      data: body.data ?? {},
+    });
+
+    return c.json({ id });
+  } catch (err) {
+    logger.error({ err }, "notifications.create failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500

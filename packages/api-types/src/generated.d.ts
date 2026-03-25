@@ -298,6 +298,12 @@ export interface WorkspaceSettings {
 			};
 		};
 	};
+	/**
+	 * Origins that are allowed to make cross-origin requests to this pod via the SDK.
+	 * Merged with ALLOWED_ORIGINS env var at runtime.
+	 * Example: ["https://myapp.example.com", "http://localhost:3000"]
+	 */
+	corsAllowedOrigins?: string[];
 	/** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
 	templateName?: string;
 	/**
@@ -315,6 +321,16 @@ export interface WorkspaceSettings {
 	systemSlug?: string;
 	/** Version of the package at time of creation. */
 	packageVersion?: string;
+	/**
+	 * Profile packs, view packs, and bento templates installed into this workspace.
+	 * Populated by the browser when installing from the CP package registry.
+	 * Used to show "Installed" badges and prevent re-installation.
+	 */
+	installedPacks?: Array<{
+		slug: string;
+		version: string;
+		installedAt: string;
+	}>;
 	/** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
 	createdBy?: "user" | "provisioning" | "plugin";
 	/** ISO timestamp when provisioning started (set immediately on workspace creation) */
@@ -1297,7 +1313,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentId?: string | undefined;
 				content?: string | undefined;
 				global?: boolean | undefined;
-				source?: "user" | "system" | "intelligence" | "ai" | "agent" | undefined;
+				source?: "user" | "system" | "ai" | "intelligence" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -1499,7 +1515,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				documentId?: string | null | undefined;
 				properties?: Record<string, unknown> | undefined;
-				source?: "user" | "system" | "intelligence" | "ai" | "agent" | undefined;
+				source?: "user" | "system" | "ai" | "intelligence" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -1517,7 +1533,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				source?: "user" | "system" | "intelligence" | "ai" | "agent" | undefined;
+				source?: "user" | "system" | "ai" | "intelligence" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -2651,6 +2667,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					offset: number;
 					hasMore: boolean;
 				};
+			};
+			meta: object;
+		}>;
+		getCorsSettings: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				envOrigins: string[];
+				dbOrigins: string[];
+				merged: string[];
+			};
+			meta: object;
+		}>;
+		updateCorsSettings: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				origins: string[];
+			};
+			output: {
+				origins: string[];
+				merged: string[];
 			};
 			meta: object;
 		}>;
@@ -4201,6 +4236,84 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | null;
 			meta: object;
 		}>;
+		getServiceManifest: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				manifest: unknown;
+				isSynapIS: boolean;
+			};
+			meta: object;
+		}>;
+		listSystemSkills: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				skills: unknown[];
+				source: "live";
+			} | {
+				skills: never[];
+				source: "offline";
+			};
+			meta: object;
+		}>;
+		testCustomServiceConnection: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				hubUrl: string;
+				apiKey: string;
+			};
+			output: {
+				ok: boolean;
+				capabilities: string[];
+				hasManifest: boolean;
+			};
+			meta: object;
+		}>;
+		registerCustomService: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				displayName: string;
+				hubUrl: string;
+				apiKey: string;
+			};
+			output: {
+				serviceId: string;
+				id: `${string}-${string}-${string}-${string}-${string}`;
+				displayName: string;
+			};
+			meta: object;
+		}>;
+		setActiveService: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+			};
+			output: {
+				serviceId: string;
+			};
+			meta: object;
+		}>;
+		listRegisteredServices: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				services: {
+					name: string;
+					id: string;
+					description: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: Record<string, unknown> | null;
+					version: string | null;
+					status: string;
+					capabilities: string[];
+					serviceId: string;
+					webhookUrl: string;
+					mcpEndpoint: string | null;
+					pricing: string | null;
+					enabled: boolean;
+					mcpApproved: boolean;
+					lastHealthCheck: Date | null;
+					lastHealthStatus: string | null;
+				}[];
+			};
+			meta: object;
+		}>;
 		extractEntity: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				url: string;
@@ -4711,7 +4824,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description?: string | undefined;
 				settings?: Record<string, unknown> | undefined;
-				type?: "enterprise" | "personal" | "team" | undefined;
+				type?: "personal" | "enterprise" | "team" | undefined;
 			};
 			output: {
 				status: "proposed";
@@ -5094,7 +5207,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				templateId?: string | undefined;
 				templateName?: string | undefined;
 				workspaceName?: string | undefined;
-				workspaceType?: "project" | "agent" | "personal" | "operational" | undefined;
+				workspaceType?: "personal" | "project" | "agent" | "operational" | undefined;
 				linkedAgentId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -5207,7 +5320,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				embeddedViewIds?: string[] | undefined;
 				metadata?: Record<string, any> | undefined;
 				initialContent?: any;
-				source?: "user" | "system" | "intelligence" | "ai" | undefined;
+				source?: "user" | "system" | "ai" | "intelligence" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -6534,6 +6647,84 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		createTrigger: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				skillId: string;
+				type: "entity_event" | "cron" | "manual";
+				eventPattern?: string | undefined;
+				filters?: Record<string, unknown> | undefined;
+				cronExpression?: string | undefined;
+				channelType?: "personal" | "new_thread" | undefined;
+			};
+			output: {
+				userId: string;
+				workspaceId: string;
+				id: string;
+				type: "entity_event" | "cron" | "manual";
+				updatedAt: Date;
+				createdAt: Date;
+				isActive: boolean;
+				channelType: "personal" | "new_thread";
+				filters: Record<string, unknown> | null;
+				skillId: string;
+				eventPattern: string | null;
+				cronExpression: string | null;
+				automationId: string | null;
+			};
+			meta: object;
+		}>;
+		listTriggers: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				skillId?: string | undefined;
+			};
+			output: {
+				id: string;
+				skillId: string;
+				workspaceId: string;
+				userId: string;
+				type: "entity_event" | "cron" | "manual";
+				eventPattern: string | null;
+				filters: Record<string, unknown> | null;
+				cronExpression: string | null;
+				channelType: "personal" | "new_thread";
+				isActive: boolean;
+				automationId: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		toggleTrigger: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				triggerId: string;
+				active: boolean;
+			};
+			output: {
+				id: string;
+				skillId: string;
+				workspaceId: string;
+				userId: string;
+				type: "entity_event" | "cron" | "manual";
+				eventPattern: string | null;
+				filters: Record<string, unknown> | null;
+				cronExpression: string | null;
+				channelType: "personal" | "new_thread";
+				isActive: boolean;
+				automationId: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		deleteTrigger: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				triggerId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 	}>>;
 	backgroundTasks: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -6823,7 +7014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "user" | "shared" | "system" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
-				source?: "user" | "system" | "intelligence" | "ai" | undefined;
+				source?: "user" | "system" | "ai" | "intelligence" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -8004,6 +8195,119 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				lastSyncedAt: Date;
 			}[];
+			meta: object;
+		}>;
+	}>>;
+	notifCenter: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				status?: "read" | "unread" | "dismissed" | "all" | undefined;
+				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				notifications: {
+					id: string;
+					workspaceId: string;
+					userId: string;
+					type: string;
+					category: "data" | "system" | "ai" | "governance" | "inbox";
+					priority: "low" | "normal" | "high" | "urgent";
+					title: string;
+					body: string;
+					icon: string | null;
+					sourceType: string;
+					sourceId: string | null;
+					workspaceUrl: string | null;
+					actions: unknown;
+					groupKey: string | null;
+					status: "read" | "unread" | "dismissed" | "actioned";
+					readAt: Date | null;
+					expiresAt: Date | null;
+					createdAt: Date;
+				}[];
+				total: number;
+			};
+			meta: object;
+		}>;
+		unreadCount: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				count: number;
+			};
+			meta: object;
+		}>;
+		markRead: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				notificationId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		markAllRead: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		dismiss: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				notificationId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		dismissAll: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		getPrefs: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				userId: string;
+				workspaceId: string;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				enabled: boolean;
+				quietHoursEnabled: boolean | null;
+				quietHoursStart: string | null;
+				quietHoursEnd: string | null;
+				routingRules: unknown;
+				soundEnabled: boolean | null;
+			} | null;
+			meta: object;
+		}>;
+		updatePrefs: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled?: boolean | undefined;
+				quietHoursEnabled?: boolean | undefined;
+				quietHoursStart?: string | undefined;
+				quietHoursEnd?: string | undefined;
+				soundEnabled?: boolean | undefined;
+				routingRules?: Record<string, any> | undefined;
+			};
+			output: {
+				success: boolean;
+			};
 			meta: object;
 		}>;
 	}>>;

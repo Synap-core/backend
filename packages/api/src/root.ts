@@ -43,6 +43,7 @@ import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
 import { connectorsRouter } from "./routers/connectors-trpc.js";
+import { notifCenterRouter } from "./routers/notif-center.js";
 
 /**
  * Core API Router
@@ -93,6 +94,7 @@ export const coreRouter = router({
   channelGateway: channelGatewayRouter,
   import: importRouter,
   connectors: connectorsRouter,
+  notifCenter: notifCenterRouter,
 });
 
 export type AppRouter = typeof coreRouter;

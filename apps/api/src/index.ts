@@ -19,9 +19,10 @@ import "dotenv/config";
 // initializeTracing();
 
 import { Hono, type Context as HonoContext } from "hono";
-import { cors } from "hono/cors";
+
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
+import { getCookie } from "hono/cookie";
 import { trpcServer } from "@hono/trpc-server";
 import {
   createLogger,
@@ -128,24 +129,74 @@ try {
 // Initialize Hono app
 const app = new Hono();
 
-// CORS must be first so even error responses (429, 413) include CORS headers
-app.use(
-  "*",
-  cors({
-    origin: (origin) => {
-      // Electron desktop app (file:// or app://) sends no origin — allow it
-      // This is safe since we still require Kratos session auth for all protected routes
-      if (!origin) return "*";
-      const allowed = getCorsOrigins();
-      return allowed.includes(origin) ? origin : null;
-    },
-    credentials: true,
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "Cookie", "X-Workspace-Id"],
-    exposeHeaders: ["Content-Length", "X-Request-Id", "Set-Cookie"],
-    maxAge: 86400, // 24 hours
-  })
-);
+// Smart CORS middleware — must be first so even error responses (429, 413) carry CORS headers.
+//
+// Two security modes, selected per-request:
+//
+//  1. API-key mode (Bearer token present, or preflight requesting Authorization header):
+//     → Allow any origin. No credentials header.
+//     → Rationale: Bearer tokens are explicit — the browser never sends them automatically.
+//       CORS cannot protect against a stolen API key (the attacker can call from their server
+//       anyway). Requiring the caller to whitelist their domain adds friction with zero security.
+//
+//  2. Cookie mode (Ory Kratos session, no Bearer token):
+//     → Enforce the CORS origin whitelist (env + DB-stored origins).
+//     → Include Access-Control-Allow-Credentials: true.
+//     → Rationale: Session cookies ARE sent automatically. Without a whitelist, any page could
+//       make authenticated requests using the user's Kratos session (CSRF via CORS).
+//
+// Electron desktop (no Origin header at all) passes through untouched.
+app.use("*", async (c, next) => {
+  const origin = c.req.header("origin");
+
+  // No Origin header: Electron, server-to-server, or same-origin — no CORS needed.
+  if (!origin) return next();
+
+  // Detect API-key mode:
+  //  - Actual request: Authorization: Bearer xxx header
+  //  - Preflight (OPTIONS): browser signals it will send Authorization via
+  //    Access-Control-Request-Headers
+  const authHeader = c.req.header("authorization") ?? "";
+  const requestedHeaders = c.req.header("access-control-request-headers") ?? "";
+  const isApiKeyMode =
+    authHeader.startsWith("Bearer ") ||
+    requestedHeaders
+      .toLowerCase()
+      .split(",")
+      .some((h) => h.trim() === "authorization");
+
+  const ALLOW_METHODS = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
+  const ALLOW_HEADERS = "Content-Type, Authorization, Cookie, X-Workspace-Id";
+  const EXPOSE_HEADERS = "Content-Length, X-Request-Id, Set-Cookie";
+
+  if (isApiKeyMode) {
+    // Allow any origin — Bearer token auth is safe cross-origin
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Vary", "Origin");
+    c.header("Access-Control-Allow-Methods", ALLOW_METHODS);
+    c.header("Access-Control-Allow-Headers", ALLOW_HEADERS);
+    c.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);
+    c.header("Access-Control-Max-Age", "86400");
+  } else {
+    // Cookie auth: only whitelisted origins can send session cookies cross-origin
+    const allowed = getCorsOrigins();
+    if (allowed.includes(origin)) {
+      c.header("Access-Control-Allow-Origin", origin);
+      c.header("Access-Control-Allow-Credentials", "true");
+      c.header("Vary", "Origin");
+      c.header("Access-Control-Allow-Methods", ALLOW_METHODS);
+      c.header("Access-Control-Allow-Headers", ALLOW_HEADERS);
+      c.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);
+      c.header("Access-Control-Max-Age", "86400");
+    }
+    // Origin not in whitelist → no CORS headers → browser blocks the request ✓
+  }
+
+  // Answer preflights immediately
+  if (c.req.method === "OPTIONS") return c.body(null, 204);
+
+  return next();
+});
 
 // Security Middleware
 app.use("*", requestSizeLimit); // Max 10MB requests
@@ -462,6 +513,38 @@ app.post("/api/handshake", async (c) => {
   } catch (error) {
     apiLogger.error({ err: error }, "Handshake endpoint error");
     return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+// Session check endpoint — used by the web landing page (synap.dev) to determine
+// if the user already has a valid pod session after a previous handshake, so it
+// doesn't need to re-run the handshake on every page load.
+//
+// Auth: ory_kratos_session cookie (set by /api/handshake). Public endpoint.
+// Returns 200 + session data if valid, 401 if missing or expired.
+app.get("/api/session", async (c) => {
+  const sessionToken = getCookie(c, "ory_kratos_session");
+  if (!sessionToken) {
+    return c.json({ authenticated: false }, 401);
+  }
+
+  try {
+    const resp = await fetch(`${kratosPublicUrl}/sessions/whoami`, {
+      headers: {
+        Cookie: `ory_kratos_session=${sessionToken}`,
+        Accept: "application/json",
+      },
+    });
+
+    if (!resp.ok) {
+      return c.json({ authenticated: false }, 401);
+    }
+
+    const session = await resp.json();
+    return c.json({ authenticated: true, session });
+  } catch (err) {
+    apiLogger.error({ err }, "Session check failed");
+    return c.json({ authenticated: false }, 401);
   }
 });
 

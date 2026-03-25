@@ -8,7 +8,10 @@
  * so that both the property_defs and relation_defs exist in the database.
  *
  * Current mappings:
- *   - task.assignee (entity_id) → assigned_to relation def, target: person profile
+ *   - task.assignee (entity_id)   → assigned_to relation def,      target: person profile
+ *   - task.projectId (entity_id)  → belongs_to_project relation def, target: project profile
+ *   - contact.companyId (entity_id) → works_at relation def,        target: company profile
+ *   - deal.contactId (entity_id)  → deal_for relation def,          target: contact profile
  *
  * Idempotent — skips if already set.
  */
@@ -35,6 +38,21 @@ const PROPERTY_RELATION_MAPPINGS = [
     propertySlug: "assignee",
     relationDefSlug: "assigned_to",
     targetProfileSlug: "person",
+  },
+  {
+    propertySlug: "projectId",
+    relationDefSlug: "belongs_to_project",
+    targetProfileSlug: "project",
+  },
+  {
+    propertySlug: "companyId",
+    relationDefSlug: "works_at",
+    targetProfileSlug: "company",
+  },
+  {
+    propertySlug: "contactId",
+    relationDefSlug: "deal_for",
+    targetProfileSlug: "contact",
   },
 ];
 
@@ -66,7 +84,15 @@ export async function seedPropertyRelationMappings(
           eq(relationDefs.workspaceId, workspaceId)
         ),
       });
-      if (!relDef) continue;
+      if (!relDef) {
+        // Relation def missing — likely ensureDefaultRelationDefs() hasn't run yet for this workspace.
+        // Log a warning so callers know why mappings are skipped, rather than silently continuing.
+        console.warn(
+          `[seed-property-relation-mappings] relation_def "${mapping.relationDefSlug}" not found in workspace ${workspaceId}. ` +
+            "Run ensureDefaultRelationDefs() first."
+        );
+        continue;
+      }
 
       // Find the target profile
       const targetProfile = await db.query.profiles.findFirst({

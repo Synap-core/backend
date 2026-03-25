@@ -51,5 +51,15 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("telegram-digest", "0 8 * * *", {});
   logger.info("Registered cron: telegram-digest (daily at 8:00 AM)");
 
+  // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
+  await boss.schedule("vault-grant-expiry", "0 * * * *", {});
+  logger.info("Registered cron: vault-grant-expiry (every hour)");
+
+  // Automation pattern detection (daily at 3:00 AM UTC)
+  await boss.schedule("automation-pattern-detect", "0 3 * * *", {});
+  logger.info(
+    "Registered cron: automation-pattern-detect (daily at 3:00 AM UTC)"
+  );
+
   logger.info("All cron schedules registered");
 }

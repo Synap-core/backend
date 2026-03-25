@@ -307,6 +307,24 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: { min: 0 },
         uiHints: { label: "File Size", inputType: "number" },
       },
+      {
+        slug: "projectId",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Project", inputType: "entity-select" },
+      },
+      {
+        slug: "companyId",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Company", inputType: "entity-select" },
+      },
+      {
+        slug: "contactId",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Contact", inputType: "entity-select" },
+      },
     ];
 
     for (const propDef of capturePropertyDefs) {
@@ -528,8 +546,9 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "priority", required: false, displayOrder: 2 },
           { slug: "dueDate", required: false, displayOrder: 3 },
           { slug: "assignee", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          { slug: "description", required: false, displayOrder: 6 },
+          { slug: "projectId", required: false, displayOrder: 5 },
+          { slug: "tags", required: false, displayOrder: 6 },
+          { slug: "description", required: false, displayOrder: 7 },
         ],
       },
       {
@@ -620,8 +639,9 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "email", required: false, displayOrder: 1 },
           { slug: "phone", required: false, displayOrder: 2 },
           { slug: "role", required: false, displayOrder: 3 },
-          { slug: "tags", required: false, displayOrder: 4 },
-          { slug: "description", required: false, displayOrder: 5 },
+          { slug: "companyId", required: false, displayOrder: 4 },
+          { slug: "tags", required: false, displayOrder: 5 },
+          { slug: "description", required: false, displayOrder: 6 },
         ],
       },
       // Organization
@@ -650,8 +670,9 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           },
           { slug: "value", required: false, displayOrder: 2 },
           { slug: "closeDate", required: false, displayOrder: 3 },
-          { slug: "tags", required: false, displayOrder: 4 },
-          { slug: "description", required: false, displayOrder: 5 },
+          { slug: "contactId", required: false, displayOrder: 4 },
+          { slug: "tags", required: false, displayOrder: 5 },
+          { slug: "description", required: false, displayOrder: 6 },
         ],
       },
       // File

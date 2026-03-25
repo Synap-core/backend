@@ -30,6 +30,7 @@ export const intelligenceCommands = pgTable(
     /** Source of truth; parser produces compiled_template_ast + derived_inputs */
     promptTemplate: text("prompt_template").notNull(),
     compiledTemplateAst: jsonb("compiled_template_ast").$type<unknown>(),
+    /** User-provided arg definitions parsed from the template (args only — context/static refs re-parsed at run time). */
     derivedInputs: jsonb("derived_inputs").$type<DerivedInput[]>(),
     /** Optional overrides: labels, defaults, options only */
     inputOverrides:
@@ -72,12 +73,36 @@ export const intelligenceCommands = pgTable(
   })
 );
 
+/**
+ * A user-provided argument collected at run time (from @{arg:NAME:type} or legacy {argument}).
+ * Stored in the `derived_inputs` JSONB column — args only (not context/static refs).
+ */
 export interface DerivedInput {
   name: string;
-  label?: string;
-  type?: string;
-  options?: string[];
-  default?: string;
+  label?: string | null;
+  type?: "text" | "number" | "entity" | "view" | "choice" | null;
+  options?: string[] | null;
+  default?: string | null;
+}
+
+/** A context reference extracted from @{context:...} placeholders. */
+export interface DerivedContextRef {
+  kind: "context";
+  contextType: "entity" | "view" | "url" | "text";
+}
+
+/** A static entity reference pinned at authoring time via @{entity:ID:name}. */
+export interface DerivedStaticEntityRef {
+  kind: "entity";
+  entityId: string;
+  displayName: string;
+}
+
+/** All placeholder types extracted from a template (returned by parseCommandTemplate). */
+export interface ParsedTemplateMetadata {
+  args: DerivedInput[];
+  contextRefs: DerivedContextRef[];
+  staticRefs: DerivedStaticEntityRef[];
 }
 
 export interface InputOverride {
