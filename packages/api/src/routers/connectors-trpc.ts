@@ -342,7 +342,15 @@ export const connectorsRouter = router({
    * Enforces tier-based connector limits before issuing the session.
    */
   session: protectedProcedure
-    .input(cpUrlInput)
+    .input(
+      z
+        .object({
+          cpUrl: z.string().url().optional(),
+          /** Restrict session to a single provider (skips Nango picker). */
+          providerId: z.string().min(1).optional(),
+        })
+        .optional()
+    )
     .mutation(async ({ ctx, input }) => {
       const cpUrl = await resolveCpUrl(input?.cpUrl);
       if (!cpUrl) {
@@ -392,7 +400,10 @@ export const connectorsRouter = router({
       const result = (await cpFetch(cpUrl, "/session", {
         method: "POST",
         sessionToken: getSessionToken(ctx.req),
-        body: { podId },
+        body: {
+          podId,
+          ...(input?.providerId ? { providerId: input.providerId } : {}),
+        },
       })) as { token: string; nangoHost?: string; connectLink?: string };
 
       return {
