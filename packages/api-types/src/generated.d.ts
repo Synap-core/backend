@@ -747,6 +747,40 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		relationDefId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "relation_def_id";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		targetProfileId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "target_profile_id";
+			tableName: "property_defs";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		createdAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "created_at";
 			tableName: "property_defs";
@@ -802,7 +836,7 @@ declare enum ProfileScope {
  *   1. IS config generation/validation
  *   2. Settings form auto-generation in the frontend
  */
-export type WidgetRendererType = "builtin" | "iframe";
+export type WidgetRendererType = "builtin" | "iframe" | "native";
 /**
  * EventRecord - Database representation of an event
  *
@@ -1246,6 +1280,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		countByProfile: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				counts: Record<string, number>;
+			};
+			meta: object;
+		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				profileSlug?: string | undefined;
@@ -4506,6 +4547,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		backfill: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: {
+				jobId: string | null;
+			};
+			meta: object;
+		}>;
 	}>>;
 	graph: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -7002,6 +7052,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					valueType: PropertyValueType;
 					constraints: unknown;
 					uiHints: unknown;
+					relationDefId: string | null;
+					targetProfileId: string | null;
 				}[];
 			};
 			meta: object;
@@ -7020,6 +7072,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					valueType: PropertyValueType;
 					constraints: unknown;
 					uiHints: unknown;
+					relationDefId: string | null;
+					targetProfileId: string | null;
 				};
 			};
 			meta: object;
@@ -7042,6 +7096,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					valueType: PropertyValueType;
 					constraints: unknown;
 					uiHints: unknown;
+					relationDefId: string | null;
+					targetProfileId: string | null;
 				};
 				existing: boolean;
 			} | {
@@ -7054,6 +7110,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					valueType: PropertyValueType;
 					constraints: unknown;
 					uiHints: unknown;
+					relationDefId: string | null;
+					targetProfileId: string | null;
 				};
 				existing?: undefined;
 			};
@@ -7077,6 +7135,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					valueType: PropertyValueType;
 					constraints: unknown;
 					uiHints: unknown;
+					relationDefId: string | null;
+					targetProfileId: string | null;
 				};
 			};
 			meta: object;
@@ -7255,6 +7315,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				relations: {
+					metadata: unknown;
+					relationDefId: string;
+					targetProfileId: string;
+					propertyDefId: string | null;
+					displayOrder: number;
+					sourceProfileId: string;
+				}[];
+			};
+			meta: object;
+		}>;
 		link: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sourceProfileId: string;
@@ -7266,10 +7340,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				link: {
 					metadata: unknown;
+					relationDefId: string;
+					targetProfileId: string;
+					propertyDefId: string | null;
 					displayOrder: number;
 					sourceProfileId: string;
-					targetProfileId: string;
-					relationDefId: string;
 				};
 			};
 			meta: object;
@@ -7292,10 +7367,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				relations: {
 					metadata: unknown;
+					relationDefId: string;
+					targetProfileId: string;
+					propertyDefId: string | null;
 					displayOrder: number;
 					sourceProfileId: string;
-					targetProfileId: string;
-					relationDefId: string;
 				}[];
 			};
 			meta: object;
@@ -7656,6 +7732,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				workspaceId: string | null;
+				source: string | null;
 				id: string;
 				description: string | null;
 				updatedAt: Date;
@@ -7667,6 +7744,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				icon: string | null;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
+				bundleSource: string | null;
 				configSchema: Record<string, unknown>;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -7687,6 +7765,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				workspaceId: string | null;
+				source: string | null;
 				id: string;
 				description: string | null;
 				updatedAt: Date;
@@ -7698,6 +7777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				icon: string | null;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
+				bundleSource: string | null;
 				configSchema: Record<string, unknown>;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -7718,8 +7798,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				icon?: string | undefined;
 				category?: string | undefined;
-				rendererType?: "builtin" | "iframe" | undefined;
+				rendererType?: "builtin" | "iframe" | "native" | undefined;
 				rendererSource?: string | undefined;
+				source?: string | undefined;
 				configSchema?: Record<string, unknown> | undefined;
 				defaultConfig?: Record<string, unknown> | undefined;
 				defaultSize?: {
@@ -7734,6 +7815,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				workspaceId: string | null;
+				source: string | null;
 				id: string;
 				description: string | null;
 				updatedAt: Date;
@@ -7745,6 +7827,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				icon: string | null;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
+				bundleSource: string | null;
 				configSchema: Record<string, unknown>;
 				defaultConfig: Record<string, unknown> | null;
 				defaultSize: {
@@ -7879,9 +7962,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		session: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				cpUrl?: string | undefined;
+				providerId?: string | undefined;
 			} | undefined;
 			output: {
 				token: string;
+				nangoHost: string | undefined;
+				connectLink: string | undefined;
 			};
 			meta: object;
 		}>;

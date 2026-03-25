@@ -61,6 +61,10 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
+import {
+  syncRelationToPropertyOnCreate,
+  syncRelationToPropertyOnDelete,
+} from "../utils/property-relation-sync.js";
 
 /**
  * Direction schema for relation queries
@@ -381,6 +385,19 @@ export const relationsRouter = router({
         ctx.userId
       );
 
+      // 2b. Reverse-sync: if this relation type maps to an entity_id property, auto-set it
+      syncRelationToPropertyOnCreate(
+        input.sourceEntityId,
+        input.targetEntityId,
+        input.type,
+        effectiveWorkspaceId
+      ).catch((err) => {
+        console.warn(
+          "[relations.create] Relation→property reverse sync failed:",
+          err
+        );
+      });
+
       // 3. Audit log
       auditLog({
         subjectType: "relation",
@@ -618,7 +635,28 @@ export const relationsRouter = router({
       const eventRepo = new EventRepository(sql);
       const relationRepo = new RelationRepository(database, eventRepo);
 
+      // Snapshot relation data before deletion (for reverse sync)
+      const relationToDelete = await database.query.relations.findFirst({
+        where: eq(relations.id, input.id),
+        columns: { sourceEntityId: true, targetEntityId: true, type: true },
+      });
+
       await relationRepo.delete(input.id, ctx.userId);
+
+      // 2b. Reverse-sync: if this relation type maps to a property, auto-clear it
+      if (relationToDelete && effectiveWorkspaceId) {
+        syncRelationToPropertyOnDelete(
+          relationToDelete.sourceEntityId,
+          relationToDelete.targetEntityId,
+          relationToDelete.type,
+          effectiveWorkspaceId
+        ).catch((err) => {
+          console.warn(
+            "[relations.delete] Relation→property reverse sync failed:",
+            err
+          );
+        });
+      }
 
       // 3. Audit log
       auditLog({
@@ -643,5 +681,23 @@ export const relationsRouter = router({
       return {
         status: "deleted" as const,
       };
+    }),
+
+  /**
+   * Trigger a one-time backfill job that creates relation rows
+   * for existing entity_id property values with relationDefId mappings.
+   */
+  backfill: protectedProcedure
+    .input(z.object({ workspaceId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getBoss } = await import("@synap/jobs");
+
+      const boss = getBoss();
+      const jobId = await boss.send("relation-backfill", {
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+      });
+
+      return { jobId };
     }),
 });

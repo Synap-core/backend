@@ -199,6 +199,18 @@ export interface WorkspaceSettings {
   /** Version of the package at time of creation. */
   packageVersion?: string;
 
+  // ─── Installed Packs ─────────────────────────────────────────────────────────
+  /**
+   * Profile packs, view packs, and bento templates installed into this workspace.
+   * Populated by the browser when installing from the CP package registry.
+   * Used to show "Installed" badges and prevent re-installation.
+   */
+  installedPacks?: Array<{
+    slug: string;
+    version: string;
+    installedAt: string;
+  }>;
+
   // ─── Provenance & provisioning status ────────────────────────────────────────
   /** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
   createdBy?: "user" | "provisioning" | "plugin";

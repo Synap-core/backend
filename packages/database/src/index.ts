@@ -73,6 +73,12 @@ export {
   type EnsureDefaultRelationDefsResult,
 } from "./utils/ensure-default-relation-defs.js";
 
+// Export seed property↔relation mappings utility
+export {
+  seedPropertyRelationMappings,
+  type SeedMappingsResult,
+} from "./utils/seed-property-relation-mappings.js";
+
 // Export default relation defs constants
 export {
   DEFAULT_RELATION_DEFS,

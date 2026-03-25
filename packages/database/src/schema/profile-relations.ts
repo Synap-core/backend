@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { profiles } from "./profiles.js";
 import { relationDefs } from "./relation-defs.js";
+import { propertyDefs } from "./property-defs.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const profileRelations = pgTable(
@@ -35,6 +36,12 @@ export const profileRelations = pgTable(
 
     // Display order (for UI)
     displayOrder: integer("display_order").default(0).notNull(),
+
+    // When set, this profile relation is backed by a property on the source entity.
+    // Setting the property auto-creates the relation; deleting the relation clears the property.
+    propertyDefId: uuid("property_def_id").references(() => propertyDefs.id, {
+      onDelete: "set null",
+    }),
 
     // Metadata (JSONB for extensibility)
     // Examples:

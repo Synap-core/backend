@@ -96,6 +96,23 @@ export class ProfileRelationRepository {
   }
 
   /**
+   * Get all profile relations where either source or target is in the given set.
+   * Used by the data structure viewer to fetch all relations at once.
+   */
+  async listForProfiles(profileIds: string[]): Promise<ProfileRelation[]> {
+    if (profileIds.length === 0) return [];
+    return this.db.query.profileRelations.findMany({
+      where: or(
+        ...profileIds.map((id) => eq(profileRelations.sourceProfileId, id)),
+        ...profileIds.map((id) => eq(profileRelations.targetProfileId, id))
+      ),
+      orderBy: (profileRelations, { asc }) => [
+        asc(profileRelations.displayOrder),
+      ],
+    });
+  }
+
+  /**
    * Get all outgoing relations for a source profile
    */
   async getBySourceProfile(

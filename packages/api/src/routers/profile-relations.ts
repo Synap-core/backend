@@ -10,6 +10,7 @@ import { router, workspaceProcedure } from "../trpc.js";
 import {
   getDb,
   ProfileRelationRepository,
+  ProfileRepository,
   RelationDefRepository,
   ProfileResolutionService,
 } from "@synap/database";
@@ -20,6 +21,25 @@ import { auditLog } from "../utils/audit-log.js";
 const logger = createLogger({ module: "profile-relations-router" });
 
 export const profileRelationsRouter = router({
+  /**
+   * List all profile relations for profiles accessible in this workspace.
+   * Used by the data structure viewer.
+   */
+  list: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    const profileRepo = new ProfileRepository(db);
+    const profileRelRepo = new ProfileRelationRepository(db);
+
+    const accessibleProfiles = await profileRepo.getAccessibleProfiles(
+      ctx.userId,
+      ctx.workspaceId
+    );
+    const profileIds = accessibleProfiles.map((p) => p.id);
+    const relations = await profileRelRepo.listForProfiles(profileIds);
+
+    return { relations };
+  }),
+
   /**
    * Link two profiles via a relation definition
    */

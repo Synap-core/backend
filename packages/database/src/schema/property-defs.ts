@@ -14,6 +14,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { profiles } from "./profiles.js";
+import { relationDefs } from "./relation-defs.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
@@ -90,6 +91,19 @@ export const propertyDefs = pgTable(
     // - { helpText: "Priority level for this task" }
     // - { inputType: "date" | "select" | "textarea" }
     uiHints: jsonb("ui_hints").default("{}").notNull(),
+
+    // Unified relations: when valueType is "entity_id" and this is set,
+    // writing the property auto-creates a relation row of this type.
+    // Clearing the property auto-deletes the corresponding relation.
+    relationDefId: uuid("relation_def_id").references(() => relationDefs.id, {
+      onDelete: "set null",
+    }),
+
+    // Which profile the entity_id should point to (optional constraint).
+    // Enables the data structure viewer to draw edges between profiles.
+    targetProfileId: uuid("target_profile_id").references(() => profiles.id, {
+      onDelete: "set null",
+    }),
 
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

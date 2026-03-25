@@ -41,6 +41,7 @@ import { handleAutomationTriggerMatch } from "./automation-trigger-matcher.js";
 import { handleAutomationExecute } from "./automation-executor.js";
 import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
 import { handleTelegramDigest } from "./telegram-digest.js";
+import { handleRelationBackfill } from "./relation-backfill.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -73,6 +74,7 @@ const ALL_QUEUES = [
   "automation-execute",
   "automation-cron-scheduler",
   "telegram-digest",
+  "relation-backfill",
 ];
 
 /**
@@ -223,6 +225,12 @@ export async function registerAllWorkers(): Promise<void> {
   // Telegram morning digest (cron: daily at 8:00 AM)
   await boss.work("telegram-digest", async () => handleTelegramDigest());
   logger.info("Registered worker: telegram-digest");
+
+  // Relation backfill (one-time: creates relation rows for existing entity_id property values)
+  await boss.work("relation-backfill", async ([job]: any[]) =>
+    handleRelationBackfill(job)
+  );
+  logger.info("Registered worker: relation-backfill");
 
   logger.info("All workers registered");
 }

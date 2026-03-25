@@ -439,6 +439,17 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           description: "Uploaded file",
         },
       },
+      // Quick capture — raw URL/text captured via browser extension or mobile
+      {
+        slug: "capture",
+        displayName: "Capture",
+        uiHints: {
+          icon: "camera",
+          color: "#84CC16",
+          description: "Quick capture from browser or mobile",
+        },
+        parentSlug: "bookmark",
+      },
       // AI Anchor — pinned reference to a specific message in a conversation
       {
         slug: "anchor",
@@ -652,6 +663,19 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "mimeType", required: false, displayOrder: 2 },
           { slug: "fileSize", required: false, displayOrder: 3 },
           { slug: "tags", required: false, displayOrder: 4 },
+        ],
+      },
+      // Capture — raw capture from browser/mobile (inherits bookmark hierarchy)
+      {
+        profileSlug: "capture",
+        propertySlugs: [
+          { slug: "title", required: false, displayOrder: 0 },
+          { slug: "url", required: false, displayOrder: 1 },
+          { slug: "domain", required: false, displayOrder: 2 },
+          { slug: "source", required: false, displayOrder: 3 },
+          { slug: "content", required: false, displayOrder: 4 },
+          { slug: "tags", required: false, displayOrder: 5 },
+          { slug: "description", required: false, displayOrder: 6 },
         ],
       },
       // Anchor — pinned conversation moment

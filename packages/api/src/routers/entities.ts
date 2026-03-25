@@ -32,6 +32,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
+import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 
 /** Standard entity shape for API responses */
 function toApiEntity(entity: any): Entity {
@@ -48,6 +49,46 @@ function toApiEntity(entity: any): Entity {
 }
 
 export const entitiesRouter = router({
+  /**
+   * Count entities grouped by profile slug.
+   *
+   * Returns a map of { [profileSlug]: count } for the active workspace
+   * (including global entities). Useful for data-structure visualisation badges.
+   */
+  countByProfile: workspaceProcedure
+    .output(
+      z.object({
+        counts: z.record(z.string(), z.number()),
+      })
+    )
+    .query(async ({ ctx }) => {
+      const rows = await db
+        .select({
+          profileSlug: entities.type,
+          count: drizzleSql<number>`cast(count(*) as integer)`,
+        })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.userId, ctx.userId),
+            or(
+              eq(entities.workspaceId, ctx.workspaceId),
+              isNull(entities.workspaceId)
+            ),
+            isNull(entities.deletedAt)
+          )
+        )
+        .groupBy(entities.type);
+
+      const counts: Record<string, number> = {};
+      for (const row of rows) {
+        if (row.profileSlug) {
+          counts[row.profileSlug] = row.count;
+        }
+      }
+      return { counts };
+    }),
+
   /**
    * Create entity with profile-based type system
    *
@@ -243,6 +284,24 @@ export const entitiesRouter = router({
           },
           ctx.userId
         );
+      }
+
+      // 3b. Auto-sync entity_id properties → relations (non-blocking)
+      if (
+        createdEntity.profileId &&
+        effectiveProperties &&
+        Object.keys(effectiveProperties).length > 0
+      ) {
+        syncPropertyToRelations(
+          createdEntity.id,
+          createdEntity.profileId,
+          ctx.workspaceId,
+          ctx.userId,
+          {}, // old properties = empty (new entity)
+          effectiveProperties as Record<string, unknown>
+        ).catch((err) => {
+          console.warn("[entities.create] Property→relation sync failed:", err);
+        });
       }
 
       // 4. Emit .completed event + side-effects
@@ -661,6 +720,17 @@ export const entitiesRouter = router({
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
 
+      // Snapshot old properties for relation sync (before update)
+      let oldEntity:
+        | { profileId: string | null; properties: unknown }
+        | undefined;
+      if (input.properties) {
+        oldEntity = await database.query.entities.findFirst({
+          where: eq(entities.id, input.id),
+          columns: { profileId: true, properties: true },
+        });
+      }
+
       await entityRepo.update(
         input.id,
         {
@@ -671,6 +741,23 @@ export const entitiesRouter = router({
         },
         ctx.userId
       );
+
+      // 3b. Auto-sync entity_id properties → relations (non-blocking)
+      if (input.properties && oldEntity?.profileId) {
+        const oldProps =
+          (oldEntity.properties as Record<string, unknown>) ?? {};
+        const newProps = { ...oldProps, ...input.properties };
+        syncPropertyToRelations(
+          input.id,
+          oldEntity.profileId,
+          ctx.workspaceId,
+          ctx.userId,
+          oldProps,
+          newProps
+        ).catch((err) => {
+          console.warn("[entities.update] Property→relation sync failed:", err);
+        });
+      }
 
       // 4. Emit .completed event + side-effects
       auditLog({

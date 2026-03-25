@@ -36,6 +36,7 @@ export async function handleWorkspaceInit(
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
     ensureSystemProfiles,
+    seedPropertyRelationMappings,
   } = await import("@synap/database");
 
   // Ensure system profiles exist (idempotent — creates bookmark, note, task, etc. if missing)
@@ -78,4 +79,18 @@ export async function handleWorkspaceInit(
     { workspaceId, ...resultMap },
     "Workspace initialization complete"
   );
+
+  // Seed property↔relation mappings (must run AFTER relation defs are created)
+  try {
+    const mappingResult = await seedPropertyRelationMappings(workspaceId);
+    logger.info(
+      { workspaceId, ...mappingResult },
+      "Property↔relation mappings seeded"
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to seed property↔relation mappings (non-fatal)"
+    );
+  }
 }
