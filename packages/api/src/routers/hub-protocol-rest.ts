@@ -60,7 +60,8 @@ app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
  * Middleware: validate API key and set userId + scopes (skip for /health)
  */
 app.use("/*", async (c, next) => {
-  if (c.req.path === "/health") {
+  // /health — no auth. /entity-share/deliver — CP JWT auth handled inline.
+  if (c.req.path === "/health" || c.req.path === "/entity-share/deliver") {
     return next();
   }
   const authHeader = c.req.header("authorization") ?? null;
@@ -3501,10 +3502,14 @@ app.post("/entity-share/deliver", async (c) => {
     "note";
 
   try {
-    const caller = await getCaller(c, {
-      workspaceId,
-      userId: podUser.id,
-    });
+    // Build caller context directly — getCaller reads scopes from the API key
+    // middleware context which is bypassed for CP JWT auth on this route.
+    const callerCtx = await createHubProtocolCallerContext(
+      podUser.id,
+      ["hub-protocol.read", "hub-protocol.write"],
+      workspaceId
+    );
+    const caller = hubProtocolRouter.createCaller(callerCtx as any);
 
     const result = await (caller as any).entities.create({
       profileSlug,
