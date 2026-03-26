@@ -82,52 +82,88 @@ export async function createDefaultWorkspace(
     const adminEmail = process.env.ADMIN_EMAIL;
     const isAdmin = adminEmail && email === adminEmail.toLowerCase().trim();
 
-    // Check for pending workspace invite (case-insensitive email match)
-    // Note: We fetch all non-expired invites and filter by email in memory
-    // This is acceptable since there should be few invites per email
+    // Check for any pending invite (workspace OR pod) for this email
     const allInvites = await db.query.invites.findMany({
-      where: and(
-        eq(invites.type, "workspace"),
-        gte(invites.expiresAt, new Date())
-      ),
+      where: gte(invites.expiresAt, new Date()),
+    });
+    const matchingInvites = allInvites
+      .filter((invite) => invite.email.toLowerCase().trim() === email)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const pendingInvite = matchingInvites[0];
+
+    // Check if user is already a workspace member (pre-added before registering)
+    const existingMembership = await db.query.workspaceMembers.findFirst({
+      where: eq(workspaceMembers.userId, userId),
     });
 
-    // Find most recent invite with matching email (case-insensitive)
-    const matchingInvites = allInvites.filter(
-      (invite) => invite.email.toLowerCase().trim() === email
-    );
-
-    // Sort by createdAt descending and take the most recent
-    const pendingInvite = matchingInvites.sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-    )[0];
-
-    // Security check: User must have invite OR be admin
-    if (!pendingInvite && !isAdmin) {
+    // Security check: allow if admin, has invite, or already a member
+    if (!pendingInvite && !isAdmin && !existingMembership) {
       logger.warn(
         { email, userId },
-        "Registration rejected: No pending invite and not admin"
+        "Registration rejected: No pending invite, not admin, not existing member"
       );
       throw new Error(
         "Registration not allowed. You must be invited to join a workspace first."
       );
     }
 
-    // Case 1: User has pending invite → Join existing workspace
-    if (pendingInvite) {
+    // Case 1a: Pod invite → add to ALL workspaces on this pod
+    if (pendingInvite?.type === "pod") {
       logger.info(
-        { workspaceId: pendingInvite.workspaceId, userId, email },
-        "User has pending invite, joining existing workspace"
+        { userId, email },
+        "User has pod invite, joining all workspaces"
       );
 
-      // workspaceId is guaranteed non-null for type='workspace' invites
+      const allWorkspaces = await db.query.workspaces.findMany();
+      let firstWorkspaceId = allWorkspaces[0]?.id;
+
+      for (const ws of allWorkspaces) {
+        const alreadyMember = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, ws.id),
+            eq(workspaceMembers.userId, userId)
+          ),
+        });
+        if (alreadyMember) {
+          firstWorkspaceId ??= ws.id;
+          continue;
+        }
+        await db.insert(workspaceMembers).values({
+          workspaceId: ws.id,
+          userId,
+          role: pendingInvite.role,
+          invitedBy: pendingInvite.invitedBy,
+        });
+        firstWorkspaceId ??= ws.id;
+      }
+
+      await db.delete(invites).where(eq(invites.id, pendingInvite.id));
+
+      logger.info(
+        { userId, workspaceCount: allWorkspaces.length },
+        "User joined pod via pod invite"
+      );
+
+      return {
+        id: firstWorkspaceId ?? "",
+        role: pendingInvite.role as "admin" | "owner" | "editor" | "viewer",
+      };
+    }
+
+    // Case 1b: Workspace invite → join that specific workspace
+    if (pendingInvite?.type === "workspace") {
+      logger.info(
+        { workspaceId: pendingInvite.workspaceId, userId, email },
+        "User has workspace invite, joining workspace"
+      );
+
+      // workspaceId is non-null for workspace-typed invites
       const workspaceId = pendingInvite.workspaceId!;
 
-      // Check if workspace exists
       const workspace = await db.query.workspaces.findFirst({
         where: eq(workspaces.id, workspaceId),
       });
-
       if (!workspace) {
         logger.error(
           { workspaceId },
@@ -136,48 +172,48 @@ export async function createDefaultWorkspace(
         throw new Error("Invalid workspace invite");
       }
 
-      // Check if user is already a member (prevent duplicates)
-      const existingMember = await db.query.workspaceMembers.findFirst({
+      const alreadyMember = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, workspaceId),
           eq(workspaceMembers.userId, userId)
         ),
       });
 
-      if (existingMember) {
-        logger.info(
-          { workspaceId, userId },
-          "User already member of workspace, skipping"
-        );
-        return {
-          id: workspaceId,
-          role: existingMember.role as "admin" | "owner" | "editor" | "viewer",
-        };
-      }
-
-      // Add user to workspace with role from invite
-      await db.insert(workspaceMembers).values({
-        workspaceId,
-        userId,
-        role: pendingInvite.role,
-        invitedBy: pendingInvite.invitedBy,
-      });
-
-      // Delete the invite (it's been used)
-      await db.delete(invites).where(eq(invites.id, pendingInvite.id));
-
-      logger.info(
-        {
+      if (!alreadyMember) {
+        await db.insert(workspaceMembers).values({
           workspaceId,
           userId,
           role: pendingInvite.role,
-        },
+          invitedBy: pendingInvite.invitedBy,
+        });
+      }
+
+      await db.delete(invites).where(eq(invites.id, pendingInvite.id));
+
+      logger.info(
+        { workspaceId, userId, role: pendingInvite.role },
         "User joined workspace via invite"
       );
 
       return {
         id: workspaceId,
         role: pendingInvite.role as "admin" | "owner" | "editor" | "viewer",
+      };
+    }
+
+    // Case 1c: Already a member (pre-added before registering)
+    if (existingMembership) {
+      logger.info(
+        { userId, workspaceId: existingMembership.workspaceId },
+        "User already a workspace member, allowing registration"
+      );
+      return {
+        id: existingMembership.workspaceId,
+        role: existingMembership.role as
+          | "admin"
+          | "owner"
+          | "editor"
+          | "viewer",
       };
     }
 
