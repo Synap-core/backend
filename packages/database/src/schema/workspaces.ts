@@ -455,6 +455,9 @@ export const selectWorkspaceMemberSchema = createSelectSchema(workspaceMembers);
 // Invites (unified — workspace + pod)
 export type Invite = typeof invites.$inferSelect;
 export type NewInvite = typeof invites.$inferInsert;
+// Backward-compat aliases (workspaceInvites table was renamed to invites in 0058)
+export type WorkspaceInvite = Invite;
+export type NewWorkspaceInvite = NewInvite;
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer
