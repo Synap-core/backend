@@ -135,6 +135,9 @@ export const API_KEY_SCOPES = [
   // MCP scopes (for external AI tools)
   "mcp.read", // Read resources via MCP
   "mcp.write", // Execute tools via MCP
+  // External API scopes (for external callers: Claude Code, custom agents, scripts)
+  "skills.invoke", // List and invoke skills via /api/external/skills
+  "chat.stream", // Stream AI chat completions via /api/external/chat (Option D)
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];

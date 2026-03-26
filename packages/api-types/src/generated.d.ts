@@ -135,12 +135,16 @@ export interface Channel {
 	updatedAt: Date;
 	mergedAt: Date | null;
 }
+/**
+ * A user-provided argument collected at run time (from @{arg:NAME:type} or legacy {argument}).
+ * Stored in the `derived_inputs` JSONB column — args only (not context/static refs).
+ */
 export interface DerivedInput {
 	name: string;
-	label?: string;
-	type?: string;
-	options?: string[];
-	default?: string;
+	label?: string | null;
+	type?: "text" | "number" | "entity" | "view" | "choice" | null;
+	options?: string[] | null;
+	default?: string | null;
 }
 export interface InputOverride {
 	label?: string;
@@ -3948,7 +3952,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		runCommand: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				commandId: string;
-				argumentValues: Record<string, string>;
+				argumentValues?: Record<string, string> | undefined;
 				selectionContext?: {
 					type: "entities" | "documents" | "text" | "viewRows";
 					entityIds?: string[] | undefined;
@@ -3957,6 +3961,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					documentIds?: string[] | undefined;
 					text?: string | undefined;
 				} | undefined;
+				currentUrl?: string | undefined;
 			};
 			output: {
 				runId: string;

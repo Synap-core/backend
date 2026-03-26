@@ -5,7 +5,7 @@
  */
 
 import type { EventRepository } from "./event-repository.js";
-import { workspaceMembers, workspaceInvites } from "../schema/index.js";
+import { workspaceMembers, invites } from "../schema/index.js";
 import { eq, and } from "drizzle-orm";
 
 export interface AddMemberInput {
@@ -49,9 +49,7 @@ export class WorkspaceMemberRepository {
 
     // Delete invite if provided
     if (input.inviteId) {
-      await this.db
-        .delete(workspaceInvites)
-        .where(eq(workspaceInvites.id, input.inviteId));
+      await this.db.delete(invites).where(eq(invites.id, input.inviteId));
     }
 
     await this.eventRepo.append({

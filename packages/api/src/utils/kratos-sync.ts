@@ -10,7 +10,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
-  workspaceInvites,
+  invites,
 } from "@synap/database/schema";
 import { eq, and, gte } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
@@ -85,8 +85,11 @@ export async function createDefaultWorkspace(
     // Check for pending workspace invite (case-insensitive email match)
     // Note: We fetch all non-expired invites and filter by email in memory
     // This is acceptable since there should be few invites per email
-    const allInvites = await db.query.workspaceInvites.findMany({
-      where: gte(workspaceInvites.expiresAt, new Date()),
+    const allInvites = await db.query.invites.findMany({
+      where: and(
+        eq(invites.type, "workspace"),
+        gte(invites.expiresAt, new Date())
+      ),
     });
 
     // Find most recent invite with matching email (case-insensitive)
@@ -158,9 +161,7 @@ export async function createDefaultWorkspace(
       });
 
       // Delete the invite (it's been used)
-      await db
-        .delete(workspaceInvites)
-        .where(eq(workspaceInvites.id, pendingInvite.id));
+      await db.delete(invites).where(eq(invites.id, pendingInvite.id));
 
       logger.info(
         {

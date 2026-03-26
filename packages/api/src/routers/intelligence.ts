@@ -379,6 +379,24 @@ export const intelligenceRouter = router({
           : ref.displayName;
       }
 
+      // Resolve @{context:entity} — look up the first entity from selectionContext
+      const hasEntityContext = parsedTemplate.contextRefs.some(
+        (r) => r.contextType === "entity"
+      );
+      if (hasEntityContext && input.selectionContext?.entityIds?.[0]) {
+        const ctxEntityId = input.selectionContext.entityIds[0];
+        const ctxEntity = await db.query.entities.findFirst({
+          where: and(
+            eq(entities.id, ctxEntityId),
+            eq(entities.workspaceId, workspaceId)
+          ),
+        });
+        if (ctxEntity) {
+          resolvedEntities["__context_entity"] =
+            `${ctxEntity.title ?? ctxEntity.type} (${ctxEntity.type})`;
+        }
+      }
+
       const resolvedUrl = input.currentUrl;
 
       const compiledPrompt = parsedTemplate.substitute(

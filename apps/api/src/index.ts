@@ -37,6 +37,8 @@ import {
   hubProtocolRestApp,
   mcpHttpApp,
   fileUploadApp,
+  externalSkillsApp,
+  externalChatApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -992,6 +994,16 @@ app.route("/api/channels/gateway", channelGatewayApp);
 // Auth: Hub Protocol API key via Authorization: Bearer <key>
 // Protocol: JSON-RPC 2.0 over HTTP POST
 app.route("/mcp", mcpHttpApp);
+
+// External API — Skills invocation (API key auth, scope: skills.invoke)
+// GET  /api/external/skills         — list active skills
+// POST /api/external/skills/:id/invoke — invoke a skill
+app.route("/api/external/skills", externalSkillsApp);
+
+// External API — Conversational chat proxy (API key auth, scope: chat.stream)
+// GET  /api/external/chat/channels — list channels user can chat in
+// POST /api/external/chat/stream   — proxy to IS chat stream (SSE)
+app.route("/api/external/chat", externalChatApp);
 
 // File Upload REST endpoint (multipart/form-data — not tRPC)
 // Auth: Kratos session cookie (applied inside fileUploadApp)

@@ -368,18 +368,21 @@ export const workspaceMembers = pgTable("workspace_members", {
   invitedBy: text("invited_by"), // userId of inviter
 });
 
-export const workspaceInvites = pgTable("workspace_invites", {
+export const invites = pgTable("invites", {
   id: uuid("id").defaultRandom().primaryKey(),
 
-  // References
-  workspaceId: uuid("workspace_id")
-    .references(() => workspaces.id, { onDelete: "cascade" })
-    .notNull(),
+  // Type: 'workspace' (scoped to one workspace) | 'pod' (all workspaces)
+  type: text("type").notNull().$type<"workspace" | "pod">(),
+
+  // Only set for workspace invites
+  workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+    onDelete: "cascade",
+  }),
 
   // Invite details
   email: text("email").notNull(),
   role: text("role").notNull(), // 'admin' | 'editor' | 'viewer'
-  token: text("token").notNull().unique(), // Random invite token
+  token: text("token").notNull().unique(),
 
   // Metadata
   invitedBy: text("invited_by").notNull(), // userId
@@ -395,7 +398,7 @@ export const workspaceInvites = pgTable("workspace_invites", {
 // Relations
 export const workspacesRelations = relations(workspaces, ({ many }) => ({
   members: many(workspaceMembers),
-  invites: many(workspaceInvites),
+  invites: many(invites),
 }));
 
 export const workspaceMembersRelations = relations(
@@ -412,15 +415,12 @@ export const workspaceMembersRelations = relations(
   })
 );
 
-export const workspaceInvitesRelations = relations(
-  workspaceInvites,
-  ({ one }) => ({
-    workspace: one(workspaces, {
-      fields: [workspaceInvites.workspaceId],
-      references: [workspaces.id],
-    }),
-  })
-);
+export const invitesRelations = relations(invites, ({ one }) => ({
+  workspace: one(workspaces, {
+    fields: [invites.workspaceId],
+    references: [workspaces.id],
+  }),
+}));
 
 // Type exports
 // Generate Zod schemas (Single Source of Truth)
@@ -452,15 +452,15 @@ export const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers);
  */
 export const selectWorkspaceMemberSchema = createSelectSchema(workspaceMembers);
 
-// Invites
-export type WorkspaceInvite = typeof workspaceInvites.$inferSelect;
-export type NewWorkspaceInvite = typeof workspaceInvites.$inferInsert;
+// Invites (unified — workspace + pod)
+export type Invite = typeof invites.$inferSelect;
+export type NewInvite = typeof invites.$inferInsert;
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export const insertWorkspaceInviteSchema = createInsertSchema(workspaceInvites);
+export const insertInviteSchema = createInsertSchema(invites);
 /**
  * @internal For monorepo usage - enables schema composition in API layer
  */
-export const selectWorkspaceInviteSchema = createSelectSchema(workspaceInvites);
+export const selectInviteSchema = createSelectSchema(invites);

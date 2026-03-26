@@ -107,6 +107,8 @@ export const entitiesRouter = router({
         content: z.string().optional(),
         /** When true, entity has no workspace — visible everywhere */
         global: z.boolean().optional().default(false),
+        /** Override the target workspace for this entity (defaults to current workspace). */
+        targetWorkspaceId: z.string().uuid().optional(),
         /** Source of action for AI governance (e.g. "ai", "intelligence") */
         source: z
           .enum(["user", "ai", "intelligence", "system", "agent"])
@@ -206,7 +208,9 @@ export const entitiesRouter = router({
       }
 
       // 3. Materialize — inline DB write (auto-approved)
-      const entityWorkspaceId = input.global ? null : ctx.workspaceId;
+      const entityWorkspaceId = input.global
+        ? null
+        : (input.targetWorkspaceId ?? ctx.workspaceId);
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -663,6 +667,8 @@ export const entitiesRouter = router({
           .optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
+        global: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -742,7 +748,15 @@ export const entitiesRouter = router({
         ctx.userId
       );
 
-      // 3b. Auto-sync entity_id properties → relations (non-blocking)
+      // 3b. If global flag is set, remove workspace scoping (pod-wide visibility)
+      if (input.global === true) {
+        await database
+          .update(entities)
+          .set({ workspaceId: null })
+          .where(eq(entities.id, input.id));
+      }
+
+      // 3c. Auto-sync entity_id properties → relations (non-blocking)
       if (input.properties && oldEntity?.profileId) {
         const oldProps =
           (oldEntity.properties as Record<string, unknown>) ?? {};

@@ -16,7 +16,7 @@ import {
   desc,
   workspaces,
   workspaceMembers,
-  workspaceInvites,
+  invites,
   intelligenceServices,
   getDb,
   EventRepository,
@@ -29,6 +29,7 @@ import {
   users,
   createWorkspaceFromDefinition,
 } from "@synap/database";
+import { verifyCpJwt } from "../utils/jwks-client.js";
 import type {
   WorkspaceSettings,
   McpServerConfig,
@@ -823,248 +824,279 @@ export const workspacesRouter = router({
     }),
 
   /**
-   * Create invitation
+   * Create an invite (workspace or pod-level).
+   * - type='workspace': requires workspaceId, adds invitee to that workspace only.
+   * - type='pod': no workspaceId required, adds invitee to ALL workspaces on accept.
    */
   createInvite: protectedProcedure
     .input(
-      z.object({
-        workspaceId: z.string().uuid(),
-        email: z.string().email(),
-        role: z.enum(["admin", "editor", "viewer"]),
-      })
+      z.discriminatedUnion("type", [
+        z.object({
+          type: z.literal("workspace"),
+          workspaceId: z.string().uuid(),
+          email: z.string().email(),
+          role: z.enum(["admin", "editor", "viewer"]),
+        }),
+        z.object({
+          type: z.literal("pod"),
+          email: z.string().email(),
+          role: z.enum(["admin", "editor", "viewer"]).default("viewer"),
+        }),
+      ])
     )
     .mutation(async ({ input, ctx }) => {
-      // Check user is owner/admin
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-
-      if (!membership || !["owner", "admin"].includes(membership.role)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only owners/admins can invite",
+      if (input.type === "workspace") {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, input.workspaceId),
+            eq(workspaceMembers.userId, ctx.userId)
+          ),
         });
+        if (!membership || !["owner", "admin"].includes(membership.role)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only owners/admins can invite",
+          });
+        }
+      } else {
+        // Pod invite — must be an owner of at least one workspace
+        const ownerMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, ctx.userId),
+            eq(workspaceMembers.role, "owner")
+          ),
+        });
+        if (!ownerMembership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only pod owners can send pod invites",
+          });
+        }
       }
 
-      // Log requested event
-      await WorkspaceMemberEvents.inviteRequested(ctx.userId, {
-        ...input,
-        role: input.role as any,
-      });
-
-      // Generate token
       const token = randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-      // Create invite
       const [invite] = await db
-        .insert(workspaceInvites)
+        .insert(invites)
         .values({
-          workspaceId: input.workspaceId,
+          type: input.type,
+          workspaceId: input.type === "workspace" ? input.workspaceId : null,
           email: input.email,
           role: input.role,
           token,
           invitedBy: ctx.userId,
-          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-        } as any)
+          expiresAt,
+        })
         .returning();
 
-      // Log validated event (invite created)
-      await WorkspaceMemberEvents.inviteValidated(ctx.userId, {
-        id: invite.id,
-        workspaceId: invite.workspaceId,
-        userId: invite.email, // Email as placeholder until accepted
-        role: invite.role,
-      });
-
-      // Fire-and-forget invite email — sent directly via Resend using credentials
-      // injected by the Control Plane during provisioning (workspace.settings.controlPlane).
-      // No CP round-trip needed.
-      {
-        const firstWs = await db.query.workspaces.findFirst({
-          columns: { settings: true },
+      // Notify CP to send invite email (fire-and-forget)
+      const cpUrl = config.get("CONTROL_PLANE_URL") as string | undefined;
+      if (cpUrl) {
+        const inviter = await db.query.users.findFirst({
+          where: eq(users.id, ctx.userId),
+          columns: { name: true },
         });
-        const cpSettings = (firstWs?.settings as Record<string, unknown>)
-          ?.controlPlane as
-          | { resendApiKey?: string; resendFromEmail?: string; appUrl?: string }
-          | undefined;
-        const resendApiKey = cpSettings?.resendApiKey;
-        const fromEmail = cpSettings?.resendFromEmail ?? "noreply@synap.live";
-        const appUrl = cpSettings?.appUrl ?? "https://app.synap.live";
+        const inviterName = inviter?.name ?? "A Synap user";
 
-        if (resendApiKey) {
-          const [workspace, inviter] = await Promise.all([
-            db.query.workspaces.findFirst({
-              where: eq(workspaces.id, input.workspaceId),
-              columns: { name: true },
-            }),
-            db.query.users.findFirst({
-              where: eq(users.id, ctx.userId),
-              columns: { name: true },
-            }),
-          ]);
-
-          const inviterName = inviter?.name ?? "A teammate";
-          const workspaceName = workspace?.name ?? "Synap Workspace";
-          const podDomain = (config.server as any).domain ?? "pod.synap.live";
-          const inviteUrl = `${appUrl}/workspace/invite?token=${token}&backend=${encodeURIComponent(`https://${podDomain}`)}`;
-
-          const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>You've been invited to join ${workspaceName}</title></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;color:#333;max-width:600px;margin:0 auto;padding:20px;">
-  <div style="text-align:center;margin-bottom:30px;"><h1 style="color:#000;margin:0;">Synap</h1></div>
-  <h2 style="color:#333;">You've been invited!</h2>
-  <p><strong>${inviterName}</strong> has invited you to join <strong>${workspaceName}</strong> on Synap.</p>
-  <div style="text-align:center;margin:30px 0;">
-    <a href="${inviteUrl}" style="background-color:#000;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:500;">Accept Invitation</a>
-  </div>
-  <p style="color:#666;font-size:14px;">This invitation will expire in 7 days.</p>
-</body>
-</html>`;
-
-          fetch("https://api.resend.com/emails", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${resendApiKey}`,
-            },
-            body: JSON.stringify({
-              from: fromEmail,
-              to: input.email,
-              subject: `${inviterName} invited you to join ${workspaceName} on Synap`,
-              html,
-            }),
-          }).catch((err) =>
-            logger.warn(
-              { err },
-              "[createInvite] Failed to send invite email via Resend"
-            )
-          );
+        const podSubdomain = (config.get("POD_SUBDOMAIN") ??
+          config.get("SERVER_DOMAIN") ??
+          "") as string;
+        const body: Record<string, string> = {
+          type: input.type,
+          email: input.email,
+          inviterName,
+          role: input.role,
+          inviteToken: invite.token,
+          podSubdomain,
+        };
+        if (input.type === "workspace") {
+          const ws = await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, input.workspaceId),
+            columns: { name: true },
+          });
+          body.workspaceName = ws?.name ?? "Synap Workspace";
         }
+
+        fetch(`${cpUrl}/internal/invite-email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }).catch((err) =>
+          logger.warn({ err }, "Failed to send invite email (non-fatal)")
+        );
       }
-
-      return invite;
-    }),
-
-  /**
-   * List pending invites
-   */
-  listInvites: protectedProcedure
-    .input(z.object({ workspaceId: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
-      // Check user has access
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-
-      if (!membership) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
-      }
-
-      return await db.query.workspaceInvites.findMany({
-        where: eq(workspaceInvites.workspaceId, input.workspaceId),
-        orderBy: [desc(workspaceInvites.createdAt)],
-      });
-    }),
-
-  /**
-   * Accept invitation
-   */
-  acceptInvite: protectedProcedure
-    .input(z.object({ token: z.string() }))
-    .mutation(async ({ input, ctx }) => {
-      // Verify invite exists and is valid
-      const invite = await db.query.workspaceInvites.findFirst({
-        where: eq(workspaceInvites.token, input.token),
-      });
-
-      if (!invite) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-      }
-
-      if (invite.expiresAt < new Date()) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
-      }
-
-      // Direct DB operation — add member and delete invite
-      const dbConn = await getDb();
-      const eventRepo = new EventRepository(sql);
-      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
-
-      const member = await memberRepo.add(
-        {
-          workspaceId: invite.workspaceId,
-          userId: ctx.userId,
-          role: invite.role as "owner" | "editor" | "viewer",
-          inviteId: invite.id,
-        },
-        ctx.userId
-      );
-
-      // Audit log
-      auditLog({
-        subjectType: "workspaceMember",
-        action: "add",
-        phase: "completed",
-        subjectId: member.id,
-        userId: ctx.userId,
-        workspaceId: invite.workspaceId,
-        data: {
-          workspaceId: invite.workspaceId,
-          userId: ctx.userId,
-          role: invite.role,
-          invitedBy: invite.invitedBy,
-          inviteId: invite.id,
-          memberId: member.id,
-        },
-      });
 
       return {
-        status: "accepted" as const,
-        workspaceId: invite.workspaceId,
-        message: "Invite accepted successfully.",
+        id: invite.id,
+        token: invite.token,
+        expiresAt: invite.expiresAt,
       };
     }),
 
   /**
-   * Revoke invitation
+   * List pending invites. Pass workspaceId to list workspace invites,
+   * omit it (or pass type='pod') to list pod invites (owner only).
+   */
+  listInvites: protectedProcedure
+    .input(
+      z.object({
+        type: z.enum(["workspace", "pod"]),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      if (input.type === "workspace") {
+        if (!input.workspaceId)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "workspaceId required for workspace invites",
+          });
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, input.workspaceId),
+            eq(workspaceMembers.userId, ctx.userId)
+          ),
+        });
+        if (!membership)
+          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+
+        return db.query.invites.findMany({
+          where: and(
+            eq(invites.type, "workspace"),
+            eq(invites.workspaceId, input.workspaceId)
+          ),
+          orderBy: [desc(invites.createdAt)],
+        });
+      } else {
+        const ownerMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, ctx.userId),
+            eq(workspaceMembers.role, "owner")
+          ),
+        });
+        if (!ownerMembership) throw new TRPCError({ code: "FORBIDDEN" });
+
+        return db.query.invites.findMany({
+          where: eq(invites.type, "pod"),
+          orderBy: [desc(invites.createdAt)],
+        });
+      }
+    }),
+
+  /**
+   * Accept invitation (workspace or pod). Works for both types.
+   */
+  acceptInvite: protectedProcedure
+    .input(z.object({ token: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.token, input.token),
+      });
+      if (!invite)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+      if (invite.expiresAt < new Date())
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
+
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+
+      if (invite.type === "workspace") {
+        if (!invite.workspaceId)
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const member = await memberRepo.add(
+          {
+            workspaceId: invite.workspaceId,
+            userId: ctx.userId,
+            role: invite.role as "owner" | "editor" | "viewer",
+            inviteId: invite.id,
+          },
+          ctx.userId
+        );
+        auditLog({
+          subjectType: "workspaceMember",
+          action: "add",
+          phase: "completed",
+          subjectId: member.id,
+          userId: ctx.userId,
+          workspaceId: invite.workspaceId,
+          data: {
+            role: invite.role,
+            invitedBy: invite.invitedBy,
+            inviteId: invite.id,
+          },
+        });
+        return {
+          status: "accepted" as const,
+          type: "workspace" as const,
+          workspaceId: invite.workspaceId,
+        };
+      } else {
+        // Pod invite — add to all workspaces
+        const allWorkspaces = await db.query.workspaces.findMany();
+        for (const ws of allWorkspaces) {
+          const alreadyMember = await db.query.workspaceMembers.findFirst({
+            where: and(
+              eq(workspaceMembers.workspaceId, ws.id),
+              eq(workspaceMembers.userId, ctx.userId)
+            ),
+          });
+          if (alreadyMember) continue;
+          await memberRepo.add(
+            {
+              workspaceId: ws.id,
+              userId: ctx.userId,
+              role: invite.role as "owner" | "editor" | "viewer",
+            },
+            ctx.userId
+          );
+        }
+        await db.delete(invites).where(eq(invites.id, invite.id));
+        return {
+          status: "accepted" as const,
+          type: "pod" as const,
+          workspacesJoined: allWorkspaces.length,
+        };
+      }
+    }),
+
+  /**
+   * Revoke an invite (workspace or pod).
    */
   revokeInvite: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const invite = await db.query.workspaceInvites.findFirst({
-        where: eq(workspaceInvites.id, input.id),
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.id, input.id),
       });
-
-      if (!invite) {
+      if (!invite)
         throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-      }
 
-      // Check user is owner/admin
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, invite.workspaceId),
-          eq(workspaceMembers.userId, ctx.userId)
-        ),
-      });
-
-      if (!membership || !["owner", "admin"].includes(membership.role)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only owners/admins can revoke invites",
+      if (invite.type === "workspace" && invite.workspaceId) {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, invite.workspaceId),
+            eq(workspaceMembers.userId, ctx.userId)
+          ),
         });
+        if (!membership || !["owner", "admin"].includes(membership.role)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only owners/admins can revoke invites",
+          });
+        }
+      } else {
+        const ownerMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, ctx.userId),
+            eq(workspaceMembers.role, "owner")
+          ),
+        });
+        if (!ownerMembership) throw new TRPCError({ code: "FORBIDDEN" });
       }
 
-      await db
-        .delete(workspaceInvites)
-        .where(eq(workspaceInvites.id, input.id));
-
+      await db.delete(invites).where(eq(invites.id, input.id));
       return { success: true };
     }),
 
@@ -1710,24 +1742,142 @@ export const workspacesRouter = router({
     }),
 
   /**
-   * Preview invitation details (public — no auth required)
-   * Used by the accept-invite page before the user is logged in.
+   * Preview invite details (public — no auth required).
+   * Returns type so the landing page can adapt its UI.
    */
   previewInvite: publicProcedure
     .input(z.object({ token: z.string() }))
     .query(async ({ input }) => {
-      const invite = await db.query.workspaceInvites.findFirst({
-        where: eq(workspaceInvites.token, input.token),
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.token, input.token),
         with: { workspace: { columns: { name: true } } },
       });
       if (!invite) return null;
       if (invite.expiresAt < new Date()) return { expired: true as const };
-      return {
-        expired: false as const,
-        workspaceName: invite.workspace?.name ?? "Unknown Workspace",
-        role: invite.role,
-        expiresAt: invite.expiresAt,
-      };
+
+      const inviter = await db.query.users.findFirst({
+        where: eq(users.id, invite.invitedBy),
+        columns: { name: true, email: true },
+      });
+      const inviterName = inviter?.name ?? inviter?.email ?? "A Synap user";
+
+      if (invite.type === "workspace") {
+        return {
+          expired: false as const,
+          type: "workspace" as const,
+          workspaceName: invite.workspace?.name ?? "Unknown Workspace",
+          inviterName,
+          role: invite.role,
+          expiresAt: invite.expiresAt,
+        };
+      } else {
+        return {
+          expired: false as const,
+          type: "pod" as const,
+          inviterName,
+          role: invite.role,
+          expiresAt: invite.expiresAt,
+        };
+      }
+    }),
+
+  /**
+   * Accept an invite via the CP API proxy (no Kratos session needed).
+   * The CP signs a short-lived JWT containing the invitee's email.
+   * The pod looks up the local user by email and accepts on their behalf.
+   * Works for both workspace and pod invites.
+   */
+  acceptInviteViaCp: publicProcedure
+    .input(z.object({ token: z.string(), cpToken: z.string() }))
+    .mutation(async ({ input }) => {
+      const cpUrl = config.get("CONTROL_PLANE_URL") as string | undefined;
+      const payload = await verifyCpJwt<{
+        sub: string;
+        email: string;
+        type: string;
+      }>(input.cpToken, cpUrl);
+      if (!payload || payload.type !== "invite-accept") {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Invalid CP token",
+        });
+      }
+
+      const podUser = await db.query.users.findFirst({
+        where: eq(users.email, payload.email),
+      });
+      if (!podUser) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            "No pod account found for this email. Please sign in to this pod first.",
+        });
+      }
+
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.token, input.token),
+      });
+      if (!invite)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+      if (invite.expiresAt < new Date())
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
+
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+
+      if (invite.type === "workspace") {
+        if (!invite.workspaceId)
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const member = await memberRepo.add(
+          {
+            workspaceId: invite.workspaceId,
+            userId: podUser.id,
+            role: invite.role as "owner" | "editor" | "viewer",
+            inviteId: invite.id,
+          },
+          podUser.id
+        );
+        auditLog({
+          subjectType: "workspaceMember",
+          action: "add",
+          phase: "completed",
+          subjectId: member.id,
+          userId: podUser.id,
+          workspaceId: invite.workspaceId,
+          data: { source: "cp-proxy", email: payload.email },
+        });
+        return {
+          status: "accepted" as const,
+          type: "workspace" as const,
+          workspaceId: invite.workspaceId,
+        };
+      } else {
+        const allWorkspaces = await db.query.workspaces.findMany();
+        for (const ws of allWorkspaces) {
+          const alreadyMember = await db.query.workspaceMembers.findFirst({
+            where: and(
+              eq(workspaceMembers.workspaceId, ws.id),
+              eq(workspaceMembers.userId, podUser.id)
+            ),
+          });
+          if (alreadyMember) continue;
+          await memberRepo.add(
+            {
+              workspaceId: ws.id,
+              userId: podUser.id,
+              role: invite.role as "owner" | "editor" | "viewer",
+            },
+            podUser.id
+          );
+        }
+        await db.delete(invites).where(eq(invites.id, invite.id));
+        return {
+          status: "accepted" as const,
+          type: "pod" as const,
+          workspacesJoined: allWorkspaces.length,
+        };
+      }
     }),
 
   /**
