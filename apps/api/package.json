@@ -24,9 +24,11 @@
     "hono-rate-limiter": "^0.4.2",
     "zod": "^4.3.6",
     "dotenv": "^17.2.3",
+    "bcrypt": "^6.0.0",
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/pg": "^8.15.6",
     "pg": "^8.16.3",

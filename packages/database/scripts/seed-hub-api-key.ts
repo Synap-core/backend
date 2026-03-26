@@ -11,7 +11,7 @@ import * as bcrypt from "bcryptjs";
 // Configuration
 const HUB_API_KEY_RAW =
   process.env.HUB_PROTOCOL_API_KEY ||
-  `synap_hub_${randomBytes(32).toString("hex")}`;
+  `synap_hub_live_${randomBytes(32).toString("hex")}`;
 const HUB_KEY_PREFIX = "synap_hub_live_";
 
 async function seedHubProtocolKey() {

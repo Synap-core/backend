@@ -19,6 +19,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { randomUUID, randomBytes } from "crypto";
+import bcrypt from "bcrypt";
 import { createLogger, config } from "@synap-core/core";
 import { verifyCpJwt } from "@synap/api";
 import {
@@ -339,9 +340,51 @@ provisionRouter.post("/register-intelligence", async (c) => {
       { podId: payload.podId, serviceId: SERVICE_ID, serviceUrl },
       "Intelligence service self-registered and activated"
     );
+
     // Return the pod's Hub Protocol API key so IS can store it in customer_refs.
     // IS uses this key for proactive outbound Hub Protocol calls (event-triggered skills, background tasks).
-    const hubProtocolApiKey = process.env.HUB_PROTOCOL_API_KEY ?? "";
+    let hubProtocolApiKey = process.env.HUB_PROTOCOL_API_KEY ?? "";
+
+    // Auto-generate a Hub Protocol API key if one hasn't been manually configured.
+    // This ensures IS always gets a valid key even on fresh pods with no .env setup.
+    // Key is rotated on every re-registration (delete + insert).
+    if (!hubProtocolApiKey) {
+      try {
+        const IS_HUB_ID = "intelligence-hub-primary";
+        const keyPrefix =
+          process.env.NODE_ENV === "production"
+            ? "synap_hub_live_"
+            : "synap_hub_test_";
+        const rawKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
+        const keyHash = await bcrypt.hash(rawKey, 12);
+
+        // Delete any existing IS hub keys before issuing a fresh one.
+        await db.delete(apiKeys).where(eq(apiKeys.hubId, IS_HUB_ID));
+
+        await db.insert(apiKeys).values({
+          userId: "system",
+          keyName: "Intelligence Hub (auto-provisioned)",
+          keyPrefix,
+          keyHash,
+          keyType: "hub_inbound",
+          hubId: IS_HUB_ID,
+          scope: ["hub-protocol.read", "hub-protocol.write"],
+          isActive: true,
+        });
+
+        hubProtocolApiKey = rawKey;
+        logger.info(
+          { podId: payload.podId, keyPrefix },
+          "Auto-generated Hub Protocol API key for IS"
+        );
+      } catch (keyErr) {
+        logger.warn(
+          { err: keyErr },
+          "Failed to auto-generate Hub Protocol API key — IS will lack outbound Hub access"
+        );
+      }
+    }
+
     return c.json({ success: true, hubProtocolApiKey });
   } catch (err: any) {
     const msg = err?.message ?? String(err);
