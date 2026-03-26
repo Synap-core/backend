@@ -36,7 +36,7 @@ import type {
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
-import { WorkspaceMemberEvents } from "../lib/event-helpers.js";
+// import { WorkspaceMemberEvents } from "../lib/event-helpers.js"; // unused — reserved for future member event hooks
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
@@ -891,7 +891,7 @@ export const workspacesRouter = router({
         .returning();
 
       // Notify CP to send invite email (fire-and-forget)
-      const cpUrl = config.get("CONTROL_PLANE_URL") as string | undefined;
+      const cpUrl = config.server.controlPlaneUrl;
       if (cpUrl) {
         const inviter = await db.query.users.findFirst({
           where: eq(users.id, ctx.userId),
@@ -899,9 +899,8 @@ export const workspacesRouter = router({
         });
         const inviterName = inviter?.name ?? "A Synap user";
 
-        const podSubdomain = (config.get("POD_SUBDOMAIN") ??
-          config.get("SERVER_DOMAIN") ??
-          "") as string;
+        const podSubdomain =
+          process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
         const body: Record<string, string> = {
           type: input.type,
           email: input.email,
@@ -1790,7 +1789,7 @@ export const workspacesRouter = router({
   acceptInviteViaCp: publicProcedure
     .input(z.object({ token: z.string(), cpToken: z.string() }))
     .mutation(async ({ input }) => {
-      const cpUrl = config.get("CONTROL_PLANE_URL") as string | undefined;
+      const cpUrl = config.server.controlPlaneUrl;
       const payload = await verifyCpJwt<{
         sub: string;
         email: string;

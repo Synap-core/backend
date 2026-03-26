@@ -120,14 +120,17 @@ export async function createDefaultWorkspace(
         "User has pending invite, joining existing workspace"
       );
 
+      // workspaceId is guaranteed non-null for type='workspace' invites
+      const workspaceId = pendingInvite.workspaceId!;
+
       // Check if workspace exists
       const workspace = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, pendingInvite.workspaceId),
+        where: eq(workspaces.id, workspaceId),
       });
 
       if (!workspace) {
         logger.error(
-          { workspaceId: pendingInvite.workspaceId },
+          { workspaceId },
           "Invite references non-existent workspace"
         );
         throw new Error("Invalid workspace invite");
@@ -136,25 +139,25 @@ export async function createDefaultWorkspace(
       // Check if user is already a member (prevent duplicates)
       const existingMember = await db.query.workspaceMembers.findFirst({
         where: and(
-          eq(workspaceMembers.workspaceId, pendingInvite.workspaceId),
+          eq(workspaceMembers.workspaceId, workspaceId),
           eq(workspaceMembers.userId, userId)
         ),
       });
 
       if (existingMember) {
         logger.info(
-          { workspaceId: pendingInvite.workspaceId, userId },
+          { workspaceId, userId },
           "User already member of workspace, skipping"
         );
         return {
-          id: pendingInvite.workspaceId,
+          id: workspaceId,
           role: existingMember.role as "admin" | "owner" | "editor" | "viewer",
         };
       }
 
       // Add user to workspace with role from invite
       await db.insert(workspaceMembers).values({
-        workspaceId: pendingInvite.workspaceId,
+        workspaceId,
         userId,
         role: pendingInvite.role,
         invitedBy: pendingInvite.invitedBy,
@@ -165,7 +168,7 @@ export async function createDefaultWorkspace(
 
       logger.info(
         {
-          workspaceId: pendingInvite.workspaceId,
+          workspaceId,
           userId,
           role: pendingInvite.role,
         },
@@ -173,7 +176,7 @@ export async function createDefaultWorkspace(
       );
 
       return {
-        id: pendingInvite.workspaceId,
+        id: workspaceId,
         role: pendingInvite.role as "admin" | "owner" | "editor" | "viewer",
       };
     }
