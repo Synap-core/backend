@@ -1317,6 +1317,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentId?: string | undefined;
 				content?: string | undefined;
 				global?: boolean | undefined;
+				targetWorkspaceId?: string | undefined;
 				source?: "user" | "system" | "ai" | "intelligence" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
@@ -1522,6 +1523,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source?: "user" | "system" | "ai" | "intelligence" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
+				global?: boolean | undefined;
 			};
 			output: {
 				status: string;
@@ -5015,30 +5017,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		createInvite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				type: "workspace";
 				workspaceId: string;
 				email: string;
 				role: "admin" | "editor" | "viewer";
+			} | {
+				type: "pod";
+				email: string;
+				role?: "admin" | "editor" | "viewer" | undefined;
 			};
 			output: {
-				email: string;
-				workspaceId: string;
 				id: string;
-				createdAt: Date;
-				role: string;
-				expiresAt: Date;
 				token: string;
-				invitedBy: string;
+				expiresAt: Date;
 			};
 			meta: object;
 		}>;
 		listInvites: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId: string;
+				type: "workspace" | "pod";
+				workspaceId?: string | undefined;
 			};
 			output: {
 				email: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
+				type: "workspace" | "pod";
 				createdAt: Date;
 				role: string;
 				expiresAt: Date;
@@ -5053,8 +5057,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				status: "accepted";
+				type: "workspace";
 				workspaceId: string;
-				message: string;
+				workspacesJoined?: undefined;
+			} | {
+				status: "accepted";
+				type: "pod";
+				workspacesJoined: number;
+				workspaceId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5257,15 +5267,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				expired: true;
+				type?: undefined;
 				workspaceName?: undefined;
+				inviterName?: undefined;
 				role?: undefined;
 				expiresAt?: undefined;
 			} | {
 				expired: false;
+				type: "workspace";
 				workspaceName: string;
+				inviterName: string;
 				role: string;
 				expiresAt: Date;
+			} | {
+				expired: false;
+				type: "pod";
+				inviterName: string;
+				role: string;
+				expiresAt: Date;
+				workspaceName?: undefined;
 			} | null;
+			meta: object;
+		}>;
+		acceptInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				token: string;
+				cpToken: string;
+			};
+			output: {
+				status: "accepted";
+				type: "workspace";
+				workspaceId: string;
+				workspacesJoined?: undefined;
+			} | {
+				status: "accepted";
+				type: "pod";
+				workspacesJoined: number;
+				workspaceId?: undefined;
+			};
 			meta: object;
 		}>;
 		getMcpServers: import("@trpc/server").TRPCQueryProcedure<{
