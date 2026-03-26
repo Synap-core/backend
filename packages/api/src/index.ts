@@ -22,6 +22,7 @@ export { suggestionsRouter } from "./routers/suggestions.js";
 export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
 export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
+export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
 export { ensurePersonalChannel } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";

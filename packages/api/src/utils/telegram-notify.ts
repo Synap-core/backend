@@ -136,8 +136,14 @@ export async function notifyProposalViaTelegram(opts: {
   reasoning?: string;
   workspaceId?: string;
 }): Promise<boolean> {
-  const { userId, proposalId, targetType, action, reasoning, workspaceId: _ws } =
-    opts;
+  const {
+    userId,
+    proposalId,
+    targetType,
+    action,
+    reasoning,
+    workspaceId: _ws,
+  } = opts;
 
   const miniAppUrl =
     process.env.TELEGRAM_MINI_APP_URL || "https://app.synap.so";
@@ -161,9 +167,21 @@ export async function notifyProposalViaTelegram(opts: {
 
   return notifyTelegramUser(userId, message, {
     inlineKeyboard: [
+      // Row 1: inline Approve / Reject buttons (handled by callback_query)
       [
         {
-          text: "View in Synap",
+          text: "✅ Approve",
+          callback_data: `proposal:approve:${proposalId}`,
+        },
+        {
+          text: "❌ Reject",
+          callback_data: `proposal:reject:${proposalId}`,
+        },
+      ],
+      // Row 2: deep-link into the Mini App for full review
+      [
+        {
+          text: "📱 Open in Synap",
           web_app: { url: deepLink },
         },
       ],

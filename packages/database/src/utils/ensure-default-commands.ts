@@ -43,7 +43,7 @@ const DEFAULT_COMMANDS: DefaultCommandDef[] = [
     title: "Create View from Description",
     promptTemplate: `You are helping the user create a new view from a natural language description.
 
-**User's goal:** {argument name="Goal"}
+**User's goal:** @{arg:goal}
 
 Create a proposal for a new view that matches this description. Include:
 - View type (table, kanban, list, etc.)
@@ -51,7 +51,7 @@ Create a proposal for a new view that matches this description. Include:
 - Layout configuration
 
 Output your proposal clearly so it can be turned into a Synap view.`,
-    derivedInputs: [{ name: "Goal", label: "Goal", type: "text" }],
+    derivedInputs: [{ name: "goal", label: "Goal", type: "text" }],
     outputMode: "view",
     canCreateViews: true,
     permissionsProfile: "propose_writes",
@@ -60,9 +60,9 @@ Output your proposal clearly so it can be turned into a Synap view.`,
     title: "Extract Entities from Text",
     promptTemplate: `You are helping the user extract entities and relationships from text.
 
-**User's selection (text, doc snippets, or notes):**
+**User's text or selection:**
 
-{selection}
+@{context:text}
 
 Analyze this content and propose:
 1. New entities to create (Notes, Tasks, People, Companies, etc.) with their properties
@@ -78,9 +78,9 @@ Output proposals that the user can review and approve. Do not create anything di
     title: "Summarize Selection",
     promptTemplate: `You are helping the user get a concise summary of their selection.
 
-**User's selection:**
+**User's text or selection:**
 
-{selection}
+@{context:text}
 
 Provide a clear, structured summary. Highlight key points, dates, and actionable items if relevant. Keep it concise but comprehensive.`,
     derivedInputs: [],
@@ -92,12 +92,12 @@ Provide a clear, structured summary. Highlight key points, dates, and actionable
     title: "Analyze Entities",
     promptTemplate: `You are helping the user analyze selected entities.
 
-**Selected entities context:**
+**Current entity context:**
 
-{selection}
+@{context:entity}
 
-Analyze these entities and provide:
-- Overview and patterns
+Analyze this entity and provide:
+- Overview and key properties
 - Insights, gaps, or opportunities
 - Suggestions for relationships or next steps
 
@@ -113,7 +113,7 @@ Be concise and actionable.`,
 
 **User's text (meeting notes, pasted content, or selection):**
 
-{selection}
+@{context:text}
 
 Extract actionable tasks. For each task propose:
 - Title
@@ -132,7 +132,7 @@ Output proposals only—do not create entities directly. The user will review an
 
 **User's text (meeting notes, calendar copy, or selection):**
 
-{selection}
+@{context:text}
 
 Extract events with dates/times. For each event propose:
 - Title
