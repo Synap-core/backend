@@ -33,8 +33,8 @@ import {
   ensurePersonalChannel,
   resolveTelegramBotToken,
   proposalsRouter,
+  createHubProtocolCallerContext,
 } from "@synap/api";
-import { createHubProtocolCallerContext } from "@synap/api/routers/hub-protocol/utils.js";
 
 const logger = createLogger({ module: "channel-gateway-rest" });
 
