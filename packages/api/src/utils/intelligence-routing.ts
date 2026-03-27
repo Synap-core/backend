@@ -88,7 +88,7 @@ export async function resolveIntelligenceService(
   ) {
     const capService = await db.query.intelligenceServices.findFirst({
       where: and(
-        eq(intelligenceServices.status, "active"),
+        drizzleSql`${intelligenceServices.status} IN ('active', 'credential_error')`,
         eq(intelligenceServices.enabled, true),
         drizzleSql`${intelligenceServices.capabilities} @> ${JSON.stringify([capability])}::jsonb`
       ),
@@ -175,10 +175,15 @@ const SERVICE_RESOLUTION_TIMEOUT_MS = 5_000;
  * or if the DB query times out (fail open → route to fallback).
  */
 async function getActiveService(serviceId: string) {
+  // Include "credential_error" services — the key may have been refreshed on
+  // the IS side since the last probe. If the key is still bad, the IS will
+  // return 401 and the circuit breaker handles it. Excluding these services
+  // causes a silent fallback to env vars which are often misconfigured,
+  // producing misleading "overload" errors instead of actionable credential errors.
   const queryPromise = db.query.intelligenceServices.findFirst({
     where: and(
       eq(intelligenceServices.serviceId, serviceId),
-      eq(intelligenceServices.status, "active"),
+      drizzleSql`${intelligenceServices.status} IN ('active', 'credential_error')`,
       eq(intelligenceServices.enabled, true)
     ),
   });

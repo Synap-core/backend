@@ -34,7 +34,8 @@
     "@trpc/server": "^11.0.0"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "restricted",
+    "registry": "https://npm.pkg.github.com"
   },
   "repository": {
     "type": "git",

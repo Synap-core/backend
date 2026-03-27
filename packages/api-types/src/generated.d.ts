@@ -7003,7 +7003,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				creatableOnly?: boolean | undefined;
+			} | undefined;
 			output: {
 				profiles: {
 					userId: string | null;

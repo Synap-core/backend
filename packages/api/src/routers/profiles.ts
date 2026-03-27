@@ -34,17 +34,32 @@ export const profilesRouter = router({
   /**
    * List accessible profiles (system + workspace + user)
    */
-  list: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    const profileRepo = new ProfileRepository(db);
+  list: workspaceProcedure
+    .input(
+      z
+        .object({
+          /** When true, excludes profiles marked hideFromCreate in uiHints (file, capture, anchor, etc.) */
+          creatableOnly: z.boolean().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      const profileRepo = new ProfileRepository(db);
 
-    const profiles = await profileRepo.getAccessibleProfiles(
-      ctx.userId,
-      ctx.workspaceId
-    );
+      let profiles = await profileRepo.getAccessibleProfiles(
+        ctx.userId,
+        ctx.workspaceId
+      );
 
-    return { profiles };
-  }),
+      if (input?.creatableOnly) {
+        profiles = profiles.filter(
+          (p) => !(p.uiHints as Record<string, unknown> | null)?.hideFromCreate
+        );
+      }
+
+      return { profiles };
+    }),
 
   /**
    * Get profile by slug or ID

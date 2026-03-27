@@ -66,6 +66,13 @@ export {
   clearTelegramTokenCache,
 } from "./utils/telegram-bot-token.js";
 
+// Export Telegram bot forwarding and link token utilities
+export {
+  forwardTelegramMessageToAI,
+  findTelegramUser,
+} from "./utils/telegram-bot-forward.js";
+export { consumeLinkToken } from "./utils/consume-link-token.js";
+
 // Export utilities for default whiteboard creation
 // Re-export ensureDefaultWhiteboard from @synap/database for convenience
 export { ensureDefaultWhiteboard } from "@synap/database";

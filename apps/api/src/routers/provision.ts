@@ -801,6 +801,8 @@ provisionRouter.get("/status", async (c) => {
           }
         : null,
       intelligenceService,
+      // Pod version info — read from env (set by install.sh / synap update)
+      podVersion: process.env.BACKEND_VERSION || null,
     });
   } catch (err) {
     logger.error({ err }, "Provision status error");
@@ -1315,4 +1317,79 @@ provisionRouter.post("/disconnect", async (c) => {
     logger.error({ err }, "Failed to remove Control Plane connection");
     return c.json({ error: "Internal server error" }, 500);
   }
+});
+
+// ─── POST /api/provision/trigger-update ──────────────────────────────────────
+//
+// Self-hosted pod update trigger. CP calls this instead of SSH.
+// Runs `./synap update --version <tag>` in the background.
+// Auth: CP-signed JWT (same as other provision endpoints).
+//
+// Body (from JWT claims): { targetVersion: string, updateId?: string }
+// Returns immediately: { accepted: true } — update runs asynchronously.
+
+provisionRouter.post("/trigger-update", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  // Read CP URL from workspace settings for JWT verification
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string } | undefined;
+    if (!cpUrl) cpUrl = cp?.url;
+  } catch {
+    /* use env fallback */
+  }
+
+  if (!cpUrl) {
+    return c.json(
+      { error: "No Control Plane connection — cannot verify JWT" },
+      403
+    );
+  }
+
+  const payload = await verifyCpJwt<{
+    type: string;
+    targetVersion?: string;
+    updateId?: string;
+    podId?: string;
+  }>(token, cpUrl);
+  if (!payload || payload.type !== "provision") {
+    return c.json({ error: "Invalid or expired JWT" }, 401);
+  }
+
+  const targetVersion = payload.targetVersion;
+  if (!targetVersion) {
+    return c.json({ error: "targetVersion is required in JWT claims" }, 400);
+  }
+
+  logger.info(
+    { targetVersion, updateId: payload.updateId },
+    "Received update trigger from CP"
+  );
+
+  // Run the update asynchronously — don't block the response.
+  // Uses the pod's own `synap` CLI which handles pull, migrate, restart, health.
+  const { exec } = await import("child_process");
+  exec(
+    `cd /opt/synap/deploy && ./synap update --version ${targetVersion.replace(/[^a-zA-Z0-9._-]/g, "")} 2>&1 | tee /tmp/synap-update.log`,
+    { timeout: 600_000 }, // 10 min max
+    (err, _stdout, stderr) => {
+      if (err) {
+        logger.error({ err: err.message, stderr }, "Self-update failed");
+      } else {
+        logger.info({ targetVersion }, "Self-update completed");
+      }
+    }
+  );
+
+  return c.json({ accepted: true, targetVersion });
 });

@@ -16,7 +16,7 @@ import {
   views,
   workspaces,
 } from "../schema/index.js";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type {
   DocumentType,
   DocumentMetadata,
@@ -74,6 +74,39 @@ export async function ensureDefaultWhiteboard(
         };
       }
       // If view doesn't exist but ID is in settings, we'll create a new one and update settings
+    }
+
+    // Deduplication: if mainWhiteboardId is not set but a whiteboard view already
+    // exists for this workspace (e.g. previous creation succeeded but settings
+    // update failed), adopt it instead of creating a duplicate.
+    if (!existingMainWhiteboardId) {
+      const orphanedView = await db.query.views.findFirst({
+        where: and(
+          eq(views.workspaceId, workspaceId),
+          eq(views.type, "whiteboard" as any)
+        ),
+      });
+      if (orphanedView) {
+        // Repair: link existing whiteboard in workspace settings
+        const currentSettings = (workspace.settings || {}) as any;
+        await db
+          .update(workspaces)
+          .set({
+            settings: { ...currentSettings, mainWhiteboardId: orphanedView.id },
+            updatedAt: new Date(),
+          })
+          .where(eq(workspaces.id, workspaceId));
+
+        console.log(
+          `[ensureDefaultWhiteboard] Adopted orphaned whiteboard ${orphanedView.id} for workspace ${workspaceId}`
+        );
+        return {
+          status: "skipped",
+          message: "Adopted existing whiteboard (repaired settings)",
+          whiteboardId: orphanedView.id,
+          documentId: orphanedView.documentId || undefined,
+        };
+      }
     }
 
     // 1. Create document for whiteboard content

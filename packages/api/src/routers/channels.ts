@@ -1202,6 +1202,8 @@ export const channelsRouter = router({
           streamError instanceof Error
             ? streamError.message
             : String(streamError);
+        const isStreamAuthError =
+          streamErrMsg.includes("401") || streamErrMsg.includes("Unauthorized");
         logger.error(
           {
             err: streamError,
@@ -1210,9 +1212,21 @@ export const channelsRouter = router({
             endpoint: resolvedService.endpoint,
             isCircuit: streamErrMsg.includes("circuit open"),
             isAbort: streamErrMsg.includes("abort"),
+            isAuthError: isStreamAuthError,
           },
           "Streaming error, falling back to non-streaming"
         );
+
+        // Trigger auto-repair on auth errors so the next request succeeds
+        if (isStreamAuthError) {
+          try {
+            const { triggerCredentialRepair } =
+              await import("../utils/credential-auto-repair.js");
+            triggerCredentialRepair();
+          } catch {
+            /* best-effort */
+          }
+        }
 
         emitChatEvent({
           event: "chat:stream:error",
@@ -1257,7 +1271,23 @@ export const channelsRouter = router({
           );
 
           // User-facing message with actionable context
-          if (isCircuit) {
+          const isAuthError =
+            errorDetail.includes("401") ||
+            errorDetail.includes("Unauthorized") ||
+            errorDetail.includes("credential");
+          if (isAuthError) {
+            // Auto-repair: request fresh credentials from CP in the background.
+            // The current request fails gracefully, but the next one should succeed.
+            try {
+              const { triggerCredentialRepair } =
+                await import("../utils/credential-auto-repair.js");
+              triggerCredentialRepair();
+            } catch {
+              // Non-critical — auto-repair is best-effort
+            }
+            fullContent =
+              "The AI service credentials are being refreshed automatically. Please try again in a moment.";
+          } else if (isCircuit) {
             fullContent =
               "The AI service is recovering from a temporary overload. Please wait 30 seconds and try again.";
           } else if (isTimeout) {

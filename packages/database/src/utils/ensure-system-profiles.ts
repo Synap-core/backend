@@ -455,6 +455,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           icon: "file",
           color: "#64748B",
           description: "Uploaded file",
+          hideFromCreate: true, // created programmatically via file upload, not manually
         },
       },
       // Quick capture — raw URL/text captured via browser extension or mobile
@@ -465,6 +466,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           icon: "camera",
           color: "#84CC16",
           description: "Quick capture from browser or mobile",
+          hideFromCreate: true, // created programmatically via browser/mobile capture
         },
         parentSlug: "bookmark",
       },
@@ -476,6 +478,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           icon: "pin",
           color: "#10B981",
           description: "Pinned conversation moment",
+          hideFromCreate: true, // created programmatically when pinning messages
         },
       },
     ];
@@ -511,6 +514,25 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         } catch {
           // Ignore if already set
         }
+      }
+    }
+
+    // Third pass: backfill hideFromCreate flag on system-only profiles (idempotent)
+    const HIDE_FROM_CREATE_SLUGS = ["file", "capture", "anchor"];
+    for (const slug of HIDE_FROM_CREATE_SLUGS) {
+      const profileId = createdProfiles.get(slug);
+      if (!profileId) continue;
+      const existing = await profileRepo.getBySlug(slug);
+      if (
+        existing &&
+        !(existing.uiHints as Record<string, unknown>)?.hideFromCreate
+      ) {
+        await profileRepo.update(profileId, {
+          uiHints: {
+            ...(existing.uiHints as Record<string, unknown>),
+            hideFromCreate: true,
+          },
+        });
       }
     }
 

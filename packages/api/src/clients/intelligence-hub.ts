@@ -212,6 +212,13 @@ export class IntelligenceHubClient {
         );
 
         if (!response.ok) {
+          // 401 = credential error — don't retry, surface immediately for auto-repair
+          if (response.status === 401) {
+            recordFailure(this.baseUrl);
+            throw new Error(
+              `Intelligence Hub credential error: 401 Unauthorized`
+            );
+          }
           throw new Error(`Intelligence Hub error: ${response.statusText}`);
         }
 
@@ -220,6 +227,10 @@ export class IntelligenceHubClient {
         return data;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        // Don't retry 401s — break immediately so auto-repair can kick in
+        if (lastError.message.includes("401 Unauthorized")) {
+          break;
+        }
         if (attempt === MAX_RETRIES) {
           recordFailure(this.baseUrl);
         }
@@ -310,6 +321,9 @@ export class IntelligenceHubClient {
 
     if (!response.ok) {
       recordFailure(this.baseUrl);
+      if (response.status === 401) {
+        throw new Error(`Intelligence Hub credential error: 401 Unauthorized`);
+      }
       throw new Error(`Intelligence Hub error: ${response.statusText}`);
     }
 

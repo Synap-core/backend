@@ -10,7 +10,7 @@
 
 import { db } from "../client-pg.js";
 import { intelligenceServices } from "../schema/index.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { resolveServiceKey } from "./service-key-crypto.js";
 
 export interface IntelligenceEndpoint {
@@ -24,9 +24,13 @@ export interface IntelligenceEndpoint {
  */
 export async function resolveDefaultIntelligenceEndpoint(): Promise<IntelligenceEndpoint> {
   try {
+    // Include "credential_error" — the key may have been refreshed on the IS
+    // side. Excluding these causes a silent fallback to env vars (often wrong),
+    // producing misleading "overload" errors. Let the actual request fail with
+    // a 401 so the error is actionable.
     const svc = await db.query.intelligenceServices.findFirst({
       where: and(
-        eq(intelligenceServices.status, "active"),
+        sql`${intelligenceServices.status} IN ('active', 'credential_error')`,
         eq(intelligenceServices.enabled, true)
       ),
       columns: { webhookUrl: true, apiKey: true },

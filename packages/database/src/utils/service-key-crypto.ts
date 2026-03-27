@@ -22,22 +22,12 @@ const ALGORITHM = "aes-256-gcm";
 
 /** Derive a 32-byte AES key from the env-provided secret. */
 function getEncryptionKey(): Buffer {
-  const dedicated = process.env.SYNAP_SERVICE_ENCRYPTION_KEY;
-  const fallback = process.env.HUB_PROTOCOL_API_KEY;
-
-  const raw = dedicated || fallback || "";
-
-  if (!dedicated && fallback) {
-    console.warn(
-      "[service-key-crypto] WARNING: SYNAP_SERVICE_ENCRYPTION_KEY is not set. " +
-        "Falling back to HUB_PROTOCOL_API_KEY for service credential encryption. " +
-        "Set a dedicated SYNAP_SERVICE_ENCRYPTION_KEY to eliminate this warning."
-    );
-  }
+  const raw = process.env.SYNAP_SERVICE_ENCRYPTION_KEY;
 
   if (!raw) {
     throw new Error(
-      "No encryption key available — set SYNAP_SERVICE_ENCRYPTION_KEY in env"
+      "SYNAP_SERVICE_ENCRYPTION_KEY is not set — required for IS credential encryption. " +
+        "Generate with: openssl rand -hex 32"
     );
   }
 

@@ -262,6 +262,9 @@ export const viewsRouter = router({
         ...input.metadata,
       };
 
+      // Canvas views need a yjsRoomId for Yjs collaboration
+      const yjsRoomId = docId ? `whiteboard-${docId}` : undefined;
+
       const dbInstance = await getDb();
       const eventRepo = new EventRepository(pgSql);
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
@@ -273,6 +276,7 @@ export const viewsRouter = router({
           name: input.name,
           description: input.description,
           documentId: docId,
+          yjsRoomId,
           workspaceId: effectiveWorkspaceId,
           userId: ctx.userId,
           scopeProfileIds: input.scopeProfileIds,

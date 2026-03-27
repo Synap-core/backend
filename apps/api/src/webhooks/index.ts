@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { n8nWebhookRouter } from "./n8n.js";
 import { intelligenceWebhookRouter } from "./intelligence.js";
 import { kratosWebhookRouter } from "./kratos.js";
+import { telegramWebhookRouter } from "./telegram.js";
 
 export const webhookRouter = new Hono();
 
@@ -16,6 +17,7 @@ export const webhookRouter = new Hono();
 webhookRouter.route("/n8n", n8nWebhookRouter);
 webhookRouter.route("/kratos", kratosWebhookRouter);
 webhookRouter.route("/intelligence", intelligenceWebhookRouter);
+webhookRouter.route("/telegram", telegramWebhookRouter);
 
 // Global webhook health check
 webhookRouter.get("/health", (c) => {
@@ -24,6 +26,7 @@ webhookRouter.get("/health", (c) => {
     routes: {
       n8n: "/webhooks/n8n/*",
       intelligence: "/webhooks/intelligence/*",
+      telegram: "/webhooks/telegram/*",
     },
   });
 });

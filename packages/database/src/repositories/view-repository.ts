@@ -38,6 +38,7 @@ export interface CreateViewInput {
   name: string;
   description?: string;
   documentId?: string | null;
+  yjsRoomId?: string;
   workspaceId: string;
   userId: string;
   // NEW: Scope profiles (required for structured views)
@@ -108,6 +109,7 @@ export class ViewRepository extends BaseRepository<
         name: data.name,
         description: data.description,
         documentId: data.documentId,
+        yjsRoomId: data.yjsRoomId,
         workspaceId: data.workspaceId,
         userId,
         // NEW: Scope profiles
