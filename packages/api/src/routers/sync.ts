@@ -20,6 +20,10 @@ import {
   db,
   syncPeers,
   events,
+  messages,
+  automations,
+  automationRuns,
+  intelligenceCommands,
   eq,
   and,
   or,
@@ -275,7 +279,7 @@ app.get("/pull", async (c) => {
 
 const supplementaryInputSchema = z.object({
   table: z.string(),
-  rows: z.array(z.record(z.unknown())),
+  rows: z.array(z.record(z.string(), z.unknown())),
   cursor: z.string(), // ISO datetime of last row in batch
 });
 
@@ -288,44 +292,38 @@ const SUPPLEMENTARY_TABLES: Record<
     let processed = 0;
     for (const row of rows) {
       try {
+        // Sync data is dynamic — use `as any` to bypass strict Drizzle column types
         await db
           .insert(messages)
           .values({
-            id: row.id as string,
-            channelId: row.channelId as string,
-            parentId: (row.parentId as string) ?? null,
-            role: (row.role as "user" | "assistant" | "system") ?? "user",
-            authorType:
-              (row.authorType as "human" | "ai_agent" | "external" | "bot") ??
-              "human",
-            messageCategory:
-              (row.messageCategory as
-                | "chat"
-                | "comment"
-                | "system_notification"
-                | "review") ?? "chat",
-            externalSource: (row.externalSource as string) ?? null,
-            inboxItemId: (row.inboxItemId as string) ?? null,
-            content: (row.content as string) ?? "",
+            id: row.id,
+            channelId: row.channelId,
+            parentId: row.parentId ?? null,
+            role: row.role ?? "user",
+            authorType: row.authorType ?? "human",
+            messageCategory: row.messageCategory ?? "chat",
+            externalSource: row.externalSource ?? null,
+            inboxItemId: row.inboxItemId ?? null,
+            content: row.content ?? "",
             metadata: row.metadata ?? null,
-            userId: (row.userId as string) ?? "sync",
+            userId: row.userId ?? "sync",
             timestamp: row.timestamp
               ? new Date(row.timestamp as string)
               : new Date(),
-            previousHash: (row.previousHash as string) ?? null,
-            hash: (row.hash as string) ?? "",
-            sessionId: (row.sessionId as string) ?? null,
+            previousHash: row.previousHash ?? null,
+            hash: row.hash ?? "",
+            sessionId: row.sessionId ?? null,
             deletedAt: row.deletedAt ? new Date(row.deletedAt as string) : null,
-          })
+          } as any)
           .onConflictDoUpdate({
             target: messages.id,
             set: {
-              content: (row.content as string) ?? "",
+              content: row.content ?? "",
               metadata: row.metadata ?? null,
               deletedAt: row.deletedAt
                 ? new Date(row.deletedAt as string)
                 : null,
-            },
+            } as any,
           });
         processed++;
       } catch (err) {
@@ -374,30 +372,24 @@ const SUPPLEMENTARY_TABLES: Record<
             updatedAt: row.updatedAt
               ? new Date(row.updatedAt as string)
               : new Date(),
-          })
+          } as any)
           .onConflictDoUpdate({
             target: automations.id,
             set: {
-              name: (row.name as string) ?? undefined,
-              description: (row.description as string) ?? null,
-              triggerConfig:
-                (row.triggerConfig as Record<string, unknown>) ?? {},
-              flowDefinition: (row.flowDefinition as {
-                nodes: unknown[];
-                edges: unknown[];
-              }) ?? { nodes: [], edges: [] },
-              status:
-                (row.status as "draft" | "active" | "paused" | "error") ??
-                undefined,
-              errorMessage: (row.errorMessage as string) ?? null,
-              runCount: (row.runCount as number) ?? 0,
-              successCount: (row.successCount as number) ?? 0,
-              failureCount: (row.failureCount as number) ?? 0,
-              metadata: (row.metadata as Record<string, unknown>) ?? {},
+              name: row.name ?? undefined,
+              description: row.description ?? null,
+              triggerConfig: row.triggerConfig ?? {},
+              flowDefinition: row.flowDefinition ?? { nodes: [], edges: [] },
+              status: row.status ?? undefined,
+              errorMessage: row.errorMessage ?? null,
+              runCount: row.runCount ?? 0,
+              successCount: row.successCount ?? 0,
+              failureCount: row.failureCount ?? 0,
+              metadata: row.metadata ?? {},
               updatedAt: row.updatedAt
                 ? new Date(row.updatedAt as string)
                 : new Date(),
-            },
+            } as any,
           });
         processed++;
       } catch (err) {
@@ -440,25 +432,19 @@ const SUPPLEMENTARY_TABLES: Record<
             completedAt: row.completedAt
               ? new Date(row.completedAt as string)
               : null,
-          })
+          } as any)
           .onConflictDoUpdate({
             target: automationRuns.id,
             set: {
-              status:
-                (row.status as
-                  | "running"
-                  | "completed"
-                  | "failed"
-                  | "cancelled") ?? undefined,
-              errorMessage: (row.errorMessage as string) ?? null,
-              stepsCompleted: (row.stepsCompleted as number) ?? 0,
-              stepsFailed: (row.stepsFailed as number) ?? 0,
-              outputSummary:
-                (row.outputSummary as Record<string, unknown>) ?? null,
+              status: row.status ?? undefined,
+              errorMessage: row.errorMessage ?? null,
+              stepsCompleted: row.stepsCompleted ?? 0,
+              stepsFailed: row.stepsFailed ?? 0,
+              outputSummary: row.outputSummary ?? null,
               completedAt: row.completedAt
                 ? new Date(row.completedAt as string)
                 : null,
-            },
+            } as any,
           });
         processed++;
       } catch (err) {
@@ -505,32 +491,26 @@ const SUPPLEMENTARY_TABLES: Record<
             updatedAt: row.updatedAt
               ? new Date(row.updatedAt as string)
               : new Date(),
-          })
+          } as any)
           .onConflictDoUpdate({
             target: intelligenceCommands.id,
             set: {
-              title: (row.title as string) ?? undefined,
-              promptTemplate: (row.promptTemplate as string) ?? undefined,
+              title: row.title ?? undefined,
+              promptTemplate: row.promptTemplate ?? undefined,
               compiledTemplateAst: row.compiledTemplateAst ?? null,
-              derivedInputs: (row.derivedInputs as unknown[]) ?? null,
-              inputOverrides:
-                (row.inputOverrides as Record<string, unknown>) ?? null,
-              allowedTools: (row.allowedTools as string[]) ?? null,
-              allowedEntityTypes: (row.allowedEntityTypes as string[]) ?? null,
-              maxEntitiesCreatedPerRun:
-                (row.maxEntitiesCreatedPerRun as number) ?? null,
-              canCreateViews: (row.canCreateViews as boolean) ?? false,
-              outputMode:
-                (row.outputMode as "text" | "proposal" | "view") ?? "text",
-              permissionsProfile:
-                (row.permissionsProfile as "read_only" | "propose_writes") ??
-                "propose_writes",
-              sharedScope:
-                (row.sharedScope as "workspace" | "user") ?? "workspace",
+              derivedInputs: row.derivedInputs ?? null,
+              inputOverrides: row.inputOverrides ?? null,
+              allowedTools: row.allowedTools ?? null,
+              allowedEntityTypes: row.allowedEntityTypes ?? null,
+              maxEntitiesCreatedPerRun: row.maxEntitiesCreatedPerRun ?? null,
+              canCreateViews: row.canCreateViews ?? false,
+              outputMode: row.outputMode ?? "text",
+              permissionsProfile: row.permissionsProfile ?? "propose_writes",
+              sharedScope: row.sharedScope ?? "workspace",
               updatedAt: row.updatedAt
                 ? new Date(row.updatedAt as string)
                 : new Date(),
-            },
+            } as any,
           });
         processed++;
       } catch (err) {
@@ -648,7 +628,9 @@ const fileVersionPayloadSchema = z.object({
  * Stores content in local S3/MinIO, upserts documents row.
  */
 app.post("/receive-file", async (c) => {
-  const authResult = await authenticateSyncPeer(c.req, "pull");
+  const authResult = await authenticateReceivePeer(
+    c.req.header("authorization") ?? null
+  );
   if (!authResult) {
     return c.json({ error: "Unauthorized" }, 401);
   }
@@ -708,7 +690,9 @@ app.post("/receive-file", async (c) => {
  * POST /receive-file-version — Receives a document version snapshot.
  */
 app.post("/receive-file-version", async (c) => {
-  const authResult = await authenticateSyncPeer(c.req, "pull");
+  const authResult = await authenticateReceivePeer(
+    c.req.header("authorization") ?? null
+  );
   if (!authResult) {
     return c.json({ error: "Unauthorized" }, 401);
   }

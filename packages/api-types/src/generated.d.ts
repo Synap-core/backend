@@ -8608,6 +8608,126 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	sync: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		listPeers: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				enabled: boolean;
+				peerPodUrl: string;
+				direction: string;
+				label: string | null;
+				authToken: string | null;
+				workspaceIds: string[] | null;
+			}[];
+			meta: object;
+		}>;
+		addPeer: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				peerPodUrl: string;
+				direction: "push" | "pull";
+				label?: string | undefined;
+				authToken?: string | undefined;
+				workspaceIds?: string[] | undefined;
+				enabled?: boolean | undefined;
+			};
+			output: {
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				enabled: boolean;
+				peerPodUrl: string;
+				direction: string;
+				label: string | null;
+				authToken: string | null;
+				workspaceIds: string[] | null;
+			};
+			meta: object;
+		}>;
+		removePeer: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		updatePeer: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				peerPodUrl?: string | undefined;
+				label?: string | undefined;
+				authToken?: string | undefined;
+				workspaceIds?: string[] | null | undefined;
+				enabled?: boolean | undefined;
+			};
+			output: {
+				id: string;
+				peerPodUrl: string;
+				direction: string;
+				enabled: boolean;
+				label: string | null;
+				authToken: string | null;
+				workspaceIds: string[] | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		getStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				syncState: {
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					status: string;
+					syncPeerId: string;
+					lastCursor: Date | null;
+					lastPushCursor: Date | null;
+					lastPullCursor: Date | null;
+					lastSyncAt: Date | null;
+					errorCount: number;
+					lastError: string | null;
+					eventsProcessed: number;
+					supplementaryCursors: Record<string, string>;
+				} | null;
+				workspaceNames: string[] | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				enabled: boolean;
+				peerPodUrl: string;
+				direction: string;
+				label: string | null;
+				authToken: string | null;
+				workspaceIds: string[] | null;
+			}[];
+			meta: object;
+		}>;
+		resetPeer: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				resetCursor?: boolean | undefined;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
 }>>;
 export type AppRouter = typeof coreRouter;
 

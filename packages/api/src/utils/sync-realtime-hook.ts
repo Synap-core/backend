@@ -14,7 +14,7 @@
  * The polling sync-push worker remains as the catch-up mechanism.
  */
 
-import { db, syncPeers, eq, or } from "@synap/database";
+import { db, syncPeers, eq } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 

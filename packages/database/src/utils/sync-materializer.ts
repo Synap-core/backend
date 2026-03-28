@@ -18,7 +18,7 @@ import { entities } from "../schema/entities.js";
 import { views } from "../schema/views.js";
 import { documents } from "../schema/documents.js";
 import { relations } from "../schema/relations.js";
-import { profiles } from "../schema/profiles.js";
+import { profiles, ProfileScope } from "../schema/profiles.js";
 import { syncConflicts } from "../schema/sync.js";
 
 const logger = createLogger({ module: "sync-materializer" });
@@ -477,6 +477,13 @@ async function materializeProfile(
   data: Record<string, unknown>
 ): Promise<boolean> {
   if (action === "create" || action === "update") {
+    const scopeValue = (data.scope as string) ?? ProfileScope.WORKSPACE;
+    const validScope = Object.values(ProfileScope).includes(
+      scopeValue as ProfileScope
+    )
+      ? (scopeValue as ProfileScope)
+      : ProfileScope.WORKSPACE;
+
     await db
       .insert(profiles)
       .values({
@@ -485,8 +492,8 @@ async function materializeProfile(
         displayName: (data.displayName as string) ?? "Synced Profile",
         parentProfileId: data.parentProfileId as string | undefined,
         uiHints: data.uiHints ?? {},
-        scope: (data.scope as string) ?? "workspace",
-      })
+        scope: validScope,
+      } as any)
       .onConflictDoUpdate({
         target: profiles.id,
         set: {
