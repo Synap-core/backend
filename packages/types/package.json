@@ -83,6 +83,14 @@
     "./automations": {
       "types": "./dist/automations/index.d.ts",
       "import": "./dist/automations/index.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications/index.d.ts",
+      "import": "./dist/notifications/index.js"
+    },
+    "./proactive": {
+      "types": "./dist/proactive/index.d.ts",
+      "import": "./dist/proactive/index.js"
     }
   },
   "scripts": {

@@ -73,5 +73,9 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("proactive-health-check", "0 4 * * *", {});
   logger.info("Registered cron: proactive-health-check (daily at 4:00 AM UTC)");
 
+  // Notification cleanup (daily at 2:00 AM UTC — expires/deletes old notifications)
+  await boss.schedule("notification-cleanup", "0 2 * * *", {});
+  logger.info("Registered cron: notification-cleanup (daily at 2:00 AM UTC)");
+
   logger.info("All cron schedules registered");
 }

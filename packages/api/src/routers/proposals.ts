@@ -27,6 +27,7 @@ import type { StoredProposalData } from "@synap-core/types";
 import {
   isDocumentContentProposalData,
   isRequestShapedProposalData,
+  buildRequestFromProposal,
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -38,8 +39,35 @@ import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitSideEffects } from "@synap/jobs";
+import { notifications } from "@synap/database/schema";
 
 const logger = createLogger({ module: "proposals" });
+
+/**
+ * Fire-and-forget: mark the corresponding notification row as 'actioned'
+ * when a proposal is approved or rejected. Uses the source index on
+ * (sourceType, sourceId) for efficient lookup.
+ */
+function markProposalNotificationActioned(proposalId: string): void {
+  db.update(notifications)
+    .set({ status: "actioned", readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.sourceType, "proposal"),
+        eq(notifications.sourceId, proposalId)
+      )
+    )
+    .then(() => {
+      logger.debug({ proposalId }, "Proposal notification marked as actioned");
+    })
+    .catch((err) => {
+      // Non-fatal — notifications must never break the proposal flow
+      logger.warn(
+        { err, proposalId },
+        "Failed to mark proposal notification as actioned (non-fatal)"
+      );
+    });
+}
 
 /**
  * Fire-and-forget: notify connected clients that a proposal was reviewed.
@@ -67,6 +95,8 @@ function emitProposalReviewed(
     workspaceId,
     data: { proposalStatus: status },
   });
+  // Mark the corresponding notification as actioned (fire-and-forget)
+  markProposalNotificationActioned(proposalId);
 }
 
 /**
@@ -207,7 +237,14 @@ export const proposalsRouter = router({
         limit: input.limit,
       });
 
-      return { proposals: items };
+      // Enrich each proposal with a pre-formed `request` object so the
+      // frontend doesn't need to reconstruct it from the JSONB data column.
+      const enriched = items.map((row) => ({
+        ...row,
+        request: buildRequestFromProposal(row),
+      }));
+
+      return { proposals: enriched };
     }),
 
   /**

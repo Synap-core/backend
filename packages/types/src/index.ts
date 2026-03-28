@@ -67,3 +67,9 @@ export * from "./events/unified.js";
 
 // Automations (workflow DAGs)
 export * from "./automations/index.js";
+
+// Notifications (categories, priorities, statuses — browser-safe)
+export * from "./notifications/index.js";
+
+// Proactive AI Preferences
+export * from "./proactive/index.js";

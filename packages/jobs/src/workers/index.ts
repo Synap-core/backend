@@ -50,6 +50,10 @@ import { handleAutomationPatternDetect } from "./automation-pattern-detector.js"
 import { handleProactiveMorningBriefing } from "./proactive-morning-briefing.js";
 import { handleProactiveWeeklyDigest } from "./proactive-weekly-digest.js";
 import { handleProactiveHealthCheck } from "./proactive-health-check.js";
+import {
+  handleNotificationCleanup,
+  NOTIFICATION_CLEANUP_QUEUE,
+} from "./notification-cleanup.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -88,6 +92,7 @@ const ALL_QUEUES = [
   "proactive-morning-briefing",
   "proactive-weekly-digest",
   "proactive-health-check",
+  NOTIFICATION_CLEANUP_QUEUE,
 ];
 
 /**
@@ -274,6 +279,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleProactiveHealthCheck()
   );
   logger.info("Registered worker: proactive-health-check");
+
+  // Notification cleanup (cron: daily at 2:00 AM UTC)
+  await boss.work(NOTIFICATION_CLEANUP_QUEUE, async () =>
+    handleNotificationCleanup()
+  );
+  logger.info("Registered worker: notification-cleanup");
 
   logger.info("All workers registered");
 }

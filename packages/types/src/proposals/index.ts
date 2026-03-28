@@ -141,3 +141,46 @@ export function isDocumentContentProposalData(
     typeof (data as DocumentContentProposalData).proposedContent === "string"
   );
 }
+
+// ---------------------------------------------------------------------------
+// Enriched proposal (returned by proposals.list with pre-formed request)
+// ---------------------------------------------------------------------------
+
+/**
+ * A proposal DB row enriched with a reconstructed `request` field.
+ * Returned by `proposals.list` so the frontend doesn't need to reconstruct it.
+ *
+ * Re-exported by frontend as `UniversalProposal` for backwards compat.
+ */
+import type { Proposal } from "@synap/database";
+
+export interface ProposalWithRequest extends Proposal {
+  request: UpdateRequest;
+}
+
+/**
+ * Build an UpdateRequest from a raw proposal row's JSONB `data` column.
+ * Used server-side in proposals.list and available as a shared utility.
+ */
+export function buildRequestFromProposal(row: Proposal): UpdateRequest {
+  const raw = row.data as Record<string, unknown> | null;
+  const source = (raw?.source as UpdateRequest["source"]) ?? "user";
+  const sourceId =
+    (typeof raw?.sourceId === "string" ? raw.sourceId : "") || "";
+  const changeType =
+    (raw?.changeType as UpdateRequest["changeType"]) ?? "update";
+
+  return {
+    requestId: row.id,
+    source: source === "ai" || source === "system" ? source : "user",
+    sourceId,
+    workspaceId: row.workspaceId,
+    targetType: row.targetType as UpdateRequest["targetType"],
+    targetId: row.targetId,
+    changeType,
+    data:
+      raw && typeof raw === "object"
+        ? (raw as UpdateRequest["data"])
+        : undefined,
+  };
+}

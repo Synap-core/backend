@@ -19,7 +19,8 @@
  * 5. Logs errors non-fatally (never throws)
  */
 
-import { db, notifications } from "@synap/database";
+import { db, notifications, notificationPreferences } from "@synap/database";
+import { and, eq } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { getNotificationDef } from "./registry.js";
@@ -51,7 +52,13 @@ export interface CreateNotificationInput {
   userId: string;
 
   // Source traceability
-  sourceType: "proposal" | "connector" | "agent" | "system" | "inbox_item";
+  sourceType:
+    | "proposal"
+    | "connector"
+    | "agent"
+    | "system"
+    | "inbox_item"
+    | "proactive_message";
   sourceId?: string;
   workspaceUrl?: string;
 
@@ -112,6 +119,58 @@ export const NotificationService = {
     }
 
     try {
+      // ── Routing enforcement ────────────────────────────────────────────
+      // Check user preferences: global kill switch, routing rules, quiet hours.
+      // routingRules stores category-based rules: { "governance": "mute", "ai": "in_app", ... }
+      // If a category is "mute", skip entirely (don't persist, don't emit).
+      const prefs = await db.query.notificationPreferences.findFirst({
+        where: and(
+          eq(notificationPreferences.userId, input.userId),
+          eq(notificationPreferences.workspaceId, input.workspaceId)
+        ),
+      });
+
+      // Global kill switch — skip everything if notifications are disabled
+      if (prefs?.enabled === false) {
+        logger.debug(
+          { type: input.type, userId: input.userId },
+          "Notifications disabled for user — skipping"
+        );
+        return undefined;
+      }
+
+      // Per-category routing rule
+      const rules = (prefs?.routingRules ?? {}) as Record<string, string>;
+      const categoryRule = rules[def.category] ?? rules[input.type]; // check category first, then specific type
+      if (categoryRule === "mute") {
+        logger.debug(
+          { type: input.type, category: def.category },
+          "Notification muted by user preference — skipping"
+        );
+        return undefined;
+      }
+
+      // Quiet hours — suppress real-time emission (still persist to DB for later viewing)
+      let suppressRealtime = false;
+      if (
+        prefs?.quietHoursEnabled &&
+        prefs.quietHoursStart &&
+        prefs.quietHoursEnd
+      ) {
+        const now = new Date();
+        const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        const start = prefs.quietHoursStart;
+        const end = prefs.quietHoursEnd;
+        // Handle overnight ranges (e.g., 22:00 → 08:00)
+        const inQuietHours =
+          start <= end
+            ? hhmm >= start && hhmm < end
+            : hhmm >= start || hhmm < end;
+        if (inQuietHours) {
+          suppressRealtime = true;
+        }
+      }
+
       const [row] = await db
         .insert(notifications)
         .values({
@@ -152,11 +211,16 @@ export const NotificationService = {
       };
 
       // Fire-and-forget — never blocks the caller
-      emitChatEvent({
-        event: "notification:new",
-        data: { notification: payload, userId: input.userId },
-        workspaceId: input.workspaceId,
-      });
+      // Skip real-time emission during quiet hours (notification is still persisted above)
+      // Skip real-time emission if routing rule is "os" only (no in-app)
+      const shouldEmitSocket = !suppressRealtime && categoryRule !== "os";
+      if (shouldEmitSocket) {
+        emitChatEvent({
+          event: "notification:new",
+          data: { notification: payload, userId: input.userId },
+          workspaceId: input.workspaceId,
+        });
+      }
 
       logger.debug(
         {

@@ -18,6 +18,8 @@ export default defineConfig({
     "src/events/index.ts",
     "src/proposals/index.ts",
     "src/vault/index.ts",
+    "src/notifications/index.ts",
+    "src/proactive/index.ts",
   ],
   format: ["esm"],
   dts: false,
