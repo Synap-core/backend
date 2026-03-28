@@ -236,6 +236,23 @@ success "Kratos config written"
 if [[ "$UPDATE_ONLY" == "true" ]]; then
   heading "Skipping secret regeneration (update mode)"
   info "Using existing .env at $INSTALL_DIR/.env"
+
+  # Ensure kratos.yml has secrets block (may be missing on older installs)
+  if ! grep -q "^secrets:" "$INSTALL_DIR/config/kratos/kratos.yml" 2>/dev/null; then
+    # Read secrets from existing .env
+    source "$INSTALL_DIR/.env" 2>/dev/null || true
+    if [[ -n "$KRATOS_SECRETS_COOKIE" && -n "$KRATOS_SECRETS_CIPHER" ]]; then
+      cat >> "$INSTALL_DIR/config/kratos/kratos.yml" << SECRETS_EOF
+
+secrets:
+  cookie:
+    - $KRATOS_SECRETS_COOKIE
+  cipher:
+    - $KRATOS_SECRETS_CIPHER
+SECRETS_EOF
+      info "Kratos secrets injected into kratos.yml (upgrade from older install)"
+    fi
+  fi
 else
   heading "Generating secrets"
 
@@ -257,6 +274,20 @@ else
   VAULT_SERVER_KEY=$(_gen)
 
   success "Secrets generated"
+
+  # ─── Inject secrets into kratos.yml ──────────────────────────────────────────
+  # Kratos v1.3.1 does NOT support ${VAR} substitution in config files, and
+  # env vars require indexed array format (SECRETS_COOKIE_0=xxx). Writing the
+  # actual values directly into kratos.yml is the only reliable approach.
+  cat >> "$INSTALL_DIR/config/kratos/kratos.yml" << SECRETS_EOF
+
+secrets:
+  cookie:
+    - $KRATOS_SECRETS_COOKIE
+  cipher:
+    - $KRATOS_SECRETS_CIPHER
+SECRETS_EOF
+  success "Kratos secrets injected into kratos.yml"
 
   # ─── Write .env ─────────────────────────────────────────────────────────────
   heading "Writing .env"
