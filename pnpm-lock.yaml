@@ -693,6 +693,9 @@ importers:
       '@synap/ai-embeddings':
         specifier: workspace:*
         version: link:../ai-embeddings
+      '@synap/api':
+        specifier: workspace:*
+        version: link:../api
       '@synap/database':
         specifier: workspace:*
         version: link:../database

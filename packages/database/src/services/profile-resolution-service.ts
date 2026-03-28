@@ -70,6 +70,16 @@ export class ProfileResolutionService {
   }
 
   /**
+   * Get all profiles accessible to a user in a workspace
+   */
+  async getAccessibleProfiles(
+    userId: string,
+    workspaceId: string
+  ): Promise<Profile[]> {
+    return this.profileRepo.getAccessibleProfiles(userId, workspaceId);
+  }
+
+  /**
    * Get profile hierarchy (root → leaf)
    */
   async getProfileHierarchy(profileId: string): Promise<Profile[]> {

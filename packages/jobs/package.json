@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
+    "@synap/api": "workspace:*",
     "@synap-core/core": "workspace:*",
     "@synap-core/types": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",

@@ -246,6 +246,45 @@ export interface McpServerConfig {
 	/** Set to false to disable without removing config. Default: true. */
 	enabled?: boolean;
 }
+/**
+ * Proactive AI Preferences
+ *
+ * Controls the AI's proactive intelligence features: morning briefings,
+ * weekly digests, health checks, and nudge density. Stored per workspace
+ * so users can have different schedules per workspace.
+ */
+export type ProactiveNudgeDensity = "minimal" | "balanced" | "proactive";
+export interface ProactiveAiPreferences {
+	/** Global kill switch for all proactive AI features. Default: true */
+	enabled: boolean;
+	morningBriefing: {
+		enabled: boolean;
+		/** Hour in 24h format (0-23). Default: 8 */
+		cronHour: number;
+		/** Minute (0-59). Default: 0 */
+		cronMinute: number;
+		/** IANA timezone. Default: "UTC" */
+		timezone: string;
+	};
+	weeklyDigest: {
+		enabled: boolean;
+		/** Day of week: 0=Sun..6=Sat. Default: 1 (Monday) */
+		dayOfWeek: number;
+		/** Hour in 24h format. Default: 9 */
+		cronHour: number;
+		/** IANA timezone. Default: "UTC" */
+		timezone: string;
+	};
+	healthCheck: {
+		enabled: boolean;
+		/** How often to run health checks in days. Default: 7 */
+		frequencyDays: number;
+	};
+	/** Controls how many proactive nudges the AI sends. Default: "balanced" */
+	nudgeDensity: ProactiveNudgeDensity;
+	/** ISO 8601 timestamp — snooze all proactive AI until this time */
+	mutedUntil?: string;
+}
 export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
@@ -397,6 +436,11 @@ export interface WorkspaceSettings {
 	 * Example: { "synap.proposals": false, "synap.ai-chat": true }
 	 */
 	enabledPackages?: Record<string, boolean>;
+	/**
+	 * Proactive AI intelligence preferences (morning briefings, weekly digests, nudges).
+	 * Controls when and how the AI proactively posts messages to the user's personal channel.
+	 */
+	proactiveAi?: ProactiveAiPreferences;
 	aiGovernance?: {
 		/**
 		 * Whitelist of event keys that AI agents may execute WITHOUT a proposal.
@@ -1275,7 +1319,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				content: string;
 				url?: string | undefined;
-				context?: Record<string, any> | undefined;
+				context?: Record<string, unknown> | undefined;
 			};
 			output: {
 				success: boolean;
@@ -1290,7 +1334,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				text: string;
 				url?: string | undefined;
+				html?: string | undefined;
 				context?: string | undefined;
+				previousEntities?: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string | undefined;
+					properties?: Record<string, unknown> | undefined;
+				}[] | undefined;
 			};
 			output: {
 				proposals: {
@@ -4387,8 +4439,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				profileSlug: string;
 				title: string;
-				description?: string;
-				properties?: Record<string, unknown>;
+				description: string | undefined;
+				properties: Record<string, unknown>;
 				confidence: number;
 			} | null;
 			meta: object;
@@ -8444,6 +8496,67 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	proactive: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		getPrefs: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: ProactiveAiPreferences;
+			meta: object;
+		}>;
+		updatePrefs: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled?: boolean | undefined;
+				morningBriefing?: {
+					enabled?: boolean | undefined;
+					cronHour?: number | undefined;
+					cronMinute?: number | undefined;
+					timezone?: string | undefined;
+				} | undefined;
+				weeklyDigest?: {
+					enabled?: boolean | undefined;
+					dayOfWeek?: number | undefined;
+					cronHour?: number | undefined;
+					timezone?: string | undefined;
+				} | undefined;
+				healthCheck?: {
+					enabled?: boolean | undefined;
+					frequencyDays?: number | undefined;
+				} | undefined;
+				nudgeDensity?: "minimal" | "balanced" | "proactive" | undefined;
+				mutedUntil?: string | null | undefined;
+			};
+			output: {
+				enabled: boolean;
+				morningBriefing: {
+					enabled: boolean;
+					cronHour: number;
+					cronMinute: number;
+					timezone: string;
+				};
+				weeklyDigest: {
+					enabled: boolean;
+					dayOfWeek: number;
+					cronHour: number;
+					timezone: string;
+				};
+				healthCheck: {
+					enabled: boolean;
+					frequencyDays: number;
+				};
+				nudgeDensity: ProactiveNudgeDensity;
+				mutedUntil: string | undefined;
 			};
 			meta: object;
 		}>;
