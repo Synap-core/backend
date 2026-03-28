@@ -114,7 +114,38 @@ async function applyMigration(
     `;
 
     console.log(`✅ Applied [${type}]: ${filename}\n`);
-  } catch (error) {
+  } catch (error: any) {
+    const pgCode = error?.code;
+
+    // Recoverable errors — skip the migration and mark as applied so it
+    // doesn't block future runs. These typically happen when:
+    // - 42P01: ALTER TABLE on a table that doesn't exist (stale initial migration)
+    // - 42701: Column already exists (duplicate migration)
+    // - 42P07: Table already exists (re-run of CREATE TABLE)
+    // - 3F000: Schema doesn't exist
+    const RECOVERABLE_CODES = new Set(["42P01", "42701", "42P07", "3F000"]);
+
+    if (pgCode && RECOVERABLE_CODES.has(pgCode)) {
+      console.warn(
+        `⚠️  Skipped [${type}]: ${filename} (PG error ${pgCode}: ${error.message})`
+      );
+      console.warn(
+        `   Marking as applied to avoid blocking future migrations.\n`
+      );
+
+      // Record as applied so we don't retry on next run
+      try {
+        await sql`
+          INSERT INTO _migrations (type, filename)
+          VALUES (${type}, ${filename})
+          ON CONFLICT DO NOTHING
+        `;
+      } catch {
+        // Non-fatal — worst case we retry this migration next time
+      }
+      return;
+    }
+
     console.error(`❌ ERROR applying [${type}] ${filename}:`);
     console.error(error);
     console.error(
