@@ -25,6 +25,7 @@ COPY packages/core/package.json          ./packages/core/
 COPY packages/database/package.json      ./packages/database/
 COPY packages/events/package.json        ./packages/events/
 COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
+COPY packages/intelligence-client/package.json ./packages/intelligence-client/
 COPY packages/jobs/package.json          ./packages/jobs/
 COPY packages/realtime/package.json      ./packages/realtime/
 COPY packages/scripts/package.json       ./packages/scripts/
