@@ -981,6 +981,10 @@ app.route("/api/connectors", connectorsRestRouter);
 import { webhookRouter } from "./webhooks/index.js";
 app.route("/webhooks", webhookRouter);
 
+// Pod-to-Pod Sync receive endpoint (Bearer token auth from registered peers)
+import { syncReceiveApp } from "@synap/api";
+app.route("/api/sync", syncReceiveApp);
+
 // Hub Protocol REST adapter (for Intelligence Service; API key auth)
 app.route("/api/hub", hubProtocolRestApp);
 // Alias: some hub clients use /api/hub-protocol prefix

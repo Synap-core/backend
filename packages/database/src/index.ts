@@ -119,6 +119,17 @@ export * from "./projectors/index.js";
 export * from "./utils/permissions.js";
 export * from "./utils/preferences.js";
 
+// Export sync materializer (shared between API receive + pull worker)
+export {
+  materializeBatch,
+  materializeEvent,
+  storeReceivedEvents,
+  syncEventSchema,
+  syncReceiveInputSchema,
+  type SyncEvent,
+  type MaterializeOptions,
+} from "./utils/sync-materializer.js";
+
 // Re-export commonly used drizzle-orm functions
 export {
   // Query builders

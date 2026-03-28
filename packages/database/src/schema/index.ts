@@ -120,3 +120,6 @@ export * from "./entity-external-links.js";
 
 // NEW: Unified Notification System
 export * from "./notifications.js";
+
+// NEW: Pod-to-Pod Sync (event log replication)
+export * from "./sync.js";

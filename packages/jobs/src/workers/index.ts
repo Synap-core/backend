@@ -54,6 +54,16 @@ import {
   handleNotificationCleanup,
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
+import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
+import {
+  handleSyncPushSupplementary,
+  SYNC_PUSH_SUPPLEMENTARY_QUEUE,
+} from "./sync-push-supplementary.js";
+import {
+  handleSyncPushFiles,
+  SYNC_PUSH_FILES_QUEUE,
+} from "./sync-push-files.js";
+import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -93,6 +103,10 @@ const ALL_QUEUES = [
   "proactive-weekly-digest",
   "proactive-health-check",
   NOTIFICATION_CLEANUP_QUEUE,
+  SYNC_PUSH_QUEUE,
+  SYNC_PUSH_SUPPLEMENTARY_QUEUE,
+  SYNC_PUSH_FILES_QUEUE,
+  SYNC_PULL_QUEUE,
 ];
 
 /**
@@ -285,6 +299,24 @@ export async function registerAllWorkers(): Promise<void> {
     handleNotificationCleanup()
   );
   logger.info("Registered worker: notification-cleanup");
+
+  // Sync push (cron: every 60 seconds — pushes completed events to registered peers)
+  await boss.work(SYNC_PUSH_QUEUE, async () => handleSyncPush());
+  logger.info("Registered worker: sync-push");
+
+  // Sync push supplementary (cron: every 5 minutes — pushes non-event tables to peers)
+  await boss.work(SYNC_PUSH_SUPPLEMENTARY_QUEUE, async () =>
+    handleSyncPushSupplementary()
+  );
+  logger.info("Registered worker: sync-push-supplementary");
+
+  // Sync push files (cron: every 10 minutes — pushes document content + file blobs to peers)
+  await boss.work(SYNC_PUSH_FILES_QUEUE, async () => handleSyncPushFiles());
+  logger.info("Registered worker: sync-push-files");
+
+  // Sync pull (cron: every 60 seconds — pulls events from pull/bidirectional peers)
+  await boss.work(SYNC_PULL_QUEUE, async () => handleSyncPull());
+  logger.info("Registered worker: sync-pull");
 
   logger.info("All workers registered");
 }

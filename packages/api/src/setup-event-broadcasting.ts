@@ -14,6 +14,7 @@ import { eventStreamManager } from "./event-stream-manager.js";
 import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import { emitDomainEventToRealtime } from "./utils/domain-event-bridge.js";
+import { syncRealtimeHook } from "./utils/sync-realtime-hook.js";
 
 const logger = createLogger({ module: "event-broadcasting" });
 
@@ -79,13 +80,19 @@ export function setupEventBroadcasting(): void {
     }
   };
 
+  // Hook 4: Real-time sync push — immediately forwards .completed events to
+  // registered sync peers over HTTPS. Fire-and-forget with batching (500ms
+  // debounce). The polling sync-push worker (every 60s) remains as catch-up.
+  // See: utils/sync-realtime-hook.ts
+
   // Register all hooks
   eventRepository.addEventHook(broadcastHook);
   eventRepository.addEventHook(domainBridgeHook);
   eventRepository.addEventHook(materializationHook);
+  eventRepository.addEventHook(syncRealtimeHook);
 
   logger.info(
-    "Event broadcasting + domain bridge + materialization hooks registered"
+    "Event broadcasting + domain bridge + materialization + sync real-time hooks registered"
   );
   isSetup = true;
 }

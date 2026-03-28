@@ -77,5 +77,21 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("notification-cleanup", "0 2 * * *", {});
   logger.info("Registered cron: notification-cleanup (daily at 2:00 AM UTC)");
 
+  // Sync push (every 60 seconds — pushes completed events to registered sync peers)
+  await boss.schedule("sync-push", "* * * * *", {});
+  logger.info("Registered cron: sync-push (every 60s)");
+
+  // Sync push supplementary (every 5 minutes — pushes non-event tables to peers)
+  await boss.schedule("sync-push-supplementary", "*/5 * * * *", {});
+  logger.info("Registered cron: sync-push-supplementary (every 5min)");
+
+  // Sync push files (every 10 minutes — pushes document content + file blobs to peers)
+  await boss.schedule("sync-push-files", "*/10 * * * *", {});
+  logger.info("Registered cron: sync-push-files (every 10min)");
+
+  // Sync pull (every 60 seconds — pulls events from pull/bidirectional peers)
+  await boss.schedule("sync-pull", "* * * * *", {});
+  logger.info("Registered cron: sync-pull (every 60s)");
+
   logger.info("All cron schedules registered");
 }

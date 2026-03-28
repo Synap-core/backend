@@ -1060,6 +1060,52 @@ export interface BranchDecision {
 	suggestedTitle?: string;
 	suggestedPurpose?: string;
 }
+declare const EVENT_ACTIONS: readonly [
+	"create",
+	"update",
+	"delete",
+	"archive",
+	"restore"
+];
+export type EventAction = (typeof EVENT_ACTIONS)[number];
+/**
+ * Universal Update Request
+ *
+ * The standard envelope for all change requests in the system.
+ * This object is stored in the `proposals` table (as part of StoredProposalData)
+ * and passed in events. changeType aligns with EventAction for event-sourced flow.
+ */
+export interface UpdateRequest {
+	/** Unique ID for this specific request */
+	requestId: string;
+	/** Who initiated the change? */
+	source: "user" | "ai" | "system";
+	sourceId: string;
+	/** Context */
+	workspaceId: string;
+	/** Target Entity */
+	targetType: "document" | "entity" | "whiteboard" | "view" | "profile";
+	targetId: string;
+	/** What kind of change? (aligns with EventAction) */
+	changeType: EventAction;
+	/**
+	 * Lightweight metadata changes (e.g. title rename, status change).
+	 * For entities: create/update payload. For documents: not used when proposedContent is used.
+	 */
+	data?: Record<string, unknown>;
+	/**
+	 * Heavy Content Reference (S3/MinIO).
+	 * Used for Documents, Whiteboards, etc.
+	 */
+	contentRef?: {
+		storageKey: string;
+		mimeType: string;
+		size: number;
+		checksum?: string;
+	};
+	/** AI Reasoning / Context */
+	reasoning?: string;
+}
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
 	DOCUMENT = "document",
@@ -2365,6 +2411,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				proposals: {
+					request: UpdateRequest;
 					workspaceId: string;
 					sourceMessageId: string | null;
 					id: string;

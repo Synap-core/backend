@@ -103,7 +103,7 @@ jobs:
             --arg gitRef "${{ github.ref }}" \
             '{tag: $tag, gitSha: $gitSha, gitRef: $gitRef}')
 
-          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.GITHUB_WEBHOOK_SECRET }}" | awk '{print $2}')
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.CP_WEBHOOK_SECRET }}" | awk '{print $2}')
 
           curl -sf -X POST \
             "${{ secrets.CONTROL_PLANE_API_URL }}/webhooks/github" \

@@ -22,6 +22,7 @@ export { suggestionsRouter } from "./routers/suggestions.js";
 export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
 export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
+export { syncReceiveApp } from "./routers/sync.js";
 export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js";
 export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
@@ -390,6 +391,13 @@ registerRouter("connectors", connectorsTrpcRouter, {
   version: "1.0.0",
   source: "core",
   description: "External connector management (proxy to Control Plane)",
+});
+
+import { syncManagementRouter } from "./routers/sync-management.js";
+registerRouter("sync", syncManagementRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Pod-to-pod sync peer management and status monitoring",
 });
 
 import { coreRouter } from "./root.js";
