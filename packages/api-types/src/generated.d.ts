@@ -8628,7 +8628,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				peerPodUrl: string;
 				direction: string;
 				label: string | null;
-				authToken: string | null;
 				workspaceIds: string[] | null;
 			}[];
 			meta: object;

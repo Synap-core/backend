@@ -28,6 +28,17 @@ export const syncManagementRouter = router({
   listPeers: podAdminProcedure.query(async () => {
     const peers = await db.query.syncPeers.findMany({
       orderBy: (t, { desc }) => [desc(t.createdAt)],
+      // Exclude authToken from response — never expose secrets
+      columns: {
+        id: true,
+        peerPodUrl: true,
+        direction: true,
+        enabled: true,
+        label: true,
+        workspaceIds: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
     return peers;
   }),

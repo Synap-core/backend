@@ -15,10 +15,11 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { createLogger } from "@synap-core/core";
+import { createLogger, config } from "@synap-core/core";
 import {
   db,
   syncPeers,
+  syncState,
   events,
   messages,
   automations,
@@ -31,6 +32,8 @@ import {
   syncReceiveInputSchema,
   materializeBatch,
 } from "@synap/database";
+import { verifyCpJwt } from "../utils/jwks-client.js";
+import { invalidateSyncPeerCache } from "../utils/sync-realtime-hook.js";
 
 const logger = createLogger({ module: "sync-receive" });
 
@@ -77,7 +80,7 @@ async function authenticateReceivePeer(
  */
 async function authenticatePullPeer(
   authHeader: string | null
-): Promise<{ peerId: string } | null> {
+): Promise<{ peerId: string; workspaceIds: string[] | null } | null> {
   if (!authHeader) return null;
 
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
@@ -95,11 +98,11 @@ async function authenticatePullPeer(
       eq(syncPeers.enabled, true),
       eq(syncPeers.authToken, token)
     ),
-    columns: { id: true },
+    columns: { id: true, workspaceIds: true },
   });
 
   if (!peer) return null;
-  return { peerId: peer.id };
+  return { peerId: peer.id, workspaceIds: peer.workspaceIds };
 }
 
 // ============================================================================
@@ -107,6 +110,21 @@ async function authenticatePullPeer(
 // ============================================================================
 
 const app = new Hono();
+
+// ── Global body size limit (20 MB) ─────────────────────────────────────────
+// Prevents DoS via oversized payloads on all sync endpoints.
+const MAX_BODY_SIZE = 20 * 1024 * 1024;
+app.use("*", async (c, next): Promise<void | Response> => {
+  const contentLength = c.req.header("content-length");
+  if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+  await next();
+});
+
+// ── Max batch sizes ─────────────────────────────────────────────────────────
+const MAX_EVENT_BATCH = 1000;
+const MAX_SUPPLEMENTARY_BATCH = 500;
 
 /**
  * POST /receive — Accept a batch of events from a push peer
@@ -147,6 +165,10 @@ app.post("/receive", async (c) => {
 
   if (incomingEvents.length === 0) {
     return c.json({ received: true, processed: 0 });
+  }
+
+  if (incomingEvents.length > MAX_EVENT_BATCH) {
+    return c.json({ error: `Batch too large (max ${MAX_EVENT_BATCH})` }, 413);
   }
 
   logger.info(
@@ -219,16 +241,25 @@ app.get("/pull", async (c) => {
   const limitResult = limitSchema.safeParse(limitParam ?? 500);
   const limit = limitResult.success ? limitResult.data : 500;
 
-  // 3. Query local completed events after cursor
+  // 3. Query local completed events after cursor (with workspace filtering)
+  const conditions = [
+    drizzleSql`${events.timestamp} > ${since}`,
+    drizzleSql`${events.type} LIKE '%.completed'`,
+  ];
+
+  // Apply workspace filtering if the peer has workspaceIds configured
+  if (auth.workspaceIds && auth.workspaceIds.length > 0) {
+    const escaped = auth.workspaceIds.map((id) => id.replace(/'/g, "''"));
+    const inList = escaped.map((id) => `'${id}'`).join(",");
+    conditions.push(
+      drizzleSql`(${events.data}->>'workspaceId' IN (${drizzleSql.raw(inList)}) OR ${events.data}->>'workspaceId' IS NULL)`
+    );
+  }
+
   const batch = await db
     .select()
     .from(events)
-    .where(
-      and(
-        drizzleSql`${events.timestamp} > ${since}`,
-        drizzleSql`${events.type} LIKE '%.completed'`
-      )
-    )
+    .where(and(...conditions))
     .orderBy(events.timestamp)
     .limit(limit + 1); // Fetch one extra to detect hasMore
 
@@ -562,6 +593,13 @@ app.post("/receive-supplementary", async (c) => {
     return c.json({ received: true, processed: 0 });
   }
 
+  if (rows.length > MAX_SUPPLEMENTARY_BATCH) {
+    return c.json(
+      { error: `Batch too large (max ${MAX_SUPPLEMENTARY_BATCH})` },
+      413
+    );
+  }
+
   // 3. Look up the upsert handler for this table
   const handler = SUPPLEMENTARY_TABLES[table];
   if (!handler) {
@@ -731,9 +769,257 @@ app.post("/receive-file-version", async (c) => {
   }
 });
 
+// ============================================================================
+// CP-Authenticated Setup Endpoints — used by Control Plane to orchestrate
+// pod linking for redundancy. Auth: CP-signed ES256 JWT.
+// ============================================================================
+
+const httpsUrl = z
+  .string()
+  .url()
+  .refine(
+    (u) => u.startsWith("https://") || process.env.NODE_ENV === "development",
+    "Peer URL must use HTTPS"
+  );
+
+const setupPeerInputSchema = z.object({
+  peerUrl: httpsUrl,
+  direction: z.enum(["push", "pull", "bidirectional"]),
+  authToken: z.string().min(1),
+  label: z.string().optional(),
+});
+
+const removePeerInputSchema = z.object({
+  peerUrl: httpsUrl,
+});
+
 /**
- * GET /health — Simple health check for sync endpoint
+ * Verify a CP-signed JWT from the Authorization header.
+ * Returns the decoded payload or null if invalid.
  */
-app.get("/health", (c) => c.json({ status: "ok", service: "sync" }));
+async function verifyCpAuth<T extends object>(
+  authHeader: string | null
+): Promise<T | null> {
+  if (!authHeader) return null;
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) return null;
+
+  const token = match[1].trim();
+  const cpUrl = config.server.controlPlaneUrl;
+  if (!cpUrl) {
+    logger.warn("No controlPlaneUrl configured — cannot verify CP JWT");
+    return null;
+  }
+
+  return verifyCpJwt<T>(token, cpUrl);
+}
+
+/**
+ * POST /setup-peer — Create a sync peer entry (called by CP during pod linking)
+ *
+ * Auth: CP-signed JWT with type "sync-setup"
+ */
+app.post("/setup-peer", async (c) => {
+  const payload = await verifyCpAuth<{
+    type: string;
+    podId: string;
+    action: string;
+  }>(c.req.header("authorization") ?? null);
+
+  if (!payload || payload.type !== "sync-setup" || payload.action !== "add") {
+    return c.json({ error: "Unauthorized — invalid or missing CP JWT" }, 401);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const parsed = setupPeerInputSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      { error: "Invalid input", details: parsed.error.flatten().fieldErrors },
+      400
+    );
+  }
+
+  const { peerUrl, direction, authToken, label } = parsed.data;
+
+  // Check for duplicate (same peerUrl + direction)
+  const existing = await db.query.syncPeers.findFirst({
+    where: and(
+      eq(syncPeers.peerPodUrl, peerUrl),
+      eq(syncPeers.direction, direction)
+    ),
+  });
+
+  if (existing) {
+    // Update the existing peer instead of creating a duplicate
+    await db
+      .update(syncPeers)
+      .set({
+        authToken,
+        label: label ?? existing.label,
+        enabled: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(syncPeers.id, existing.id));
+
+    logger.info(
+      { peerId: existing.id, peerUrl, direction },
+      "Sync peer updated via CP setup"
+    );
+    invalidateSyncPeerCache();
+    return c.json({ peerId: existing.id });
+  }
+
+  // Create new sync peer
+  const [peer] = await db
+    .insert(syncPeers)
+    .values({
+      peerPodUrl: peerUrl,
+      direction,
+      authToken,
+      label,
+      enabled: true,
+    })
+    .returning();
+
+  // Create initial sync_state row
+  await db.insert(syncState).values({
+    syncPeerId: peer.id,
+  });
+
+  logger.info(
+    { peerId: peer.id, peerUrl, direction, cpPodId: payload.podId },
+    "Sync peer created via CP setup"
+  );
+
+  invalidateSyncPeerCache();
+  return c.json({ peerId: peer.id });
+});
+
+/**
+ * DELETE /setup-peer — Remove a sync peer entry (called by CP during pod unlinking)
+ *
+ * Auth: CP-signed JWT with type "sync-setup"
+ */
+app.delete("/setup-peer", async (c) => {
+  const payload = await verifyCpAuth<{
+    type: string;
+    podId: string;
+    action: string;
+  }>(c.req.header("authorization") ?? null);
+
+  if (
+    !payload ||
+    payload.type !== "sync-setup" ||
+    payload.action !== "remove"
+  ) {
+    return c.json({ error: "Unauthorized — invalid or missing CP JWT" }, 401);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const parsed = removePeerInputSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      { error: "Invalid input", details: parsed.error.flatten().fieldErrors },
+      400
+    );
+  }
+
+  const { peerUrl } = parsed.data;
+
+  // Find and remove all peers matching this URL
+  const peers = await db
+    .select({ id: syncPeers.id })
+    .from(syncPeers)
+    .where(eq(syncPeers.peerPodUrl, peerUrl));
+
+  if (peers.length === 0) {
+    logger.info({ peerUrl }, "No sync peers found for URL — nothing to remove");
+    return c.json({ removed: true });
+  }
+
+  for (const peer of peers) {
+    await db.delete(syncPeers).where(eq(syncPeers.id, peer.id));
+  }
+
+  logger.info(
+    { peerUrl, removedCount: peers.length, cpPodId: payload.podId },
+    "Sync peers removed via CP setup"
+  );
+
+  invalidateSyncPeerCache();
+  return c.json({ removed: true });
+});
+
+/**
+ * GET /health — Sync health check.
+ *
+ * Unauthenticated: returns only status + peer count (no URLs, no errors).
+ * Authenticated (Bearer token matches any peer): returns full peer details.
+ * This prevents topology leakage to unauthenticated callers.
+ */
+app.get("/health", async (c) => {
+  const base = { status: "ok" as const, service: "sync" as const };
+
+  try {
+    const peers = await db.query.syncPeers.findMany({
+      columns: {
+        id: true,
+        peerPodUrl: true,
+        direction: true,
+        enabled: true,
+        authToken: true,
+      },
+    });
+
+    if (peers.length === 0) {
+      return c.json({ ...base, peerCount: 0 });
+    }
+
+    // Check if caller is authenticated (matches any peer token)
+    const authHeader = c.req.header("authorization") ?? "";
+    const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+    const callerToken = tokenMatch?.[1]?.trim();
+    const isAuthenticated =
+      callerToken && peers.some((p) => p.authToken === callerToken);
+
+    const states = await db.query.syncState.findMany();
+    const stateMap = new Map(states.map((s) => [s.syncPeerId, s]));
+
+    if (isAuthenticated) {
+      // Full details for authenticated callers (CP health check)
+      const peerSummaries = peers.map((peer) => {
+        const state = stateMap.get(peer.id);
+        return {
+          peerId: peer.id,
+          direction: peer.direction,
+          enabled: peer.enabled,
+          status: state?.status ?? "unknown",
+          lastSyncAt: state?.lastSyncAt?.toISOString() ?? null,
+          eventsProcessed: state?.eventsProcessed ?? 0,
+          errorCount: state?.errorCount ?? 0,
+          lastError: state?.lastError ?? null,
+        };
+      });
+      return c.json({ ...base, peerCount: peers.length, peers: peerSummaries });
+    }
+
+    // Unauthenticated: only status + count (no topology leakage)
+    return c.json({ ...base, peerCount: peers.length });
+  } catch {
+    return c.json(base);
+  }
+});
 
 export const syncReceiveApp = app;

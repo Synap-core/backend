@@ -14,7 +14,7 @@
  * The polling sync-push worker remains as the catch-up mechanism.
  */
 
-import { db, syncPeers, eq } from "@synap/database";
+import { db, syncPeers, eq, or, and } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -49,11 +49,15 @@ async function getEnabledPushPeers(): Promise<CachedPeer[]> {
       })
       .from(syncPeers)
       .where(
-        // Push and bidirectional peers
-        eq(syncPeers.enabled, true)
+        and(
+          eq(syncPeers.enabled, true),
+          or(
+            eq(syncPeers.direction, "push"),
+            eq(syncPeers.direction, "bidirectional")
+          )
+        )
       );
 
-    // Filter to push/bidirectional in JS (simpler than OR in drizzle)
     peerCache = peers.filter(
       (p) => p.peerPodUrl && p.peerPodUrl.startsWith("http")
     );

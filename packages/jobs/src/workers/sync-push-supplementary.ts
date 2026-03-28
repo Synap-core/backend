@@ -22,6 +22,7 @@ import {
   intelligenceCommands,
   eq,
   and,
+  or,
   gt,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -41,9 +42,7 @@ const SOURCE_POD_ID =
 /** Tables to sync and their timestamp column for cursor-based pagination */
 interface SupplementaryTableConfig {
   name: string;
-  queryFn: (
-    cursor: Date
-  ) => Promise<{
+  queryFn: (cursor: Date) => Promise<{
     rows: Record<string, unknown>[];
     lastTimestamp: string | null;
   }>;
@@ -301,7 +300,13 @@ export async function handleSyncPushSupplementary(): Promise<void> {
   try {
     // Fetch all enabled push peers
     const peers = await db.query.syncPeers.findMany({
-      where: and(eq(syncPeers.direction, "push"), eq(syncPeers.enabled, true)),
+      where: and(
+        or(
+          eq(syncPeers.direction, "push"),
+          eq(syncPeers.direction, "bidirectional")
+        ),
+        eq(syncPeers.enabled, true)
+      ),
     });
 
     if (peers.length === 0) {
