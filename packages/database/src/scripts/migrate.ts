@@ -122,8 +122,15 @@ async function applyMigration(
     // - 42P01: ALTER TABLE on a table that doesn't exist (stale initial migration)
     // - 42701: Column already exists (duplicate migration)
     // - 42P07: Table already exists (re-run of CREATE TABLE)
+    // - 42P10: ON CONFLICT references a constraint that doesn't exist (stale schema)
     // - 3F000: Schema doesn't exist
-    const RECOVERABLE_CODES = new Set(["42P01", "42701", "42P07", "3F000"]);
+    const RECOVERABLE_CODES = new Set([
+      "42P01",
+      "42701",
+      "42P07",
+      "42P10",
+      "3F000",
+    ]);
 
     if (pgCode && RECOVERABLE_CODES.has(pgCode)) {
       console.warn(
