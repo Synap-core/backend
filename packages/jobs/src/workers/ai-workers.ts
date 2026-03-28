@@ -68,7 +68,8 @@ export async function handleAiAnalysis(
   }
 
   // 3. Call IS /api/structure via Hub Protocol client (not raw fetch)
-  const { resolveIntelligenceService } = await import("@synap/api");
+  const { resolveIntelligenceService } =
+    await import("@synap/intelligence-client");
 
   let structureResult: {
     entities: Array<{

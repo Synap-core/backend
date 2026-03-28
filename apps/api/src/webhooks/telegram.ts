@@ -176,7 +176,7 @@ async function handleProposalCallback(
     authenticated: true as const,
     userId: connection.userId,
     workspaceId: connection.workspaceId ?? undefined,
-    workspaceRole: "admin" as const, // Telegram user is acting as themselves; authorization checked inside approve/reject
+    workspaceRole: "member" as const, // Actual RBAC checked inside approve/reject procedure
   };
 
   try {
