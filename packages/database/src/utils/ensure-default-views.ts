@@ -196,7 +196,7 @@ export async function ensureDefaultViews(
           {
             id: "quick-capture",
             kind: "widget",
-            widgetType: "quick-capture",
+            widgetType: "capture-flow",
             config: { placeholder: "Save a note, bookmark, or idea..." },
             pos: { x: 0, y: 2, w: 4, h: 3 },
           },

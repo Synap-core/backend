@@ -25,6 +25,7 @@ import {
   or,
   asc,
   desc,
+  gte,
   knowledgeRepository,
   drizzleSql,
   traverseEntityGraph,
@@ -3352,6 +3353,149 @@ app.post("/channels/trigger-ai", async (c) => {
     );
     return c.json(
       { error: err instanceof Error ? err.message : String(err) },
+      500
+    );
+  }
+});
+
+// ── Proactive Intelligence (IS → Backend) ───────────────────────────────────
+
+/**
+ * POST /proactive/post
+ * Allows the Intelligence Service to proactively post a message into a
+ * user's personal channel (morning briefings, insights, nudges, etc.).
+ *
+ * Rate-limited: max 3 messages/hour and 10 messages/24h per user+workspace.
+ * Delegates to postProactiveMessage() from Phase 1 utility.
+ */
+app.post("/proactive/post", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+
+  const body = (await c.req.json()) as {
+    userId?: string;
+    workspaceId?: string;
+    content?: string;
+    proactiveType?: string;
+    reasoning?: string;
+    metadata?: Record<string, unknown>;
+  };
+
+  // ── Input validation ────────────────────────────────────────────────────
+  if (
+    !body.userId ||
+    !body.workspaceId ||
+    !body.content ||
+    !body.proactiveType
+  ) {
+    return c.json(
+      { error: "userId, workspaceId, content, and proactiveType are required" },
+      400
+    );
+  }
+
+  const VALID_PROACTIVE_TYPES = [
+    "insight",
+    "suggestion",
+    "alert",
+    "nudge",
+    "morning_briefing",
+    "weekly_digest",
+    "health_check",
+  ] as const;
+
+  if (
+    !(VALID_PROACTIVE_TYPES as readonly string[]).includes(body.proactiveType)
+  ) {
+    return c.json(
+      {
+        error: `Invalid proactiveType "${body.proactiveType}". Must be one of: ${VALID_PROACTIVE_TYPES.join(", ")}`,
+      },
+      400
+    );
+  }
+
+  if (body.content.length > 10000) {
+    return c.json({ error: "content must be at most 10000 characters" }, 400);
+  }
+
+  try {
+    // ── Rate limiting (DB-backed) ───────────────────────────────────────────
+    // Count proactive messages for this user+workspace in the last hour and 24h.
+    // We query the personal channel's system messages with proactiveAi metadata.
+    const { ensurePersonalChannel } =
+      await import("../utils/personal-channel.js");
+    const channel = await ensurePersonalChannel(body.userId, body.workspaceId);
+
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    const recentMessages = await db.query.messages.findMany({
+      where: and(
+        eq(messages.channelId, channel.id),
+        eq(messages.role, "system"),
+        gte(messages.timestamp, twentyFourHoursAgo)
+      ),
+      columns: { metadata: true, timestamp: true },
+    });
+
+    // Filter to proactive messages only
+    const proactiveMessages = recentMessages.filter((m) => {
+      const meta = m.metadata as Record<string, unknown> | null;
+      return meta?.proactiveAi === true;
+    });
+
+    const lastHourCount = proactiveMessages.filter(
+      (m) => m.timestamp >= oneHourAgo
+    ).length;
+    const last24hCount = proactiveMessages.length;
+
+    if (lastHourCount >= 3) {
+      return c.json({
+        posted: false,
+        reason: "rate_limited",
+        detail: "Maximum 3 proactive messages per hour exceeded",
+      });
+    }
+
+    if (last24hCount >= 10) {
+      return c.json({
+        posted: false,
+        reason: "rate_limited",
+        detail: "Maximum 10 proactive messages per 24 hours exceeded",
+      });
+    }
+
+    // ── Post the message ────────────────────────────────────────────────────
+    const { postProactiveMessage } =
+      await import("../utils/proactive-channel-post.js");
+    const result = await postProactiveMessage({
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      content: body.content,
+      proactiveType: body.proactiveType as any,
+      metadata: {
+        ...body.metadata,
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+      },
+    });
+
+    return c.json(result);
+  } catch (err) {
+    logger.error(
+      { err, userId: body.userId, workspaceId: body.workspaceId },
+      "proactive/post failed"
+    );
+    return c.json(
+      {
+        posted: false,
+        reason: err instanceof Error ? err.message : "unknown_error",
+      },
       500
     );
   }

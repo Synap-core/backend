@@ -1682,7 +1682,55 @@ export const intelligenceRouter = router({
         workspaceId: ctx.workspaceId,
         capability: "default",
       });
-      const result = await client.extractEntity(input);
-      return result;
+      const result = await client.structure({
+        text: input.title || input.url,
+        url: input.url,
+        html: input.html,
+      });
+      if (!result?.entities?.length) return null;
+      const e = result.entities[0];
+      return {
+        profileSlug: e.profileSlug,
+        title: e.title,
+        description: e.description,
+        properties: e.properties ?? {},
+        confidence: e.confidence,
+      };
+    }),
+
+  /**
+   * classifyCapture
+   *
+   * Classifies raw text/URL into a structured entity type using the IS.
+   * Works for authenticated users — anonymous users use the IPC bridge instead.
+   * Falls back gracefully — returns null if IS is unavailable.
+   */
+  classifyCapture: workspaceProcedure
+    .input(
+      z.object({
+        text: z.string().min(1).max(4000),
+        url: z.string().url().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { client } = await resolveIntelligenceService({
+        userId,
+        workspaceId: ctx.workspaceId,
+        capability: "default",
+      });
+      const result = await client.structure({
+        text: input.text,
+        url: input.url,
+      });
+      if (!result?.entities?.length) return null;
+      const e = result.entities[0];
+      return {
+        profileSlug: e.profileSlug,
+        title: e.title,
+        properties: e.properties ?? {},
+        confidence: e.confidence,
+        tokensUsed: 0,
+      };
     }),
 });

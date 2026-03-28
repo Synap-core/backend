@@ -54,6 +54,9 @@ export interface UpdateEntityInput {
 
   // Properties (validated against profile)
   properties?: Record<string, unknown>;
+
+  /** Change entity's profile type by slug */
+  profileSlug?: string;
 }
 
 export interface DeleteEntityOptions {
@@ -254,8 +257,25 @@ export class EntityRepository extends BaseRepository<
     }
 
     // 2. Validate and merge properties if provided
+    // 2b. Resolve new profile if profileSlug is provided
+    let newProfileId: string | undefined;
+    let newType: string | undefined;
+    if (data.profileSlug) {
+      const newProfile = await this.profileResolution.resolveProfile(
+        data.profileSlug,
+        userId,
+        existing.workspaceId
+      );
+      if (newProfile) {
+        newProfileId = newProfile.id;
+        newType = newProfile.slug;
+      }
+    }
+
+    const validationProfileId = newProfileId || existing.profileId;
+
     let updatedProperties = existing.properties || {};
-    if (data.properties && existing.profileId) {
+    if (data.properties && validationProfileId) {
       // Merge with existing properties
       const mergedProperties = {
         ...(existing.properties as Record<string, unknown>),
@@ -264,7 +284,7 @@ export class EntityRepository extends BaseRepository<
 
       const validationResult = await this.propertyValidation.validateProperties(
         mergedProperties,
-        existing.profileId
+        validationProfileId
       );
 
       if (!validationResult.valid) {
@@ -289,6 +309,8 @@ export class EntityRepository extends BaseRepository<
         ...(data.title !== undefined && { title: data.title }),
         ...(data.preview !== undefined && { preview: data.preview }),
         ...(data.documentId !== undefined && { documentId: data.documentId }),
+        ...(newProfileId && { profileId: newProfileId }),
+        ...(newType && { type: newType }),
         properties: updatedProperties,
         updatedAt: new Date(),
       } as Partial<NewEntity>)
@@ -300,12 +322,13 @@ export class EntityRepository extends BaseRepository<
     }
 
     // 4. Reindex properties if changed
-    if (data.properties && existing.profileId) {
+    const reindexProfileId = newProfileId || existing.profileId;
+    if (data.properties && reindexProfileId) {
       this.propertyIndex
         .reindexEntity(
           entity.id,
           updatedProperties as Record<string, unknown>,
-          existing.profileId
+          reindexProfileId
         )
         .catch((error) => {
           console.warn(

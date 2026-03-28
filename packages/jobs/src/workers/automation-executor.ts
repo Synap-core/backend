@@ -199,11 +199,15 @@ function getOutEdges(
 
 /**
  * Execute a command step by calling the Intelligence Service.
+ *
+ * Special slug "__skill_trigger": routes to /api/tasks/skill-trigger instead of
+ * /api/tasks/execute, enabling event-triggered skill execution (PLAN-03).
  */
 async function executeCommandStep(
   data: {
     commandId?: string;
     commandTitle?: string;
+    commandSlug?: string;
     inputMapping: Record<string, string>;
     promptOverride?: string;
   },
@@ -240,7 +244,6 @@ async function executeCommandStep(
     prompt += `\n\nInputs:\n${inputSummary}`;
   }
 
-  // Call IS via the same pattern as background-task-scheduler
   const isUrl =
     process.env.AGENT_HUB_URL ||
     process.env.INTELLIGENCE_HUB_URL ||
@@ -248,6 +251,57 @@ async function executeCommandStep(
   const isApiKey =
     process.env.AGENT_HUB_API_KEY || process.env.INTELLIGENCE_HUB_API_KEY || "";
 
+  // ── Skill trigger routing ──────────────────────────────────────────────
+  // Commands with commandSlug "__skill_trigger" are event-triggered skills
+  // (created by skills.createTrigger). Route to the dedicated skill-trigger
+  // endpoint instead of the generic task executor (PLAN-03).
+  if (data.commandSlug === "__skill_trigger") {
+    const skillId = resolvedInputs.skillId as string | undefined;
+    const entityId = resolvedInputs.entityId as string | undefined;
+    const channelType =
+      (resolvedInputs.channelType as "personal" | "new_thread" | undefined) ??
+      "personal";
+
+    if (!skillId) {
+      throw new Error(
+        "__skill_trigger command requires skillId in inputMapping"
+      );
+    }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30_000);
+      const response = await fetch(`${isUrl}/api/tasks/skill-trigger`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": isApiKey,
+        },
+        body: JSON.stringify({
+          skillId,
+          userId: ownerId,
+          workspaceId,
+          entityId: entityId || undefined,
+          channelType,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        throw new Error(
+          `IS skill-trigger returned ${response.status}: ${response.statusText}`
+        );
+      }
+
+      return { status: "skill_trigger_executing", skillId, resolvedInputs };
+    } catch (err) {
+      logger.error({ err, skillId }, "Skill trigger IS call failed");
+      throw err;
+    }
+  }
+
+  // ── Generic command execution ──────────────────────────────────────────
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000); // 60s timeout for commands
@@ -793,6 +847,7 @@ async function executeAutomationFlow(params: {
             const data = node.data as {
               commandId?: string;
               commandTitle?: string;
+              commandSlug?: string;
               inputMapping: Record<string, string>;
               promptOverride?: string;
             };

@@ -22,6 +22,21 @@ export function requireUserId(userId?: string | null): string {
 }
 
 /**
+ * Validates and returns workspaceId, throwing if not present
+ *
+ * @throws {ValidationError} If workspaceId is null or undefined
+ */
+export function requireWorkspaceId(workspaceId?: string | null): string {
+  if (!workspaceId) {
+    throw new ValidationError(
+      "Workspace ID is required for this operation",
+      {}
+    );
+  }
+  return workspaceId;
+}
+
+/**
  * Helper to create user-scoped WHERE clause
  *
  * Usage:

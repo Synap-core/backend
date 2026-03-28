@@ -48,6 +48,91 @@ function toApiEntity(entity: any): Entity {
   } as Entity;
 }
 
+// ── Built-in per-profile bento templates ──────────────────────────────────
+// Provide richer defaults than the generic 3-widget layout for common profiles.
+// Workspace settings (profileEntityBentoTemplates) override these.
+const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
+  string,
+  Array<Record<string, unknown>>
+> = {
+  event: [
+    {
+      id: "entity-header",
+      kind: "widget",
+      widgetType: "entity-header",
+      pos: { x: 0, y: 0, w: 12, h: 2 },
+    },
+    {
+      id: "entity-props",
+      kind: "widget",
+      widgetType: "entity-properties",
+      pos: { x: 0, y: 2, w: 4, h: 6 },
+    },
+    {
+      id: "linked-notes",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 4, y: 2, w: 4, h: 6 },
+      config: { profileSlug: "note", title: "Notes" },
+    },
+    {
+      id: "linked-tasks",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 8, y: 2, w: 4, h: 6 },
+      config: { profileSlug: "task", title: "Tasks" },
+    },
+    {
+      id: "linked-docs",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 0, y: 8, w: 6, h: 4 },
+      config: { profileSlug: "file", title: "Documents" },
+    },
+    {
+      id: "all-links",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 6, y: 8, w: 6, h: 4 },
+    },
+  ],
+  project: [
+    {
+      id: "entity-header",
+      kind: "widget",
+      widgetType: "entity-header",
+      pos: { x: 0, y: 0, w: 12, h: 2 },
+    },
+    {
+      id: "entity-props",
+      kind: "widget",
+      widgetType: "entity-properties",
+      pos: { x: 0, y: 2, w: 4, h: 6 },
+    },
+    {
+      id: "linked-tasks",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 4, y: 2, w: 8, h: 6 },
+      config: { profileSlug: "task", title: "Tasks" },
+    },
+    {
+      id: "linked-notes",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 0, y: 8, w: 6, h: 4 },
+      config: { profileSlug: "note", title: "Notes" },
+    },
+    {
+      id: "linked-docs",
+      kind: "widget",
+      widgetType: "entity-links",
+      pos: { x: 6, y: 8, w: 6, h: 4 },
+      config: { profileSlug: "file", title: "Documents" },
+    },
+  ],
+};
+
 export const entitiesRouter = router({
   /**
    * Count entities grouped by profile slug.
@@ -341,6 +426,24 @@ export const entitiesRouter = router({
         });
       } catch (err) {
         console.warn("[entities.create] Failed to queue embedding job:", err);
+      }
+
+      // Dispatch AI classification for raw captures (non-blocking)
+      // Upgrades profileSlug from "capture" → typed profile (note, bookmark, task…)
+      if (profileSlug === "capture") {
+        try {
+          const { getBoss } = await import("@synap/jobs");
+          await getBoss().send("ai-analysis", {
+            entityId: createdEntity.id,
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+          });
+        } catch (err) {
+          console.warn(
+            "[entities.create] Failed to queue AI analysis job:",
+            err
+          );
+        }
       }
 
       return {
@@ -941,7 +1044,15 @@ export const entitiesRouter = router({
    * State is stored in entity.systemData (not entity.properties) to avoid polluting
    * user-defined fields and bypassing property validation.
    * Any workspace member can set view mode (not just the entity creator).
+   *
+   * Built-in bento templates for common profiles provide richer defaults than
+   * the generic 3-widget layout. Workspace settings can override these.
    */
+
+  // ── Built-in per-profile bento templates ──────────────────────────────────
+  // keyed by profileSlug → array of bento blocks
+  // These provide sensible defaults when no workspace-level template exists.
+
   setEntityViewMode: workspaceProcedure
     .input(
       z.object({
@@ -985,27 +1096,29 @@ export const entitiesRouter = router({
             | undefined;
 
         // Level 1: profile-specific template from workspace settings
-        // Level 2: generic 3-widget fallback
-        const blocks = profileTemplates?.[profileSlug]?.blocks ?? [
-          {
-            id: "entity-header",
-            kind: "widget",
-            widgetType: "entity-header",
-            pos: { x: 0, y: 0, w: 12, h: 2 },
-          },
-          {
-            id: "entity-props",
-            kind: "widget",
-            widgetType: "entity-properties",
-            pos: { x: 0, y: 2, w: 4, h: 6 },
-          },
-          {
-            id: "entity-content",
-            kind: "widget",
-            widgetType: "entity-content",
-            pos: { x: 4, y: 2, w: 8, h: 6 },
-          },
-        ];
+        // Level 2: built-in profile templates for common entity types
+        // Level 3: generic 3-widget fallback
+        const blocks = profileTemplates?.[profileSlug]?.blocks ??
+          DEFAULT_ENTITY_BENTO_TEMPLATES[profileSlug] ?? [
+            {
+              id: "entity-header",
+              kind: "widget",
+              widgetType: "entity-header",
+              pos: { x: 0, y: 0, w: 12, h: 2 },
+            },
+            {
+              id: "entity-props",
+              kind: "widget",
+              widgetType: "entity-properties",
+              pos: { x: 0, y: 2, w: 4, h: 6 },
+            },
+            {
+              id: "entity-content",
+              kind: "widget",
+              widgetType: "entity-links",
+              pos: { x: 4, y: 2, w: 8, h: 6 },
+            },
+          ];
 
         const newViewId = randomUUID();
         await db.insert(views).values({

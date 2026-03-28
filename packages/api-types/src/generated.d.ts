@@ -1274,18 +1274,75 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		thought: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				content: string;
+				url?: string | undefined;
 				context?: Record<string, any> | undefined;
 			};
 			output: {
 				success: boolean;
-				message: string;
-				requestId: string;
-				mode: string;
-			} | {
-				success: boolean;
-				message: string;
-				mode: string;
-				requestId?: undefined;
+				entityId: string;
+				profileSlug: string;
+				title: string;
+				mode: "ai" | "fallback";
+			};
+			meta: object;
+		}>;
+		structure: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				text: string;
+				url?: string | undefined;
+				context?: string | undefined;
+			};
+			output: {
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string | null;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+			};
+			meta: object;
+		}>;
+		execute: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entities: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string | undefined;
+					properties?: Record<string, unknown> | undefined;
+					existingEntityId?: string | undefined;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+			};
+			output: {
+				created: {
+					tempId: string;
+					entityId: string;
+					linked: boolean;
+				}[];
+				relations: {
+					sourceEntityId: string;
+					targetEntityId: string;
+					relationType: string;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -2248,7 +2305,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				targetType?: "entity" | "document" | "view" | "profile" | "whiteboard" | undefined;
+				targetType?: "entity" | "document" | "view" | "whiteboard" | "profile" | undefined;
 				targetId?: string | undefined;
 				threadId?: string | undefined;
 				status?: "pending" | "rejected" | "validated" | "all" | undefined;
@@ -2326,7 +2383,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				targetType: "entity" | "document" | "view" | "workspace" | "relation" | "profile";
-				changeType: "create" | "update" | "delete";
+				changeType: "update" | "delete" | "create";
 				data: Record<string, any>;
 				targetId?: string | undefined;
 				reasoning?: string | undefined;
@@ -3535,7 +3592,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilities: string[];
 				description?: string | undefined;
 				version?: string | undefined;
-				pricing?: "custom" | "free" | "premium" | "enterprise" | undefined;
+				pricing?: "custom" | "enterprise" | "free" | "premium" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 			};
 			output: {
@@ -4336,6 +4393,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | null;
 			meta: object;
 		}>;
+		classifyCapture: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				text: string;
+				url?: string | undefined;
+			};
+			output: {
+				profileSlug: string;
+				title: string;
+				properties: Record<string, unknown>;
+				confidence: number;
+				tokensUsed: number;
+			} | null;
+			meta: object;
+		}>;
 	}>>;
 	capabilities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -4524,7 +4595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					type: string;
 					label: string;
 					description: string;
-					directionality: "unidirectional" | "bidirectional";
+					directionality: "bidirectional" | "unidirectional";
 					category: string;
 					source: "workspace";
 				}[];
@@ -5131,7 +5202,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						config?: Record<string, unknown> | undefined;
 						groupBy?: string | undefined;
 						sortBy?: string | undefined;
-						sortOrder?: "desc" | "asc" | undefined;
+						sortOrder?: "asc" | "desc" | undefined;
 						filterBy?: Record<string, unknown> | undefined;
 						description?: string | undefined;
 						defaultView?: boolean | undefined;
@@ -5198,7 +5269,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						defaultView?: string | undefined;
 						theme?: string | undefined;
 						sidebarItems?: {
-							kind: "external" | "view" | "profile" | "app";
+							kind: "external" | "view" | "app" | "profile";
 							appId?: string | undefined;
 							viewName?: string | undefined;
 							profileSlug?: string | undefined;
@@ -8121,6 +8192,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultChannelId: string | null;
 				externalUsername: string | null;
 			}[];
+			meta: object;
+		}>;
+		setupTelegramBot: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				botToken: string;
+			};
+			output: {
+				ok: boolean;
+				botUsername: string;
+				webhookUrl: string;
+			};
+			meta: object;
+		}>;
+		telegramStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				configured: boolean;
+				botUsername: string | null;
+				source: "env" | "workspace" | null;
+			};
 			meta: object;
 		}>;
 		unlink: import("@trpc/server").TRPCMutationProcedure<{

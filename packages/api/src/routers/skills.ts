@@ -11,7 +11,12 @@ import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, desc } from "@synap/database";
 import type { SQL } from "drizzle-orm";
-import { skills, skillTriggers, automations } from "@synap/database/schema";
+import {
+  skills,
+  skillTriggers,
+  automations,
+  type FlowDefinition,
+} from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -680,7 +685,11 @@ export const skillsRouter = router({
                   type: "trigger",
                   position: { x: 0, y: 0 },
                   data: {
-                    triggerType: input.type === "cron" ? "cron" : "event",
+                    triggerType: (input.type === "cron" ? "cron" : "event") as
+                      | "event"
+                      | "cron"
+                      | "webhook"
+                      | "manual",
                     label: "Trigger",
                     config: {},
                   },
@@ -694,13 +703,13 @@ export const skillsRouter = router({
                     inputMapping: {
                       skillId: input.skillId,
                       entityId: "{{trigger.payload.subjectId}}",
-                      channelType: input.channelType,
+                      channelType: input.channelType ?? "",
                     },
                   },
                 },
               ],
               edges: [{ id: "e1", source: "trigger", target: "skill" }],
-            },
+            } satisfies FlowDefinition,
             status: "active",
             metadata: { createdVia: "ai", tags: ["skill_trigger"] } as any,
           })

@@ -55,6 +55,9 @@ export interface IntelligenceHubRequest {
   deepAnalysis?: boolean;
   /** Workspace settings JSONB — forwarded to IS for agentModelPreferences tier overrides */
   workspaceSettings?: Record<string, unknown>;
+  /** Entity context: channel is scoped to this entity (entity_comments channels) */
+  contextObjectType?: string;
+  contextObjectId?: string;
 }
 
 // Re-export from types package
@@ -386,6 +389,8 @@ export class IntelligenceHubClient {
    * Used by the browser Save button's AI extraction strategy.
    *
    * Falls back gracefully — never throws (returns null on failure).
+   *
+   * @deprecated Use structure() instead
    */
   async extractEntity(input: {
     url: string;
@@ -428,6 +433,191 @@ export class IntelligenceHubClient {
       }
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Classify raw text/URL into a structured entity type.
+   * Used by the intelligence.classifyCapture tRPC procedure.
+   * Falls back gracefully — returns null on failure.
+   *
+   * @deprecated Use structure() instead
+   */
+  async classifyCapture(input: { text: string; url?: string }): Promise<{
+    profileSlug: string;
+    title: string;
+    properties: Record<string, unknown>;
+    confidence: number;
+    tokensUsed: number;
+  } | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6_000);
+      try {
+        const response = await fetch(`${this.baseUrl}/api/classify`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": this.apiKey,
+          },
+          body: JSON.stringify(input),
+          signal: controller.signal,
+        });
+        if (!response.ok) return null;
+        return (await response.json()) as {
+          profileSlug: string;
+          title: string;
+          properties: Record<string, unknown>;
+          confidence: number;
+          tokensUsed: number;
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Multi-entity structure extraction from raw text.
+   * Returns entity proposals with relations and optional follow-up question.
+   * Used by the capture.structure tRPC procedure.
+   * Falls back gracefully — returns null on failure.
+   */
+  async structure(input: {
+    text: string;
+    url?: string;
+    html?: string;
+    context?: string;
+    hints?: {
+      preferredProfiles?: string[];
+      existingEntityNames?: string[];
+      availableProfiles?: Array<{
+        slug: string;
+        displayName: string;
+        description?: string;
+        propertyHints?: string;
+      }>;
+      previousEntities?: Array<{
+        tempId: string;
+        profileSlug: string;
+        title: string;
+        description?: string;
+        properties?: Record<string, unknown>;
+      }>;
+    };
+  }): Promise<{
+    entities: Array<{
+      tempId: string;
+      profileSlug: string;
+      title: string;
+      description?: string;
+      properties?: Record<string, unknown>;
+      confidence: number;
+    }>;
+    relations: Array<{
+      sourceTempId: string;
+      targetTempId: string;
+      relationType: string;
+    }>;
+    followUp: string | null;
+  } | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 25_000);
+      try {
+        const response = await fetch(`${this.baseUrl}/api/structure`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": this.apiKey,
+          },
+          body: JSON.stringify(input),
+          signal: controller.signal,
+        });
+        if (!response.ok) return null;
+        return (await response.json()) as Awaited<
+          ReturnType<typeof this.structure>
+        > & {};
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Multi-entity structure extraction with SSE streaming.
+   * Yields partial results as the LLM generates them, enabling progressive UI rendering.
+   * Falls back gracefully — yields nothing on connection failure (no throw).
+   */
+  async *structureStream(input: {
+    text: string;
+    url?: string;
+    html?: string;
+    context?: string;
+    hints?: {
+      preferredProfiles?: string[];
+      existingEntityNames?: string[];
+      availableProfiles?: Array<{
+        slug: string;
+        displayName: string;
+        description?: string;
+        propertyHints?: string;
+      }>;
+    };
+  }): AsyncGenerator<
+    | { type: "partial"; data: Record<string, unknown> }
+    | { type: "complete" }
+    | { type: "error"; message: string }
+  > {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch(`${this.baseUrl}/api/structure-stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": this.apiKey,
+        },
+        body: JSON.stringify(input),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) return;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                yield JSON.parse(line.slice(6));
+              } catch {
+                /* skip malformed */
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch {
+      // Graceful failure — caller gets no events
+    } finally {
+      clearTimeout(timer);
     }
   }
 

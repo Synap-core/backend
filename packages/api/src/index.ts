@@ -64,6 +64,8 @@ export { verifyCpJwt, clearJwksCache } from "./utils/jwks-client.js";
 export {
   resolveTelegramBotToken,
   clearTelegramTokenCache,
+  resolveTelegramWebhookSecret,
+  clearTelegramSecretCache,
 } from "./utils/telegram-bot-token.js";
 
 // Export Telegram bot forwarding and link token utilities

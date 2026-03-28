@@ -945,13 +945,14 @@ export const channelsRouter = router({
 
       // AI routing gate:
       //   AI_THREAD + BRANCH: always call IS.
-      //   THREAD: only call IS when the channel has an explicit agentType set
-      //           (user-created threads are human-only by default; AI is opt-in).
+      //   THREAD / ENTITY_COMMENTS: only call IS when the channel has an explicit
+      //     agentType set (human-only by default; AI is opt-in via @mention).
       //   All other types: never call IS — return after saving the user message.
       const isAiChannel =
         channel.channelType === ChannelType.AI_THREAD ||
         channel.channelType === ChannelType.BRANCH ||
-        (channel.channelType === ChannelType.THREAD &&
+        ((channel.channelType === ChannelType.THREAD ||
+          channel.channelType === ChannelType.ENTITY_COMMENTS) &&
           !!channel.agentType &&
           channel.agentType !== "default");
 
@@ -1104,6 +1105,9 @@ export const channelsRouter = router({
           deepAnalysis: input.deepAnalysis,
           // Workspace model preferences — IS reads agentModelPreferences
           workspaceSettings: workspaceSettingsForIS,
+          // Entity context: when channel is scoped to an entity, forward for prompt injection
+          contextObjectType: channel.contextObjectType ?? undefined,
+          contextObjectId: channel.contextObjectId ?? undefined,
         });
 
         for await (const chunk of stream) {

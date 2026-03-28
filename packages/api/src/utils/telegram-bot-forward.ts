@@ -8,33 +8,38 @@
  * Telegram bot conversation doesn't pollute the main timeline.
  */
 
+import { createHash, randomUUID } from "crypto";
+import { db, eq, and, drizzleSql } from "@synap/database";
 import {
-  db,
-  eq,
-  and,
-  drizzleSql,
   channels,
   messages,
+  channelConnections,
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
   MessageRole,
   MessageAuthorType,
-} from "@synap/database";
-import { channelConnections } from "@synap/database/schema";
+} from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import type { HubStreamEvent } from "@synap-core/types";
 import { ensurePersonalChannel } from "./personal-channel.js";
 import { resolveIntelligenceService } from "./intelligence-routing.js";
-import type { HubStreamEvent } from "../clients/intelligence-hub.js";
 
 const logger = createLogger({ module: "telegram-bot-forward" });
 
 const MAX_MESSAGE_LENGTH = 50_000;
 
+export interface CapturedProposal {
+  proposalId: string;
+  toolName: string;
+  description: string;
+}
+
 export interface ForwardResult {
   ok: boolean;
   reply?: string;
   error?: string;
+  proposals?: CapturedProposal[];
 }
 
 /**
@@ -117,7 +122,7 @@ export async function forwardTelegramMessageToAI(opts: {
   text: string;
   senderName?: string;
 }): Promise<ForwardResult> {
-  const { telegramChatId, text, senderName } = opts;
+  const { telegramChatId, text } = opts;
 
   // Validate input
   if (!text || text.length > MAX_MESSAGE_LENGTH) {
@@ -149,16 +154,23 @@ export async function forwardTelegramMessageToAI(opts: {
     );
 
     // 3. Store user message
+    const userMsgId = randomUUID();
+    const userMsgHash = createHash("sha256")
+      .update(`${userMsgId}${text}`)
+      .digest("hex");
+
     const [userMsg] = await db
       .insert(messages)
       .values({
+        id: userMsgId,
         channelId: botBranch.id,
         role: MessageRole.USER,
         authorType: MessageAuthorType.EXTERNAL,
         content: text,
         userId,
         externalSource: "telegram",
-        metadata: senderName ? { senderName } : undefined,
+        previousHash: "",
+        hash: userMsgHash,
       })
       .returning();
 
@@ -170,6 +182,7 @@ export async function forwardTelegramMessageToAI(opts: {
     });
 
     let replyText = "";
+    const capturedProposals: CapturedProposal[] = [];
 
     try {
       const stream = resolvedService.client.sendMessageStream({
@@ -187,13 +200,28 @@ export async function forwardTelegramMessageToAI(opts: {
 
       // Collect streaming response
       for await (const event of stream) {
-        const evt = event as HubStreamEvent;
+        const evt = event as HubStreamEvent & {
+          content?: string;
+          data?: Record<string, unknown>;
+        };
         if (evt.type === "chunk" && typeof evt.content === "string") {
           replyText += evt.content;
         }
-        if (evt.type === "complete" && evt.data?.response) {
-          // Use the final complete response if available (may be cleaner than accumulated chunks)
-          replyText = evt.data.response;
+        if (evt.type === "complete" && evt.data) {
+          if (typeof evt.data.response === "string") {
+            replyText = evt.data.response;
+          }
+          // Extract proposals created during this turn
+          const incoming = evt.data.createdProposals as
+            | Array<{
+                proposalId: string;
+                toolName: string;
+                description: string;
+              }>
+            | undefined;
+          if (Array.isArray(incoming)) {
+            capturedProposals.push(...incoming);
+          }
         }
       }
     } catch (streamErr) {
@@ -212,15 +240,27 @@ export async function forwardTelegramMessageToAI(opts: {
     }
 
     // 5. Store AI response message
+    const aiMsgId = randomUUID();
+    const aiMsgHash = createHash("sha256")
+      .update(`${aiMsgId}${replyText}`)
+      .digest("hex");
+
     await db.insert(messages).values({
+      id: aiMsgId,
       channelId: botBranch.id,
       role: MessageRole.ASSISTANT,
       authorType: MessageAuthorType.AI_AGENT,
       content: replyText,
       userId,
+      previousHash: userMsgHash,
+      hash: aiMsgHash,
     });
 
-    return { ok: true, reply: replyText };
+    return {
+      ok: true,
+      reply: replyText,
+      proposals: capturedProposals.length > 0 ? capturedProposals : undefined,
+    };
   } catch (err) {
     logger.error(
       { telegramChatId, userId, error: err },

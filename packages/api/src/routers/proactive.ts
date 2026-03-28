@@ -1,0 +1,116 @@
+/**
+ * Proactive AI Preferences Router
+ *
+ * Reads and writes proactive AI preferences stored in workspace.settings.proactiveAi.
+ * Uses the existing JSONB merge pattern for workspace settings.
+ *
+ * Mounted as trpc.proactive.* in root.ts.
+ */
+
+import { z } from "zod";
+import { router, workspaceProcedure } from "../trpc.js";
+import { db, eq, drizzleSql } from "@synap/database";
+import { workspaces } from "@synap/database/schema";
+import type { WorkspaceSettings } from "@synap/database/schema";
+import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
+
+// ── Zod Schemas ──────────────────────────────────────────────────────────────
+
+const morningBriefingSchema = z.object({
+  enabled: z.boolean().optional(),
+  cronHour: z.number().int().min(0).max(23).optional(),
+  cronMinute: z.number().int().min(0).max(59).optional(),
+  timezone: z.string().min(1).max(64).optional(),
+});
+
+const weeklyDigestSchema = z.object({
+  enabled: z.boolean().optional(),
+  dayOfWeek: z.number().int().min(0).max(6).optional(),
+  cronHour: z.number().int().min(0).max(23).optional(),
+  timezone: z.string().min(1).max(64).optional(),
+});
+
+const healthCheckSchema = z.object({
+  enabled: z.boolean().optional(),
+  frequencyDays: z.number().int().min(1).max(90).optional(),
+});
+
+const updateProactivePrefsSchema = z.object({
+  enabled: z.boolean().optional(),
+  morningBriefing: morningBriefingSchema.optional(),
+  weeklyDigest: weeklyDigestSchema.optional(),
+  healthCheck: healthCheckSchema.optional(),
+  nudgeDensity: z.enum(["minimal", "balanced", "proactive"]).optional(),
+  mutedUntil: z.string().datetime({ offset: true }).nullable().optional(),
+});
+
+// ── Router ───────────────────────────────────────────────────────────────────
+
+export const proactiveRouter = router({
+  /**
+   * Get proactive AI preferences for the current workspace.
+   * Returns defaults if no preferences have been set.
+   */
+  getPrefs: workspaceProcedure.query(async ({ ctx }) => {
+    const ws = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, ctx.workspaceId),
+      columns: { settings: true },
+    });
+
+    const settings = (ws?.settings ?? {}) as WorkspaceSettings;
+    return settings.proactiveAi ?? getDefaultProactiveAiPreferences();
+  }),
+
+  /**
+   * Update proactive AI preferences for the current workspace.
+   * Partial merge: only provided fields are overwritten.
+   * Uses the JSONB merge pattern: settings || { proactiveAi: merged }
+   */
+  updatePrefs: workspaceProcedure
+    .input(updateProactivePrefsSchema)
+    .mutation(async ({ ctx, input }) => {
+      // Read current prefs
+      const ws = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+        columns: { settings: true },
+      });
+
+      const settings = (ws?.settings ?? {}) as WorkspaceSettings;
+      const current =
+        settings.proactiveAi ?? getDefaultProactiveAiPreferences();
+
+      // Deep merge each sub-object
+      const merged = {
+        enabled: input.enabled ?? current.enabled,
+        morningBriefing: {
+          ...current.morningBriefing,
+          ...input.morningBriefing,
+        },
+        weeklyDigest: {
+          ...current.weeklyDigest,
+          ...input.weeklyDigest,
+        },
+        healthCheck: {
+          ...current.healthCheck,
+          ...input.healthCheck,
+        },
+        nudgeDensity: input.nudgeDensity ?? current.nudgeDensity,
+        // null explicitly clears mutedUntil; undefined keeps current value
+        mutedUntil:
+          input.mutedUntil === null
+            ? undefined
+            : (input.mutedUntil ?? current.mutedUntil),
+      };
+
+      // Merge into workspace settings JSONB
+      await db
+        .update(workspaces)
+        .set({
+          settings: drizzleSql`settings || ${JSON.stringify({ proactiveAi: merged })}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(eq(workspaces.id, ctx.workspaceId));
+
+      return merged;
+    }),
+});

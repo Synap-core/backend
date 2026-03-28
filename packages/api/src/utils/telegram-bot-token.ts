@@ -177,3 +177,53 @@ async function resolveFromWorkspaceSettings(): Promise<string | null> {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Webhook Secret Resolution (same 3-tier chain as bot token)
+// ---------------------------------------------------------------------------
+
+let cachedSecret: { secret: string; resolvedAt: number } | null = null;
+
+/** Clear the webhook secret cache. */
+export function clearTelegramSecretCache(): void {
+  cachedSecret = null;
+}
+
+/**
+ * Resolve the Telegram webhook secret used to verify incoming webhook requests.
+ * 3-tier: workspace setting (set by setupTelegramBot) → env TELEGRAM_WEBHOOK_SECRET
+ */
+export async function resolveTelegramWebhookSecret(): Promise<string | null> {
+  if (cachedSecret && Date.now() - cachedSecret.resolvedAt < CACHE_TTL_MS) {
+    return cachedSecret.secret;
+  }
+
+  // Workspace settings (set by setupTelegramBot procedure)
+  try {
+    const rows = await db
+      .select({ settings: workspaces.settings })
+      .from(workspaces)
+      .limit(5);
+
+    for (const row of rows) {
+      const settings = row.settings as Record<string, unknown> | null;
+      if (!settings) continue;
+      const cp = settings.controlPlane as Record<string, unknown> | undefined;
+      if (!cp) continue;
+      const secret = cp.telegramWebhookSecret;
+      if (typeof secret === "string" && secret.length > 0) {
+        cachedSecret = { secret, resolvedAt: Date.now() };
+        return secret;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  // Env var fallback
+  const envSecret = process.env.TELEGRAM_WEBHOOK_SECRET ?? null;
+  if (envSecret) {
+    cachedSecret = { secret: envSecret, resolvedAt: Date.now() };
+  }
+  return envSecret;
+}

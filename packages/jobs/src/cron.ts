@@ -61,5 +61,17 @@ export async function registerCronSchedules(): Promise<void> {
     "Registered cron: automation-pattern-detect (daily at 3:00 AM UTC)"
   );
 
+  // Proactive morning briefing (every 15 minutes — checks timezone windows)
+  await boss.schedule("proactive-morning-briefing", "*/15 * * * *", {});
+  logger.info("Registered cron: proactive-morning-briefing (every 15min)");
+
+  // Proactive weekly digest (every hour — checks day-of-week + hour match)
+  await boss.schedule("proactive-weekly-digest", "0 * * * *", {});
+  logger.info("Registered cron: proactive-weekly-digest (every hour)");
+
+  // Proactive health check (daily at 4:00 AM UTC — respects frequencyDays)
+  await boss.schedule("proactive-health-check", "0 4 * * *", {});
+  logger.info("Registered cron: proactive-health-check (daily at 4:00 AM UTC)");
+
   logger.info("All cron schedules registered");
 }

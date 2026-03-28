@@ -47,6 +47,9 @@ import {
   VAULT_GRANT_EXPIRY_QUEUE,
 } from "./vault-grant-expiry-worker.js";
 import { handleAutomationPatternDetect } from "./automation-pattern-detector.js";
+import { handleProactiveMorningBriefing } from "./proactive-morning-briefing.js";
+import { handleProactiveWeeklyDigest } from "./proactive-weekly-digest.js";
+import { handleProactiveHealthCheck } from "./proactive-health-check.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -82,6 +85,9 @@ const ALL_QUEUES = [
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
+  "proactive-morning-briefing",
+  "proactive-weekly-digest",
+  "proactive-health-check",
 ];
 
 /**
@@ -250,6 +256,24 @@ export async function registerAllWorkers(): Promise<void> {
     handleAutomationPatternDetect()
   );
   logger.info("Registered worker: automation-pattern-detect");
+
+  // Proactive morning briefing (cron: every 15 minutes)
+  await boss.work("proactive-morning-briefing", async () =>
+    handleProactiveMorningBriefing()
+  );
+  logger.info("Registered worker: proactive-morning-briefing");
+
+  // Proactive weekly digest (cron: every hour)
+  await boss.work("proactive-weekly-digest", async () =>
+    handleProactiveWeeklyDigest()
+  );
+  logger.info("Registered worker: proactive-weekly-digest");
+
+  // Proactive health check (cron: daily at 4:00 AM UTC)
+  await boss.work("proactive-health-check", async () =>
+    handleProactiveHealthCheck()
+  );
+  logger.info("Registered worker: proactive-health-check");
 
   logger.info("All workers registered");
 }
