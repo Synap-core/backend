@@ -17,7 +17,7 @@ import {
   sqlDrizzle as sql,
 } from "@synap/database";
 import { intelligenceHubClient } from "../clients/intelligence-hub.js";
-import { createLogger } from "@synap-core/core";
+import { createLogger, config } from "@synap-core/core";
 
 const logger = createLogger({ module: "search-router" });
 
@@ -93,6 +93,12 @@ export const searchRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.userId;
+
+      // Skip vector search on shared pods (no workspace-level isolation in pgvector)
+      if (!config.server.vectorSearchEnabled) {
+        logger.debug("Vector search disabled at pod level — returning empty");
+        return { entities: [] };
+      }
 
       logger.debug({ userId, query: input.query }, "Semantic search requested");
 

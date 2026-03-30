@@ -9,6 +9,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { sql } from "@synap/database";
 import { intelligenceHubClient } from "../../clients/intelligence-hub.js";
+import { config } from "@synap-core/core";
 
 export const searchRouter = router({
   /**
@@ -210,6 +211,11 @@ export const searchRouter = router({
       })
     )
     .query(async ({ input }) => {
+      // Skip vector search on shared pods (no workspace-level isolation in pgvector)
+      if (!config.server.vectorSearchEnabled) {
+        return { results: [], embeddingGenerated: false };
+      }
+
       // 1. Generate embedding for query
       let embedding: number[];
       try {

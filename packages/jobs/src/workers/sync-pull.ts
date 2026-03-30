@@ -208,7 +208,13 @@ export async function handleSyncPull(): Promise<void> {
       }
     }
   } catch (err) {
-    logger.error({ err }, "Sync pull worker top-level error");
+    // sync_peers table may not exist yet (migration not run) — suppress to avoid log spam
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("relation") && msg.includes("does not exist")) {
+      logger.debug("Sync pull skipped — sync tables not yet migrated");
+    } else {
+      logger.error({ err }, "Sync pull worker top-level error");
+    }
   }
 }
 

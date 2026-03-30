@@ -8,7 +8,7 @@
  */
 
 import { getBoss } from "./boss.js";
-import { createLogger } from "@synap-core/core";
+import { createLogger, config } from "@synap-core/core";
 
 const logger = createLogger({ module: "side-effects" });
 
@@ -61,7 +61,9 @@ export async function emitSideEffects(
     }
 
     // 2. Entity embedding (for entity create/update)
+    // Skip on shared pods where vector search is disabled
     if (
+      config.server.vectorSearchEnabled &&
       payload.subjectType === "entity" &&
       (payload.action === "create" || payload.action === "update")
     ) {

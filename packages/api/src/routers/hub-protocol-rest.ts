@@ -31,6 +31,8 @@ import {
   traverseEntityGraph,
   intelligenceCommands,
   mcpServers,
+  inArray,
+  workspaceMembers,
 } from "@synap/database";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -126,6 +128,43 @@ async function resolveActorId(
   return { actorId: agentUserId };
 }
 
+// ─── Workspace access helpers ─────────────────────────────────────────────────
+// On shared pods (multiple users, each with their own workspace), these helpers
+// enforce that read queries only return data from workspaces the user has access
+// to. Write routes already go through workspaceProcedure which validates membership.
+// User-scoped resources (memory, sessions, personal channels) are intentionally
+// NOT workspace-gated — they belong to the user across all their workspaces.
+
+/**
+ * Get all workspace IDs a user is a member of.
+ */
+async function getUserAccessibleWorkspaceIds(
+  userId: string
+): Promise<string[]> {
+  const rows = await db
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId));
+  return rows.map((r) => r.workspaceId);
+}
+
+/**
+ * Verify a user has access to a specific workspace.
+ */
+async function verifyWorkspaceAccess(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const row = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { id: true },
+  });
+  return !!row;
+}
+
 /**
  * Helper: get hub protocol caller for current request.
  * Pass workspaceId for workspace-scoped procedures (e.g. entities create/update).
@@ -167,16 +206,30 @@ app.get("/threads", async (c) => {
   const limit = parseInt(c.req.query("limit") ?? "50", 10);
   if (!userId) return c.json({ error: "userId is required" }, 400);
   try {
-    // Include personal channels (pod-wide) alongside workspace channels
-    const whereClause = workspaceId
-      ? and(
-          eq(channels.userId, userId),
-          or(
-            eq(channels.workspaceId, workspaceId),
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
-          )
+    // Scope to user's accessible workspaces + personal channels.
+    // When workspaceId is explicit, return that workspace + personal.
+    // When omitted, return ALL accessible workspaces + personal.
+    let whereClause;
+    if (workspaceId) {
+      whereClause = and(
+        eq(channels.userId, userId),
+        or(
+          eq(channels.workspaceId, workspaceId),
+          drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
         )
-      : eq(channels.userId, userId);
+      );
+    } else {
+      const accessibleWsIds = await getUserAccessibleWorkspaceIds(userId);
+      whereClause = and(
+        eq(channels.userId, userId),
+        or(
+          ...(accessibleWsIds.length > 0
+            ? [inArray(channels.workspaceId, accessibleWsIds)]
+            : []),
+          drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+        )
+      );
+    }
     const threads = await db
       .select({
         id: channels.id,
@@ -298,7 +351,18 @@ app.get("/users/:userId/entities", async (c) => {
   const limit = c.req.query("limit");
   const workspaceId = c.req.query("workspaceId") || null;
   try {
-    const caller = await getCaller(c, { workspaceId });
+    // When no workspaceId is specified, query across all accessible workspaces.
+    // The tRPC caller still needs at least one workspaceId for context.
+    const effectiveWsIds = workspaceId
+      ? [workspaceId]
+      : await getUserAccessibleWorkspaceIds(userId);
+    if (effectiveWsIds.length === 0) return c.json([]);
+
+    // Use the first accessible workspace for caller context
+    const caller = await getCaller(c, {
+      workspaceId: effectiveWsIds[0],
+      userId,
+    });
     const result = await (caller as any).entities.getEntities({
       userId,
       workspaceId: workspaceId || undefined,
@@ -316,8 +380,9 @@ app.get("/users/:userId/entities", async (c) => {
 });
 
 /**
- * GET /entities/:id?workspaceId=...
+ * GET /entities/:id?workspaceId=...&userId=...
  * Fetch a single entity by ID. Used by skill trigger executor to get entity context.
+ * On shared pods, verifies the entity belongs to a workspace the user can access.
  */
 app.get("/entities/:id", async (c) => {
   if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
@@ -325,10 +390,19 @@ app.get("/entities/:id", async (c) => {
   }
   const entityId = c.req.param("id");
   const workspaceId = c.req.query("workspaceId");
+  // Use explicit userId from query, or fall back to API key's userId
+  const userId = c.req.query("userId") || (c.get("userId") as string);
   try {
     const caller = await getCaller(c, { workspaceId });
     const result = await (caller as any).entities.get({ id: entityId });
     if (!result) return c.json(null, 404);
+    // Verify the entity's workspace is accessible to the requesting user.
+    if (result.workspaceId) {
+      const hasAccess = await verifyWorkspaceAccess(userId, result.workspaceId);
+      if (!hasAccess) {
+        return c.json({ error: "Access denied to entity's workspace" }, 403);
+      }
+    }
     return c.json(result);
   } catch (err) {
     logger.error({ err, entityId }, "entities.get failed");
@@ -504,11 +578,17 @@ app.get("/search", async (c) => {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    const caller = await getCaller(c);
+    // When no workspaceId, resolve to user's first accessible workspace for context.
+    // Typesense already filters by userId, but adding workspace scope tightens it.
+    const effectiveWsId =
+      workspaceId ||
+      (await getUserAccessibleWorkspaceIds(userId))[0] ||
+      undefined;
+    const caller = await getCaller(c, { workspaceId: effectiveWsId });
     const result = await (caller as any).search.search({
       userId,
       query,
-      workspaceId: workspaceId || undefined,
+      workspaceId: effectiveWsId,
       collections: collections
         ? (collections.split(",") as (
             | "entities"
@@ -547,7 +627,10 @@ app.get("/search/documents", async (c) => {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    const caller = await getCaller(c);
+    // Scope document search to user's accessible workspaces
+    const effectiveWsId =
+      (await getUserAccessibleWorkspaceIds(userId))[0] || undefined;
+    const caller = await getCaller(c, { workspaceId: effectiveWsId });
     const result = await (caller as any).search.searchDocuments({
       userId,
       query,
@@ -580,13 +663,17 @@ app.get("/vector-search", async (c) => {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    const caller = await getCaller(c, { workspaceId: workspaceId || null });
+    const effectiveWsId =
+      workspaceId ||
+      (await getUserAccessibleWorkspaceIds(userId))[0] ||
+      undefined;
+    const caller = await getCaller(c, { workspaceId: effectiveWsId || null });
     const result = await (caller as any).search.vectorSearch({
       userId,
       query,
       types: types ? types.split(",") : undefined,
       limit: limit ? parseInt(limit, 10) : 10,
-      workspaceId: workspaceId || undefined,
+      workspaceId: effectiveWsId,
     });
     return c.json(result);
   } catch (err) {
@@ -663,11 +750,21 @@ app.get("/documents/:documentId", async (c) => {
     return c.json({ error: "userId query is required" }, 400);
   }
   try {
-    const caller = await getCaller(c);
+    // Set workspace context for the caller using user's first accessible workspace
+    const effectiveWsId =
+      (await getUserAccessibleWorkspaceIds(userId))[0] || undefined;
+    const caller = await getCaller(c, { workspaceId: effectiveWsId, userId });
     const result = await (caller as any).documents.getDocument({
       documentId,
       userId,
     });
+    // Verify document belongs to an accessible workspace
+    if (result?.workspaceId) {
+      const hasAccess = await verifyWorkspaceAccess(userId, result.workspaceId);
+      if (!hasAccess) {
+        return c.json({ error: "Access denied to document's workspace" }, 403);
+      }
+    }
     return c.json(result);
   } catch (err) {
     logger.error({ err, documentId }, "getDocument failed");
@@ -739,10 +836,15 @@ app.get("/proposals", async (c) => {
     (c.req.query("status") as "pending" | "approved" | "rejected" | "all") ||
     "pending";
   try {
-    const caller = await getCaller(c);
+    // Scope to user's accessible workspaces when no explicit workspaceId
+    const effectiveWsId =
+      workspaceId ||
+      (await getUserAccessibleWorkspaceIds(userId))[0] ||
+      undefined;
+    const caller = await getCaller(c, { workspaceId: effectiveWsId });
     const result = await (caller as any).proposals.listProposals({
       userId,
-      workspaceId,
+      workspaceId: effectiveWsId,
       status,
     });
     return c.json(result);
@@ -1352,11 +1454,16 @@ app.get("/graph/traverse", async (c) => {
   }
 
   try {
+    // Scope traversal to user's accessible workspaces (shared-pod safety).
+    // If user has no workspaces, return empty (no unscoped traversal).
+    const accessibleWsIds = await getUserAccessibleWorkspaceIds(userId);
+    if (accessibleWsIds.length === 0) return c.json([]);
     const results = await traverseEntityGraph({
       userId,
       startEntityId,
       maxDepth: Math.min(maxDepth, 3),
       relationshipTypes,
+      workspaceIds: accessibleWsIds,
     });
     return c.json(results);
   } catch (err) {

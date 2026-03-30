@@ -330,7 +330,14 @@ export async function handleSyncPushSupplementary(): Promise<void> {
       }
     }
   } catch (err) {
-    logger.error({ err }, "Supplementary sync push worker top-level error");
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("relation") && msg.includes("does not exist")) {
+      logger.debug(
+        "Supplementary sync push skipped — sync tables not yet migrated"
+      );
+    } else {
+      logger.error({ err }, "Supplementary sync push worker top-level error");
+    }
   }
 }
 

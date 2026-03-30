@@ -1108,6 +1108,9 @@ export const channelsRouter = router({
           // Entity context: when channel is scoped to an entity, forward for prompt injection
           contextObjectType: channel.contextObjectType ?? undefined,
           contextObjectId: channel.contextObjectId ?? undefined,
+          // Pod credentials — IS uses these to call back into this pod via Hub Protocol
+          dataPodUrl: process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
+          dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
         });
 
         for await (const chunk of stream) {
@@ -1258,6 +1261,9 @@ export const channelsRouter = router({
             sourceMessageId: userMessageId,
             agentUserId: agentUserId ?? resolvedService.agentUserId,
             mcpServers: mcpServersList,
+            dataPodUrl:
+              process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
+            dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down

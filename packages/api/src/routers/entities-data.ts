@@ -10,6 +10,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { db, sql, eq, desc, and, isNull, ilike, or } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { intelligenceHubClient } from "../clients/intelligence-hub.js";
+import { config } from "@synap-core/core";
 
 // Legacy support - use profileSlug instead
 const EntityTypeSchema = z.string().optional();
@@ -164,6 +165,11 @@ export const entitiesDataRouter = router({
         }>;
         embeddingGenerated: boolean;
       }> => {
+        // Skip vector search on shared pods
+        if (!config.server.vectorSearchEnabled) {
+          return { entities: [], embeddingGenerated: false };
+        }
+
         // Generate embedding for query
         let embedding: number[];
         try {

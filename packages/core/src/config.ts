@@ -104,6 +104,10 @@ const ServerConfigSchema = z.object({
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
   controlPlaneUrl: z.string().url().optional(),
+  /** Shared pod mode: multiple users share this pod (each gets one workspace). */
+  sharedPodMode: z.coerce.boolean().default(false),
+  /** Disable pgvector semantic search (use on shared pods where workspace isolation is impractical). */
+  vectorSearchEnabled: z.coerce.boolean().default(true),
 });
 
 const Mem0ConfigSchema = z.object({
@@ -246,6 +250,8 @@ function loadConfig(): Config {
         corsOrigins: process.env.CORS_ORIGINS,
         logLevel: process.env.LOG_LEVEL,
         controlPlaneUrl: process.env.CONTROL_PLANE_URL || undefined,
+        sharedPodMode: process.env.SHARED_POD_MODE,
+        vectorSearchEnabled: process.env.VECTOR_SEARCH_ENABLED,
       },
       mem0: {
         apiUrl: process.env.MEM0_API_URL,

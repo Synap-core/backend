@@ -210,6 +210,8 @@ export async function traverseEntityGraph(params: {
   startEntityId: string;
   maxDepth?: number;
   relationshipTypes?: string[];
+  /** When set, only traverse relations within these workspaces (shared-pod safety). */
+  workspaceIds?: string[];
 }): Promise<
   Array<{
     entityId: string;
@@ -219,8 +221,15 @@ export async function traverseEntityGraph(params: {
     path: string[];
   }>
 > {
-  const { userId, startEntityId, maxDepth = 2, relationshipTypes } = params;
+  const {
+    userId,
+    startEntityId,
+    maxDepth = 2,
+    relationshipTypes,
+    workspaceIds,
+  } = params;
   const safeDepth = Math.min(maxDepth, 3);
+  const hasWsFilter = workspaceIds && workspaceIds.length > 0;
 
   const visited = new Set<string>([startEntityId]);
   const results: Array<{
@@ -243,22 +252,41 @@ export async function traverseEntityGraph(params: {
       }>;
 
       if (relationshipTypes && relationshipTypes.length > 0) {
-        rows = await sql<typeof rows>`
-          SELECT source_entity_id, target_entity_id, type
-          FROM relations
-          WHERE user_id = ${userId}
-            AND type = ANY(${relationshipTypes})
-            AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
-          LIMIT 50
-        `;
+        rows = hasWsFilter
+          ? await sql<typeof rows>`
+              SELECT source_entity_id, target_entity_id, type
+              FROM relations
+              WHERE user_id = ${userId}
+                AND type = ANY(${relationshipTypes})
+                AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
+                AND workspace_id = ANY(${workspaceIds})
+              LIMIT 50
+            `
+          : await sql<typeof rows>`
+              SELECT source_entity_id, target_entity_id, type
+              FROM relations
+              WHERE user_id = ${userId}
+                AND type = ANY(${relationshipTypes})
+                AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
+              LIMIT 50
+            `;
       } else {
-        rows = await sql<typeof rows>`
-          SELECT source_entity_id, target_entity_id, type
-          FROM relations
-          WHERE user_id = ${userId}
-            AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
-          LIMIT 50
-        `;
+        rows = hasWsFilter
+          ? await sql<typeof rows>`
+              SELECT source_entity_id, target_entity_id, type
+              FROM relations
+              WHERE user_id = ${userId}
+                AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
+                AND workspace_id = ANY(${workspaceIds})
+              LIMIT 50
+            `
+          : await sql<typeof rows>`
+              SELECT source_entity_id, target_entity_id, type
+              FROM relations
+              WHERE user_id = ${userId}
+                AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
+              LIMIT 50
+            `;
       }
 
       for (const row of rows) {
