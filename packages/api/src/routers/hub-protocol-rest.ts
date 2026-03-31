@@ -452,10 +452,10 @@ app.post("/entities", async (c) => {
     const result = await (caller as any).entities.createEntity({
       userId: body.userId,
       agentUserId: body.agentUserId,
-      // Accept profileSlug (preferred) or legacy type field
       profileSlug: body.profileSlug ?? body.type,
       title: body.title,
       description: body.description,
+      properties: body.properties,
     });
     return c.json(result);
   } catch (err) {

@@ -56,24 +56,30 @@ export const entitiesRouter = router({
    */
   createEntity: scopedProcedure(["hub-protocol.write"])
     .input(
-      z.object({
-        userId: z.string(),
-        type: z.string(),
-        title: z.string(),
-        description: z.string().optional(),
-        // agentUserId: the per-human agent user (userType:"agent") acting on behalf of userId.
-        // The Intelligence Hub must pass this explicitly — it is NOT the API key owner.
-        agentUserId: z.string().uuid().optional(),
-        // AI metadata for tracking AI-generated proposals
-        aiMetadata: z
-          .object({
-            messageId: z.string().optional(),
-            confidence: z.number().min(0).max(1).optional(),
-            model: z.string().optional(),
-            reasoning: z.string().optional(),
-          })
-          .optional(),
-      })
+      z
+        .object({
+          userId: z.string(),
+          profileSlug: z.string().optional(),
+          type: z.string().optional(), // @deprecated — use profileSlug
+          title: z.string(),
+          description: z.string().optional(),
+          properties: z.record(z.string(), z.unknown()).optional(),
+          // agentUserId: the per-human agent user (userType:"agent") acting on behalf of userId.
+          // The Intelligence Hub must pass this explicitly — it is NOT the API key owner.
+          agentUserId: z.string().uuid().optional(),
+          // AI metadata for tracking AI-generated proposals
+          aiMetadata: z
+            .object({
+              messageId: z.string().optional(),
+              confidence: z.number().min(0).max(1).optional(),
+              model: z.string().optional(),
+              reasoning: z.string().optional(),
+            })
+            .optional(),
+        })
+        .refine((d) => d.profileSlug || d.type, {
+          message: "Either profileSlug or type is required",
+        })
     )
     .mutation(async ({ input, ctx }) => {
       // Use the real user (input.userId), not ctx.userId (API key owner)
@@ -86,9 +92,10 @@ export const entitiesRouter = router({
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
       const result = await caller.create({
-        profileSlug: input.type,
+        profileSlug: input.profileSlug ?? input.type,
         title: input.title,
         description: input.description,
+        properties: input.properties,
         // Use "agent" source when agentUserId is present — enables proper attribution in events
         source: input.agentUserId ? "agent" : "intelligence",
         // Prefer explicit agentUserId from request; fall back to API key owner only
