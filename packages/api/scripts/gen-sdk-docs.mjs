@@ -18,7 +18,11 @@ import { resolve, join, basename } from "path";
 const ROUTERS_DIR = resolve("src/routers");
 const REAL_SCRIPT_DIR = realpathSync(resolve("."));
 // synap-backend/packages/api → packages → synap-backend → synap root → users-docs
-const OUT_FILE = join(REAL_SCRIPT_DIR, "../../..", "users-docs/docs/reference/api-reference.md");
+const OUT_FILE = join(
+  REAL_SCRIPT_DIR,
+  "../../..",
+  "users-docs/docs/reference/api-reference.md"
+);
 
 // Routers to document (excludes internal/hub/test files)
 const EXCLUDED = new Set([
@@ -94,8 +98,17 @@ const ROUTER_LABELS = {
 function extractJsDoc(lines, lineIndex) {
   const comments = [];
   let i = lineIndex - 1;
-  while (i >= 0 && (lines[i].trim().startsWith("*") || lines[i].trim() === "*/")) {
-    comments.unshift(lines[i].trim().replace(/^\*+\s?/, "").replace(/^\/\*\*/, "").trim());
+  while (
+    i >= 0 &&
+    (lines[i].trim().startsWith("*") || lines[i].trim() === "*/")
+  ) {
+    comments.unshift(
+      lines[i]
+        .trim()
+        .replace(/^\*+\s?/, "")
+        .replace(/^\/\*\*/, "")
+        .trim()
+    );
     i--;
   }
   if (i >= 0 && lines[i].trim().startsWith("/**")) {
@@ -104,7 +117,7 @@ function extractJsDoc(lines, lineIndex) {
   return comments
     .join(" ")
     .replace(/\s+/g, " ")
-    .replace(/\/\s*$/, "")   // strip trailing slash from */
+    .replace(/\/\s*$/, "") // strip trailing slash from */
     .replace(/^[*\/]+/, "")
     .trim();
 }
@@ -118,7 +131,8 @@ function parseRouter(filePath) {
   const procedures = [];
 
   // Match: procedureName: procedure.query(...) or procedureName: procedure.mutation(...)
-  const RE = /^\s{0,4}(\w+):\s*(workspaceProcedure|protectedProcedure|publicProcedure|procedure)\s*\.\s*(query|mutation|subscription)\s*\(/;
+  const RE =
+    /^\s{0,4}(\w+):\s*(workspaceProcedure|protectedProcedure|publicProcedure|procedure)\s*\.\s*(query|mutation|subscription)\s*\(/;
 
   for (let i = 0; i < lines.length; i++) {
     const match = lines[i].match(RE);
@@ -158,13 +172,17 @@ function getRouterKey(filePath) {
     // entitiesRouter → entities
     return match[1].replace(/Router$/, "");
   }
-  return basename(filePath, ".ts").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  return basename(filePath, ".ts").replace(/-([a-z])/g, (_, c) =>
+    c.toUpperCase()
+  );
 }
 
 function formatProcedure(proc, routerKey) {
   const call = `${routerKey}.${proc.name}`;
   const lines = [];
-  lines.push(`#### \`${call}\` <span class="badge badge--${proc.type === "query" ? "info" : "warning"}">${proc.type}</span>`);
+  lines.push(
+    `#### \`${call}\` <span class="badge badge--${proc.type === "query" ? "info" : "warning"}">${proc.type}</span>`
+  );
   lines.push("");
   if (proc.doc) {
     lines.push(proc.doc);
@@ -172,7 +190,9 @@ function formatProcedure(proc, routerKey) {
   }
   if (proc.inputShape) {
     lines.push("```typescript");
-    lines.push(`useSynap().${call}.${proc.type === "query" ? "useQuery" : "useMutation"}(${proc.inputShape})`);
+    lines.push(
+      `useSynap().${call}.${proc.type === "query" ? "useQuery" : "useMutation"}(${proc.inputShape})`
+    );
     lines.push("```");
     lines.push("");
   }
@@ -180,8 +200,12 @@ function formatProcedure(proc, routerKey) {
 }
 
 // Main
-const files = readdirSync(ROUTERS_DIR)
-  .filter((f) => f.endsWith(".ts") && !EXCLUDED.has(f) && !EXCLUDED_PREFIXES.some((p) => f.startsWith(p)));
+const files = readdirSync(ROUTERS_DIR).filter(
+  (f) =>
+    f.endsWith(".ts") &&
+    !EXCLUDED.has(f) &&
+    !EXCLUDED_PREFIXES.some((p) => f.startsWith(p))
+);
 
 const sections = [];
 
@@ -241,4 +265,6 @@ ${sections.join("\n\n---\n\n")}
 `;
 
 writeFileSync(OUT_FILE, output, "utf-8");
-console.log(`✅  API reference written to ${OUT_FILE} (${sections.length} routers, ${sections.reduce((n, s) => n + (s.match(/^####/gm) || []).length, 0)} procedures)`);
+console.log(
+  `✅  API reference written to ${OUT_FILE} (${sections.length} routers, ${sections.reduce((n, s) => n + (s.match(/^####/gm) || []).length, 0)} procedures)`
+);

@@ -122,6 +122,49 @@ export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
     isDirectional: true,
     uiHints: { category: "workflow", inverseLabel: "Has Deal" },
   },
+  // Relay: relationship graph relation types
+  {
+    slug: "met_at",
+    displayName: "Met at",
+    description: "Person met at an event or gathering",
+    isDirectional: true,
+    uiHints: { category: "social", inverseLabel: "Attendees" },
+  },
+  {
+    slug: "works_on",
+    displayName: "Works on",
+    description: "Person contributes to a project",
+    isDirectional: true,
+    uiHints: { category: "workflow", inverseLabel: "Contributors" },
+  },
+  {
+    slug: "has_skill",
+    displayName: "Has skill",
+    description: "Person possesses a skill or expertise",
+    isDirectional: true,
+    uiHints: { category: "reference", inverseLabel: "Skilled people" },
+  },
+  {
+    slug: "affiliated_with",
+    displayName: "Affiliated with",
+    description: "Person affiliated with an organization",
+    isDirectional: true,
+    uiHints: { category: "social", inverseLabel: "Members" },
+  },
+  {
+    slug: "knows",
+    displayName: "Knows",
+    description: "Two people know each other",
+    isDirectional: false,
+    uiHints: { category: "social" },
+  },
+  {
+    slug: "discussed_with",
+    displayName: "Discussed with",
+    description: "Had a discussion or conversation with",
+    isDirectional: false,
+    uiHints: { category: "social" },
+  },
 ];
 
 /**

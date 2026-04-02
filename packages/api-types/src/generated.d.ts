@@ -1248,10 +1248,7 @@ export interface ExecutionStats {
 	toolCallCount?: number;
 	[key: string]: unknown;
 }
-/**
- * Core API Router
- */
-export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
+declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	ctx: Context;
 	meta: object;
 	errorShape: {
@@ -8727,6 +8724,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 	}>>;
 }>>;
-export type AppRouter = typeof coreRouter;
+export type AppRouter = typeof _coreRouter;
+export declare const coreRouter: AppRouter;
 
 export {};

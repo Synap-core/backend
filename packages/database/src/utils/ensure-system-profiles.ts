@@ -325,6 +325,81 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "Contact", inputType: "entity-select" },
       },
+      // Relay: extended person/contact properties
+      {
+        slug: "telegramHandle",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: {
+          label: "Telegram",
+          inputType: "text",
+          helpText: "@username",
+        },
+      },
+      {
+        slug: "linkedinUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "LinkedIn", inputType: "url" },
+      },
+      {
+        slug: "twitterHandle",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Twitter/X", inputType: "text" },
+      },
+      {
+        slug: "farcasterFid",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Farcaster", inputType: "text" },
+      },
+      {
+        slug: "walletAddresses",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Wallet Addresses", inputType: "tags" },
+      },
+      {
+        slug: "sources",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Sources",
+          inputType: "tags",
+          helpText: "Where this contact was imported from",
+        },
+      },
+      {
+        slug: "lastInteractionAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Last Interaction" },
+      },
+      {
+        slug: "interactionCount",
+        valueType: PropertyValueType.NUMBER,
+        constraints: {},
+        uiHints: { label: "Interactions", inputType: "number" },
+      },
+      {
+        slug: "strengthScore",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0, max: 100 },
+        uiHints: { label: "Relationship Strength" },
+      },
+      {
+        slug: "aiSummary",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "AI Summary", inputType: "textarea" },
+      },
+      {
+        slug: "focusAreas",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Focus Areas", inputType: "tags" },
+      },
     ];
 
     for (const propDef of capturePropertyDefs) {
@@ -650,8 +725,19 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "title", required: true, displayOrder: 0 },
           { slug: "email", required: false, displayOrder: 1 },
           { slug: "phone", required: false, displayOrder: 2 },
-          { slug: "tags", required: false, displayOrder: 3 },
-          { slug: "description", required: false, displayOrder: 4 },
+          { slug: "telegramHandle", required: false, displayOrder: 3 },
+          { slug: "linkedinUrl", required: false, displayOrder: 4 },
+          { slug: "twitterHandle", required: false, displayOrder: 5 },
+          { slug: "farcasterFid", required: false, displayOrder: 6 },
+          { slug: "walletAddresses", required: false, displayOrder: 7 },
+          { slug: "sources", required: false, displayOrder: 8 },
+          { slug: "lastInteractionAt", required: false, displayOrder: 9 },
+          { slug: "interactionCount", required: false, displayOrder: 10 },
+          { slug: "strengthScore", required: false, displayOrder: 11 },
+          { slug: "aiSummary", required: false, displayOrder: 12 },
+          { slug: "focusAreas", required: false, displayOrder: 13 },
+          { slug: "tags", required: false, displayOrder: 14 },
+          { slug: "description", required: false, displayOrder: 15 },
         ],
       },
       {
