@@ -141,7 +141,7 @@ export const entitiesRouter = router({
         description: input.preview,
         properties: input.metadata,
         source: input.agentUserId ? "agent" : "intelligence",
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        agentUserId: input.agentUserId,
       });
 
       return {

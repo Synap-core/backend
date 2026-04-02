@@ -200,8 +200,13 @@ export class IntelligenceHubClient {
               threadId: request.threadId,
               userId: request.userId,
               agentId: request.agentId || "orchestrator",
+              agentType: request.agentType,
+              agentConfig: request.agentConfig,
               projectId: request.projectId,
               workspaceId: request.workspaceId,
+              sourceMessageId: request.sourceMessageId,
+              agentUserId: request.agentUserId,
+              deepAnalysis: request.deepAnalysis,
               dataPodUrl:
                 request.dataPodUrl ||
                 process.env.PUBLIC_URL ||

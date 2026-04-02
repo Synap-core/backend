@@ -31,7 +31,7 @@ interface WorkspaceSettings {
     chat?: string;
     analysis?: string;
   };
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ServiceResolutionContext {
@@ -205,7 +205,7 @@ async function getActiveService(serviceId: string) {
   });
   if (!svc) return null;
   // Skip explicitly unhealthy services — route to fallback instead
-  if ((svc as any).lastHealthStatus === "unhealthy") {
+  if ((svc as { lastHealthStatus?: string }).lastHealthStatus === "unhealthy") {
     logger.warn(
       { serviceId: svc.serviceId },
       "Skipping unhealthy intelligence service — falling through to next option"
