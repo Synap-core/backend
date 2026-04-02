@@ -118,7 +118,7 @@ function extractJsDoc(lines, lineIndex) {
     .join(" ")
     .replace(/\s+/g, " ")
     .replace(/\/\s*$/, "") // strip trailing slash from */
-    .replace(/^[*\/]+/, "")
+    .replace(/^[*/]+/, "")
     .trim();
 }
 
