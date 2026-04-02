@@ -73,14 +73,21 @@ export const captureRouter = router({
           workspaceId
         );
         const availableProfiles = accessibleProfiles
-          .filter((p: any) => !(p.uiHints as any)?.hideFromCreate)
-          .map((p: any) => ({
+          .filter(
+            (p) => !(p.uiHints as Record<string, unknown>)?.hideFromCreate
+          )
+          .map((p) => ({
             slug: p.slug,
             displayName: p.displayName || p.slug,
-            description: p.description || undefined,
-            propertyHints:
-              p.effectiveProperties?.map((prop: any) => prop.slug).join(", ") ||
+            description:
+              ((p.uiHints as Record<string, unknown>)?.description as string) ||
               undefined,
+            propertyHints:
+              (
+                p as { effectiveProperties?: Array<{ slug: string }> }
+              ).effectiveProperties
+                ?.map((prop) => prop.slug)
+                .join(", ") || undefined,
           }));
 
         const { client } = await resolveIntelligenceService({
@@ -211,14 +218,19 @@ export const captureRouter = router({
         workspaceId
       );
       const availableProfiles = accessibleProfiles
-        .filter((p: any) => !(p.uiHints as any)?.hideFromCreate)
-        .map((p: any) => ({
+        .filter((p) => !(p.uiHints as Record<string, unknown>)?.hideFromCreate)
+        .map((p) => ({
           slug: p.slug,
           displayName: p.displayName || p.slug,
-          description: p.description || undefined,
-          propertyHints:
-            p.effectiveProperties?.map((prop: any) => prop.slug).join(", ") ||
+          description:
+            ((p.uiHints as Record<string, unknown>)?.description as string) ||
             undefined,
+          propertyHints:
+            (
+              p as { effectiveProperties?: Array<{ slug: string }> }
+            ).effectiveProperties
+              ?.map((prop) => prop.slug)
+              .join(", ") || undefined,
         }));
 
       // 2. Call IS /api/structure

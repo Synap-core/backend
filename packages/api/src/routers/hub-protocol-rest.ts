@@ -9,11 +9,14 @@ import { Hono } from "hono";
 import { realpathSync, existsSync } from "fs";
 import { resolve as resolvePath } from "path";
 import { createLogger, config } from "@synap-core/core";
+import { TRPCError } from "@trpc/server";
 import { apiKeyService } from "../services/api-keys.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
+import type { MessageRole } from "@synap/database/schema";
+import type { ProactiveMessageType } from "../utils/proactive-channel-post.js";
 import {
   db,
   messages,
@@ -166,6 +169,13 @@ async function verifyWorkspaceAccess(
 }
 
 /**
+ * Typed caller — the return type of createCaller is fully inferred from
+ * the hub protocol router definition. This single type alias eliminates
+ * the need for `caller.sub.procedure()` throughout the file.
+ */
+type HubProtocolCaller = ReturnType<typeof hubProtocolRouter.createCaller>;
+
+/**
  * Helper: get hub protocol caller for current request.
  * Pass workspaceId for workspace-scoped procedures (e.g. entities create/update).
  */
@@ -176,7 +186,7 @@ async function getCaller(
     userId?: string;
     sourceMessageId?: string | null;
   }
-) {
+): Promise<HubProtocolCaller> {
   // For workspace-scoped calls the body userId (real user) must be used,
   // not the API key's userId ("system"), so the membership check passes.
   const userId = options?.userId ?? (c.get("userId") as string);
@@ -187,6 +197,9 @@ async function getCaller(
     options?.workspaceId,
     options?.sourceMessageId
   );
+  // Bridge cast: hub-protocol context extends tRPC's base context with extra
+  // fields (scopes, apiKeyId, source). This is the ONLY `as any` needed —
+  // all downstream caller usage inherits proper types from HubProtocolCaller.
   return hubProtocolRouter.createCaller(ctx as any);
 }
 
@@ -265,7 +278,7 @@ app.get("/threads/:threadId/context", async (c) => {
   const threadId = c.req.param("threadId");
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).context.getThreadContext({ threadId });
+    const result = await caller.context.getThreadContext({ threadId });
     return c.json(result);
   } catch (err) {
     logger.error({ err, threadId }, "getThreadContext failed");
@@ -292,7 +305,7 @@ app.patch("/threads/:threadId/context", async (c) => {
   try {
     if (body.contextSummary !== undefined) {
       const caller = await getCaller(c);
-      await (caller as any).context.updateThreadContext({
+      await caller.context.updateThreadContext({
         threadId,
         contextSummary: body.contextSummary ?? "",
       });
@@ -328,7 +341,7 @@ app.get("/users/:userId/context", async (c) => {
   const userId = c.req.param("userId");
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).context.getUserContext({ userId });
+    const result = await caller.context.getUserContext({ userId });
     return c.json(result);
   } catch (err) {
     logger.error({ err, userId }, "getUserContext failed");
@@ -363,7 +376,7 @@ app.get("/users/:userId/entities", async (c) => {
       workspaceId: effectiveWsIds[0],
       userId,
     });
-    const result = await (caller as any).entities.getEntities({
+    const result = await caller.entities.getEntities({
       userId,
       workspaceId: workspaceId || undefined,
       type: type || undefined,
@@ -449,9 +462,9 @@ app.post("/entities", async (c) => {
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).entities.createEntity({
+    const result = await caller.entities.createEntity({
       userId: body.userId,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       profileSlug: body.profileSlug ?? body.type,
       title: body.title,
       description: body.description,
@@ -501,10 +514,10 @@ app.patch("/entities/:entityId", async (c) => {
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).entities.updateEntity({
+    const result = await caller.entities.updateEntity({
       entityId,
       userId: body.userId,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       title: body.title,
       preview: body.preview,
       metadata: body.metadata,
@@ -537,7 +550,7 @@ app.get("/search/collection", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).search.searchCollection({
+    const result = await caller.search.searchCollection({
       userId,
       collection: collection as
         | "entities"
@@ -585,7 +598,7 @@ app.get("/search", async (c) => {
       (await getUserAccessibleWorkspaceIds(userId))[0] ||
       undefined;
     const caller = await getCaller(c, { workspaceId: effectiveWsId });
-    const result = await (caller as any).search.search({
+    const result = await caller.search.search({
       userId,
       query,
       workspaceId: effectiveWsId,
@@ -631,7 +644,7 @@ app.get("/search/documents", async (c) => {
     const effectiveWsId =
       (await getUserAccessibleWorkspaceIds(userId))[0] || undefined;
     const caller = await getCaller(c, { workspaceId: effectiveWsId });
-    const result = await (caller as any).search.searchDocuments({
+    const result = await caller.search.searchDocuments({
       userId,
       query,
       type: type as "text" | "markdown" | "code" | "pdf" | "docx" | undefined,
@@ -668,7 +681,7 @@ app.get("/vector-search", async (c) => {
       (await getUserAccessibleWorkspaceIds(userId))[0] ||
       undefined;
     const caller = await getCaller(c, { workspaceId: effectiveWsId || null });
-    const result = await (caller as any).search.vectorSearch({
+    const result = await caller.search.vectorSearch({
       userId,
       query,
       types: types ? types.split(",") : undefined,
@@ -718,14 +731,14 @@ app.post("/documents", async (c) => {
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).documents.createDocument({
+    const result = await caller.documents.createDocument({
       userId: body.userId,
       workspaceId: body.workspaceId,
       title: body.title,
       content: body.content ?? "",
       type: body.type ?? "markdown",
       reasoning: body.reasoning,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
     });
     return c.json(result);
   } catch (err) {
@@ -754,7 +767,7 @@ app.get("/documents/:documentId", async (c) => {
     const effectiveWsId =
       (await getUserAccessibleWorkspaceIds(userId))[0] || undefined;
     const caller = await getCaller(c, { workspaceId: effectiveWsId, userId });
-    const result = await (caller as any).documents.getDocument({
+    const result = await caller.documents.getDocument({
       documentId,
       userId,
     });
@@ -802,10 +815,10 @@ app.post("/documents/proposals", async (c) => {
     const caller = await getCaller(c, {
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).documents.createDocumentProposal({
+    const result = await caller.documents.createDocumentProposal({
       documentId: body.documentId,
       userId: body.userId,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       threadId: body.threadId,
       sourceMessageId: body.sourceMessageId,
       proposalType: body.proposalType ?? "ai_edit",
@@ -842,7 +855,7 @@ app.get("/proposals", async (c) => {
       (await getUserAccessibleWorkspaceIds(userId))[0] ||
       undefined;
     const caller = await getCaller(c, { workspaceId: effectiveWsId });
-    const result = await (caller as any).proposals.listProposals({
+    const result = await caller.proposals.listProposals({
       userId,
       workspaceId: effectiveWsId,
       status,
@@ -876,7 +889,7 @@ app.patch("/proposals/:id", async (c) => {
   };
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).proposals.updateProposal({
+    const result = await caller.proposals.updateProposal({
       proposalId,
       data: body.data,
       summary: body.summary,
@@ -885,9 +898,9 @@ app.patch("/proposals/:id", async (c) => {
   } catch (err) {
     logger.error({ err, proposalId }, "updateProposal failed");
     const code =
-      (err as any)?.code === "NOT_FOUND"
+      err instanceof TRPCError && err.code === "NOT_FOUND"
         ? 404
-        : (err as any)?.code === "BAD_REQUEST"
+        : err instanceof TRPCError && err.code === "BAD_REQUEST"
           ? 400
           : 500;
     return c.json(
@@ -909,7 +922,7 @@ app.get("/skills/getSkills", async (c) => {
   const status = c.req.query("status");
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).skills.getSkills({
+    const result = await caller.skills.getSkills({
       userId,
       workspaceId: workspaceId || undefined,
       status: (status as "active" | "inactive" | "error" | "all") || "all",
@@ -938,7 +951,7 @@ app.get("/skills/getSkill", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).skills.getSkill({ userId, skillId });
+    const result = await caller.skills.getSkill({ userId, skillId });
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "getSkill failed");
@@ -967,7 +980,7 @@ app.post("/skills/createSkill", async (c) => {
   }>();
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).skills.createSkill(body);
+    const result = await caller.skills.createSkill(body);
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "createSkill failed");
@@ -1000,9 +1013,9 @@ app.post("/threads/:threadId/link-entity", async (c) => {
   };
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).linking.linkEntity({
+    const result = await caller.linking.linkEntity({
       userId: body.userId,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       threadId,
       entityId: body.entityId,
       relationshipType: body.relationshipType ?? "referenced",
@@ -1011,7 +1024,8 @@ app.post("/threads/:threadId/link-entity", async (c) => {
     return c.json(result);
   } catch (err) {
     logger.error({ err, threadId }, "linkEntity failed");
-    const code = (err as any)?.message?.includes("not found") ? 404 : 500;
+    const code =
+      err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500;
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       code
@@ -1041,9 +1055,9 @@ app.post("/threads/:threadId/link-document", async (c) => {
   };
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).linking.linkDocument({
+    const result = await caller.linking.linkDocument({
       userId: body.userId,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       threadId,
       documentId: body.documentId,
       relationshipType: body.relationshipType ?? "referenced",
@@ -1052,7 +1066,8 @@ app.post("/threads/:threadId/link-document", async (c) => {
     return c.json(result);
   } catch (err) {
     logger.error({ err, threadId }, "linkDocument failed");
-    const code = (err as any)?.message?.includes("not found") ? 404 : 500;
+    const code =
+      err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500;
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       code
@@ -1224,7 +1239,7 @@ app.post("/threads/:threadId/messages", async (c) => {
     await db.insert(messages).values({
       id: msgId,
       channelId: threadId,
-      role: body.role as any,
+      role: body.role as MessageRole,
       content: body.content,
       userId: body.userId,
       hash,
@@ -1596,7 +1611,7 @@ app.get("/views", async (c) => {
   }
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).views.listViews({
+    const result = await caller.views.listViews({
       userId,
       workspaceId,
       type: c.req.query("type"),
@@ -1644,7 +1659,7 @@ app.post("/views", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).views.createView({
+    const result = await caller.views.createView({
       userId: body.userId,
       workspaceId: body.workspaceId,
       name: body.name,
@@ -1652,7 +1667,7 @@ app.post("/views", async (c) => {
       profileId: body.profileId,
       config: body.config,
       metadata: body.metadata,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       reasoning: body.reasoning,
     });
     return c.json(result);
@@ -1693,14 +1708,14 @@ app.patch("/views/:viewId", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).views.updateView({
+    const result = await caller.views.updateView({
       userId: body.userId,
       viewId,
       workspaceId: body.workspaceId,
       name: body.name,
       config: body.config,
       metadata: body.metadata,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       reasoning: body.reasoning,
     });
     return c.json(result);
@@ -1737,12 +1752,12 @@ app.post("/views/:viewId/arrange", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).views.arrangeBento({
+    const result = await caller.views.arrangeBento({
       userId: body.userId,
       workspaceId: body.workspaceId,
       viewId,
       widgets: body.widgets,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       reasoning: body.reasoning,
     });
     return c.json(result);
@@ -1776,7 +1791,7 @@ app.get("/profiles", async (c) => {
   }
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).profiles.listProfiles({
+    const result = await caller.profiles.listProfiles({
       userId,
       workspaceId,
     });
@@ -1820,7 +1835,7 @@ app.post("/profiles", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).profiles.createProfile({
+    const result = await caller.profiles.createProfile({
       userId: body.userId,
       workspaceId: body.workspaceId,
       slug: body.slug,
@@ -1830,7 +1845,7 @@ app.post("/profiles", async (c) => {
       parentProfileId: body.parentProfileId,
       uiHints: body.uiHints,
       reasoning: body.reasoning,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
     });
     return c.json(result);
   } catch (err) {
@@ -1859,7 +1874,7 @@ app.get("/property-defs", async (c) => {
   }
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).profiles.listPropertyDefs({
+    const result = await caller.profiles.listPropertyDefs({
       userId,
       workspaceId,
       profileId: c.req.query("profileId"),
@@ -1902,14 +1917,14 @@ app.post("/property-defs", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).profiles.createPropertyDef({
+    const result = await caller.profiles.createPropertyDef({
       userId: body.userId,
       profileId: body.profileId,
       slug: body.slug,
       valueType: body.valueType,
       constraints: body.constraints,
       uiHints: body.uiHints,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
     });
     return c.json(result);
   } catch (err) {
@@ -1942,7 +1957,7 @@ app.get("/relations", async (c) => {
   }
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).relations.listRelations({
+    const result = await caller.relations.listRelations({
       userId,
       workspaceId,
       entityId: c.req.query("entityId"),
@@ -1986,14 +2001,14 @@ app.post("/relations", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).relations.createRelation({
+    const result = await caller.relations.createRelation({
       userId: body.userId,
       workspaceId: body.workspaceId,
       sourceEntityId: body.sourceEntityId,
       targetEntityId: body.targetEntityId,
       type: body.type,
       metadata: body.metadata,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       reasoning: body.reasoning,
     });
     return c.json(result);
@@ -2028,7 +2043,7 @@ app.post("/sessions/getOrCreate", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).sessions.getOrCreate({
+    const result = await caller.sessions.getOrCreate({
       channelId: body.channelId,
       bootstrapStateId: body.bootstrapStateId,
     });
@@ -2055,7 +2070,7 @@ app.get("/sessions/active", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).sessions.getActive({ channelId });
+    const result = await caller.sessions.getActive({ channelId });
     return c.json(result ?? null);
   } catch (err) {
     logger.error({ err }, "sessions.getActive failed");
@@ -2076,13 +2091,13 @@ app.get("/sessions/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).sessions.get({ sessionId });
+    const result = await caller.sessions.get({ sessionId });
     return c.json(result);
   } catch (err) {
     logger.error({ err, sessionId }, "sessions.get failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
-      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+      err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
     );
   }
 });
@@ -2101,7 +2116,7 @@ app.get("/sessions", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).sessions.list({ channelId, limit });
+    const result = await caller.sessions.list({ channelId, limit });
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "sessions.list failed");
@@ -2128,7 +2143,7 @@ app.patch("/sessions/:sessionId", async (c) => {
   if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).sessions.update({
+    const result = await caller.sessions.update({
       sessionId,
       ...body,
     });
@@ -2137,7 +2152,7 @@ app.patch("/sessions/:sessionId", async (c) => {
     logger.error({ err, sessionId }, "sessions.update failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
-      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+      err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
     );
   }
 });
@@ -2157,7 +2172,7 @@ app.post("/sessions/:sessionId/close", async (c) => {
   if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).sessions.close({
+    const result = await caller.sessions.close({
       sessionId,
       producedStateId: body.producedStateId,
     });
@@ -2166,7 +2181,7 @@ app.post("/sessions/:sessionId/close", async (c) => {
     logger.error({ err, sessionId }, "sessions.close failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
-      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+      err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
     );
   }
 });
@@ -2193,7 +2208,7 @@ app.post("/compacted-states", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).compactedStates.create(body);
+    const result = await caller.compactedStates.create(body);
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "compactedStates.create failed");
@@ -2217,7 +2232,7 @@ app.get("/compacted-states/latest", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).compactedStates.getLatest({
+    const result = await caller.compactedStates.getLatest({
       channelId,
     });
     return c.json(result ?? null);
@@ -2240,13 +2255,13 @@ app.get("/compacted-states/:stateId", async (c) => {
   const stateId = c.req.param("stateId");
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).compactedStates.get({ stateId });
+    const result = await caller.compactedStates.get({ stateId });
     return c.json(result);
   } catch (err) {
     logger.error({ err, stateId }, "compactedStates.get failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
-      (err as any)?.code === "NOT_FOUND" ? 404 : 500
+      err instanceof TRPCError && err.code === "NOT_FOUND" ? 404 : 500
     );
   }
 });
@@ -2265,7 +2280,7 @@ app.get("/compacted-states", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await (caller as any).compactedStates.list({
+    const result = await caller.compactedStates.list({
       channelId,
       limit,
     });
@@ -2305,11 +2320,11 @@ app.delete("/relations/:relationId", async (c) => {
       workspaceId: body.workspaceId,
       sourceMessageId: body.sourceMessageId,
     });
-    const result = await (caller as any).relations.deleteRelation({
+    const result = await caller.relations.deleteRelation({
       userId,
       workspaceId: body.workspaceId,
       relationId,
-      agentUserId: body.agentUserId,
+      ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       reasoning: body.reasoning,
     });
     return c.json(result);
@@ -2340,7 +2355,7 @@ app.get("/widget-definitions", async (c) => {
   }
   try {
     const caller = await getCaller(c, { workspaceId });
-    const result = await (caller as any).widgetDefinitions.listWidgetDefs({
+    const result = await caller.widgetDefinitions.listWidgetDefs({
       workspaceId,
     });
     return c.json(result);
@@ -2501,7 +2516,7 @@ app.post("/widget-definitions", async (c) => {
       workspaceId,
       sourceMessageId: (body.sourceMessageId as string) ?? null,
     });
-    const result = await (caller as any).widgetDefinitions.upsertWidgetDef({
+    const result = await caller.widgetDefinitions.upsertWidgetDef({
       ...body,
       userId,
     });
@@ -2549,7 +2564,7 @@ app.post("/automations/create", async (c) => {
       workspaceId,
       sourceMessageId: (body.sourceMessageId as string) ?? null,
     });
-    const result = await (caller as any).automations.createAutomation({
+    const result = await caller.automations.createAutomation({
       userId,
       agentUserId: body.agentUserId as string | undefined,
       workspaceId,
@@ -2590,7 +2605,7 @@ app.get("/automations", async (c) => {
 
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).automations.listAutomations({
+    const result = await caller.automations.listAutomations({
       userId,
       workspaceId,
       status: c.req.query("status") || undefined,
@@ -2623,7 +2638,7 @@ app.get("/automations/:automationId", async (c) => {
 
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).automations.getAutomation({
+    const result = await caller.automations.getAutomation({
       userId,
       workspaceId,
       id: c.req.param("automationId"),
@@ -2660,7 +2675,7 @@ app.post("/automations/:automationId/trigger", async (c) => {
 
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).automations.triggerAutomation({
+    const result = await caller.automations.triggerAutomation({
       userId,
       workspaceId,
       id: c.req.param("automationId"),
@@ -2700,7 +2715,7 @@ app.patch("/automations/:automationId", async (c) => {
 
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).automations.updateAutomation({
+    const result = await caller.automations.updateAutomation({
       userId,
       workspaceId,
       id: c.req.param("automationId"),
@@ -2744,7 +2759,7 @@ app.post("/automations/:automationId/activate", async (c) => {
 
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).automations.activateAutomation({
+    const result = await caller.automations.activateAutomation({
       userId,
       workspaceId,
       id: c.req.param("automationId"),
@@ -2779,7 +2794,7 @@ app.post("/automations/:automationId/pause", async (c) => {
 
   try {
     const caller = await getCaller(c, { userId, workspaceId });
-    const result = await (caller as any).automations.pauseAutomation({
+    const result = await caller.automations.pauseAutomation({
       userId,
       workspaceId,
       id: c.req.param("automationId"),
@@ -3293,7 +3308,7 @@ app.get("/channels/personal", async (c) => {
   }
   try {
     const caller = await getCaller(c, { workspaceId, userId });
-    const result = await (caller as any).channels.ensurePersonal({
+    const result = await caller.channels.ensurePersonal({
       userId,
       workspaceId,
     });
@@ -3444,7 +3459,7 @@ app.post("/channels/trigger-ai", async (c) => {
       workspaceId: body.workspaceId,
       userId: body.userId,
     });
-    const result = await (caller as any).channels.triggerAI({
+    const result = await caller.channels.triggerAI({
       channelId: body.channelId,
       userId: body.userId,
       workspaceId: body.workspaceId,
@@ -3585,7 +3600,7 @@ app.post("/proactive/post", async (c) => {
       userId: body.userId,
       workspaceId: body.workspaceId,
       content: body.content,
-      proactiveType: body.proactiveType as any,
+      proactiveType: body.proactiveType as ProactiveMessageType,
       metadata: {
         ...body.metadata,
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
@@ -3762,7 +3777,7 @@ app.post("/entity-share/deliver", async (c) => {
     );
     const caller = hubProtocolRouter.createCaller(callerCtx as any);
 
-    const result = await (caller as any).entities.create({
+    const result = await caller.entities.create({
       profileSlug,
       title: (snapshot.title as string | undefined) ?? undefined,
       description: (snapshot.preview as string | undefined) ?? undefined,

@@ -56,30 +56,24 @@ export const entitiesRouter = router({
    */
   createEntity: scopedProcedure(["hub-protocol.write"])
     .input(
-      z
-        .object({
-          userId: z.string(),
-          profileSlug: z.string().optional(),
-          type: z.string().optional(), // @deprecated — use profileSlug
-          title: z.string(),
-          description: z.string().optional(),
-          properties: z.record(z.string(), z.unknown()).optional(),
-          // agentUserId: the per-human agent user (userType:"agent") acting on behalf of userId.
-          // The Intelligence Hub must pass this explicitly — it is NOT the API key owner.
-          agentUserId: z.string().uuid().optional(),
-          // AI metadata for tracking AI-generated proposals
-          aiMetadata: z
-            .object({
-              messageId: z.string().optional(),
-              confidence: z.number().min(0).max(1).optional(),
-              model: z.string().optional(),
-              reasoning: z.string().optional(),
-            })
-            .optional(),
-        })
-        .refine((d) => d.profileSlug || d.type, {
-          message: "Either profileSlug or type is required",
-        })
+      z.object({
+        userId: z.string(),
+        // profileSlug is canonical; type is a deprecated alias accepted for backward compat
+        profileSlug: z.string().optional(),
+        type: z.string().optional(),
+        title: z.string(),
+        description: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        agentUserId: z.string().uuid().optional(),
+        aiMetadata: z
+          .object({
+            messageId: z.string().optional(),
+            confidence: z.number().min(0).max(1).optional(),
+            model: z.string().optional(),
+            reasoning: z.string().optional(),
+          })
+          .optional(),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       // Use the real user (input.userId), not ctx.userId (API key owner)
