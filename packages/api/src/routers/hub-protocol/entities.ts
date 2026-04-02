@@ -98,9 +98,9 @@ export const entitiesRouter = router({
         properties: input.properties,
         // Use "agent" source when agentUserId is present — enables proper attribution in events
         source: input.agentUserId ? "agent" : "intelligence",
-        // Prefer explicit agentUserId from request; fall back to API key owner only
-        // as last resort (API key owner is a system account, not a per-human agent).
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        // Only pass agentUserId when explicitly provided — ctx.userId is the API key
+        // owner ("system") which is not a valid UUID and would fail Zod validation.
+        agentUserId: input.agentUserId,
       });
       return {
         status: result.status,
