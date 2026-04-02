@@ -45,6 +45,7 @@ Response:
 ### Chat Attachments
 
 `sendMessage` accepts `attachmentEntityIds: string[]` (max 10). For each:
+
 1. Verifies entity exists with `type="file"`
 2. Inserts `channel_context_items` row (relationship: `used_as_context`)
 3. Stores `metadata.attachments` on the message as JSONB
@@ -52,6 +53,7 @@ Response:
 ### AI Context
 
 The Intelligence Service receives file entities via `getThreadContext()` → `linkedEntities`. For files, `properties` (including `storageKey`, `mimeType`) are included. The IS context-manager:
+
 - Images: generates presigned URL → injects `![fileName](url)` into system prompt
 - Documents: injects `[File: name (type, size)]` as text reference
 - Cap: 5 file context items per message
@@ -86,12 +88,12 @@ Limits:
 
 ### Type Detection & Processing
 
-| Extension | Detection | Action |
-|-----------|-----------|--------|
-| `.json` | `detectJsonChatShape()` | Create external_import channel + messages |
-| `.md` | `parseMarkdown()` | Create entity (note) + document with frontmatter properties |
-| `.csv` | `parseCsv()` | Create entities (one per row, headers as properties) |
-| Other | — | Store raw file in MinIO under `imports/{userId}/{batchId}/` |
+| Extension | Detection               | Action                                                      |
+| --------- | ----------------------- | ----------------------------------------------------------- |
+| `.json`   | `detectJsonChatShape()` | Create external_import channel + messages                   |
+| `.md`     | `parseMarkdown()`       | Create entity (note) + document with frontmatter properties |
+| `.csv`    | `parseCsv()`            | Create entities (one per row, headers as properties)        |
+| Other     | —                       | Store raw file in MinIO under `imports/{userId}/{batchId}/` |
 
 ### Response
 
@@ -109,6 +111,7 @@ Limits:
 ### Frontend: ImportDialog
 
 Available in `@synap/channels` as `<ImportDialog>`. Supports:
+
 - Drag-and-drop files and folders
 - `webkitdirectory` for folder selection
 - Recursive directory traversal (FileSystemEntry API)
@@ -127,6 +130,7 @@ When an AI proposal is created, `notifyProposalViaTelegram()` fires (in `permiss
 ### Morning Digest
 
 `telegram-digest` pg-boss worker runs daily at 8 AM. For each user with a Telegram connection:
+
 - Counts pending proposals
 - Counts new entities (last 24h)
 - Sends summary via Telegram Bot API
@@ -135,6 +139,7 @@ When an AI proposal is created, `notifyProposalViaTelegram()` fires (in `permiss
 ### Bot Token Resolution
 
 `resolveTelegramBotToken()` — 3-tier chain with 5-min cache:
+
 1. Secrets vault (`category='integrations'`, `encryptionMode='server'`)
 2. `workspace.settings.controlPlane.telegramBotToken`
 3. `process.env.TELEGRAM_BOT_TOKEN`
