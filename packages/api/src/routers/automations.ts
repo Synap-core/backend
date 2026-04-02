@@ -16,6 +16,7 @@ import {
   automationRuns,
   automationStepRuns,
 } from "@synap/database";
+import type { FlowDefinition } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -167,15 +168,15 @@ export const automationsRouter = router({
           description: input.description,
           triggerType: input.triggerType,
           triggerConfig: input.triggerConfig,
-          flowDefinition: input.flowDefinition as any,
+          flowDefinition: input.flowDefinition as unknown as FlowDefinition,
           status: input.status,
           metadata: {
             ...(input.metadata ?? {}),
             createdVia:
               input.source === "agent" || input.source === "ai"
-                ? "ai"
-                : "manual",
-          } as any,
+                ? ("ai" as const)
+                : ("manual" as const),
+          },
         })
         .returning();
 

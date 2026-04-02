@@ -215,7 +215,7 @@ export const profilesRouter = router({
       }
       if ("proposalId" in perm) {
         return {
-          profile: null as any,
+          profile: null as Record<string, unknown> | null,
           status: "proposed",
           message: "Profile creation proposed for review",
           proposalId: perm.proposalId,
@@ -315,7 +315,7 @@ export const profilesRouter = router({
           const bentoView = await viewRepo.create(
             {
               name: input.displayName,
-              type: "bento" as any,
+              type: "bento",
               workspaceId: ctx.workspaceId,
               userId: ctx.userId,
               scopeProfileIds: [profile.id],
@@ -337,30 +337,35 @@ export const profilesRouter = router({
             where: eq(workspaces.id, ctx.workspaceId),
           });
           if (workspace) {
-            const currentLayout = ((workspace.settings as any)?.layout ??
-              {}) as Record<string, unknown>;
-            const existingItems = (currentLayout.sidebarItems as any[]) ?? [];
+            const settingsRecord = (workspace.settings ?? {}) as Record<
+              string,
+              unknown
+            >;
+            const currentLayout = (settingsRecord.layout ?? {}) as Record<
+              string,
+              unknown
+            >;
+            const existingItems = (currentLayout.sidebarItems ?? []) as Array<
+              Record<string, unknown>
+            >;
             const alreadyPresent = existingItems.some(
-              (item: any) =>
-                item.kind === "profile" && item.profileSlug === slug
+              (item) => item.kind === "profile" && item.profileSlug === slug
             );
             if (!alreadyPresent) {
+              const newItem = {
+                kind: "profile",
+                profileSlug: slug,
+                label: input.displayName,
+                icon,
+              };
               await workspaceRepo.mergeSettings(
                 ctx.workspaceId,
                 {
                   layout: {
                     ...currentLayout,
-                    sidebarItems: [
-                      ...existingItems,
-                      {
-                        kind: "profile",
-                        profileSlug: slug,
-                        label: input.displayName,
-                        icon,
-                      },
-                    ],
+                    sidebarItems: [...existingItems, newItem],
                   },
-                },
+                } as Record<string, unknown>,
                 ctx.userId
               );
             }

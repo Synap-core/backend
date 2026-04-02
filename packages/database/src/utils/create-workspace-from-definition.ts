@@ -16,6 +16,7 @@ import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { WorkspaceMemberRepository } from "../repositories/workspace-member-repository.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
+import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { ViewRepository } from "../repositories/view-repository.js";
@@ -481,18 +482,19 @@ export async function createWorkspaceFromDefinition(
   // Each profile gets one sidebar tab pointing to its auto-created bento view (named
   // after profile.displayName). Templates can override this by providing sidebarItems.
   if (
-    !(definition.layoutConfig as any)?.sidebarItems &&
+    !(definition.layoutConfig as Record<string, unknown> | undefined)
+      ?.sidebarItems &&
     (definition.profiles ?? []).length > 0
   ) {
     settings.layout = {
       ...(settings.layout ?? {}),
       sidebarItems: (definition.profiles ?? []).map((p) => ({
-        kind: "profile",
+        kind: "profile" as const,
         profileSlug: p.slug,
         label: p.displayName,
         icon: p.icon ?? p.uiHints?.icon,
       })),
-    } as any;
+    };
   }
   if (packageSlug) settings.packageSlug = packageSlug;
   if (packageVersion) settings.packageVersion = packageVersion;
@@ -609,8 +611,12 @@ export async function createWorkspaceFromDefinition(
     for (const p of existingProfiles) {
       profileMap_[p.slug] = p.id;
       profileHintsMap_[p.slug] = {
-        icon: (p.uiHints as any)?.icon,
-        color: (p.uiHints as any)?.color,
+        icon: (p.uiHints as Record<string, unknown> | null)?.icon as
+          | string
+          | undefined,
+        color: (p.uiHints as Record<string, unknown> | null)?.color as
+          | string
+          | undefined,
       };
       profileIds_.push(p.id);
     }
@@ -869,7 +875,7 @@ export async function createWorkspaceFromDefinition(
           };
           const propDef = await propDefRepo.create({
             slug: prop.slug,
-            valueType: prop.valueType as any,
+            valueType: prop.valueType as PropertyValueType,
             uiHints: {
               label: prop.label,
               inputType: prop.inputType,
@@ -1036,7 +1042,7 @@ export async function createWorkspaceFromDefinition(
         viewResult = await viewRepo.create(
           {
             name: view.name,
-            type: view.type as any,
+            type: view.type,
             scopeProfileIds: scopeProfileIds?.length
               ? scopeProfileIds
               : undefined,
@@ -1141,7 +1147,7 @@ export async function createWorkspaceFromDefinition(
         viewResult = await viewRepo.create(
           {
             name: view.name,
-            type: "bento" as any,
+            type: "bento",
             scopeProfileIds: scopeProfileIds?.length
               ? scopeProfileIds
               : undefined,
@@ -1181,7 +1187,7 @@ export async function createWorkspaceFromDefinition(
         viewResult = await viewRepo.create(
           {
             name: profile.displayName,
-            type: "bento" as any,
+            type: "bento",
             scopeProfileIds: scopeProfileId ? [scopeProfileId] : undefined,
             config: { layout: "bento", blocks },
             metadata: { isProfileBento: true, profileSlug: profile.slug },
@@ -1368,7 +1374,7 @@ export async function createWorkspaceFromDefinition(
         const flowViewResult = await viewRepo.create(
           {
             name: view.name,
-            type: view.type as any,
+            type: view.type,
             scopeProfileIds: scopeProfileIds?.length
               ? scopeProfileIds
               : undefined,

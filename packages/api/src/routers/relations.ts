@@ -129,7 +129,8 @@ export const relationsRouter = router({
         ? ("unidirectional" as const)
         : ("bidirectional" as const),
       category:
-        ((def.uiHints as any)?.category as string) ?? ("custom" as const),
+        ((def.uiHints as Record<string, unknown>)?.category as string) ??
+        ("custom" as const),
       source: "workspace" as const,
     }));
 

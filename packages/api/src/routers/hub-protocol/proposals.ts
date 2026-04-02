@@ -122,7 +122,7 @@ export const proposalsRouter = router({
 
       await db
         .update(proposals)
-        .set(updatePayload as any)
+        .set(updatePayload as typeof proposals.$inferInsert)
         .where(
           and(
             eq(proposals.id, input.proposalId),

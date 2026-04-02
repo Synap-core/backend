@@ -493,7 +493,7 @@ async function materializeProfile(
         parentProfileId: data.parentProfileId as string | undefined,
         uiHints: data.uiHints ?? {},
         scope: validScope,
-      } as any)
+      } as typeof profiles.$inferInsert)
       .onConflictDoUpdate({
         target: profiles.id,
         set: {

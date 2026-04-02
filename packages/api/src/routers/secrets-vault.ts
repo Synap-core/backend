@@ -288,7 +288,11 @@ export const secretsVaultRouter = router({
         accessCount: secret.accessCount,
         createdAt: secret.createdAt,
         updatedAt: secret.updatedAt,
-        tags: (secret as any).tags?.map((t: any) => t.tag) ?? [],
+        tags: (secret as Record<string, unknown>).tags
+          ? (
+              (secret as Record<string, unknown>).tags as Array<{ tag: string }>
+            ).map((t) => t.tag)
+          : [],
       };
     }),
 

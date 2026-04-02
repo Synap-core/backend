@@ -95,7 +95,7 @@ export const aiRateLimitMiddleware = middleware(async (opts) => {
     key = `ai:user:${ctx.userId}`;
   } else {
     // Fallback to IP if no user context (shouldn't happen in protected procedures)
-    key = `ai:ip:${(opts as any).req?.headers?.["x-forwarded-for"] || "unknown"}`;
+    key = `ai:ip:unknown`;
   }
 
   const result = checkRateLimit(key);
@@ -114,12 +114,8 @@ export const aiRateLimitMiddleware = middleware(async (opts) => {
     });
   }
 
-  // Add rate limit headers to response (if possible)
-  // Note: tRPC doesn't expose response headers directly, but we can add metadata
-  (opts as any)._rateLimit = {
-    remaining: result.remaining,
-    resetAt: result.resetAt,
-  };
+  // Rate limit info: remaining=${result.remaining}, resetAt=${result.resetAt}
+  // tRPC doesn't expose response headers directly, so metadata is logged only.
 
   return opts.next({
     ctx,

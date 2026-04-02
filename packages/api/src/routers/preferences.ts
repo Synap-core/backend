@@ -202,7 +202,11 @@ export const preferencesRouter = router({
       where: eq(userPreferences.userId, ctx.userId),
     });
 
-    const viewModes = (prefs?.uiPreferences as any)?.viewModes || {
+    const uiPrefsRecord = prefs?.uiPreferences as Record<
+      string,
+      unknown
+    > | null;
+    const viewModes = (uiPrefsRecord?.viewModes as Record<string, string>) || {
       entities: "grid",
       documents: "grid",
       views: "grid",
@@ -227,8 +231,14 @@ export const preferencesRouter = router({
         where: eq(userPreferences.userId, ctx.userId),
       });
 
-      const currentUiPrefs = (current?.uiPreferences || {}) as any;
-      const currentViewModes = currentUiPrefs.viewModes || {};
+      const currentUiPrefs = (current?.uiPreferences || {}) as Record<
+        string,
+        unknown
+      >;
+      const currentViewModes = (currentUiPrefs.viewModes || {}) as Record<
+        string,
+        string
+      >;
 
       const newUiPrefs = {
         ...currentUiPrefs,
@@ -321,7 +331,7 @@ export const preferencesRouter = router({
       });
 
       const currentPrefs = (current?.intelligenceServicePreferences ||
-        {}) as any;
+        {}) as Record<string, unknown>;
 
       // Merge or clear preference
       const newPrefs = { ...currentPrefs };

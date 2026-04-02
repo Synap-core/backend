@@ -293,8 +293,8 @@ export async function checkPermissionOrPropose(
               },
               status: ProposalStatus.AUTO_APPROVED,
               createdBy: agentUserId,
-              threadId: threadId as any,
-              commandRunId: commandRunId as any,
+              threadId: threadId ?? undefined,
+              commandRunId: commandRunId ?? undefined,
             })
             .catch(() => {}); // non-critical — never block the operation
 

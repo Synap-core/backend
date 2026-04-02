@@ -89,8 +89,8 @@ export async function transformInsightToEvents(
       userId,
       subjectId:
         action.subjectId ||
-        (action.data as any).entityId ||
-        (action.data as any).id,
+        (action.data.entityId as string | undefined) ||
+        (action.data.id as string | undefined),
       source: "automation", // Hub insights are considered automations
       correlationId: insight.correlationId,
       requestId,

@@ -141,7 +141,7 @@ export const systemRouter = router({
       }
 
       // Convert Zod schema to a simplified structure for frontend
-      const shape = (schema as any)._def.shape();
+      const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
       const fields: Array<{
         name: string;
         type: string;
@@ -161,10 +161,10 @@ export const systemRouter = router({
         // Helper to get inner type
         const getInnerType = (type: z.ZodTypeAny): z.ZodTypeAny => {
           if (type instanceof z.ZodOptional) {
-            return (type as any)._def.innerType;
+            return type._def.innerType as z.ZodTypeAny;
           }
           if (type instanceof z.ZodDefault) {
-            return (type as any)._def.innerType;
+            return type._def.innerType as z.ZodTypeAny;
           }
           return type;
         };
@@ -178,7 +178,8 @@ export const systemRouter = router({
         // Get default value
         if (zodType instanceof z.ZodDefault) {
           try {
-            const defValue = (zodType._def as any).defaultValue;
+            const defValue = (zodType._def as { defaultValue: unknown })
+              .defaultValue;
             defaultValue =
               typeof defValue === "function" ? defValue() : defValue;
           } catch {
@@ -197,12 +198,8 @@ export const systemRouter = router({
           fieldType = "array";
         } else if (innerType instanceof z.ZodEnum) {
           fieldType = "enum";
-          const enumDef = innerType._def as any;
-          options =
-            enumDef.values ||
-            (Array.isArray(enumDef.options)
-              ? enumDef.options
-              : Object.values(enumDef.options || {}));
+          const enumDef = innerType._def as unknown as { values: string[] };
+          options = enumDef.values;
         } else if (innerType instanceof z.ZodObject) {
           fieldType = "object";
         } else {
@@ -249,7 +246,7 @@ export const systemRouter = router({
       const eventUserId = input.userId || ctx.userId;
       // Create the event
       const event = createSynapEvent({
-        type: input.type as any,
+        type: input.type,
         data: input.data,
         userId: eventUserId,
         subjectId: input.subjectId,
@@ -422,7 +419,7 @@ export const systemRouter = router({
       const filters = {
         userId: input.userId,
         eventType: input.eventType,
-        subjectType: input.subjectType as any,
+        subjectType: input.subjectType,
         subjectId: input.subjectId,
         correlationId: input.correlationId,
         fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
@@ -435,7 +432,7 @@ export const systemRouter = router({
       const totalCount = await eventRepository.countEvents({
         userId: input.userId,
         eventType: input.eventType,
-        subjectType: input.subjectType as any,
+        subjectType: input.subjectType,
         fromDate: filters.fromDate,
         toDate: filters.toDate,
       });
@@ -487,18 +484,20 @@ export const systemRouter = router({
       const metadata = dynamicToolRegistry.getToolMetadata(input.toolName);
 
       // Extract schema properties for UI rendering
-      const schema = tool.schema as any;
-      const schemaShape = schema._def?.shape
-        ? Object.keys(schema._def.shape())
-        : [];
+      const toolSchema = tool.schema as z.ZodTypeAny;
+      let schemaProperties: Record<string, z.ZodTypeAny> = {};
+      if (toolSchema instanceof z.ZodObject) {
+        schemaProperties = (toolSchema as z.ZodObject<z.ZodRawShape>)
+          .shape as Record<string, z.ZodTypeAny>;
+      }
 
       return {
         name: tool.name,
         description: tool.description,
         schema: {
           type: "object",
-          properties: schema._def?.shape ? schema._def.shape() : {},
-          required: schemaShape,
+          properties: schemaProperties,
+          required: Object.keys(schemaProperties),
         },
         metadata: {
           version: metadata?.version || "unknown",
@@ -517,7 +516,7 @@ export const systemRouter = router({
     .input(
       z.object({
         toolName: z.string(),
-        parameters: z.record(z.string(), z.any()),
+        parameters: z.record(z.string(), z.unknown()),
         threadId: z.string().default("playground"),
       })
     )
@@ -638,7 +637,7 @@ export const systemRouter = router({
         ORDER BY table_name;
       `);
     console.log(`[SystemRouter] Found ${tables.length} tables`);
-    return [...tables] as any[];
+    return [...tables] as unknown[];
   }),
 
   /**
@@ -661,7 +660,7 @@ export const systemRouter = router({
       `);
 
       const isValid = validTables.some(
-        (t: any) => t.table_name === input.tableName
+        (t: Record<string, unknown>) => t.table_name === input.tableName
       );
       if (!isValid) {
         throw new TRPCError({
@@ -677,7 +676,7 @@ export const systemRouter = router({
         `SELECT * FROM "${input.tableName}" LIMIT ${input.limit} OFFSET ${input.offset}`
       );
       const rows = await db.execute(query);
-      return rows as any[];
+      return rows as unknown[];
     }),
 
   /**
@@ -907,7 +906,9 @@ export const systemRouter = router({
           .filter(Boolean)
       : [];
 
-    const dbOrigins: string[] = (ws?.settings as any)?.corsAllowedOrigins ?? [];
+    const settingsRecord = ws?.settings as Record<string, unknown> | null;
+    const dbOrigins: string[] =
+      (settingsRecord?.corsAllowedOrigins as string[]) ?? [];
 
     return {
       envOrigins, // from ALLOWED_ORIGINS env var (read-only)

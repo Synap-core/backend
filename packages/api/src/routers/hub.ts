@@ -25,7 +25,7 @@ import { validateHubInsight, type HubInsight } from "@synap-core/hub-protocol";
 import { getEventRepository } from "@synap/database";
 import { db, entities } from "@synap/database";
 import { eq, and, desc, gte, lte } from "@synap/database";
-import type { SQL } from "@synap/database";
+// SQL type no longer needed — queryEntities uses collect-then-spread pattern
 
 const logger = createLogger({ module: "hub-router" });
 
@@ -128,18 +128,39 @@ async function getNotes(
   }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving notes");
-  let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
-  whereCondition = and(whereCondition, eq(entities.type, "note") as any) as any;
-  if (filters?.dateRange) {
-    const startDate = new Date(filters.dateRange.start);
-    const endDate = new Date(filters.dateRange.end);
-    whereCondition = and(
-      whereCondition,
-      gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any
-    ) as any;
+  return queryEntities(userId, { entityType: "note", ...filters });
+}
+
+/**
+ * Shared entity query builder — single source of truth for getNotes/getTasks/getProjects/getAllEntities.
+ * Uses the collect-then-spread pattern for Drizzle conditions (no `as any`).
+ */
+async function queryEntities(
+  userId: string,
+  options?: {
+    entityType?: string;
+    entityTypes?: string[];
+    dateRange?: { start: string; end: string };
+    limit?: number;
+    offset?: number;
   }
-  const query = db
+): Promise<Array<Record<string, unknown>>> {
+  const conditions = [eq(entities.userId, userId)];
+
+  if (options?.entityType) {
+    conditions.push(eq(entities.type, options.entityType));
+  } else if (options?.entityTypes?.length) {
+    conditions.push(eq(entities.type, options.entityTypes[0]));
+  }
+
+  if (options?.dateRange) {
+    conditions.push(
+      gte(entities.createdAt, new Date(options.dateRange.start)),
+      lte(entities.createdAt, new Date(options.dateRange.end))
+    );
+  }
+
+  const rows = await db
     .select({
       id: entities.id,
       title: entities.title,
@@ -149,24 +170,18 @@ async function getNotes(
       updatedAt: entities.updatedAt,
     })
     .from(entities)
-    .where(whereCondition)
-    .orderBy(desc(entities.createdAt) as any)
-    .limit(filters?.limit || 100)
-    .offset(filters?.offset || 0);
-  const rows = await query;
-  return rows.map((row: any) => ({
+    .where(and(...conditions))
+    .orderBy(desc(entities.createdAt))
+    .limit(options?.limit || 100)
+    .offset(options?.offset || 0);
+
+  return rows.map((row) => ({
     id: row.id,
     title: row.title,
     preview: row.preview,
     type: row.type,
-    createdAt:
-      row.createdAt instanceof Date
-        ? row.createdAt.toISOString()
-        : new Date(row.createdAt).toISOString(),
-    updatedAt:
-      row.updatedAt instanceof Date
-        ? row.updatedAt.toISOString()
-        : new Date(row.updatedAt).toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   }));
 }
 
@@ -179,46 +194,7 @@ async function getTasks(
   }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving tasks");
-  let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
-  whereCondition = and(whereCondition, eq(entities.type, "task") as any) as any;
-  if (filters?.dateRange) {
-    const startDate = new Date(filters.dateRange.start);
-    const endDate = new Date(filters.dateRange.end);
-    whereCondition = and(
-      whereCondition,
-      gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any
-    ) as any;
-  }
-  const query = db
-    .select({
-      id: entities.id,
-      title: entities.title,
-      preview: entities.preview,
-      type: entities.type,
-      createdAt: entities.createdAt,
-      updatedAt: entities.updatedAt,
-    })
-    .from(entities)
-    .where(whereCondition)
-    .orderBy(desc(entities.createdAt) as any)
-    .limit(filters?.limit || 100)
-    .offset(filters?.offset || 0);
-  const rows = await query;
-  return rows.map((row: any) => ({
-    id: row.id,
-    title: row.title,
-    preview: row.preview,
-    type: row.type,
-    createdAt:
-      row.createdAt instanceof Date
-        ? row.createdAt.toISOString()
-        : new Date(row.createdAt).toISOString(),
-    updatedAt:
-      row.updatedAt instanceof Date
-        ? row.updatedAt.toISOString()
-        : new Date(row.updatedAt).toISOString(),
-  }));
+  return queryEntities(userId, { entityType: "task", ...filters });
 }
 
 async function getProjects(
@@ -230,49 +206,7 @@ async function getProjects(
   }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving projects");
-  let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
-  whereCondition = and(
-    whereCondition,
-    eq(entities.type, "project") as any
-  ) as any;
-  if (filters?.dateRange) {
-    const startDate = new Date(filters.dateRange.start);
-    const endDate = new Date(filters.dateRange.end);
-    whereCondition = and(
-      whereCondition,
-      gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any
-    ) as any;
-  }
-  const query = db
-    .select({
-      id: entities.id,
-      title: entities.title,
-      preview: entities.preview,
-      type: entities.type,
-      createdAt: entities.createdAt,
-      updatedAt: entities.updatedAt,
-    })
-    .from(entities)
-    .where(whereCondition)
-    .orderBy(desc(entities.createdAt) as any)
-    .limit(filters?.limit || 100)
-    .offset(filters?.offset || 0);
-  const rows = await query;
-  return rows.map((row: any) => ({
-    id: row.id,
-    title: row.title,
-    preview: row.preview,
-    type: row.type,
-    createdAt:
-      row.createdAt instanceof Date
-        ? row.createdAt.toISOString()
-        : new Date(row.createdAt).toISOString(),
-    updatedAt:
-      row.updatedAt instanceof Date
-        ? row.updatedAt.toISOString()
-        : new Date(row.updatedAt).toISOString(),
-  }));
+  return queryEntities(userId, { entityType: "project", ...filters });
 }
 
 async function getConversations(
@@ -292,51 +226,7 @@ async function getAllEntities(
   }
 ): Promise<Array<Record<string, unknown>>> {
   logger.debug({ userId, filters }, "Retrieving all entities");
-  let whereCondition: SQL | undefined = eq(entities.userId, userId) as any;
-  if (filters?.entityTypes && filters.entityTypes.length > 0) {
-    whereCondition = and(
-      whereCondition,
-      eq(entities.type, filters.entityTypes[0]) as any
-    ) as any;
-  }
-  if (filters?.dateRange) {
-    const startDate = new Date(filters.dateRange.start);
-    const endDate = new Date(filters.dateRange.end);
-    whereCondition = and(
-      whereCondition,
-      gte(entities.createdAt, startDate) as any,
-      lte(entities.createdAt, endDate) as any
-    ) as any;
-  }
-  const query = db
-    .select({
-      id: entities.id,
-      title: entities.title,
-      preview: entities.preview,
-      type: entities.type,
-      createdAt: entities.createdAt,
-      updatedAt: entities.updatedAt,
-    })
-    .from(entities)
-    .where(whereCondition)
-    .orderBy(desc(entities.createdAt) as any)
-    .limit(filters?.limit || 100)
-    .offset(filters?.offset || 0);
-  const rows = await query;
-  return rows.map((row: any) => ({
-    id: row.id,
-    title: row.title,
-    preview: row.preview,
-    type: row.type,
-    createdAt:
-      row.createdAt instanceof Date
-        ? row.createdAt.toISOString()
-        : new Date(row.createdAt).toISOString(),
-    updatedAt:
-      row.updatedAt instanceof Date
-        ? row.updatedAt.toISOString()
-        : new Date(row.updatedAt).toISOString(),
-  }));
+  return queryEntities(userId, filters);
 }
 
 async function getRelations(

@@ -40,7 +40,15 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
         userId: opts.userId,
       },
       userId: opts.userId,
-      source: (opts.source || "api") as any,
+      source: (opts.source || "api") as
+        | "api"
+        | "automation"
+        | "sync"
+        | "migration"
+        | "system"
+        | "intelligence"
+        | "iot"
+        | "enterprise",
       correlationId: opts.correlationId,
     });
 
@@ -53,7 +61,14 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
       data: event.data as Record<string, unknown>,
       metadata: event.metadata as Record<string, unknown>,
       userId: event.userId,
-      source: event.source as any,
+      // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
+      source: event.source as
+        | "api"
+        | "automation"
+        | "sync"
+        | "migration"
+        | "system"
+        | "intelligence",
       timestamp: event.timestamp,
       correlationId: event.correlationId,
     });

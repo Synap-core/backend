@@ -177,7 +177,14 @@ export const migrationRouter = router({
             source: "intelligence",
           });
 
-          profileIdBySlug.set(profileInput.slug, profile.id);
+          if (!profile) {
+            logger.warn(
+              { slug: profileInput.slug },
+              "migration: profile create returned null"
+            );
+            continue;
+          }
+          profileIdBySlug.set(profileInput.slug, String(profile.id));
           profilesCreated++;
 
           logger.info(
@@ -193,8 +200,16 @@ export const migrationRouter = router({
                   regularPropertyDefsRouter.createCaller(callerCtx);
                 await propDefCaller.create({
                   slug: prop.slug,
-                  valueType: prop.valueType as any,
-                  profileId: profile.id,
+                  valueType: prop.valueType as
+                    | "string"
+                    | "number"
+                    | "boolean"
+                    | "object"
+                    | "array"
+                    | "date"
+                    | "secret"
+                    | "entity_id",
+                  profileId: String(profile.id),
                   uiHints: {
                     ...(prop.label ? { label: prop.label } : {}),
                     ...(prop.inputType ? { inputType: prop.inputType } : {}),

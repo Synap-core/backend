@@ -211,7 +211,7 @@ export async function postProactiveMessage(
       userId,
       previousHash: "",
       hash: messageHash,
-      metadata: messageMetadata as any,
+      metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
     });
 
     // Emit realtime event (fire-and-forget)

@@ -49,7 +49,9 @@ export const contextRouter = router({
         .limit(1)
         .then((r) => r[0]);
       const workspaceId =
-        thread?.workspaceId ?? (ctx as any).workspaceId ?? null;
+        thread?.workspaceId ??
+        ((ctx as Record<string, unknown>).workspaceId as string | null) ??
+        null;
       const threadUserId = thread?.userId ?? ctx.userId!;
       // Use the thread's actual userId (not API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
@@ -169,7 +171,9 @@ export const contextRouter = router({
         .limit(1)
         .then((r) => r[0]);
       const workspaceId =
-        membership?.workspaceId ?? (ctx as any).workspaceId ?? null;
+        membership?.workspaceId ??
+        ((ctx as Record<string, unknown>).workspaceId as string | null) ??
+        null;
       // Use input.userId (the real user) not ctx.userId (the API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
         input.userId,

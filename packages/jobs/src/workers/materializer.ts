@@ -39,7 +39,12 @@ import {
   documents,
   documentVersions,
 } from "@synap/database/schema";
-import { createUnifiedEvent } from "../types/unified-events.js";
+import {
+  createUnifiedEvent,
+  type EventAction,
+  type EventPhase,
+} from "../types/unified-events.js";
+import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "../emit-side-effects.js";
 
@@ -120,13 +125,13 @@ export async function handleMaterialize(
     // Emit .completed event
     const eventRepo = new EventRepository(sql);
     const completedEvent = createUnifiedEvent({
-      subjectType: subjectType as any,
-      action: action as any,
-      phase: "completed" as any,
+      subjectType,
+      action: action as EventAction,
+      phase: "completed" as EventPhase,
       subjectId,
       userId,
       data: { ...data, workspaceId, materializedBy: "worker" },
-      source: "materializer" as any,
+      source: "system",
       correlationId,
     });
     await eventRepo.append({
@@ -138,7 +143,7 @@ export async function handleMaterialize(
       data: completedEvent.data as Record<string, unknown>,
       metadata: completedEvent.metadata as Record<string, unknown>,
       userId: completedEvent.userId,
-      source: completedEvent.source as any,
+      source: completedEvent.source as SynapEvent["source"],
       timestamp: completedEvent.timestamp,
       correlationId: completedEvent.correlationId,
     });
@@ -382,7 +387,7 @@ async function materializeView(
       await sharedDb.insert(documents).values({
         id: docId,
         userId,
-        workspaceId,
+        workspaceId: workspaceId ?? "",
         type: viewType,
         title: (data.name as string) || "Untitled",
         storageUrl: uploadResult.url,
@@ -390,7 +395,7 @@ async function materializeView(
         size: uploadResult.size,
         mimeType: "application/json",
         currentVersion: 1,
-      } as any);
+      });
 
       await sharedDb.insert(documentVersions).values({
         documentId: docId,
@@ -407,7 +412,7 @@ async function materializeView(
     await viewRepo.create(
       {
         id: subjectId,
-        type: viewType as any,
+        type: viewType,
         name: (data.name as string) || "Untitled",
         description: (data.description as string) || undefined,
         documentId,

@@ -246,7 +246,10 @@ export const channelsRouter = router({
           senderName: input.senderName,
           originalTimestamp: input.timestamp,
           ...(input.metadata ?? {}),
-        } as any,
+        } as Record<
+          string,
+          unknown
+        > as (typeof messages.$inferInsert)["metadata"],
       });
 
       await db
@@ -409,7 +412,10 @@ export const channelsRouter = router({
           agentUserId: input.agentUserId,
           source: "hub-protocol",
           ...(input.metadata ?? {}),
-        } as any,
+        } as Record<
+          string,
+          unknown
+        > as (typeof messages.$inferInsert)["metadata"],
       });
 
       await db
@@ -660,7 +666,10 @@ export const channelsRouter = router({
           systemPromptOverride: input.systemPromptOverride,
           skillId: input.skillId,
           entityId: input.entityId,
-        } as any,
+        } as Record<
+          string,
+          unknown
+        > as (typeof messages.$inferInsert)["metadata"],
       });
 
       await db

@@ -25,6 +25,8 @@ import {
   automations,
   automationRuns,
   intelligenceCommands,
+  documents,
+  documentVersions,
   eq,
   and,
   or,
@@ -323,39 +325,40 @@ const SUPPLEMENTARY_TABLES: Record<
     let processed = 0;
     for (const row of rows) {
       try {
-        // Sync data is dynamic — use `as any` to bypass strict Drizzle column types
-        await db
-          .insert(messages)
-          .values({
-            id: row.id,
-            channelId: row.channelId,
-            parentId: row.parentId ?? null,
-            role: row.role ?? "user",
-            authorType: row.authorType ?? "human",
-            messageCategory: row.messageCategory ?? "chat",
-            externalSource: row.externalSource ?? null,
-            inboxItemId: row.inboxItemId ?? null,
-            content: row.content ?? "",
-            metadata: row.metadata ?? null,
-            userId: row.userId ?? "sync",
-            timestamp: row.timestamp
-              ? new Date(row.timestamp as string)
-              : new Date(),
-            previousHash: row.previousHash ?? null,
-            hash: row.hash ?? "",
-            sessionId: row.sessionId ?? null,
-            deletedAt: row.deletedAt ? new Date(row.deletedAt as string) : null,
-          } as any)
-          .onConflictDoUpdate({
-            target: messages.id,
-            set: {
-              content: row.content ?? "",
-              metadata: row.metadata ?? null,
-              deletedAt: row.deletedAt
-                ? new Date(row.deletedAt as string)
-                : null,
-            } as any,
-          });
+        const values: typeof messages.$inferInsert = {
+          id: row.id as string,
+          channelId: row.channelId as string,
+          parentId: (row.parentId as string) ?? null,
+          role: (row.role as typeof messages.$inferInsert.role) ?? "user",
+          authorType:
+            (row.authorType as typeof messages.$inferInsert.authorType) ??
+            "human",
+          messageCategory:
+            (row.messageCategory as typeof messages.$inferInsert.messageCategory) ??
+            "chat",
+          externalSource: (row.externalSource as string) ?? null,
+          inboxItemId: (row.inboxItemId as string) ?? null,
+          content: (row.content as string) ?? "",
+          metadata:
+            (row.metadata as typeof messages.$inferInsert.metadata) ?? null,
+          userId: (row.userId as string) ?? "sync",
+          timestamp: row.timestamp
+            ? new Date(row.timestamp as string)
+            : new Date(),
+          previousHash: (row.previousHash as string) ?? null,
+          hash: (row.hash as string) ?? "",
+          sessionId: (row.sessionId as string) ?? null,
+          deletedAt: row.deletedAt ? new Date(row.deletedAt as string) : null,
+        };
+        const updateSet: Partial<typeof messages.$inferInsert> = {
+          content: values.content,
+          metadata: values.metadata,
+          deletedAt: values.deletedAt,
+        };
+        await db.insert(messages).values(values).onConflictDoUpdate({
+          target: messages.id,
+          set: updateSet,
+        });
         processed++;
       } catch (err) {
         logger.warn(
@@ -371,57 +374,57 @@ const SUPPLEMENTARY_TABLES: Record<
     let processed = 0;
     for (const row of rows) {
       try {
-        await db
-          .insert(automations)
-          .values({
-            id: row.id as string,
-            workspaceId: row.workspaceId as string,
-            createdBy: (row.createdBy as string) ?? "sync",
-            name: (row.name as string) ?? "Synced Automation",
-            description: (row.description as string) ?? null,
-            triggerType:
-              (row.triggerType as "event" | "cron" | "webhook" | "manual") ??
-              "manual",
-            triggerConfig: (row.triggerConfig as Record<string, unknown>) ?? {},
-            flowDefinition: (row.flowDefinition as {
-              nodes: unknown[];
-              edges: unknown[];
-            }) ?? { nodes: [], edges: [] },
-            status:
-              (row.status as "draft" | "active" | "paused" | "error") ??
-              "draft",
-            errorMessage: (row.errorMessage as string) ?? null,
-            lastRunAt: row.lastRunAt ? new Date(row.lastRunAt as string) : null,
-            nextRunAt: row.nextRunAt ? new Date(row.nextRunAt as string) : null,
-            runCount: (row.runCount as number) ?? 0,
-            successCount: (row.successCount as number) ?? 0,
-            failureCount: (row.failureCount as number) ?? 0,
-            metadata: (row.metadata as Record<string, unknown>) ?? {},
-            createdAt: row.createdAt
-              ? new Date(row.createdAt as string)
-              : new Date(),
-            updatedAt: row.updatedAt
-              ? new Date(row.updatedAt as string)
-              : new Date(),
-          } as any)
-          .onConflictDoUpdate({
-            target: automations.id,
-            set: {
-              name: row.name ?? undefined,
-              description: row.description ?? null,
-              triggerConfig: row.triggerConfig ?? {},
-              flowDefinition: row.flowDefinition ?? { nodes: [], edges: [] },
-              status: row.status ?? undefined,
-              errorMessage: row.errorMessage ?? null,
-              runCount: row.runCount ?? 0,
-              successCount: row.successCount ?? 0,
-              failureCount: row.failureCount ?? 0,
-              metadata: row.metadata ?? {},
-              updatedAt: row.updatedAt
-                ? new Date(row.updatedAt as string)
-                : new Date(),
-            } as any,
-          });
+        const values: typeof automations.$inferInsert = {
+          id: row.id as string,
+          workspaceId: row.workspaceId as string,
+          createdBy: (row.createdBy as string) ?? "sync",
+          name: (row.name as string) ?? "Synced Automation",
+          description: (row.description as string) ?? null,
+          triggerType:
+            (row.triggerType as typeof automations.$inferInsert.triggerType) ??
+            "manual",
+          triggerConfig:
+            (row.triggerConfig as typeof automations.$inferInsert.triggerConfig) ??
+            {},
+          flowDefinition:
+            (row.flowDefinition as typeof automations.$inferInsert.flowDefinition) ?? {
+              nodes: [],
+              edges: [],
+            },
+          status:
+            (row.status as typeof automations.$inferInsert.status) ?? "draft",
+          errorMessage: (row.errorMessage as string) ?? null,
+          lastRunAt: row.lastRunAt ? new Date(row.lastRunAt as string) : null,
+          nextRunAt: row.nextRunAt ? new Date(row.nextRunAt as string) : null,
+          runCount: (row.runCount as number) ?? 0,
+          successCount: (row.successCount as number) ?? 0,
+          failureCount: (row.failureCount as number) ?? 0,
+          metadata:
+            (row.metadata as typeof automations.$inferInsert.metadata) ?? {},
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+        };
+        const updateSet: Partial<typeof automations.$inferInsert> = {
+          name: values.name,
+          description: values.description,
+          triggerConfig: values.triggerConfig,
+          flowDefinition: values.flowDefinition,
+          status: values.status,
+          errorMessage: values.errorMessage,
+          runCount: values.runCount,
+          successCount: values.successCount,
+          failureCount: values.failureCount,
+          metadata: values.metadata,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(automations).values(values).onConflictDoUpdate({
+          target: automations.id,
+          set: updateSet,
+        });
         processed++;
       } catch (err) {
         logger.warn(
@@ -437,46 +440,40 @@ const SUPPLEMENTARY_TABLES: Record<
     let processed = 0;
     for (const row of rows) {
       try {
-        await db
-          .insert(automationRuns)
-          .values({
-            id: row.id as string,
-            automationId: row.automationId as string,
-            workspaceId: row.workspaceId as string,
-            triggeredBy: (row.triggeredBy as string) ?? null,
-            triggerPayload:
-              (row.triggerPayload as Record<string, unknown>) ?? {},
-            status:
-              (row.status as
-                | "running"
-                | "completed"
-                | "failed"
-                | "cancelled") ?? "running",
-            errorMessage: (row.errorMessage as string) ?? null,
-            stepsCompleted: (row.stepsCompleted as number) ?? 0,
-            stepsFailed: (row.stepsFailed as number) ?? 0,
-            outputSummary:
-              (row.outputSummary as Record<string, unknown>) ?? null,
-            startedAt: row.startedAt
-              ? new Date(row.startedAt as string)
-              : new Date(),
-            completedAt: row.completedAt
-              ? new Date(row.completedAt as string)
-              : null,
-          } as any)
-          .onConflictDoUpdate({
-            target: automationRuns.id,
-            set: {
-              status: row.status ?? undefined,
-              errorMessage: row.errorMessage ?? null,
-              stepsCompleted: row.stepsCompleted ?? 0,
-              stepsFailed: row.stepsFailed ?? 0,
-              outputSummary: row.outputSummary ?? null,
-              completedAt: row.completedAt
-                ? new Date(row.completedAt as string)
-                : null,
-            } as any,
-          });
+        const values: typeof automationRuns.$inferInsert = {
+          id: row.id as string,
+          automationId: row.automationId as string,
+          workspaceId: row.workspaceId as string,
+          triggeredBy: (row.triggeredBy as string) ?? null,
+          triggerPayload:
+            (row.triggerPayload as typeof automationRuns.$inferInsert.triggerPayload) ??
+            {},
+          status:
+            (row.status as typeof automationRuns.$inferInsert.status) ??
+            "running",
+          errorMessage: (row.errorMessage as string) ?? null,
+          stepsCompleted: (row.stepsCompleted as number) ?? 0,
+          stepsFailed: (row.stepsFailed as number) ?? 0,
+          outputSummary: (row.outputSummary as Record<string, unknown>) ?? null,
+          startedAt: row.startedAt
+            ? new Date(row.startedAt as string)
+            : new Date(),
+          completedAt: row.completedAt
+            ? new Date(row.completedAt as string)
+            : null,
+        };
+        const updateSet: Partial<typeof automationRuns.$inferInsert> = {
+          status: values.status,
+          errorMessage: values.errorMessage,
+          stepsCompleted: values.stepsCompleted,
+          stepsFailed: values.stepsFailed,
+          outputSummary: values.outputSummary,
+          completedAt: values.completedAt,
+        };
+        await db.insert(automationRuns).values(values).onConflictDoUpdate({
+          target: automationRuns.id,
+          set: updateSet,
+        });
         processed++;
       } catch (err) {
         logger.warn(
@@ -492,56 +489,63 @@ const SUPPLEMENTARY_TABLES: Record<
     let processed = 0;
     for (const row of rows) {
       try {
+        const values: typeof intelligenceCommands.$inferInsert = {
+          id: row.id as string,
+          workspaceId: row.workspaceId as string,
+          createdBy: (row.createdBy as string) ?? "sync",
+          title: (row.title as string) ?? "Synced Command",
+          promptTemplate: (row.promptTemplate as string) ?? "",
+          compiledTemplateAst:
+            (row.compiledTemplateAst as typeof intelligenceCommands.$inferInsert.compiledTemplateAst) ??
+            null,
+          derivedInputs:
+            (row.derivedInputs as typeof intelligenceCommands.$inferInsert.derivedInputs) ??
+            null,
+          inputOverrides:
+            (row.inputOverrides as typeof intelligenceCommands.$inferInsert.inputOverrides) ??
+            null,
+          allowedTools: (row.allowedTools as string[]) ?? null,
+          allowedEntityTypes: (row.allowedEntityTypes as string[]) ?? null,
+          maxEntitiesCreatedPerRun:
+            (row.maxEntitiesCreatedPerRun as number) ?? null,
+          canCreateViews: (row.canCreateViews as boolean) ?? false,
+          outputMode:
+            (row.outputMode as typeof intelligenceCommands.$inferInsert.outputMode) ??
+            "text",
+          permissionsProfile:
+            (row.permissionsProfile as typeof intelligenceCommands.$inferInsert.permissionsProfile) ??
+            "propose_writes",
+          sharedScope:
+            (row.sharedScope as typeof intelligenceCommands.$inferInsert.sharedScope) ??
+            "workspace",
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+        };
+        const updateSet: Partial<typeof intelligenceCommands.$inferInsert> = {
+          title: values.title,
+          promptTemplate: values.promptTemplate,
+          compiledTemplateAst: values.compiledTemplateAst,
+          derivedInputs: values.derivedInputs,
+          inputOverrides: values.inputOverrides,
+          allowedTools: values.allowedTools,
+          allowedEntityTypes: values.allowedEntityTypes,
+          maxEntitiesCreatedPerRun: values.maxEntitiesCreatedPerRun,
+          canCreateViews: values.canCreateViews,
+          outputMode: values.outputMode,
+          permissionsProfile: values.permissionsProfile,
+          sharedScope: values.sharedScope,
+          updatedAt: values.updatedAt,
+        };
         await db
           .insert(intelligenceCommands)
-          .values({
-            id: row.id as string,
-            workspaceId: row.workspaceId as string,
-            createdBy: (row.createdBy as string) ?? "sync",
-            title: (row.title as string) ?? "Synced Command",
-            promptTemplate: (row.promptTemplate as string) ?? "",
-            compiledTemplateAst: row.compiledTemplateAst ?? null,
-            derivedInputs: (row.derivedInputs as unknown[]) ?? null,
-            inputOverrides:
-              (row.inputOverrides as Record<string, unknown>) ?? null,
-            allowedTools: (row.allowedTools as string[]) ?? null,
-            allowedEntityTypes: (row.allowedEntityTypes as string[]) ?? null,
-            maxEntitiesCreatedPerRun:
-              (row.maxEntitiesCreatedPerRun as number) ?? null,
-            canCreateViews: (row.canCreateViews as boolean) ?? false,
-            outputMode:
-              (row.outputMode as "text" | "proposal" | "view") ?? "text",
-            permissionsProfile:
-              (row.permissionsProfile as "read_only" | "propose_writes") ??
-              "propose_writes",
-            sharedScope:
-              (row.sharedScope as "workspace" | "user") ?? "workspace",
-            createdAt: row.createdAt
-              ? new Date(row.createdAt as string)
-              : new Date(),
-            updatedAt: row.updatedAt
-              ? new Date(row.updatedAt as string)
-              : new Date(),
-          } as any)
+          .values(values)
           .onConflictDoUpdate({
             target: intelligenceCommands.id,
-            set: {
-              title: row.title ?? undefined,
-              promptTemplate: row.promptTemplate ?? undefined,
-              compiledTemplateAst: row.compiledTemplateAst ?? null,
-              derivedInputs: row.derivedInputs ?? null,
-              inputOverrides: row.inputOverrides ?? null,
-              allowedTools: row.allowedTools ?? null,
-              allowedEntityTypes: row.allowedEntityTypes ?? null,
-              maxEntitiesCreatedPerRun: row.maxEntitiesCreatedPerRun ?? null,
-              canCreateViews: row.canCreateViews ?? false,
-              outputMode: row.outputMode ?? "text",
-              permissionsProfile: row.permissionsProfile ?? "propose_writes",
-              sharedScope: row.sharedScope ?? "workspace",
-              updatedAt: row.updatedAt
-                ? new Date(row.updatedAt as string)
-                : new Date(),
-            } as any,
+            set: updateSet,
           });
         processed++;
       } catch (err) {
@@ -689,28 +693,30 @@ app.post("/receive-file", async (c) => {
     });
 
     // Upsert document row
-    const { documents } = await import("@synap/database");
+    const docValues: typeof documents.$inferInsert = {
+      id: body.documentId,
+      userId: "sync",
+      workspaceId: body.workspaceId ?? "",
+      title: body.title ?? "Synced Document",
+      type: body.type ?? "document",
+      storageKey: body.storageKey,
+      mimeType: body.mimeType,
+      size: body.size ?? buffer.length,
+      currentVersion: body.currentVersion ?? 1,
+    };
+    const docUpdateSet: Partial<typeof documents.$inferInsert> = {
+      storageKey: docValues.storageKey,
+      mimeType: docValues.mimeType,
+      size: docValues.size,
+      currentVersion: docValues.currentVersion,
+      updatedAt: new Date(),
+    };
     await db
       .insert(documents)
-      .values({
-        id: body.documentId,
-        storageKey: body.storageKey,
-        mimeType: body.mimeType,
-        size: body.size ?? buffer.length,
-        title: body.title,
-        type: body.type ?? "document",
-        currentVersion: body.currentVersion ?? 1,
-        workspaceId: body.workspaceId,
-      } as any)
+      .values(docValues)
       .onConflictDoUpdate({
         target: [documents.id],
-        set: {
-          storageKey: body.storageKey,
-          mimeType: body.mimeType,
-          size: body.size ?? buffer.length,
-          currentVersion: body.currentVersion ?? 1,
-          updatedAt: new Date(),
-        } as any,
+        set: docUpdateSet,
       });
 
     logger.debug({ documentId: body.documentId }, "File received and stored");
@@ -743,19 +749,19 @@ app.post("/receive-file-version", async (c) => {
   }
 
   try {
-    const { documentVersions } = await import("@synap/database");
+    const versionValues: typeof documentVersions.$inferInsert = {
+      id: body.versionId,
+      documentId: body.documentId,
+      version: body.version ?? 1,
+      content: body.content ?? "",
+      author: body.author ?? "sync",
+      authorId: body.authorId ?? "sync",
+      message: body.message,
+      createdAt: body.createdAt ? new Date(body.createdAt) : new Date(),
+    };
     await db
       .insert(documentVersions)
-      .values({
-        id: body.versionId,
-        documentId: body.documentId,
-        version: body.version ?? 1,
-        content: body.content,
-        author: body.author,
-        authorId: body.authorId,
-        message: body.message,
-        createdAt: body.createdAt ? new Date(body.createdAt) : new Date(),
-      } as any)
+      .values(versionValues)
       .onConflictDoNothing();
 
     logger.debug({ versionId: body.versionId }, "File version received");

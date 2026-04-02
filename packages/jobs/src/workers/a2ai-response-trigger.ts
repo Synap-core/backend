@@ -206,7 +206,10 @@ export async function handleA2AIResponseTrigger(
     userId,
     previousHash: prevHash,
     hash: assistantHash,
-    metadata: { serviceId, a2ai: true, sourceAgentUserId } as any,
+    metadata: { serviceId, a2ai: true, sourceAgentUserId } as Record<
+      string,
+      unknown
+    > as (typeof messages.$inferInsert)["metadata"],
   });
 
   await db

@@ -11,6 +11,15 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "api-key-middleware" });
 
+/** Context shape after API key middleware has already enriched it. */
+interface ApiKeyEnrichedContext {
+  scopes: string[];
+  apiKeyId: string;
+  apiKeyName?: string;
+  isHubProtocol?: boolean;
+  [key: string]: unknown;
+}
+
 /**
  * Extract API key from Authorization header
  */
@@ -35,31 +44,31 @@ function hasScope(keyScopes: string[], requiredScope: string): boolean {
 export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
   // Short-circuit: if context is already authenticated with scopes (hub protocol server-side call),
   // skip Bearer token extraction — auth already done at the Hono middleware layer.
-  if (
-    ctx.authenticated &&
-    "scopes" in ctx &&
-    Array.isArray((ctx as any).scopes) &&
-    (ctx as any).scopes.length > 0 &&
-    "apiKeyId" in ctx &&
-    (ctx as any).apiKeyId
-  ) {
-    const existingScopes = (ctx as any).scopes as string[];
-    const isHubProtocolKey = existingScopes.some((s: string) =>
-      s.startsWith("hub-protocol.")
-    );
-    return next({
-      ctx: {
-        ...ctx,
-        scopes: existingScopes,
-        apiKeyId: (ctx as any).apiKeyId as string,
-        apiKeyName: ((ctx as any).apiKeyName ?? "hub-protocol") as string,
-        authenticated: true as const,
-        // Preserve hub-protocol branding from createHubProtocolCallerContext
-        ...(isHubProtocolKey || (ctx as any).isHubProtocol
-          ? { source: "intelligence", isHubProtocol: true }
-          : {}),
-      },
-    });
+  if (ctx.authenticated && "scopes" in ctx && "apiKeyId" in ctx) {
+    const enriched = ctx as unknown as ApiKeyEnrichedContext;
+    if (
+      Array.isArray(enriched.scopes) &&
+      enriched.scopes.length > 0 &&
+      enriched.apiKeyId
+    ) {
+      const existingScopes = enriched.scopes;
+      const isHubProtocolKey = existingScopes.some((s: string) =>
+        s.startsWith("hub-protocol.")
+      );
+      return next({
+        ctx: {
+          ...ctx,
+          scopes: existingScopes,
+          apiKeyId: enriched.apiKeyId,
+          apiKeyName: enriched.apiKeyName ?? "hub-protocol",
+          authenticated: true as const,
+          // Preserve hub-protocol branding from createHubProtocolCallerContext
+          ...(isHubProtocolKey || enriched.isHubProtocol
+            ? { source: "intelligence", isHubProtocol: true }
+            : {}),
+        },
+      });
+    }
   }
 
   // Extract Authorization header

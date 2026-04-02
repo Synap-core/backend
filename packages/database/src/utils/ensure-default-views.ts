@@ -70,7 +70,8 @@ export async function ensureDefaultViews(
     const hasTaskBoard = existingViews.some((v) => v.name === "Task Board");
     const hasHome = allWorkspaceViews.some(
       (v) =>
-        v.type === "bento" && (v.metadata as any)?.homeScope === "workspace"
+        v.type === "bento" &&
+        (v.metadata as Record<string, unknown>)?.homeScope === "workspace"
     );
 
     // Skip only if Home is done AND (task views done OR task profile not available)
@@ -86,7 +87,8 @@ export async function ensureDefaultViews(
               v.name === "All Tasks" ||
               v.name === "Task Board" ||
               (v.type === "bento" &&
-                (v.metadata as any)?.homeScope === "workspace")
+                (v.metadata as Record<string, unknown>)?.homeScope ===
+                  "workspace")
           )
           .map((v) => v.id),
       };
@@ -269,22 +271,27 @@ export async function ensureDefaultViews(
       viewsCreated: createdViewIds.length,
       viewIds: createdViewIds,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const err = error as Error & {
+      code?: string;
+      detail?: string;
+      constraint?: string;
+    };
     console.error(
       `[ensureDefaultViews] Error creating default views for workspace ${workspaceId}:`,
       {
-        error: error.message,
-        stack: error.stack,
-        code: error.code,
-        detail: error.detail,
-        constraint: error.constraint,
+        error: err.message,
+        stack: err.stack,
+        code: err.code,
+        detail: err.detail,
+        constraint: err.constraint,
       }
     );
     return {
       status: "error",
-      message: `Failed to create default views: ${error.message}`,
+      message: `Failed to create default views: ${err.message}`,
       viewsCreated: 0,
-      error: error.message,
+      error: err.message,
     };
   }
 }

@@ -165,11 +165,14 @@ export const n8nActionsRouter = router({
         const { searchEntityVectorsRaw } = await import("@synap/database");
         // Cast db to any because VectorRepositoryDatabase interface is loose ([key: string]: unknown)
         // and Drizzle's PgDatabase doesn't have an index signature
-        const results = await searchEntityVectorsRaw(db as any, {
-          userId,
-          embedding,
-          limit,
-        });
+        const results = await searchEntityVectorsRaw(
+          db as unknown as Parameters<typeof searchEntityVectorsRaw>[0],
+          {
+            userId,
+            embedding,
+            limit,
+          }
+        );
 
         if (!results) {
           logger.warn({ userId }, "n8n: Search returned null");

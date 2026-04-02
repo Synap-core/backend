@@ -30,7 +30,10 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const workspaceId = input.workspaceId ?? (ctx as any).workspaceId ?? null;
+      const workspaceId =
+        input.workspaceId ??
+        ((ctx as Record<string, unknown>).workspaceId as string | null) ??
+        null;
       // Use input.userId (the real user) not ctx.userId (the API key owner "system")
       const callerContext = await createHubProtocolCallerContext(
         input.userId,

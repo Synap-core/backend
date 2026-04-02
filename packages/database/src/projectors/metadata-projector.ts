@@ -35,8 +35,8 @@ function hasAIMetadata(
     typeof metadata === "object" &&
     metadata !== null &&
     "ai" in metadata &&
-    typeof (metadata as any).ai === "object" &&
-    (metadata as any).ai !== null
+    typeof (metadata as Record<string, unknown>).ai === "object" &&
+    (metadata as Record<string, unknown>).ai !== null
   );
 }
 
@@ -102,7 +102,9 @@ export async function projectEventMetadata(
           agentId: ai.agent,
           confidence: String(
             Math.max(
-              ...ai.classification.categories.map((c: any) => c.confidence), //TODO
+              ...ai.classification.categories.map(
+                (c: { confidence: number }) => c.confidence
+              ),
               0
             )
           ),
@@ -142,7 +144,8 @@ export async function projectEventMetadata(
           .values({
             sourceEntityId: entityId,
             targetEntityId: rel.targetEntityId,
-            relationshipType: rel.type as any,
+            relationshipType:
+              rel.type as (typeof entityRelationships.$inferInsert)["relationshipType"],
             sourceEventId: event.id,
             agentId: ai.agent,
             confidence: String(rel.confidence),
@@ -157,7 +160,8 @@ export async function projectEventMetadata(
             .values({
               sourceEntityId: rel.targetEntityId,
               targetEntityId: entityId,
-              relationshipType: rel.type as any,
+              relationshipType:
+                rel.type as (typeof entityRelationships.$inferInsert)["relationshipType"],
               sourceEventId: event.id,
               agentId: ai.agent,
               confidence: String(rel.confidence),

@@ -642,7 +642,7 @@ export const intelligenceRegistryRouter = router({
           description: entry.description,
           createdByUserId: ctx.userId,
           capabilities: entry.agentCapabilities,
-        } as any,
+        } satisfies NonNullable<(typeof users.$inferInsert)["agentMetadata"]>,
         timezone: "UTC",
         locale: "en",
       });

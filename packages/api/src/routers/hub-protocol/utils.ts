@@ -38,7 +38,7 @@ export async function createHubProtocolCallerContext(
     scopes,
     apiKeyId: "hub-protocol",
     apiKeyName: "Hub Protocol",
-    req: null as any,
+    req: undefined,
     user: null,
     session: null,
     workspaceId: workspaceId ?? null,

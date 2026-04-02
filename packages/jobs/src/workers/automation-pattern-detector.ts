@@ -189,14 +189,17 @@ async function saveDraftAutomation(
       | "webhook"
       | "manual",
     triggerConfig: {},
-    flowDefinition: (proposal.suggestedFlow ?? { nodes: [], edges: [] }) as any,
+    flowDefinition: (proposal.suggestedFlow ?? {
+      nodes: [],
+      edges: [],
+    }) as (typeof automations.$inferInsert)["flowDefinition"],
     status: "draft",
     metadata: {
-      createdVia: "ai",
+      createdVia: "ai" as const,
       suggestedByPattern: true,
       patternConfidence: proposal.confidence,
       description: proposal.description,
-    } as any,
+    },
     createdAt: new Date(),
     updatedAt: new Date(),
   });

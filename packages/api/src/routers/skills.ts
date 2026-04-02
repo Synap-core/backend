@@ -711,7 +711,7 @@ export const skillsRouter = router({
               edges: [{ id: "e1", source: "trigger", target: "skill" }],
             } satisfies FlowDefinition,
             status: "active",
-            metadata: { createdVia: "ai", tags: ["skill_trigger"] } as any,
+            metadata: { createdVia: "ai" as const, tags: ["skill_trigger"] },
           })
           .returning({ id: automations.id });
         automationId = automation[0].id;

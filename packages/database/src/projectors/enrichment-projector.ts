@@ -171,7 +171,8 @@ async function projectRelationshipDiscovered(event: SynapEvent): Promise<void> {
     .values({
       sourceEntityId: data.sourceEntityId,
       targetEntityId: data.targetEntityId,
-      relationshipType: data.relationshipType as any,
+      relationshipType:
+        data.relationshipType as (typeof entityRelationships.$inferInsert)["relationshipType"],
       sourceEventId: event.id,
       agentId: data.discoveredBy,
       confidence: String(data.confidence),
@@ -187,7 +188,8 @@ async function projectRelationshipDiscovered(event: SynapEvent): Promise<void> {
       .values({
         sourceEntityId: data.targetEntityId,
         targetEntityId: data.sourceEntityId,
-        relationshipType: data.relationshipType as any,
+        relationshipType:
+          data.relationshipType as (typeof entityRelationships.$inferInsert)["relationshipType"],
         sourceEventId: event.id,
         agentId: data.discoveredBy,
         confidence: String(data.confidence),
@@ -295,7 +297,8 @@ async function projectReasoningRecorded(event: SynapEvent): Promise<void> {
   await db
     .insert(reasoningTraces)
     .values({
-      subjectType: data.subjectType as any,
+      subjectType:
+        data.subjectType as (typeof reasoningTraces.$inferInsert)["subjectType"],
       subjectId: data.subjectId,
       sourceEventId: event.id,
       agentId: data.agentId,

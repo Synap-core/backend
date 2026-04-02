@@ -128,14 +128,15 @@ export const importRouter = router({
         workspaceId,
         userId,
       };
-      const entitiesCaller = entitiesRouter.createCaller(callerCtx as any);
-      const chatCaller = channelsRouter.createCaller(callerCtx as any);
+      const entitiesCaller = entitiesRouter.createCaller(callerCtx);
+      const chatCaller = channelsRouter.createCaller(callerCtx);
 
       for (const { path, content, mimeType } of decoded) {
         stats.filesReceived++;
         const ext = path.split(".").pop()?.toLowerCase() ?? "";
         const canTransform =
-          MIME_TRANSFORM.includes(mimeType as any) || EXT_TRANSFORM[ext];
+          (MIME_TRANSFORM as readonly string[]).includes(mimeType) ||
+          EXT_TRANSFORM[ext];
 
         try {
           // 1. Store raw under imports/{batchId}/{path}

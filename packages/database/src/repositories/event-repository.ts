@@ -231,7 +231,17 @@ export class EventRepository {
     } catch (error) {
       // Detailed error logging for debugging
       // Cast to any to access all possible error properties
-      const err = error as any;
+      const err = error as Error & {
+        code?: string;
+        detail?: string;
+        constraint?: string;
+        table?: string;
+        severity?: string;
+        hint?: string;
+        where?: string;
+        schema?: string;
+        column?: string;
+      };
       console.error("❌ Event append failed:", {
         eventId: validated.id,
         eventType: validated.type,

@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
+import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc, or, like, sql, drizzleSql } from "@synap/database";
 import {
@@ -438,12 +439,14 @@ export const intelligenceRouter = router({
           inputs: input.argumentValues,
           selectionContextSnapshot: input.selectionContext ?? undefined,
           status: "running",
-        } as any)
+        })
         .returning();
       if (!run) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       try {
-        const chatCaller = channelsRouter.createCaller(ctx as any);
+        const chatCaller = channelsRouter.createCaller(
+          ctx as unknown as Context
+        );
         await chatCaller.sendMessage({
           channelId: thread.id,
           content: compiledPrompt,
@@ -541,8 +544,10 @@ export const intelligenceRouter = router({
             name: service.name,
             version: service.version ?? undefined,
             capabilities: (service.capabilities as string[]) ?? [],
-            endpoints: (service.metadata as any)?.endpoints,
-            authType: (service.metadata as any)?.authType,
+            endpoints: (service.metadata as Record<string, unknown> | null)
+              ?.endpoints as string[] | undefined,
+            authType: (service.metadata as Record<string, unknown> | null)
+              ?.authType as string | undefined,
           };
         } else {
           manifest = { name: serviceId, capabilities: [] };

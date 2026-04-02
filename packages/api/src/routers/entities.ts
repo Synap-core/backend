@@ -266,7 +266,7 @@ export const entitiesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
-        sourceMessageId: (ctx as any).sourceMessageId ?? undefined,
+        sourceMessageId: ctx.sourceMessageId ?? undefined,
         data: {
           id: entityId,
           profileSlug,
@@ -287,7 +287,7 @@ export const entitiesRouter = router({
           status: "proposed",
           message: "Entity creation proposed for review",
           id: entityId,
-          entity: null as any,
+          entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
         };
       }
@@ -1066,7 +1066,7 @@ export const entitiesRouter = router({
         where: and(
           eq(entities.id, input.entityId),
           or(
-            eq(entities.workspaceId, ctx.workspaceId as any),
+            eq(entities.workspaceId, ctx.workspaceId!),
             isNull(entities.workspaceId)
           )
         ),

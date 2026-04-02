@@ -1165,7 +1165,8 @@ export const channelsRouter = router({
               const data = chunk.data as Partial<HubResponse>;
               hubResponse = { ...hubResponse, ...data };
               // Collect proposals created by backend governance during this response
-              const incoming = (data as any).createdProposals as
+              const incoming = (data as Record<string, unknown>)
+                .createdProposals as
                 | Array<{
                     proposalId: string;
                     toolName: string;
@@ -1463,7 +1464,7 @@ export const channelsRouter = router({
         userId: userId,
         previousHash: userMessageHash,
         hash: assistantMessageHash,
-        metadata: messageMetadata as any,
+        metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
         ...(activeSessionId ? { sessionId: activeSessionId } : {}),
       });
 

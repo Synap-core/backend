@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -612,10 +613,8 @@ export const proposalsRouter = router({
         proposal.targetType === "entity" &&
         proposal.proposalType === "create"
       ) {
-        const innerData = ((proposal.data as any)?.data ?? {}) as Record<
-          string,
-          unknown
-        >;
+        const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+          {}) as Record<string, unknown>;
         const membership = await getWorkspaceMembership(
           db,
           proposal.workspaceId!,
@@ -635,7 +634,7 @@ export const proposalsRouter = router({
           workspaceRole: membership.role,
         };
         const entityCaller = regularEntitiesRouter.createCaller(
-          entityCallerCtx as any
+          entityCallerCtx as unknown as Context
         );
         const profileSlug = innerData.profileSlug as string | undefined;
         if (!profileSlug) {
@@ -679,10 +678,8 @@ export const proposalsRouter = router({
         proposal.targetType === "entity" &&
         proposal.proposalType === "update"
       ) {
-        const innerData = ((proposal.data as any)?.data ?? {}) as Record<
-          string,
-          unknown
-        >;
+        const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+          {}) as Record<string, unknown>;
         const entityId = (innerData.id as string) || proposal.targetId;
         const membership = await getWorkspaceMembership(
           db,
@@ -703,7 +700,7 @@ export const proposalsRouter = router({
           workspaceRole: membership.role,
         };
         const entityCaller = regularEntitiesRouter.createCaller(
-          entityCallerCtx as any
+          entityCallerCtx as unknown as Context
         );
         await entityCaller.update({
           id: entityId,

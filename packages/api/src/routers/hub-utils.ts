@@ -153,7 +153,7 @@ export async function logHubAccess(
 
     // Create audit event
     const auditEvent = createSynapEvent({
-      type: "accessLogs.create" as any, // Audit event
+      type: "accessLogs.create", // Audit event
       data: {
         action,
         requestId,

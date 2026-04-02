@@ -4,7 +4,7 @@
  * Handles all workspace CRUD operations with automatic event emission
  */
 
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, type SQL } from "drizzle-orm";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -101,7 +101,7 @@ export class WorkspaceRepository extends BaseRepository<
       .set({
         settings: sql`${workspaces.settings} || ${JSON.stringify(patch)}::jsonb`,
         updatedAt: new Date(),
-      } as any)
+      } satisfies Record<string, SQL | Date>)
       .where(eq(workspaces.id, id))
       .returning();
 

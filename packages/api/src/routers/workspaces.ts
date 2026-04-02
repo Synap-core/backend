@@ -28,6 +28,7 @@ import {
   sql,
   users,
   createWorkspaceFromDefinition,
+  type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type {
@@ -92,9 +93,7 @@ export const workspacesRouter = router({
       }
 
       // 2. Tier check for package-based workspaces
-      const packageSlug = (input.settings as any)?.packageSlug as
-        | string
-        | undefined;
+      const packageSlug = input.settings?.packageSlug as string | undefined;
       if (packageSlug) {
         await assertPackageTierAccess(ctx.userId, packageSlug);
       }
@@ -151,8 +150,8 @@ export const workspacesRouter = router({
       // 5. Enqueue workspace-init for default whiteboard/views/commands
       try {
         const boss = getBoss();
-        const templateName = (input.settings as any)?.templateName;
-        const packageSlug = (input.settings as any)?.packageSlug;
+        const templateName = input.settings?.templateName as string | undefined;
+        const packageSlug = input.settings?.packageSlug as string | undefined;
         await boss.send("workspace-init", {
           workspaceId,
           userId: ctx.userId,
@@ -250,7 +249,9 @@ export const workspacesRouter = router({
       }
 
       // Skip default views for template workspaces — template defines its own views
-      const isTemplateWorkspace = !!(workspace.settings as any)?.templateName;
+      const isTemplateWorkspace = !!(
+        workspace.settings as Record<string, unknown> | null
+      )?.templateName;
       if (!isTemplateWorkspace) {
         const viewsResult = await ensureDefaultViews(input.id, ctx.userId);
         console.log(
@@ -306,7 +307,8 @@ export const workspacesRouter = router({
         if (updatedWorkspace) {
           console.log(
             `[workspaces.get] Whiteboard created, returning updated workspace with mainWhiteboardId:`,
-            (updatedWorkspace.settings as any)?.mainWhiteboardId
+            (updatedWorkspace.settings as Record<string, unknown> | null)
+              ?.mainWhiteboardId
           );
           return { ...updatedWorkspace, role: membership.role };
         }
@@ -1663,7 +1665,7 @@ export const workspacesRouter = router({
       // Generic path: use definition from control plane registry
       if (input.definition) {
         const result = await createWorkspaceFromDefinition({
-          definition: input.definition as any,
+          definition: input.definition as WorkspaceDefinitionInput,
           userId: systemUserId,
           packageSlug: input.pluginId,
           createdBy: "provisioning",

@@ -287,6 +287,10 @@ export const automations = pgTable(
         version?: number;
         createdVia?: "ai" | "manual" | "template";
         averageExecutionTime?: number;
+        suggestedByPattern?: boolean;
+        patternConfidence?: number;
+        description?: string;
+        [key: string]: unknown;
       }>()
       .default({})
       .notNull(),

@@ -1222,13 +1222,6 @@ export interface WorkerMetadata {
 	outputs?: string[];
 	category: "table" | "shared" | "ai";
 }
-/**
- * Intelligence Router
- *
- * Commands (Raycast-style), runs (audit), effective service (manifest),
- * and proxy procedures for intelligence service management APIs
- * (agents, tools, memory, skills, executions, proposals).
- */
 export interface ToolLog {
 	id?: string;
 	toolName?: string;
@@ -1481,7 +1474,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				message: string;
 				id: `${string}-${string}-${string}-${string}-${string}`;
-				entity: any;
+				entity: Record<string, unknown> | null;
 				proposalId: string;
 			} | {
 				status: string;
@@ -1909,7 +1902,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -1955,7 +1948,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					parentId: string | null;
 					role: "user" | "system" | "assistant";
-					authorType: "external" | "human" | "ai_agent" | "bot";
+					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -2715,7 +2708,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string;
 				schema: {
 					type: string;
-					properties: any;
+					properties: Record<string, import("zod").ZodType<unknown, unknown, import("zod/v4/core").$ZodTypeInternals<unknown, unknown>>>;
 					required: string[];
 				};
 				metadata: {
@@ -2729,7 +2722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		executeTool: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				toolName: string;
-				parameters: Record<string, any>;
+				parameters: Record<string, unknown>;
 				threadId?: string | undefined;
 			};
 			output: {
@@ -2774,7 +2767,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getDatabaseTables: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
-			output: any[];
+			output: unknown[];
 			meta: object;
 		}>;
 		getDatabaseTableRows: import("@trpc/server").TRPCQueryProcedure<{
@@ -2783,7 +2776,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
-			output: any[];
+			output: unknown[];
 			meta: object;
 		}>;
 		getServiceHealth: import("@trpc/server").TRPCQueryProcedure<{
@@ -4538,7 +4531,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: string | null;
 					webhookUrl: string | null;
 					lastHealthCheck: Date | null;
-					lastHealthStatus: any;
+					lastHealthStatus: string | null;
 				}[];
 			};
 			meta: object;
@@ -4598,7 +4591,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 			};
 			output: {
-				entities: any[];
+				entities: {
+					[x: string]: unknown;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -4611,12 +4606,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				entities: {
-					id: any;
-					type: any;
-					title: any;
-					preview: any;
+					id: unknown;
+					type: unknown;
+					title: unknown;
+					preview: unknown;
 					similarity: number;
-					createdAt: any;
+					createdAt: unknown;
 				}[];
 			};
 			meta: object;
@@ -4652,7 +4647,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 			};
 			output: {
-				entities: any[];
+				entities: Record<string, unknown>[];
 			};
 			meta: object;
 		}>;
@@ -5539,9 +5534,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 			};
 			output: {
-				view: any;
-				documentId: null;
-				status: string;
+				view: Record<string, unknown> | null;
+				documentId: string | null;
+				status: "proposed";
 				message: string;
 				proposalId: string;
 			} | {
@@ -6022,7 +6017,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getViewModes: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
-			output: any;
+			output: Record<string, string>;
 			meta: object;
 		}>;
 		updateViewMode: import("@trpc/server").TRPCMutationProcedure<{
@@ -6032,7 +6027,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
-				viewModes: any;
+				viewModes: {
+					[x: string]: string;
+				};
 			};
 			meta: object;
 		}>;
@@ -6051,7 +6048,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
-				preferences: any;
+				preferences: {
+					[x: string]: unknown;
+				};
 			};
 			meta: object;
 		}>;
@@ -7256,7 +7255,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				proposalId?: undefined;
 			} | {
-				profile: any;
+				profile: Record<string, unknown> | null;
 				status: string;
 				message: string;
 				proposalId: string;

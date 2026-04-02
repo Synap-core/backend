@@ -150,7 +150,15 @@ export const hubProfilesRouter = router({
 
       return caller.create({
         slug: input.slug,
-        valueType: input.valueType as any,
+        valueType: input.valueType as
+          | "string"
+          | "number"
+          | "boolean"
+          | "object"
+          | "array"
+          | "date"
+          | "secret"
+          | "entity_id",
         constraints: input.constraints,
         uiHints: input.uiHints,
         profileId: input.profileId,

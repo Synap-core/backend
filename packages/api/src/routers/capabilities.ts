@@ -111,7 +111,8 @@ export const capabilitiesRouter = router({
         version: s.version,
         webhookUrl: s.webhookUrl ?? null,
         lastHealthCheck: s.lastHealthCheck ?? null,
-        lastHealthStatus: (s as any).lastHealthStatus ?? null,
+        lastHealthStatus:
+          ("lastHealthStatus" in s ? s.lastHealthStatus : null) ?? null,
       })),
     };
   }),

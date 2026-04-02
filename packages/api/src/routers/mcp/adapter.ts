@@ -37,7 +37,7 @@ async function createHubProtocolCaller(userId: string, scopes: string[]) {
     scopes,
     apiKeyId: "mcp",
     apiKeyName: "MCP Server",
-    req: null as any,
+    req: undefined,
     user: null,
     session: null,
   };
@@ -93,7 +93,7 @@ export async function executeMCPToolViaHubProtocol(
       ] as const;
       const t = args.type as string | undefined;
       const validType =
-        t && validTypes.includes(t as any)
+        t && (validTypes as readonly string[]).includes(t)
           ? (t as (typeof validTypes)[number])
           : undefined;
       const result = await caller.search.searchEntities({
@@ -118,7 +118,7 @@ export async function executeMCPToolViaHubProtocol(
       ] as const;
       const t = args.type as string | undefined;
       const validType =
-        t && validTypes.includes(t as any)
+        t && (validTypes as readonly string[]).includes(t)
           ? (t as (typeof validTypes)[number])
           : undefined;
       const result = await caller.entities.getEntities({
@@ -300,7 +300,7 @@ export async function readMCPResourceViaHubProtocol(
       "meeting",
       "idea",
     ] as const;
-    const validType = validTypes.includes(entityType as any)
+    const validType = (validTypes as readonly string[]).includes(entityType!)
       ? (entityType as (typeof validTypes)[number])
       : undefined;
     const entities = await caller.entities.getEntities({

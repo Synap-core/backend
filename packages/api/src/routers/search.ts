@@ -70,10 +70,12 @@ export const searchRouter = router({
       logger.debug({ userId, resultCount: results.length }, "Search complete");
 
       // Cast results to entity type (remove rank field from response)
-      const entitiesResults = results.map((r: any) => {
-        const { rank, ...entity } = r;
-        return entity;
-      });
+      const entitiesResults = (results as Record<string, unknown>[]).map(
+        (r) => {
+          const { rank, ...entity } = r;
+          return entity;
+        }
+      );
 
       return { entities: entitiesResults };
     }),
@@ -136,7 +138,7 @@ export const searchRouter = router({
       `);
 
       return {
-        entities: (results as any[]).map((r) => ({
+        entities: (results as Record<string, unknown>[]).map((r) => ({
           id: r.id,
           type: r.type,
           title: r.title,
@@ -242,6 +244,6 @@ export const searchRouter = router({
         "Tag search complete"
       );
 
-      return { entities: results as any[] };
+      return { entities: results as Record<string, unknown>[] };
     }),
 });

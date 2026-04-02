@@ -42,6 +42,8 @@ import type {
   AutomationNode,
   AutomationEdge,
   NodeErrorHandling,
+  CommandNodeDef,
+  OutputNodeDef,
 } from "@synap/database";
 import { emitSideEffects } from "../emit-side-effects.js";
 import { getBoss } from "../boss.js";
@@ -372,7 +374,7 @@ async function executeOutputStep(
           type: profileSlug ?? "note",
           title,
           properties,
-        } as any)
+        })
         .returning({ id: entities.id, title: entities.title });
 
       // Emit side effects so the entity gets indexed, embedded, and can trigger further automations
@@ -401,7 +403,7 @@ async function executeOutputStep(
         .set({
           properties: drizzleSql`COALESCE(properties, '{}'::jsonb) || ${JSON.stringify(properties)}::jsonb`,
           updatedAt: new Date(),
-        } as any)
+        } as unknown as Record<string, unknown>)
         .where(eq(entities.id, entityId));
 
       await emitSideEffects({
@@ -474,14 +476,25 @@ async function executeOutputStep(
         throw new Error("channel_message requires channelId and content");
       }
 
+      const { createHash, randomUUID } = await import("crypto");
+      const hash = createHash("sha256")
+        .update(JSON.stringify({ channelId, content, role: "system" }))
+        .digest("hex");
+      const values: typeof messages.$inferInsert = {
+        id: randomUUID(),
+        channelId,
+        userId: "system",
+        role: "system",
+        content,
+        hash,
+        metadata: {
+          automationMessage: true,
+          ...automationContext,
+        } as (typeof messages.$inferInsert)["metadata"],
+      };
       const [msg] = await db
         .insert(messages)
-        .values({
-          channelId,
-          role: "system",
-          content,
-          metadata: { type: "automation_message", automationContext },
-        } as any)
+        .values(values)
         .returning({ id: messages.id });
 
       return { status: "sent", messageId: msg.id, channelId };
@@ -809,7 +822,11 @@ async function executeAutomationFlow(params: {
         runId,
         nodeId: node.id,
         commandId:
-          node.type === "command" ? (node.data as any).commandId : undefined,
+          node.type === "command"
+            ? ((node.data as Record<string, unknown>).commandId as
+                | string
+                | undefined)
+            : undefined,
         status: "running",
         startedAt: new Date(),
       })
@@ -1015,15 +1032,18 @@ async function executeAutomationFlow(params: {
                   let childOutput: Record<string, unknown> = {};
 
                   if (childNode.type === "command") {
+                    const commandData =
+                      childNode.data as CommandNodeDef["data"];
                     childOutput = await executeCommandStep(
-                      childNode.data as any,
+                      commandData,
                       context,
                       workspaceId,
                       ownerId
                     );
                   } else if (childNode.type === "output") {
+                    const outputData = childNode.data as OutputNodeDef["data"];
                     childOutput = await executeOutputStep(
-                      childNode.data as any,
+                      outputData,
                       context,
                       workspaceId,
                       automationContext,
@@ -1242,7 +1262,7 @@ async function executeAutomationFlow(params: {
               status: "running",
               triggerPayload: resolvedPayload,
               startedAt: new Date(),
-            } as any);
+            });
 
             // Look up the child automation owner
             const childAutomation = await db.query.automations.findFirst({

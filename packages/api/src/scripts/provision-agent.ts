@@ -33,6 +33,7 @@ import {
   apiKeys,
   workspaces,
   intelligenceServices,
+  type AgentMetadata,
 } from "@synap/database/schema";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
 
@@ -446,7 +447,7 @@ async function run() {
       description: e.description,
       createdByUserId: "system",
       capabilities: e.agentCapabilities,
-    } as any,
+    } as AgentMetadata,
     timezone: "UTC",
     locale: "en",
   });

@@ -36,6 +36,8 @@ import {
   mcpServers,
   inArray,
   workspaceMembers,
+  entities,
+  isNull,
 } from "@synap/database";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -402,12 +404,13 @@ app.get("/entities/:id", async (c) => {
     return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
   }
   const entityId = c.req.param("id");
-  const workspaceId = c.req.query("workspaceId");
   // Use explicit userId from query, or fall back to API key's userId
   const userId = c.req.query("userId") || (c.get("userId") as string);
   try {
-    const caller = await getCaller(c, { workspaceId });
-    const result = await (caller as any).entities.get({ id: entityId });
+    // Direct DB query — no tRPC procedure exists for single-entity get in hub protocol
+    const result = await db.query.entities.findFirst({
+      where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
+    });
     if (!result) return c.json(null, 404);
     // Verify the entity's workspace is accessible to the requesting user.
     if (result.workspaceId) {
@@ -420,7 +423,7 @@ app.get("/entities/:id", async (c) => {
   } catch (err) {
     logger.error({ err, entityId }, "entities.get failed");
     return c.json(
-      { error: err instanceof Error ? err.message : "Unknown error" },
+      { error: err instanceof Error ? err.message : "Internal error" },
       500
     );
   }
@@ -772,8 +775,11 @@ app.get("/documents/:documentId", async (c) => {
       userId,
     });
     // Verify document belongs to an accessible workspace
-    if (result?.workspaceId) {
-      const hasAccess = await verifyWorkspaceAccess(userId, result.workspaceId);
+    const docWsId = (result as Record<string, unknown> | null)?.workspaceId as
+      | string
+      | undefined;
+    if (docWsId) {
+      const hasAccess = await verifyWorkspaceAccess(userId, docWsId);
       if (!hasAccess) {
         return c.json({ error: "Access denied to document's workspace" }, 403);
       }
@@ -1018,7 +1024,12 @@ app.post("/threads/:threadId/link-entity", async (c) => {
       ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       threadId,
       entityId: body.entityId,
-      relationshipType: body.relationshipType ?? "referenced",
+      relationshipType: (body.relationshipType ?? "referenced") as
+        | "created"
+        | "updated"
+        | "used_as_context"
+        | "referenced"
+        | "inherited_from_parent",
       sourceMessageId: body.sourceMessageId,
     });
     return c.json(result);
@@ -1060,7 +1071,12 @@ app.post("/threads/:threadId/link-document", async (c) => {
       ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
       threadId,
       documentId: body.documentId,
-      relationshipType: body.relationshipType ?? "referenced",
+      relationshipType: (body.relationshipType ?? "referenced") as
+        | "created"
+        | "updated"
+        | "used_as_context"
+        | "referenced"
+        | "inherited_from_parent",
       sourceMessageId: body.sourceMessageId,
     });
     return c.json(result);
@@ -2208,7 +2224,9 @@ app.post("/compacted-states", async (c) => {
   }
   try {
     const caller = await getCaller(c);
-    const result = await caller.compactedStates.create(body);
+    const result = await caller.compactedStates.create(
+      body as Parameters<typeof caller.compactedStates.create>[0]
+    );
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "compactedStates.create failed");
@@ -2519,7 +2537,7 @@ app.post("/widget-definitions", async (c) => {
     const result = await caller.widgetDefinitions.upsertWidgetDef({
       ...body,
       userId,
-    });
+    } as Parameters<typeof caller.widgetDefinitions.upsertWidgetDef>[0]);
     return c.json(result);
   } catch (err) {
     logger.error({ err }, "widgetDefinitions.upsertWidgetDef failed");
@@ -2571,13 +2589,17 @@ app.post("/automations/create", async (c) => {
       sourceMessageId: body.sourceMessageId as string | undefined,
       name: body.name as string,
       description: body.description as string | undefined,
-      triggerType: body.triggerType as string,
+      triggerType: body.triggerType as "event" | "cron" | "webhook" | "manual",
       triggerConfig: (body.triggerConfig as Record<string, unknown>) ?? {},
       flowDefinition: body.flowDefinition as {
-        nodes: unknown[];
-        edges: unknown[];
+        nodes: Record<string, unknown>[];
+        edges: Record<string, unknown>[];
       },
-      status: (body.status as string) ?? "draft",
+      status: ((body.status as string) ?? "draft") as
+        | "draft"
+        | "active"
+        | "paused"
+        | "error",
       metadata: body.metadata as Record<string, unknown> | undefined,
     });
     return c.json(result);
@@ -2608,7 +2630,12 @@ app.get("/automations", async (c) => {
     const result = await caller.automations.listAutomations({
       userId,
       workspaceId,
-      status: c.req.query("status") || undefined,
+      status: (c.req.query("status") || undefined) as
+        | "draft"
+        | "active"
+        | "paused"
+        | "error"
+        | undefined,
       limit: c.req.query("limit")
         ? parseInt(c.req.query("limit")!, 10)
         : undefined,
@@ -2721,12 +2748,22 @@ app.patch("/automations/:automationId", async (c) => {
       id: c.req.param("automationId"),
       name: body.name as string | undefined,
       description: body.description as string | undefined,
-      triggerType: body.triggerType as string | undefined,
+      triggerType: body.triggerType as
+        | "event"
+        | "cron"
+        | "webhook"
+        | "manual"
+        | undefined,
       triggerConfig: body.triggerConfig as Record<string, unknown> | undefined,
       flowDefinition: body.flowDefinition as
-        | { nodes: unknown[]; edges: unknown[] }
+        | { nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }
         | undefined,
-      status: body.status as string | undefined,
+      status: body.status as
+        | "draft"
+        | "active"
+        | "paused"
+        | "error"
+        | undefined,
       metadata: body.metadata as Record<string, unknown> | undefined,
     });
     return c.json(result);
@@ -3777,13 +3814,13 @@ app.post("/entity-share/deliver", async (c) => {
     );
     const caller = hubProtocolRouter.createCaller(callerCtx as any);
 
-    const result = await caller.entities.create({
+    const result = await caller.entities.createEntity({
+      userId: podUser.id,
       profileSlug,
-      title: (snapshot.title as string | undefined) ?? undefined,
+      title: (snapshot.title as string | undefined) ?? "Shared Entity",
       description: (snapshot.preview as string | undefined) ?? undefined,
       properties:
         (snapshot.properties as Record<string, unknown> | undefined) ?? {},
-      source: "system" as const,
     });
 
     logger.info(

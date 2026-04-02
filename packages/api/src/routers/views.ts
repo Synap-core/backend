@@ -133,9 +133,9 @@ export const viewsRouter = router({
         }
         if ("proposalId" in perm) {
           return {
-            view: null as any,
-            documentId: null,
-            status: "proposed",
+            view: null as Record<string, unknown> | null,
+            documentId: null as string | null,
+            status: "proposed" as const,
             message: "View creation proposed for review",
             proposalId: perm.proposalId,
           };
@@ -178,10 +178,10 @@ export const viewsRouter = router({
           });
         }
 
-        if ((parseResult.data as any).category !== category) {
+        if (parseResult.data.category !== category) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `View type '${input.type}' requires '${category}' content, got '${(parseResult.data as any).category}'`,
+            message: `View type '${input.type}' requires '${category}' content, got '${parseResult.data.category}'`,
           });
         }
       }
@@ -242,7 +242,7 @@ export const viewsRouter = router({
             size: uploadResult.size,
             mimeType: "application/json",
             currentVersion: 1,
-          } as any)
+          })
           .returning();
 
         await db.insert(documentVersions).values({
@@ -272,7 +272,7 @@ export const viewsRouter = router({
       const createdView = await viewRepo.create(
         {
           id: viewId,
-          type: input.type as any,
+          type: input.type,
           name: input.name,
           description: input.description,
           documentId: docId,
@@ -784,10 +784,10 @@ export const viewsRouter = router({
 
       // Ensure content category matches view type
       const expectedCategory = getViewCategory(view.type);
-      if ((parseResult.data as any).category !== expectedCategory) {
+      if (parseResult.data.category !== expectedCategory) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${(parseResult.data as any).category}'`,
+          message: `View type '${view.type}' requires '${expectedCategory}' content, got '${parseResult.data.category}'`,
         });
       }
 
@@ -1310,7 +1310,7 @@ export const viewsRouter = router({
       const newView = await viewRepo.create(
         {
           name: profile.displayName,
-          type: "bento" as any,
+          type: "bento",
           scopeProfileIds: [profile.id],
           config: { layout: "bento", blocks },
           metadata: { isProfileBento: true, profileSlug: slug },
