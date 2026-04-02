@@ -50,7 +50,7 @@ import { syncManagementRouter } from "./routers/sync-management.js";
 /**
  * Core API Router
  */
-export const coreRouter = router({
+const _coreRouter = router({
   setup: setupRouter,
   events: eventsRouter,
   capture: captureRouter,
@@ -101,4 +101,7 @@ export const coreRouter = router({
   sync: syncManagementRouter,
 });
 
-export type AppRouter = typeof coreRouter;
+export type AppRouter = typeof _coreRouter;
+// Explicit annotation forces TS to use the named AppRouter type in .d.ts output
+// instead of re-deriving through @synap/database/node_modules/zod
+export const coreRouter: AppRouter = _coreRouter;

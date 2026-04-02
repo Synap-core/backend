@@ -401,11 +401,12 @@ registerRouter("sync", syncManagementRouter, {
 });
 
 import { coreRouter } from "./root.js";
-export type { AppRouter } from "./root.js";
+import type { AppRouter } from "./root.js";
+export type { AppRouter };
 export { coreRouter };
 
 // Export the dynamically built app router for the server
-export const appRouter = buildAppRouter();
+export const appRouter: AppRouter = buildAppRouter();
 
 // Re-export router registry functions for plugin developers
 export {
