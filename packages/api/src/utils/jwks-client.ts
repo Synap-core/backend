@@ -78,13 +78,17 @@ async function getPublicKeyPem(cpUrl: string): Promise<string> {
  * Returns the decoded payload if valid, or null if:
  *   - cpUrl is not configured (self-hosted pod, no CP)
  *   - JWKS fetch fails
- *   - Signature / issuer / expiry check fails
+ *   - Signature / issuer / expiry / audience check fails
+ *
+ * Pass `audience` when the token was signed with an `aud` claim (e.g. handshake
+ * tokens carry `aud: podUrl`). Omit for tokens that have no audience claim.
  *
  * Callers should treat null as "unverified — apply safe defaults (solo tier, etc.)".
  */
 export async function verifyCpJwt<T extends object>(
   token: string,
-  cpUrl: string | undefined
+  cpUrl: string | undefined,
+  audience?: string
 ): Promise<T | null> {
   if (!cpUrl) {
     logger.debug("verifyCpJwt: no cpUrl configured — skipping verification");
@@ -96,6 +100,7 @@ export async function verifyCpJwt<T extends object>(
     const payload = jwt.verify(token, publicKeyPem, {
       algorithms: ["ES256"],
       issuer: "synap-control-plane",
+      ...(audience ? { audience } : {}),
     }) as T;
     return payload;
   } catch (err) {

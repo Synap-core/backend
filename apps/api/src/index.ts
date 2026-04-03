@@ -374,15 +374,18 @@ app.post("/api/handshake", async (c) => {
       return c.json({ error: "token is required" }, 400);
     }
 
-    // Verify the handshake JWT via CP JWKS (ES256)
+    // Verify the handshake JWT via CP JWKS (ES256).
+    // Pass this pod's own PUBLIC_URL as the expected audience so a token signed
+    // for a different pod is rejected even if the signature is valid.
     const cpUrl = config.server.controlPlaneUrl;
+    const podPublicUrl = process.env.PUBLIC_URL;
     const payload = await verifyCpJwt<{
       sub: string;
       email: string;
       name?: string;
       aud: string;
       type: string;
-    }>(token, cpUrl);
+    }>(token, cpUrl, podPublicUrl);
 
     if (!payload) {
       apiLogger.warn(
