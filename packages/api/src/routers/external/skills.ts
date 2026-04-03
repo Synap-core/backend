@@ -120,7 +120,7 @@ externalSkillsApp.post(
   externalApiKeyAuth("skills.invoke"),
   async (c) => {
     const userId = c.get("userId");
-    const skillId = c.req.param("id");
+    const skillId = c.req.param("id")!;
 
     // Parse + validate request body
     let parsedBody: { input?: Record<string, unknown> };
