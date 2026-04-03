@@ -53,7 +53,7 @@ export const linkingRouter = router({
         agentUserId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       // Verify channel exists and resolve workspaceId
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.threadId),
@@ -68,7 +68,7 @@ export const linkingRouter = router({
       }
 
       const workspaceId = channel.workspaceId ?? undefined;
-      const agentUserId = input.agentUserId ?? ctx.userId ?? undefined;
+      const agentUserId = input.agentUserId;
 
       // Governance: "context.link" is auto-approved by default whitelist.
       // Still verifies workspace membership for the acting user.
@@ -144,7 +144,7 @@ export const linkingRouter = router({
         agentUserId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       // Verify channel exists and resolve workspaceId
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.threadId),
@@ -159,7 +159,7 @@ export const linkingRouter = router({
       }
 
       const workspaceId = channel.workspaceId ?? undefined;
-      const agentUserId = input.agentUserId ?? ctx.userId ?? undefined;
+      const agentUserId = input.agentUserId;
 
       // Governance: "context.link" is auto-approved by default whitelist.
       // Still verifies workspace membership for the acting user.

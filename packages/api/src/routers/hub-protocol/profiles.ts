@@ -82,7 +82,7 @@ export const hubProfilesRouter = router({
         reasoning: input.reasoning,
         scope: "workspace",
         source: "intelligence",
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        agentUserId: input.agentUserId,
       });
     }),
 

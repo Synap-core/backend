@@ -119,7 +119,7 @@ export const hubViewsRouter = router({
         config: input.config,
         metadata: input.metadata,
         source: "intelligence",
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        agentUserId: input.agentUserId,
         reasoning: input.reasoning,
       });
 
@@ -159,7 +159,7 @@ export const hubViewsRouter = router({
       // Governance check — view.update is NOT in auto-approve whitelist
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        agentUserId: input.agentUserId,
         workspaceId,
         subjectType: "view",
         action: "update",
@@ -230,7 +230,7 @@ export const hubViewsRouter = router({
       // Permission check — bento.arrange is in DEFAULT_AUTO_APPROVE
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        agentUserId: input.agentUserId,
         workspaceId: input.workspaceId,
         subjectType: "bento",
         action: "arrange",

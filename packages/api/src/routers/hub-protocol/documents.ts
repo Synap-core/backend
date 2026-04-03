@@ -46,7 +46,7 @@ export const documentsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const documentId = randomUUID();
       // Prefer explicit agentUserId from request; API key owner is a system account.
-      const agentUserId = input.agentUserId ?? ctx.userId!;
+      const agentUserId = input.agentUserId ?? input.userId;
 
       // Governance check — AI agent creating a document requires proposal by default
       const perm = await checkPermissionOrPropose({
@@ -234,7 +234,7 @@ export const documentsRouter = router({
 
       const workspaceId = entity?.workspaceId || input.userId;
 
-      const createdBy = input.agentUserId ?? ctx.userId ?? input.userId;
+      const createdBy = input.agentUserId ?? input.userId;
       const sourceMessageId =
         input.sourceMessageId ?? ctx.sourceMessageId ?? undefined;
       const threadId = input.threadId ?? undefined;

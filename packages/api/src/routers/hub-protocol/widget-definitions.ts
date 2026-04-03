@@ -88,7 +88,7 @@ export const hubWidgetDefinitionsRouter = router({
       // Governance check — widget.register is NOT auto-approved
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: input.agentUserId ?? ctx.userId ?? undefined,
+        agentUserId: input.agentUserId,
         workspaceId: input.workspaceId,
         subjectType: "widget",
         action: "register",

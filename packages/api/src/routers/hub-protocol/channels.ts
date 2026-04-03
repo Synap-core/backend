@@ -131,12 +131,11 @@ export const channelsRouter = router({
         reasoning: z.string().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const proposalId = randomUUID();
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
-        agentUserId: ctx.userId ?? undefined,
         workspaceId: input.workspaceId,
         subjectType: "channel",
         action: "create_external_import",

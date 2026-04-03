@@ -49,7 +49,7 @@ export const branchesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       // Prefer explicit agentUserId from request; API key owner is a system account.
-      const agentUserId = input.agentUserId ?? ctx.userId!;
+      const agentUserId = input.agentUserId ?? input.userId;
 
       // Resolve workspaceId from the parent thread
       const parentChannel = await db.query.channels.findFirst({
@@ -148,7 +148,7 @@ export const branchesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       // Prefer explicit agentUserId from request; API key owner is a system account.
-      const agentUserId = input.agentUserId ?? ctx.userId!;
+      const agentUserId = input.agentUserId ?? input.userId;
 
       // Resolve workspaceId from the branch channel
       const branchChannel = await db.query.channels.findFirst({
