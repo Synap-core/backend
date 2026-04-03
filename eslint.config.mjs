@@ -15,6 +15,7 @@ export default [
       "**/generated.d.ts", // Generated files from Drizzle ORM
       "**/*.generated.ts",
       "**/*.generated.d.ts",
+      "**/*.d.ts", // Declaration files (auto-generated, not hand-written)
     ],
   },
   js.configs.recommended,

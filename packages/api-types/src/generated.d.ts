@@ -8443,7 +8443,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
-				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
+				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -8453,7 +8453,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "ai" | "governance" | "inbox";
+					category: "data" | "system" | "governance" | "ai" | "inbox";
 					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
