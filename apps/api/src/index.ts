@@ -406,7 +406,12 @@ app.post("/api/handshake", async (c) => {
             "Handshake: resolved issuer URL from workspace settings"
           );
         }
-      } catch {}
+      } catch (e) {
+        apiLogger.debug(
+          { err: e },
+          "Handshake: failed to resolve issuer URL from workspace settings"
+        );
+      }
     }
 
     if (!issuerUrl) {
