@@ -254,9 +254,11 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: automation-cron-scheduler");
 
-  // Telegram morning digest (cron: daily at 8:00 AM)
-  await boss.work("telegram-digest", async () => handleTelegramDigest());
-  logger.info("Registered worker: telegram-digest");
+  // Telegram morning digest (cron: daily at 8:00 AM) — only when Telegram bot is enabled
+  if (process.env.TELEGRAM_BOT_ENABLED === "true") {
+    await boss.work("telegram-digest", async () => handleTelegramDigest());
+    logger.info("Registered worker: telegram-digest");
+  }
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>

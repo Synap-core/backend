@@ -97,6 +97,15 @@ export const channelGatewayRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (process.env.TELEGRAM_BOT_ENABLED !== "true") {
+        return {
+          ok: false,
+          enabled: false,
+          message:
+            "Telegram bot is disabled. Set TELEGRAM_BOT_ENABLED=true to enable, or use OpenClaw for Telegram integration.",
+        };
+      }
+
       const { botToken } = input;
       const workspaceId = ctx.workspaceId;
 
@@ -212,6 +221,17 @@ export const channelGatewayRouter = router({
    * Returns whether a bot token is configured and the bot's username.
    */
   telegramStatus: workspaceProcedure.query(async ({ ctx }) => {
+    if (process.env.TELEGRAM_BOT_ENABLED !== "true") {
+      return {
+        configured: false,
+        botUsername: null,
+        source: null,
+        enabled: false,
+        message:
+          "Telegram bot is disabled. Set TELEGRAM_BOT_ENABLED=true to enable, or use OpenClaw for Telegram integration.",
+      };
+    }
+
     const ws = await db.query.workspaces.findFirst({
       where: eq(workspaces.id, ctx.workspaceId),
       columns: { settings: true },

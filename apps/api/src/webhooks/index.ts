@@ -17,7 +17,11 @@ export const webhookRouter = new Hono();
 webhookRouter.route("/n8n", n8nWebhookRouter);
 webhookRouter.route("/kratos", kratosWebhookRouter);
 webhookRouter.route("/intelligence", intelligenceWebhookRouter);
-webhookRouter.route("/telegram", telegramWebhookRouter);
+
+// Telegram webhook — only mounted when TELEGRAM_BOT_ENABLED=true
+if (process.env.TELEGRAM_BOT_ENABLED === "true") {
+  webhookRouter.route("/telegram", telegramWebhookRouter);
+}
 
 // Global webhook health check
 webhookRouter.get("/health", (c) => {

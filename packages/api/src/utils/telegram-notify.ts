@@ -43,6 +43,8 @@ export async function notifyTelegramUser(
   message: string,
   options?: TelegramNotifyOptions
 ): Promise<boolean> {
+  if (process.env.TELEGRAM_BOT_ENABLED !== "true") return false;
+
   try {
     // Look up the user's Telegram connection
     const [connection] = await db
@@ -136,6 +138,8 @@ export async function notifyProposalViaTelegram(opts: {
   reasoning?: string;
   workspaceId?: string;
 }): Promise<boolean> {
+  if (process.env.TELEGRAM_BOT_ENABLED !== "true") return false;
+
   const {
     userId,
     proposalId,
