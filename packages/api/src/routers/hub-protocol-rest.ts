@@ -17,6 +17,7 @@ import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
 import type { ProactiveMessageType } from "../utils/proactive-channel-post.js";
+import { randomUUID, randomBytes } from "crypto";
 import {
   db,
   messages,
@@ -38,7 +39,11 @@ import {
   workspaceMembers,
   entities,
   isNull,
+  EventRepository,
+  ApiKeyRepository,
+  sql,
 } from "@synap/database";
+import { apiKeys } from "@synap/database/schema";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -69,7 +74,12 @@ app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
  */
 app.use("/*", async (c, next) => {
   // /health — no auth. /entity-share/deliver — CP JWT auth handled inline.
-  if (c.req.path === "/health" || c.req.path === "/entity-share/deliver") {
+  // /setup/agent — self-hosted setup, uses PROVISIONING_TOKEN auth handled inline.
+  if (
+    c.req.path === "/health" ||
+    c.req.path === "/entity-share/deliver" ||
+    c.req.path === "/setup/agent"
+  ) {
     return next();
   }
   const authHeader = c.req.header("authorization") ?? null;
@@ -1337,19 +1347,24 @@ app.post("/memory", async (c) => {
     userId: string;
     fact: string;
     confidence?: number;
-    embedding: number[];
+    embedding?: number[];
     sourceEntityId?: string;
     sourceMessageId?: string;
   };
-  if (!body.userId || !body.fact || !Array.isArray(body.embedding)) {
-    return c.json({ error: "userId, fact, and embedding are required" }, 400);
+  if (!body.userId || !body.fact) {
+    return c.json({ error: "userId and fact are required" }, 400);
   }
   try {
+    // Embedding is optional — if not provided, use a zero vector.
+    // Keyword search (GET /memory) still works; semantic search ranks these low.
+    const embedding = Array.isArray(body.embedding)
+      ? body.embedding
+      : new Array(1536).fill(0);
     const record = await knowledgeRepository.saveFact({
       userId: body.userId,
       fact: body.fact,
       confidence: body.confidence ?? 0.8,
-      embedding: body.embedding,
+      embedding,
       sourceEntityId: body.sourceEntityId,
       sourceMessageId: body.sourceMessageId,
     });
@@ -3838,6 +3853,226 @@ app.post("/entity-share/deliver", async (c) => {
       { error: err instanceof Error ? err.message : "Entity creation failed" },
       500
     );
+  }
+});
+
+// ─── POST /setup/agent ───────────────────────────────────────────────────────
+//
+// Self-hosted setup endpoint. Creates an agent user + Hub Protocol API key
+// for external services (e.g. OpenClaw) without requiring a Control Plane.
+//
+// Auth: Bearer <PROVISIONING_TOKEN> — the same token set in the pod's .env
+//       (no CP JWT, no session cookies — works headlessly from a setup script).
+//
+// Body: { agentType: string, workspaceId?: string }
+//
+// Steps:
+//   1. Find or create a pod-wide agent user (agentMetadata.writesRequireProposal: true)
+//   2. Grant the agent editor membership in the target workspace (idempotent)
+//   3. Create a Hub Protocol API key with hub-protocol.read/write + mcp.read/write scopes
+//
+// Idempotent: if an agent user with the given agentType already exists, it is
+// reused. Any previously active Hub key for that user is revoked before creating
+// a new one (the plaintext key is returned once only).
+//
+// Returns: { agentUserId, workspaceId, hubApiKey, keyId }
+//
+
+app.post("/setup/agent", async (c) => {
+  // ── Auth: PROVISIONING_TOKEN ────────────────────────────────────────────────
+  const authHeader = c.req.header("authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7).trim()
+    : null;
+
+  const provisioningToken = process.env.PROVISIONING_TOKEN;
+  if (!provisioningToken) {
+    return c.json(
+      {
+        error:
+          "PROVISIONING_TOKEN is not configured on this pod. Set it in your .env file.",
+      },
+      503
+    );
+  }
+
+  if (!token || token !== provisioningToken) {
+    return c.json(
+      {
+        error:
+          "Invalid or missing PROVISIONING_TOKEN. Use Authorization: Bearer <PROVISIONING_TOKEN>",
+      },
+      401
+    );
+  }
+
+  // ── Parse body ──────────────────────────────────────────────────────────────
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const agentType: string =
+    typeof body.agentType === "string" ? body.agentType : "openclaw";
+  const requestedWorkspaceId: string | undefined =
+    typeof body.workspaceId === "string" ? body.workspaceId : undefined;
+
+  const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
+
+  try {
+    // ── Find target workspace ───────────────────────────────────────────────
+    const ws = requestedWorkspaceId
+      ? await db.query.workspaces.findFirst({
+          where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
+        })
+      : await db.query.workspaces.findFirst();
+
+    if (!ws) {
+      return c.json(
+        {
+          error: requestedWorkspaceId
+            ? `Workspace ${requestedWorkspaceId} not found`
+            : "No workspace found on this pod",
+        },
+        404
+      );
+    }
+
+    // Find workspace owner for attribution
+    const ownerMember = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, ws.id),
+        eq(workspaceMembers.role, "owner")
+      ),
+      columns: { userId: true },
+    });
+    const ownerUserId = ownerMember?.userId ?? null;
+
+    // ── 1. Find or create the agent user (pod-wide singleton per agentType) ─
+    const existingAgent = await db.query.users.findFirst({
+      where: and(
+        eq(users.userType, "agent"),
+        drizzleSql`${users.agentMetadata}->>'agentType' = ${agentType}`
+      ),
+      columns: { id: true },
+    });
+
+    let agentUserId: string;
+
+    if (existingAgent) {
+      agentUserId = existingAgent.id;
+      logger.info(
+        { agentUserId, agentType },
+        "setup/agent: reusing existing agent user"
+      );
+    } else {
+      agentUserId = randomUUID();
+      const shortId = agentUserId.slice(0, 8);
+      await db.insert(users).values({
+        id: agentUserId,
+        email: `agent-${agentType}-${shortId}@synap.agent`,
+        name: agentLabel,
+        emailVerified: true,
+        userType: "agent",
+        kratosIdentityId: null,
+        agentMetadata: {
+          agentType,
+          description: `${agentLabel} — external agent (self-hosted setup)`,
+          createdByUserId: ownerUserId ?? agentUserId,
+          isPersonalAgent: false,
+          writesRequireProposal: true,
+          capabilities: [],
+        },
+        timezone: "UTC",
+        locale: "en",
+      });
+      logger.info(
+        { agentUserId, agentType },
+        "setup/agent: created agent user"
+      );
+    }
+
+    // ── 2. Grant workspace membership (idempotent) ──────────────────────────
+    const existingMembership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.userId, agentUserId),
+        eq(workspaceMembers.workspaceId, ws.id)
+      ),
+      columns: { id: true },
+    });
+
+    if (!existingMembership) {
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: ws.id,
+        userId: agentUserId,
+        role: "editor",
+        invitedBy: ownerUserId ?? undefined,
+      });
+      logger.info(
+        { agentUserId, workspaceId: ws.id },
+        "setup/agent: workspace membership granted"
+      );
+    }
+
+    // ── 3. Create Hub Protocol API key ──────────────────────────────────────
+    // Revoke any previously active key for this agent user first
+    await db
+      .update(apiKeys)
+      .set({
+        isActive: false,
+        revokedAt: new Date(),
+        revokedBy: agentUserId,
+        revokedReason: "Re-provisioning — replaced by new key via setup/agent",
+      })
+      .where(
+        and(
+          eq(apiKeys.userId, agentUserId),
+          eq(apiKeys.keyType, "hub_inbound"),
+          eq(apiKeys.isActive, true)
+        )
+      );
+
+    const keyPrefix =
+      process.env.NODE_ENV === "production"
+        ? "synap_hub_live_"
+        : "synap_hub_test_";
+    const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
+
+    const eventRepo = new EventRepository(sql);
+    const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
+    const apiKey = await apiKeyRepo.create(
+      {
+        keyName: `${agentLabel} Hub Key`,
+        keyPrefix,
+        key: plainKey,
+        scope: [
+          "hub-protocol.read",
+          "hub-protocol.write",
+          "mcp.read",
+          "mcp.write",
+        ],
+        userId: agentUserId,
+        keyType: "hub_inbound",
+        description: `Hub Protocol auth token for ${agentLabel} agent — created via self-hosted setup`,
+      },
+      agentUserId
+    );
+
+    logger.info(
+      { agentUserId, keyId: apiKey.id, workspaceId: ws.id, agentType },
+      "setup/agent: Hub API key created"
+    );
+
+    return c.json({
+      agentUserId,
+      workspaceId: ws.id,
+      hubApiKey: plainKey,
+      keyId: apiKey.id,
+    });
+  } catch (err) {
+    logger.error({ err, agentType }, "setup/agent: failed");
+    return c.json({ error: "Internal server error" }, 500);
   }
 });
 

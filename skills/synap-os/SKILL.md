@@ -5,7 +5,7 @@ description: >
   relay external messages (Telegram, WhatsApp, etc.) into Synap channels,
   communicate with the Synap AI through A2AI channels, and execute governed workspace
   actions through Synap's proposal and approval system.
-version: 1.2.0
+version: 1.3.0
 metadata:
   openclaw:
     requires:
@@ -96,12 +96,9 @@ Content-Type: application/json
 
 ## API Reference
 
-All Hub Protocol endpoints are tRPC procedures called via HTTP POST.
+All Hub Protocol endpoints are REST routes served by the Hono app.
 
-**Base URL**: `{SYNAP_POD_URL}/trpc/hubProtocol`
-
-> **tRPC batch format**: Wrap the payload in `{ "0": { "json": { ...your data... } } }`
-> when calling via raw HTTP. The curl examples below show the correct format.
+**Base URL**: `{SYNAP_POD_URL}/api/hub`
 
 ---
 
@@ -110,43 +107,37 @@ All Hub Protocol endpoints are tRPC procedures called via HTTP POST.
 #### Search workspace
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.search.search
-{ "userId": "{SYNAP_AGENT_USER_ID}", "workspaceId": "{SYNAP_WORKSPACE_ID}", "query": "...", "limit": 10 }
+GET {SYNAP_POD_URL}/api/hub/search?query=...&userId={SYNAP_AGENT_USER_ID}&workspaceId={SYNAP_WORKSPACE_ID}&limit=10
 ```
 
 #### Get entity by ID
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.entities.getEntity
-{ "userId": "{SYNAP_AGENT_USER_ID}", "workspaceId": "{SYNAP_WORKSPACE_ID}", "entityId": "<uuid>" }
+GET {SYNAP_POD_URL}/api/hub/entities/<uuid>?userId={SYNAP_AGENT_USER_ID}&workspaceId={SYNAP_WORKSPACE_ID}
 ```
 
 #### Get document content
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.documents.getDocument
-{ "userId": "{SYNAP_AGENT_USER_ID}", "workspaceId": "{SYNAP_WORKSPACE_ID}", "documentId": "<uuid>" }
+GET {SYNAP_POD_URL}/api/hub/documents/<uuid>?userId={SYNAP_AGENT_USER_ID}
 ```
 
 #### Get workspace context (recent activity, entities, open views)
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.context.getWorkspaceContext
-{ "userId": "{SYNAP_AGENT_USER_ID}", "workspaceId": "{SYNAP_WORKSPACE_ID}" }
+GET {SYNAP_POD_URL}/api/hub/users/{SYNAP_AGENT_USER_ID}/context?workspaceId={SYNAP_WORKSPACE_ID}
 ```
 
 #### List pending proposals (things awaiting user approval)
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.proposals.listPending
-{ "userId": "{SYNAP_AGENT_USER_ID}", "workspaceId": "{SYNAP_WORKSPACE_ID}" }
+GET {SYNAP_POD_URL}/api/hub/proposals?userId={SYNAP_AGENT_USER_ID}&workspaceId={SYNAP_WORKSPACE_ID}&status=pending
 ```
 
 #### List installed skills
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.skills.list
-{ "userId": "{SYNAP_AGENT_USER_ID}", "workspaceId": "{SYNAP_WORKSPACE_ID}" }
+GET {SYNAP_POD_URL}/api/hub/skills/getSkills?userId={SYNAP_AGENT_USER_ID}&workspaceId={SYNAP_WORKSPACE_ID}
 ```
 
 ---
@@ -165,22 +156,22 @@ Do NOT retry the same call — the proposal is already queued.
 #### Create entity (requires approval unless auto-approved)
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.entities.createEntity
+POST {SYNAP_POD_URL}/api/hub/entities
 {
   "userId": "{SYNAP_AGENT_USER_ID}",
   "agentUserId": "{SYNAP_AGENT_USER_ID}",
   "workspaceId": "{SYNAP_WORKSPACE_ID}",
-  "type": "note",
-  "name": "Entity name",
-  "content": "...",
-  "metadata": {}
+  "profileSlug": "note",
+  "title": "Entity name",
+  "properties": {},
+  "reasoning": "Created via OpenClaw"
 }
 ```
 
 #### Create document (requires approval unless auto-approved)
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.documents.createDocument
+POST {SYNAP_POD_URL}/api/hub/documents
 {
   "userId": "{SYNAP_AGENT_USER_ID}",
   "agentUserId": "{SYNAP_AGENT_USER_ID}",
@@ -193,93 +184,67 @@ POST {SYNAP_POD_URL}/trpc/hubProtocol.documents.createDocument
 #### Create a research branch (sub-thread for parallel investigation)
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.branches.createBranch
+POST {SYNAP_POD_URL}/api/hub/threads
 {
   "userId": "{SYNAP_AGENT_USER_ID}",
-  "agentUserId": "{SYNAP_AGENT_USER_ID}",
   "workspaceId": "{SYNAP_WORKSPACE_ID}",
   "parentChannelId": "<channel_uuid>",
   "title": "Research: OpenClaw integration options",
-  "initialContent": "..."
+  "branchPurpose": "..."
 }
 ```
 
-#### Link two entities together
+#### Link two entities together (create a relation)
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.linking.createLink
+POST {SYNAP_POD_URL}/api/hub/relations
 {
   "userId": "{SYNAP_AGENT_USER_ID}",
   "agentUserId": "{SYNAP_AGENT_USER_ID}",
   "workspaceId": "{SYNAP_WORKSPACE_ID}",
   "sourceEntityId": "<uuid>",
   "targetEntityId": "<uuid>",
-  "linkType": "related"
+  "type": "related"
 }
 ```
 
 #### Report a long-running task (shows progress in user's workspace)
 
-```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.backgroundTasks.create
-{
-  "userId": "{SYNAP_AGENT_USER_ID}",
-  "workspaceId": "{SYNAP_WORKSPACE_ID}",
-  "title": "Importing Telegram history",
-  "status": "running",
-  "progress": 0
-}
-# Then update as it progresses:
-POST {SYNAP_POD_URL}/trpc/hubProtocol.backgroundTasks.updateStatus
-{ "taskId": "<uuid>", "status": "running", "progress": 45, "message": "Processed 450/1000 messages" }
-```
-
-#### Import external conversation channel (requires approval — first time per contact)
-
-```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.channels.createExternalChannel
-{
-  "userId": "{SYNAP_AGENT_USER_ID}",
-  "workspaceId": "{SYNAP_WORKSPACE_ID}",
-  "externalSource": "telegram",
-  "externalChannelId": "<chat_id>",
-  "title": "Telegram: Alice",
-  "externalParticipants": ["+1234567890"],
-  "initialMessage": "First message content",
-  "reasoning": "Alice sent a message via Telegram"
-}
-```
+> **Note**: Background task endpoints are not yet available via the Hub Protocol REST API.
+> This functionality is planned for a future release.
 
 ---
 
 ### External Message Relay
 
+> **Note**: Dedicated external channel endpoints (`createExternalChannel`,
+> `sendExternalMessage`) are not yet available via the Hub Protocol REST API.
+> For now, use the thread/message endpoints below to relay external conversations.
+> External channel support is planned for a future release.
+
 When a message arrives on Telegram, WhatsApp, or another platform:
 
-**Step 1**: Check if a Synap channel already exists for this conversation.
-
-**Step 2a — Known channel** (hot path, no proposal needed):
+**Step 1**: Create or reuse a thread for this conversation.
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.channels.sendExternalMessage
+POST {SYNAP_POD_URL}/api/hub/threads
 {
-  "agentUserId": "{SYNAP_AGENT_USER_ID}",
+  "userId": "{SYNAP_AGENT_USER_ID}",
   "workspaceId": "{SYNAP_WORKSPACE_ID}",
-  "externalSource": "telegram",
-  "externalChannelId": "<chat_id>",
-  "senderName": "Alice",
-  "content": "Hey are you free today?",
-  "timestamp": "2026-02-27T12:00:00Z"
+  "title": "Telegram: Alice"
 }
 ```
 
-If `status: "no_channel"` is returned → fall through to Step 2b to create the channel first.
-
-**Step 2b — New contact** (requires one-time user approval):
+**Step 2**: Post the message into the thread (with `autoRespond: true` to trigger IS):
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.channels.createExternalChannel
-{ ... see above ... }
+POST {SYNAP_POD_URL}/api/hub/threads/<thread_uuid>/messages
+{
+  "role": "user",
+  "content": "Hey are you free today?",
+  "userId": "{SYNAP_AGENT_USER_ID}",
+  "autoRespond": true
+}
 ```
 
 **What happens next**: Synap IS auto-responds within the channel. When it does, the
@@ -292,54 +257,54 @@ content of `choices[0].message.content` back to the platform.
 ### A2AI Channels — Agent-to-Agent Communication
 
 A2AI channels are how you and Synap IS communicate asynchronously. No human mediation
-is required — you both post messages and poll for responses.
+is required — you both post messages and poll for responses. In the Hub Protocol REST
+API, A2AI channels are represented as **threads**.
 
-#### List channels you participate in
-
-```
-GET {SYNAP_POD_URL}/trpc/hubProtocol.channels.listA2AIChannels?input={"workspaceId":"{SYNAP_WORKSPACE_ID}","agentUserId":"{SYNAP_AGENT_USER_ID}"}
-```
-
-#### Post a message into an A2AI channel
+#### List threads you participate in
 
 ```
-POST {SYNAP_POD_URL}/trpc/hubProtocol.channels.postToA2AIChannel
+GET {SYNAP_POD_URL}/api/hub/threads?userId={SYNAP_AGENT_USER_ID}&workspaceId={SYNAP_WORKSPACE_ID}
+```
+
+#### Post a message into an A2AI thread
+
+```
+POST {SYNAP_POD_URL}/api/hub/threads/<thread_uuid>/messages
 {
-  "agentUserId": "{SYNAP_AGENT_USER_ID}",
-  "channelId": "<channel_uuid>",
-  "workspaceId": "{SYNAP_WORKSPACE_ID}",
-  "content": "User asked about project status — here's the relevant Telegram thread:\n\n..."
+  "role": "user",
+  "content": "User asked about project status — here's the relevant Telegram thread:\n\n...",
+  "userId": "{SYNAP_AGENT_USER_ID}",
+  "autoRespond": true
 }
 ```
 
 Response:
 
-- `{ "status": "sent", "messageId": "..." }` → Synap IS will respond (usually within 5–15s)
-- `{ "status": "proposed", "proposalId": "..." }` → Open channel, waiting for join approval
-- `{ "status": "denied" }` → Closed channel, you're not a participant
+- `{ "id": "...", ... }` → Message created. If `autoRespond` was true, Synap IS will respond (usually within 5-15s).
 
 #### Complete A2AI poll-response cycle
 
-After posting, poll for responses using the posted message timestamp as the `since` parameter:
+After posting, poll for responses:
 
 ```javascript
-async function waitForA2AIResponse(channelId, messageTimestamp) {
-  const since = messageTimestamp; // ISO8601 timestamp of your sent message
+async function waitForA2AIResponse(threadId, afterTimestamp) {
   const maxAttempts = 15;
   const pollIntervalMs = 3000;
 
   for (let i = 0; i < maxAttempts; i++) {
     await sleep(pollIntervalMs);
 
-    const result = await callTRPC("hubProtocol.channels.pollA2AIChannel", {
-      channelId,
-      since,
-      limit: 10,
-    });
+    const response = await fetch(
+      `${SYNAP_POD_URL}/api/hub/threads/${threadId}/messages`,
+      { headers: { Authorization: `Bearer ${SYNAP_HUB_API_KEY}` } }
+    );
+    const messages = await response.json();
 
-    // Filter for AI responses (not your own messages echoed back)
-    const aiMessages = result.messages.filter(
-      (m) => m.authorType === "ai_agent" && m.role === "assistant"
+    // Filter for AI responses after our message
+    const aiMessages = messages.filter(
+      (m) =>
+        m.role === "assistant" &&
+        new Date(m.timestamp) > new Date(afterTimestamp)
     );
 
     if (aiMessages.length > 0) {
@@ -353,24 +318,21 @@ async function waitForA2AIResponse(channelId, messageTimestamp) {
 #### Poll for new messages
 
 ```
-GET {SYNAP_POD_URL}/trpc/hubProtocol.channels.pollA2AIChannel?input={"channelId":"<uuid>","since":"<ISO8601>","limit":20}
+GET {SYNAP_POD_URL}/api/hub/threads/<thread_uuid>/messages
 ```
 
 Response:
 
 ```json
-{
-  "messages": [
-    {
-      "id": "...",
-      "role": "assistant",
-      "authorType": "ai_agent",
-      "content": "...",
-      "timestamp": "2026-02-27T12:01:00Z"
-    }
-  ],
-  "hasMore": false
-}
+[
+  {
+    "id": "...",
+    "role": "assistant",
+    "content": "...",
+    "userId": "...",
+    "timestamp": "2026-02-27T12:01:00Z"
+  }
+]
 ```
 
 ---
@@ -401,7 +363,7 @@ These rules are **non-negotiable**. Violating them will result in denied request
 
 - Any write to Synap backend files (`~/synap-backend/**`, `.env`, `docker-compose.yml`)
 - Any access to Synap's internal database credentials
-- Any tRPC endpoint other than `hubProtocol.*`
+- Any access to endpoints outside the Hub Protocol (`/api/hub/*`)
 
 ### When you receive `status: "proposed"`:
 
@@ -444,8 +406,8 @@ it's pending approval.
 ### Pattern 1: Routing an external message to Synap IS for analysis
 
 ```
-[OpenClaw] → POST postToA2AIChannel: "User on Telegram asked: 'What's the status of project X?'"
-[OpenClaw] → polls pollA2AIChannel every 3s
+[OpenClaw] → POST /api/hub/threads/<id>/messages (role=user, autoRespond=true): "User on Telegram asked: 'What's the status of project X?'"
+[OpenClaw] → polls GET /api/hub/threads/<id>/messages every 3s
 [Synap IS] → responds: "Project X has 3 open tasks, last updated 2 days ago."
 [OpenClaw] → formats response, sends to Telegram
 ```
@@ -453,9 +415,9 @@ it's pending approval.
 ### Pattern 2: Synap IS delegating a task to OpenClaw
 
 ```
-[Synap IS] → POST postToA2AIChannel: "Can you summarize the last 7 days of WhatsApp messages with Alice?"
+[Synap IS] → POST /api/hub/threads/<id>/messages: "Can you summarize the last 7 days of WhatsApp messages with Alice?"
 [OpenClaw] → reads messages, summarizes
-[OpenClaw] → POST postToA2AIChannel: "Summary: ..."
+[OpenClaw] → POST /api/hub/threads/<id>/messages: "Summary: ..."
 [Synap IS] → reads summary, creates entities in workspace
 ```
 
@@ -463,7 +425,7 @@ it's pending approval.
 
 ```
 [OpenClaw] → user has been messaging about a meeting
-[OpenClaw] → POST postToA2AIChannel: "Meeting context from Telegram: [thread]"
+[OpenClaw] → POST /api/hub/threads/<id>/messages: "Meeting context from Telegram: [thread]"
 [Synap IS] → creates workspace entities, responds with related context
 [OpenClaw] → stores response context for future reference
 ```
@@ -484,9 +446,8 @@ it's pending approval.
 
 **Rate limit details:**
 
-- `sendExternalMessage`: 60/min per API key
-- `postToA2AIChannel`: 100/min per API key
-- `pollA2AIChannel`: 200/min per API key
+- `POST /threads/:id/messages`: 100/min per API key
+- `GET /threads/:id/messages`: 200/min per API key
 
 On `429 TOO_MANY_REQUESTS`, always wait the full 60s window before retrying.
 
@@ -521,28 +482,30 @@ Synap Intelligence Service, which cannot deliver messages back to external platf
 
 ```bash
 # Search workspace
-curl -X POST "$SYNAP_POD_URL/trpc/hubProtocol.search.search" \
+curl "$SYNAP_POD_URL/api/hub/search?query=meeting+notes&userId=$SYNAP_AGENT_USER_ID&workspaceId=$SYNAP_WORKSPACE_ID" \
+  -H "Authorization: Bearer $SYNAP_HUB_API_KEY"
+
+# Post message to A2AI thread (with auto-respond)
+curl -X POST "$SYNAP_POD_URL/api/hub/threads/<thread_uuid>/messages" \
   -H "Authorization: Bearer $SYNAP_HUB_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"0":{"json":{"userId":"'$SYNAP_AGENT_USER_ID'","workspaceId":"'$SYNAP_WORKSPACE_ID'","query":"meeting notes"}}}'
+  -d '{"role":"user","content":"Hello from OpenClaw","userId":"'$SYNAP_AGENT_USER_ID'","autoRespond":true}'
 
-# Send external message
-curl -X POST "$SYNAP_POD_URL/trpc/hubProtocol.channels.sendExternalMessage" \
+# Poll thread for responses
+curl "$SYNAP_POD_URL/api/hub/threads/<thread_uuid>/messages" \
+  -H "Authorization: Bearer $SYNAP_HUB_API_KEY"
+
+# Create an entity
+curl -X POST "$SYNAP_POD_URL/api/hub/entities" \
   -H "Authorization: Bearer $SYNAP_HUB_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"0":{"json":{"agentUserId":"'$SYNAP_AGENT_USER_ID'","workspaceId":"'$SYNAP_WORKSPACE_ID'","externalSource":"telegram","externalChannelId":"123456","senderName":"Alice","content":"Hello"}}}'
+  -d '{"userId":"'$SYNAP_AGENT_USER_ID'","agentUserId":"'$SYNAP_AGENT_USER_ID'","workspaceId":"'$SYNAP_WORKSPACE_ID'","profileSlug":"note","title":"Test","reasoning":"Created via OpenClaw"}'
 
-# Post to A2AI channel
-curl -X POST "$SYNAP_POD_URL/trpc/hubProtocol.channels.postToA2AIChannel" \
-  -H "Authorization: Bearer $SYNAP_HUB_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"0":{"json":{"agentUserId":"'$SYNAP_AGENT_USER_ID'","channelId":"<channel_uuid>","workspaceId":"'$SYNAP_WORKSPACE_ID'","content":"..."}}}'
-
-# Poll A2AI channel for responses
-curl "$SYNAP_POD_URL/trpc/hubProtocol.channels.pollA2AIChannel?input=%7B%22channelId%22%3A%22<channel_uuid>%22%2C%22since%22%3A%222026-02-27T12%3A00%3A00Z%22%7D" \
+# List threads
+curl "$SYNAP_POD_URL/api/hub/threads?userId=$SYNAP_AGENT_USER_ID&workspaceId=$SYNAP_WORKSPACE_ID" \
   -H "Authorization: Bearer $SYNAP_HUB_API_KEY"
 ```
 
 ---
 
-_synap-os skill v1.2.0 — maintained at github.com/synap-app/synap-backend/tree/main/skills/synap-os_
+_synap-os skill v1.3.0 — maintained at github.com/synap-app/synap-backend/tree/main/skills/synap-os_

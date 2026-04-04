@@ -56,8 +56,8 @@ export const tools = {
             query: { type: "string", description: "Search query" },
             type: {
               type: "string",
-              enum: ["task", "contact", "project", "note", "meeting", "idea"],
-              description: "Filter by entity type (optional)",
+              description:
+                "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types.",
             },
             workspaceId: {
               type: "string",
@@ -77,8 +77,8 @@ export const tools = {
           properties: {
             type: {
               type: "string",
-              enum: ["task", "contact", "project", "note", "meeting", "idea"],
-              description: "Entity type to list",
+              description:
+                "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types.",
             },
             workspaceId: {
               type: "string",
@@ -103,16 +103,20 @@ export const tools = {
       {
         name: "synap_recall_facts",
         description:
-          "Search long-term memory (knowledge facts) for information relevant to a query.",
+          "Search long-term memory (knowledge facts) for information relevant to a query. userId is auto-injected from the API key if not provided.",
         inputSchema: {
           type: "object",
           properties: {
             query: { type: "string", description: "What to recall" },
-            userId: { type: "string", description: "User ID to recall for" },
+            userId: {
+              type: "string",
+              description:
+                "User ID to recall for (optional, auto-injected from API key if not provided)",
+            },
             workspaceId: { type: "string" },
             limit: { type: "number", default: 10 },
           },
-          required: ["query", "userId"],
+          required: ["query"],
         },
       },
       {
@@ -129,11 +133,16 @@ export const tools = {
       },
       {
         name: "synap_list_proposals",
-        description: "List pending AI proposals awaiting user approval.",
+        description:
+          "List pending AI proposals awaiting user approval. userId is auto-injected from the API key if not provided.",
         inputSchema: {
           type: "object",
           properties: {
-            userId: { type: "string" },
+            userId: {
+              type: "string",
+              description:
+                "User ID (optional, auto-injected from API key if not provided)",
+            },
             workspaceId: { type: "string" },
             status: {
               type: "string",
@@ -142,7 +151,57 @@ export const tools = {
             },
             limit: { type: "number", default: 20 },
           },
-          required: ["userId"],
+          required: [],
+        },
+      },
+      {
+        name: "synap_get_entity",
+        description:
+          "Get a single entity by its ID, including all properties and metadata.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: { type: "string", description: "Entity UUID" },
+            workspaceId: {
+              type: "string",
+              description: "Workspace ID (optional)",
+            },
+          },
+          required: ["entityId"],
+        },
+      },
+      {
+        name: "synap_list_profiles",
+        description:
+          "List all available entity profiles (types) in the workspace. Use this to discover what entity types exist before creating entities.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description: "Workspace ID (optional)",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
+        name: "synap_get_relations",
+        description:
+          "Get all relations (links) for an entity. Returns connected entities and relationship types.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description: "Entity UUID to get relations for",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Workspace ID (optional)",
+            },
+          },
+          required: ["entityId", "workspaceId"],
         },
       },
 
@@ -156,7 +215,8 @@ export const tools = {
           properties: {
             type: {
               type: "string",
-              enum: ["task", "contact", "project", "note", "meeting", "idea"],
+              description:
+                "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types.",
             },
             title: { type: "string" },
             description: { type: "string" },
@@ -203,11 +263,15 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
-            userId: { type: "string" },
+            userId: {
+              type: "string",
+              description:
+                "User ID (auto-injected from API key if not provided)",
+            },
             fact: { type: "string", description: "The fact to remember" },
             workspaceId: { type: "string" },
           },
-          required: ["userId", "fact"],
+          required: ["fact"],
         },
       },
       {
@@ -225,6 +289,35 @@ export const tools = {
             workspaceId: { type: "string" },
           },
           required: ["channelId", "content"],
+        },
+      },
+      {
+        name: "synap_link_entities",
+        description:
+          "Create a relation (link) between two entities. Use to build the knowledge graph. Requires mcp.write scope. May create a proposal.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sourceEntityId: {
+              type: "string",
+              description: "Source entity UUID",
+            },
+            targetEntityId: {
+              type: "string",
+              description: "Target entity UUID",
+            },
+            type: {
+              type: "string",
+              description:
+                "Relation type (e.g., 'related', 'parent', 'child', 'belongs-to')",
+              default: "related",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Workspace ID (optional)",
+            },
+          },
+          required: ["sourceEntityId", "targetEntityId", "workspaceId"],
         },
       },
     ];

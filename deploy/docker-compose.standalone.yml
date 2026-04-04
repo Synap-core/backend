@@ -383,36 +383,41 @@ services:
       - 8.8.8.8
 
   # ============================================================================
-  # OPENCLAW (opt-in — managed via control plane /openclaw/provision)
+  # OPENCLAW (opt-in via profile)
   #
-  # Uncomment and configure to add OpenClaw as a world-interface agent.
-  # OpenClaw provides: shell, filesystem, browser automation, and messaging
+  # World-interface agent: shell, filesystem, browser automation, messaging
   # channels (Telegram, WhatsApp, Slack, Discord, iMessage, Teams...).
   #
-  # Environment variables are injected automatically by the provisioning flow.
-  # Manual setup: copy this block, fill in SYNAP_* vars, run:
-  #   docker compose up -d openclaw
-  #   openclaw skill install https://raw.githubusercontent.com/Synap-core/backend/main/skills/synap-os/SKILL.md
+  # Setup:
+  #   1. Run ./setup-openclaw.sh to create agent credentials automatically
+  #   2. Or manually: set OPENCLAW_HUB_API_KEY, SYNAP_WORKSPACE_ID in .env
+  #
+  # Start:
+  #   docker compose --profile openclaw up -d openclaw
   # ============================================================================
-  # openclaw:
-  #   container_name: openclaw
-  #   image: ghcr.io/openclaw/openclaw:latest
-  #   restart: unless-stopped
-  #   volumes:
-  #     - openclaw_config:/root/.openclaw
-  #     - openclaw_workspace:/root/openclaw/workspace
-  #   environment:
-  #     - SYNAP_POD_URL=${SYNAP_POD_URL:-http://backend:4000}
-  #     - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY}
-  #     - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID}
-  #     - OPENCLAW_MODEL=anthropic/claude-sonnet-4-6
-  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-  #   ports:
-  #     - "18789:18789"
-  #   networks:
-  #     - synap-net
-  #   profiles:
-  #     - openclaw
+  openclaw:
+    container_name: openclaw
+    image: ghcr.io/openclaw/openclaw:latest
+    restart: unless-stopped
+    volumes:
+      - openclaw_config:/root/.openclaw
+      - openclaw_workspace:/root/openclaw/workspace
+    environment:
+      - SYNAP_POD_URL=${SYNAP_POD_URL:-http://backend:4000}
+      - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY}
+      - SYNAP_AGENT_USER_ID=${SYNAP_AGENT_USER_ID}
+      - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID}
+      - OPENCLAW_MODEL=${OPENCLAW_MODEL:-anthropic/claude-sonnet-4-6}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "18789:18789"
+    networks:
+      - synap-net
+    profiles:
+      - openclaw
 
   # ============================================================================
   # MONITORING — Dozzle log viewer (optional)

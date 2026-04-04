@@ -8,6 +8,8 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
+import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
+import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 import { getDb } from "@synap/database";
 import { db, knowledgeRepository, messages } from "@synap/database";
 import {
@@ -82,24 +84,18 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_search_entities": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      const validTypes = [
-        "note",
-        "task",
-        "document",
-        "project",
-        "contact",
-        "meeting",
-        "idea",
-      ] as const;
-      const t = args.type as string | undefined;
-      const validType =
-        t && (validTypes as readonly string[]).includes(t)
-          ? (t as (typeof validTypes)[number])
-          : undefined;
       const result = await caller.search.searchEntities({
         userId,
         query: args.query as string,
-        type: validType,
+        type:
+          (args.type as
+            | "note"
+            | "task"
+            | "document"
+            | "project"
+            | "contact"
+            | "meeting"
+            | "idea") || undefined,
         limit: (args.limit as number) || 20,
       });
       return ok(result);
@@ -107,23 +103,9 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_get_entities": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      const validTypes = [
-        "task",
-        "note",
-        "document",
-        "project",
-        "contact",
-        "meeting",
-        "idea",
-      ] as const;
-      const t = args.type as string | undefined;
-      const validType =
-        t && (validTypes as readonly string[]).includes(t)
-          ? (t as (typeof validTypes)[number])
-          : undefined;
       const result = await caller.entities.getEntities({
         userId,
-        type: validType,
+        type: (args.type as string) || undefined,
         limit: (args.limit as number) || 50,
       });
       return ok(result);
@@ -142,7 +124,7 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.read", toolName);
       // Keyword-based fact search (no embedding needed)
       const facts = await knowledgeRepository.searchFacts({
-        userId: args.userId as string,
+        userId: (args.userId as string) || userId,
         query: args.query as string,
         limit: (args.limit as number) || 10,
       });
@@ -167,7 +149,8 @@ export async function executeMCPToolViaHubProtocol(
       };
       const status = statusMap[statusArg] ?? ProposalStatus.PENDING;
 
-      const conditions = [eq(proposals.createdBy, args.userId as string)];
+      const proposalUserId = (args.userId as string) || userId;
+      const conditions = [eq(proposals.createdBy, proposalUserId)];
       if (args.workspaceId)
         conditions.push(eq(proposals.workspaceId, args.workspaceId as string));
       if (statusArg !== "all") conditions.push(eq(proposals.status, status));
@@ -221,13 +204,84 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_remember_fact": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      // Storing facts requires semantic embeddings — route through Intelligence Hub.
-      // For direct storage, use POST /api/hub/memory with a pre-computed embedding.
-      return ok({
-        success: false,
-        message:
-          "Use the Intelligence Hub's /api/hub/memory endpoint directly to store facts with embeddings. Provide: { userId, fact, embedding: number[1536] }",
+      const fact = args.fact as string;
+      const factUserId = (args.userId as string) || userId;
+
+      // Store fact with a zero embedding (keyword search still works;
+      // semantic search will rank it low, which is acceptable for MCP-sourced facts).
+      const zeroEmbedding = new Array(1536).fill(0);
+      await knowledgeRepository.saveFact({
+        userId: factUserId,
+        fact,
+        confidence: 0.8,
+        embedding: zeroEmbedding,
       });
+      return ok({ success: true, message: "Fact stored successfully" });
+    }
+
+    case "synap_get_entity": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      // Hub protocol doesn't expose a single-entity get; use regular entities router
+      const entityCallerCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        (args.workspaceId as string) || undefined
+      );
+      const entityCaller = regularEntitiesRouter.createCaller(entityCallerCtx);
+      const entityResult = await entityCaller.get({
+        id: args.entityId as string,
+        includeProfile: true,
+      });
+      return ok(entityResult);
+    }
+
+    case "synap_list_profiles": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const wsId = args.workspaceId as string | undefined;
+      if (!wsId) {
+        return ok({
+          error: "workspaceId is required for listing profiles",
+        });
+      }
+      const result = await caller.profiles.listProfiles({
+        userId,
+        workspaceId: wsId,
+      });
+      return ok(result);
+    }
+
+    case "synap_get_relations": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const relWsId = args.workspaceId as string | undefined;
+      if (!relWsId) {
+        return ok({
+          error: "workspaceId is required for listing relations",
+        });
+      }
+      const result = await caller.relations.listRelations({
+        userId,
+        workspaceId: relWsId,
+        entityId: args.entityId as string,
+      });
+      return ok(result);
+    }
+
+    case "synap_link_entities": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const linkWsId = args.workspaceId as string | undefined;
+      if (!linkWsId) {
+        return ok({
+          error: "workspaceId is required for creating relations",
+        });
+      }
+      const result = await caller.relations.createRelation({
+        userId,
+        workspaceId: linkWsId,
+        sourceEntityId: args.sourceEntityId as string,
+        targetEntityId: args.targetEntityId as string,
+        type: (args.type as string) || "related",
+      });
+      return ok(result);
     }
 
     case "synap_send_message": {
@@ -291,21 +345,9 @@ export async function readMCPResourceViaHubProtocol(
       };
     }
 
-    const validTypes = [
-      "task",
-      "note",
-      "document",
-      "project",
-      "contact",
-      "meeting",
-      "idea",
-    ] as const;
-    const validType = (validTypes as readonly string[]).includes(entityType!)
-      ? (entityType as (typeof validTypes)[number])
-      : undefined;
     const entities = await caller.entities.getEntities({
       userId,
-      type: validType,
+      type: entityType || undefined,
       limit: 100,
     });
     return {

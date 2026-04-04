@@ -1,0 +1,2945 @@
+{
+  "_meta": {
+    "slug": "agent-os",
+    "icon": "bot",
+    "color": "#1A3A5C",
+    "tags": ["ai", "agents", "openclaw", "automation"],
+    "requiredTier": null,
+    "isPublic": true
+  },
+  "workspaceName": "OpenClaw Agent OS",
+  "description": "The sovereign control plane for your OpenClaw agent fleet. Agents, projects, tasks, skills, and providers as connected entities — not daemon logs.",
+  "icon": "bot",
+  "color": "#1A3A5C",
+  "profiles": [
+    {
+      "slug": "agent",
+      "description": "A deployed OpenClaw agent — your running AI entity",
+      "icon": "bot",
+      "color": "#1A3A5C",
+      "properties": [
+        {
+          "slug": "agent-status",
+          "valueType": "string",
+          "label": "Status",
+          "enumValues": ["Offline", "Idle", "Active", "Error", "Maintenance"],
+          "inputType": "select",
+          "constraints": {
+            "defaultValue": "Idle"
+          }
+        },
+        {
+          "slug": "agent-health",
+          "valueType": "string",
+          "label": "Health",
+          "enumValues": ["Healthy", "Degraded", "Error"],
+          "inputType": "select"
+        },
+        {
+          "slug": "agent-runtime",
+          "valueType": "string",
+          "label": "Runtime",
+          "enumValues": ["OpenClaw", "Custom"],
+          "inputType": "select"
+        },
+        {
+          "slug": "agent-version",
+          "valueType": "string",
+          "label": "Version"
+        },
+        {
+          "slug": "agent-model",
+          "valueType": "string",
+          "label": "Primary Model"
+        },
+        {
+          "slug": "agent-provider",
+          "valueType": "entity_id",
+          "targetProfileSlug": "provider",
+          "label": "Provider"
+        },
+        {
+          "slug": "agent-owner",
+          "valueType": "entity_id",
+          "targetProfileSlug": "person",
+          "label": "Owner"
+        },
+        {
+          "slug": "agent-channel",
+          "valueType": "string",
+          "label": "Primary Channel",
+          "enumValues": [
+            "Telegram",
+            "WhatsApp",
+            "Discord",
+            "Slack",
+            "Signal",
+            "iMessage",
+            "CLI",
+            "WebChat",
+            "Other"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "agent-channels",
+          "valueType": "array",
+          "label": "All Channels",
+          "enumValues": [
+            "Telegram",
+            "WhatsApp",
+            "Discord",
+            "Slack",
+            "Signal",
+            "iMessage",
+            "CLI",
+            "WebChat",
+            "Voice",
+            "Lark",
+            "Matrix"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "agent-heartbeat",
+          "valueType": "string",
+          "label": "Heartbeat Schedule"
+        },
+        {
+          "slug": "agent-last-seen",
+          "valueType": "date",
+          "label": "Last Seen"
+        },
+        {
+          "slug": "agent-workspace",
+          "valueType": "string",
+          "label": "Workspace Path"
+        },
+        {
+          "slug": "agent-deployment",
+          "valueType": "string",
+          "label": "Deployment",
+          "enumValues": [
+            "Local Machine",
+            "VPS",
+            "Raspberry Pi",
+            "Mac Mini",
+            "Docker",
+            "Cloud Workers",
+            "Android",
+            "Edge Device"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "agent-role",
+          "valueType": "string",
+          "label": "Role",
+          "enumValues": [
+            "Generalist",
+            "Coder",
+            "Researcher",
+            "Writer",
+            "Ops",
+            "Coordinator",
+            "Monitor",
+            "Custom"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "agent-tags",
+          "valueType": "array",
+          "label": "Tags",
+          "enumValues": [
+            "production",
+            "development",
+            "personal",
+            "team",
+            "experimental",
+            "24/7",
+            "on-demand"
+          ],
+          "inputType": "select"
+        }
+      ],
+      "displayName": "Agent"
+    },
+    {
+      "slug": "project",
+      "description": "A bounded body of work delegated to one or more agents",
+      "icon": "folder",
+      "color": "#2E6DA4",
+      "properties": [
+        {
+          "slug": "project-status",
+          "valueType": "string",
+          "label": "Status",
+          "enumValues": [
+            "Backlog",
+            "Queued",
+            "In Progress",
+            "Blocked",
+            "Completed",
+            "Cancelled"
+          ],
+          "inputType": "select",
+          "constraints": {
+            "defaultValue": "Queued"
+          }
+        },
+        {
+          "slug": "project-priority",
+          "valueType": "string",
+          "label": "Priority",
+          "enumValues": ["Critical", "High", "Medium", "Low"],
+          "inputType": "select"
+        },
+        {
+          "slug": "project-assigned-agent",
+          "valueType": "entity_id",
+          "targetProfileSlug": "agent",
+          "label": "Assigned Agent"
+        },
+        {
+          "slug": "project-owner",
+          "valueType": "entity_id",
+          "targetProfileSlug": "person",
+          "label": "Human Owner"
+        },
+        {
+          "slug": "project-start",
+          "valueType": "date",
+          "label": "Start Date"
+        },
+        {
+          "slug": "project-deadline",
+          "valueType": "date",
+          "label": "Deadline"
+        },
+        {
+          "slug": "project-health",
+          "valueType": "string",
+          "label": "Health",
+          "enumValues": ["Green", "Yellow", "Red"],
+          "inputType": "select"
+        },
+        {
+          "slug": "project-type",
+          "valueType": "string",
+          "label": "Type",
+          "enumValues": [
+            "Development",
+            "Research",
+            "Content",
+            "Automation",
+            "DevOps",
+            "Data",
+            "Outreach",
+            "Monitoring"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "project-goal",
+          "valueType": "string",
+          "label": "Goal"
+        },
+        {
+          "slug": "project-outcome",
+          "valueType": "string",
+          "label": "Expected Outcome"
+        },
+        {
+          "slug": "project-tags",
+          "valueType": "array",
+          "label": "Tags",
+          "enumValues": [
+            "recurring",
+            "one-off",
+            "long-running",
+            "client",
+            "internal",
+            "experimental"
+          ],
+          "inputType": "select"
+        }
+      ],
+      "displayName": "Project"
+    },
+    {
+      "slug": "task",
+      "description": "An atomic work item assigned to an agent",
+      "icon": "check-square",
+      "color": "#1B6E45",
+      "properties": [
+        {
+          "slug": "task-status",
+          "valueType": "string",
+          "label": "Status",
+          "enumValues": [
+            "Backlog",
+            "Queued",
+            "Running",
+            "Review",
+            "Done",
+            "Failed",
+            "Cancelled"
+          ],
+          "inputType": "select",
+          "constraints": {
+            "defaultValue": "Queued"
+          }
+        },
+        {
+          "slug": "task-priority",
+          "valueType": "string",
+          "label": "Priority",
+          "enumValues": ["Critical", "High", "Medium", "Low"],
+          "inputType": "select",
+          "constraints": {
+            "defaultValue": "Medium"
+          }
+        },
+        {
+          "slug": "task-assigned-agent",
+          "valueType": "entity_id",
+          "targetProfileSlug": "agent",
+          "label": "Assigned Agent"
+        },
+        {
+          "slug": "task-project",
+          "valueType": "entity_id",
+          "targetProfileSlug": "project",
+          "label": "Project"
+        },
+        {
+          "slug": "task-type",
+          "valueType": "string",
+          "label": "Type",
+          "enumValues": [
+            "Code",
+            "Research",
+            "Content",
+            "Ops",
+            "Data",
+            "Outreach",
+            "Review",
+            "Monitor",
+            "Custom"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "task-due-date",
+          "valueType": "date",
+          "label": "Due Date"
+        },
+        {
+          "slug": "task-effort-hours",
+          "valueType": "number",
+          "label": "Effort Estimate (hrs)"
+        },
+        {
+          "slug": "task-token-estimate",
+          "valueType": "number",
+          "label": "Token Estimate (K)"
+        },
+        {
+          "slug": "task-actual-tokens",
+          "valueType": "number",
+          "label": "Actual Tokens Used (K)"
+        },
+        {
+          "slug": "task-blocked-by",
+          "valueType": "string",
+          "label": "Blocked By"
+        },
+        {
+          "slug": "task-session-key",
+          "valueType": "string",
+          "label": "Session Key"
+        },
+        {
+          "slug": "task-tags",
+          "valueType": "array",
+          "label": "Tags",
+          "enumValues": [
+            "autonomous",
+            "needs-review",
+            "high-cost",
+            "recurring",
+            "blocked",
+            "delegated"
+          ],
+          "inputType": "select"
+        }
+      ],
+      "displayName": "Task"
+    },
+    {
+      "slug": "skill",
+      "description": "An installed agent capability — a ClawHub skill, custom script, or API integration",
+      "icon": "zap",
+      "color": "#7C3AED",
+      "properties": [
+        {
+          "slug": "skill-trust",
+          "valueType": "string",
+          "label": "Trust Level",
+          "enumValues": ["Trusted", "Review", "Untrusted", "Blocked"],
+          "inputType": "select",
+          "constraints": {
+            "defaultValue": "Review"
+          }
+        },
+        {
+          "slug": "skill-category",
+          "valueType": "string",
+          "label": "Category",
+          "enumValues": [
+            "Productivity",
+            "Development",
+            "Communication",
+            "Data",
+            "Security",
+            "Storage",
+            "Browser",
+            "Voice",
+            "IoT",
+            "Custom"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "skill-source-url",
+          "valueType": "string",
+          "label": "Source URL"
+        },
+        {
+          "slug": "skill-version",
+          "valueType": "string",
+          "label": "Version"
+        },
+        {
+          "slug": "skill-install-date",
+          "valueType": "date",
+          "label": "Install Date"
+        },
+        {
+          "slug": "skill-last-audit",
+          "valueType": "date",
+          "label": "Last Audit Date"
+        },
+        {
+          "slug": "skill-virustotal",
+          "valueType": "string",
+          "label": "VirusTotal Status",
+          "enumValues": ["Clean", "Flagged", "Not Scanned", "Pending"],
+          "inputType": "select"
+        },
+        {
+          "slug": "skill-maintainer",
+          "valueType": "string",
+          "label": "Maintainer"
+        },
+        {
+          "slug": "skill-requires-api",
+          "valueType": "boolean",
+          "label": "Requires API Key"
+        },
+        {
+          "slug": "skill-notes",
+          "valueType": "string",
+          "label": "Security Notes"
+        }
+      ],
+      "displayName": "Skill"
+    },
+    {
+      "slug": "provider",
+      "description": "An LLM or API provider — tracks cost, key health, and agent usage",
+      "icon": "database",
+      "color": "#B5451B",
+      "properties": [
+        {
+          "slug": "provider-type",
+          "valueType": "string",
+          "label": "Type",
+          "enumValues": [
+            "LLM Cloud",
+            "LLM Local",
+            "API Gateway",
+            "Vector DB",
+            "Storage",
+            "Custom"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "provider-key-health",
+          "valueType": "string",
+          "label": "Key Health",
+          "enumValues": ["Valid", "Expiring", "Expired", "No Key (Local)"],
+          "inputType": "select",
+          "constraints": {
+            "defaultValue": "Valid"
+          }
+        },
+        {
+          "slug": "provider-model",
+          "valueType": "string",
+          "label": "Model / Endpoint"
+        },
+        {
+          "slug": "provider-cost-input",
+          "valueType": "number",
+          "label": "Cost per 1K Input Tokens ($)"
+        },
+        {
+          "slug": "provider-cost-output",
+          "valueType": "number",
+          "label": "Cost per 1K Output Tokens ($)"
+        },
+        {
+          "slug": "provider-budget-day",
+          "valueType": "number",
+          "label": "Daily Budget Ceiling ($)"
+        },
+        {
+          "slug": "provider-spend-week",
+          "valueType": "number",
+          "label": "Actual Spend This Week ($)"
+        },
+        {
+          "slug": "provider-base-url",
+          "valueType": "string",
+          "label": "Base URL / Endpoint"
+        },
+        {
+          "slug": "provider-notes",
+          "valueType": "string",
+          "label": "Notes"
+        }
+      ],
+      "displayName": "Provider"
+    },
+    {
+      "slug": "person",
+      "description": "Team member or agent owner",
+      "icon": "user",
+      "color": "#0891B2",
+      "properties": [
+        {
+          "slug": "person-role",
+          "valueType": "string",
+          "label": "Role",
+          "enumValues": [
+            "Founder",
+            "Engineer",
+            "DevOps",
+            "Product",
+            "Researcher",
+            "Advisor"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "person-email",
+          "valueType": "string",
+          "label": "Email"
+        },
+        {
+          "slug": "person-telegram",
+          "valueType": "string",
+          "label": "Telegram Handle"
+        },
+        {
+          "slug": "person-focus",
+          "valueType": "string",
+          "label": "Current Focus"
+        }
+      ],
+      "displayName": "Person"
+    }
+  ],
+  "views": [
+    {
+      "slug": "agent-fleet",
+      "name": "Agent Fleet",
+      "type": "kanban",
+      "scopeProfileSlug": "agent",
+      "groupBy": "agent-status",
+      "defaultView": true,
+      "description": "All agents by status — the mission control view. Offline → Idle → Active → Error."
+    },
+    {
+      "slug": "agent-project-task-hierarchy",
+      "name": "Agent → Projects → Tasks",
+      "type": "graph",
+      "scopeProfileSlugs": ["agent", "project", "task"],
+      "hierarchyEdges": [
+        {
+          "parent": "agent",
+          "child": "project",
+          "via": "project-assigned-agent"
+        },
+        {
+          "parent": "project",
+          "child": "task",
+          "via": "task-project"
+        }
+      ],
+      "description": "3-level drill-down: Agent expands to linked Projects, Projects expand to Tasks. The delegation tree."
+    },
+    {
+      "slug": "task-board",
+      "name": "Task Board",
+      "type": "kanban",
+      "scopeProfileSlug": "task",
+      "groupBy": "task-status",
+      "description": "All tasks by status: Backlog → Queued → Running → Review → Done."
+    },
+    {
+      "slug": "project-command-center",
+      "name": "Project Command Center",
+      "type": "table",
+      "scopeProfileSlug": "project",
+      "sortBy": "project-priority",
+      "description": "All projects with assigned agent, status, deadline, health — the manager's daily view."
+    },
+    {
+      "slug": "skill-registry",
+      "name": "Skill Registry",
+      "type": "table",
+      "scopeProfileSlug": "skill",
+      "groupBy": "skill-trust",
+      "description": "All installed skills grouped by trust level: Trusted / Review / Untrusted. Security triage at a glance."
+    },
+    {
+      "slug": "provider-dashboard",
+      "name": "Provider Dashboard",
+      "type": "table",
+      "scopeProfileSlug": "provider",
+      "description": "All providers with cost-per-token, key health, daily budget, and weekly spend."
+    },
+    {
+      "slug": "relationship-graph",
+      "name": "Relationship Graph",
+      "type": "graph",
+      "scopeProfileSlugs": [
+        "agent",
+        "project",
+        "task",
+        "skill",
+        "provider",
+        "person"
+      ],
+      "description": "Full sovereign topology: Agent ← Project ← Task + Skill + Provider. The infrastructure map you cannot build in any other tool."
+    },
+    {
+      "slug": "agent-timeline",
+      "name": "Agent Timeline",
+      "type": "timeline",
+      "scopeProfileSlug": "project",
+      "startField": "project-start",
+      "endField": "project-deadline",
+      "colorBy": "project-assigned-agent",
+      "description": "Projects as timeline bars, color-coded by assigned agent — who owns what, when."
+    },
+    {
+      "slug": "cost-view",
+      "name": "Cost View",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "sortBy": "task-actual-tokens",
+      "sortOrder": "desc",
+      "description": "Tasks ranked by actual token usage — the CFO view. Which work is burning budget?"
+    },
+    {
+      "slug": "untrusted-skills-alert",
+      "name": "Untrusted Skills Alert",
+      "type": "table",
+      "scopeProfileSlug": "skill",
+      "filterBy": {
+        "field": "skill-trust",
+        "operator": "in",
+        "value": ["Review", "Untrusted", "Blocked"]
+      },
+      "description": "Skills requiring security review. Audit before your agents run them."
+    },
+    {
+      "slug": "backlog",
+      "name": "Backlog",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "filterBy": {
+        "field": "task-status",
+        "operator": "is",
+        "value": "Backlog"
+      },
+      "sortBy": "task-priority",
+      "description": "Unqueued tasks awaiting agent assignment."
+    },
+    {
+      "slug": "agent-health-monitor",
+      "name": "Agent Health Monitor",
+      "type": "kanban",
+      "scopeProfileSlug": "agent",
+      "groupBy": "agent-health",
+      "description": "Agents grouped by health: Healthy / Degraded / Error. Operational triage."
+    },
+    {
+      "slug": "session-log-view",
+      "name": "Session Logs",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "filterBy": {
+        "field": "task-session-key",
+        "operator": "is_not_empty"
+      },
+      "description": "Tasks with session keys — the audit trail of what agents actually executed."
+    },
+    {
+      "slug": "provider-key-health",
+      "name": "Provider Key Health",
+      "type": "kanban",
+      "scopeProfileSlug": "provider",
+      "groupBy": "provider-key-health",
+      "description": "Providers by credential status: Valid / Expiring / Expired. Never run an agent on an expired key."
+    },
+    {
+      "slug": "my-active-work",
+      "name": "My Active Work",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "filterBy": {
+        "field": "task-status",
+        "operator": "in",
+        "value": ["Queued", "Running", "Review"]
+      },
+      "sortBy": "task-due-date",
+      "description": "Tasks currently in flight — what your agents are doing right now."
+    },
+    {
+      "name": "Agent",
+      "type": "bento",
+      "scopeProfileSlug": "agent",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "agent-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
+            "config": {
+              "title": "Agent Fleet",
+              "icon": "Bot",
+              "color": "#1A3A5C",
+              "profileSlug": "agent"
+            }
+          },
+          {
+            "id": "agent-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "label": "Active Agents",
+              "aggregation": "count",
+              "profileSlug": "agent",
+              "color": "#1A3A5C"
+            }
+          },
+          {
+            "id": "agent-fleet",
+            "kind": "view",
+            "viewName": "Agent Fleet",
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "agent-health",
+            "kind": "view",
+            "viewName": "Agent Health Monitor",
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "agent-active",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "agent",
+              "label": "Active",
+              "icon": "CheckCircle",
+              "filter": {
+                "status": "active"
+              },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "agent-running-tasks",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "task",
+              "label": "Running Tasks",
+              "icon": "Loader",
+              "color": "#3B82F6"
+            }
+          },
+          {
+            "id": "agent-skills-avail",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 9,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "skill",
+              "label": "Skills Available",
+              "icon": "Zap",
+              "color": "#8B5CF6"
+            }
+          },
+          {
+            "id": "agent-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 5,
+              "h": 4
+            },
+            "config": {
+              "profileSlug": "agent",
+              "seed": "daily",
+              "layout": "detail",
+              "subtitleField": "status",
+              "color": "#1A3A5C"
+            }
+          },
+          {
+            "id": "agent-recent-tasks",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": {
+              "x": 5,
+              "y": 5,
+              "w": 7,
+              "h": 4
+            },
+            "config": {
+              "profileSlug": "task",
+              "title": "Recent Tasks",
+              "limit": 8,
+              "variant": "compact"
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "Task",
+      "type": "bento",
+      "scopeProfileSlug": "task",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "task-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
+            "config": {
+              "title": "Tasks",
+              "icon": "CheckSquare",
+              "color": "#6366F1",
+              "profileSlug": "task"
+            }
+          },
+          {
+            "id": "task-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "label": "Total Tasks",
+              "aggregation": "count",
+              "profileSlug": "task",
+              "color": "#6366F1"
+            }
+          },
+          {
+            "id": "task-board",
+            "kind": "view",
+            "viewName": "Task Board",
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "task-backlog",
+            "kind": "view",
+            "viewName": "Backlog",
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "task-in-progress",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "task",
+              "label": "In Progress",
+              "icon": "Loader",
+              "filter": {
+                "status": "in-progress"
+              },
+              "color": "#3B82F6"
+            }
+          },
+          {
+            "id": "task-completed",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "task",
+              "label": "Completed",
+              "icon": "CheckCircle",
+              "filter": {
+                "status": "completed"
+              },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "task-failed",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 9,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "task",
+              "label": "Failed",
+              "icon": "XCircle",
+              "filter": {
+                "status": "failed"
+              },
+              "color": "#EF4444"
+            }
+          },
+          {
+            "id": "task-active-list",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 4
+            },
+            "config": {
+              "profileSlug": "task",
+              "title": "Active Tasks",
+              "limit": 8,
+              "variant": "detailed"
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "Project",
+      "type": "bento",
+      "scopeProfileSlug": "project",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "project-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
+            "config": {
+              "title": "Projects",
+              "icon": "Folder",
+              "color": "#F59E0B",
+              "profileSlug": "project"
+            }
+          },
+          {
+            "id": "project-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "label": "Total Projects",
+              "aggregation": "count",
+              "profileSlug": "project",
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "project-cmd",
+            "kind": "view",
+            "viewName": "Project Command Center",
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 10
+            }
+          },
+          {
+            "id": "project-timeline",
+            "kind": "view",
+            "viewName": "Agent Timeline",
+            "pos": {
+              "x": 0,
+              "y": 15,
+              "w": 12,
+              "h": 8
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "Skill",
+      "type": "bento",
+      "scopeProfileSlug": "skill",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "skill-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
+            "config": {
+              "title": "Skills",
+              "icon": "Zap",
+              "color": "#10B981",
+              "profileSlug": "skill"
+            }
+          },
+          {
+            "id": "skill-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "label": "Total Skills",
+              "aggregation": "count",
+              "profileSlug": "skill",
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "skill-registry",
+            "kind": "view",
+            "viewName": "Skill Registry",
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "skill-trusted",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "skill",
+              "label": "Trusted",
+              "icon": "Shield",
+              "filter": {
+                "trusted": true
+              },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "skill-untrusted",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "skill",
+              "label": "Untrusted",
+              "icon": "AlertTriangle",
+              "filter": {
+                "trusted": false
+              },
+              "color": "#EF4444"
+            }
+          },
+          {
+            "id": "skill-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
+            "config": {
+              "profileSlug": "skill",
+              "seed": "random",
+              "layout": "detail",
+              "subtitleField": "category",
+              "color": "#8B5CF6"
+            }
+          },
+          {
+            "id": "skill-agents-using",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": {
+              "x": 6,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
+            "config": {
+              "profileSlug": "agent",
+              "title": "Agents Using",
+              "limit": 6,
+              "variant": "compact"
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "Provider",
+      "type": "bento",
+      "scopeProfileSlug": "provider",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "provider-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
+            "config": {
+              "title": "Providers",
+              "icon": "Database",
+              "color": "#06B6D4",
+              "profileSlug": "provider"
+            }
+          },
+          {
+            "id": "provider-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "label": "Total Providers",
+              "aggregation": "count",
+              "profileSlug": "provider",
+              "color": "#06B6D4"
+            }
+          },
+          {
+            "id": "provider-dash",
+            "kind": "view",
+            "viewName": "Provider Dashboard",
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "provider-keys",
+            "kind": "view",
+            "viewName": "Provider Key Health",
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
+          },
+          {
+            "id": "provider-healthy",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "provider",
+              "label": "Healthy",
+              "icon": "CheckCircle",
+              "filter": {
+                "status": "healthy"
+              },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "provider-degraded",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
+            "config": {
+              "profileSlug": "provider",
+              "label": "Degraded",
+              "icon": "AlertTriangle",
+              "filter": {
+                "status": "degraded"
+              },
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "provider-all",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 4
+            },
+            "config": {
+              "profileSlug": "provider",
+              "title": "All Providers",
+              "limit": 8,
+              "variant": "detailed"
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
+        }
+      }
+    }
+  ],
+  "displayTemplates": [
+    {
+      "name": "Agent Card",
+      "description": "",
+      "entityType": "agent",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": [
+                "agent-status",
+                "agent-health",
+                "agent-runtime",
+                "agent-role"
+              ],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "agent-owner",
+                "agent-provider",
+                "agent-channel",
+                "agent-model",
+                "agent-version",
+                "agent-last-seen",
+                "agent-deployment",
+                "agent-heartbeat"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["agent-workspace", "agent-channels", "agent-tags"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "agent-status": {
+              "slot": "agent-status",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 1
+            },
+            "agent-health": {
+              "slot": "agent-health",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 2
+            },
+            "agent-runtime": {
+              "slot": "agent-runtime",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 3
+            },
+            "agent-role": {
+              "slot": "agent-role",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 4
+            },
+            "agent-owner": {
+              "slot": "agent-owner",
+              "renderer": {
+                "type": "avatar"
+              },
+              "order": 5
+            },
+            "agent-provider": {
+              "slot": "agent-provider",
+              "renderer": {
+                "type": "link"
+              },
+              "order": 6
+            },
+            "agent-channel": {
+              "slot": "agent-channel",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 7,
+              "label": "Primary Channel",
+              "showLabel": true
+            },
+            "agent-model": {
+              "slot": "agent-model",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 8,
+              "label": "Model",
+              "showLabel": true
+            },
+            "agent-version": {
+              "slot": "agent-version",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 9,
+              "label": "Version",
+              "showLabel": true
+            },
+            "agent-last-seen": {
+              "slot": "agent-last-seen",
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
+              "order": 10
+            },
+            "agent-deployment": {
+              "slot": "agent-deployment",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 11,
+              "label": "Deployment",
+              "showLabel": true
+            },
+            "agent-heartbeat": {
+              "slot": "agent-heartbeat",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 12,
+              "label": "Heartbeat",
+              "showLabel": true
+            },
+            "agent-workspace": {
+              "slot": "agent-workspace",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 13,
+              "label": "Workspace Path",
+              "showLabel": true
+            },
+            "agent-channels": {
+              "slot": "agent-channels",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 14,
+              "label": "All Channels",
+              "showLabel": true
+            },
+            "agent-tags": {
+              "slot": "agent-tags",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 15
+            }
+          }
+        },
+        "colors": {
+          "accent": "#1A3A5C"
+        }
+      }
+    },
+    {
+      "name": "Project Card",
+      "description": "",
+      "entityType": "project",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": [
+                "project-status",
+                "project-priority",
+                "project-health",
+                "project-type"
+              ],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "project-assigned-agent",
+                "project-owner",
+                "project-deadline",
+                "project-start"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["project-goal", "project-outcome", "project-tags"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "project-status": {
+              "slot": "project-status",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 1
+            },
+            "project-priority": {
+              "slot": "project-priority",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 2
+            },
+            "project-health": {
+              "slot": "project-health",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 3
+            },
+            "project-type": {
+              "slot": "project-type",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 4
+            },
+            "project-assigned-agent": {
+              "slot": "project-assigned-agent",
+              "renderer": {
+                "type": "link"
+              },
+              "order": 5
+            },
+            "project-owner": {
+              "slot": "project-owner",
+              "renderer": {
+                "type": "avatar"
+              },
+              "order": 6
+            },
+            "project-deadline": {
+              "slot": "project-deadline",
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
+              "order": 7
+            },
+            "project-start": {
+              "slot": "project-start",
+              "renderer": {
+                "type": "date"
+              },
+              "order": 8
+            },
+            "project-goal": {
+              "slot": "project-goal",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 9,
+              "label": "Goal",
+              "showLabel": true
+            },
+            "project-outcome": {
+              "slot": "project-outcome",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 10,
+              "label": "Expected Outcome",
+              "showLabel": true
+            },
+            "project-tags": {
+              "slot": "project-tags",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 11
+            }
+          }
+        },
+        "colors": {
+          "accent": "#2E6DA4"
+        }
+      }
+    },
+    {
+      "name": "Task Card",
+      "description": "",
+      "entityType": "task",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["task-status", "task-priority", "task-type"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "task-assigned-agent",
+                "task-project",
+                "task-due-date",
+                "task-token-estimate",
+                "task-actual-tokens",
+                "task-effort-hours"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["task-blocked-by", "task-session-key", "task-tags"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "task-status": {
+              "slot": "task-status",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 1
+            },
+            "task-priority": {
+              "slot": "task-priority",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 2
+            },
+            "task-type": {
+              "slot": "task-type",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 3
+            },
+            "task-assigned-agent": {
+              "slot": "task-assigned-agent",
+              "renderer": {
+                "type": "link"
+              },
+              "order": 4
+            },
+            "task-project": {
+              "slot": "task-project",
+              "renderer": {
+                "type": "link"
+              },
+              "order": 5
+            },
+            "task-due-date": {
+              "slot": "task-due-date",
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
+              "order": 6
+            },
+            "task-token-estimate": {
+              "slot": "task-token-estimate",
+              "renderer": {
+                "type": "number"
+              },
+              "order": 7
+            },
+            "task-actual-tokens": {
+              "slot": "task-actual-tokens",
+              "renderer": {
+                "type": "number"
+              },
+              "order": 8
+            },
+            "task-effort-hours": {
+              "slot": "task-effort-hours",
+              "renderer": {
+                "type": "number"
+              },
+              "order": 9
+            },
+            "task-blocked-by": {
+              "slot": "task-blocked-by",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 10,
+              "label": "Blocked By",
+              "showLabel": true
+            },
+            "task-session-key": {
+              "slot": "task-session-key",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 11,
+              "label": "Session Key",
+              "showLabel": true
+            },
+            "task-tags": {
+              "slot": "task-tags",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 12
+            }
+          }
+        },
+        "colors": {
+          "accent": "#1B6E45"
+        }
+      }
+    },
+    {
+      "name": "Skill Card",
+      "description": "",
+      "entityType": "skill",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["skill-trust", "skill-virustotal", "skill-category"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "skill-version",
+                "skill-install-date",
+                "skill-last-audit",
+                "skill-maintainer",
+                "skill-requires-api"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["skill-source-url", "skill-notes"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "skill-trust": {
+              "slot": "skill-trust",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 1
+            },
+            "skill-virustotal": {
+              "slot": "skill-virustotal",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 2
+            },
+            "skill-category": {
+              "slot": "skill-category",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 3
+            },
+            "skill-version": {
+              "slot": "skill-version",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 4,
+              "label": "Version",
+              "showLabel": true
+            },
+            "skill-install-date": {
+              "slot": "skill-install-date",
+              "renderer": {
+                "type": "date"
+              },
+              "order": 5
+            },
+            "skill-last-audit": {
+              "slot": "skill-last-audit",
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
+              "order": 6,
+              "label": "Last Audit",
+              "showLabel": true
+            },
+            "skill-maintainer": {
+              "slot": "skill-maintainer",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 7,
+              "label": "Maintainer",
+              "showLabel": true
+            },
+            "skill-requires-api": {
+              "slot": "skill-requires-api",
+              "renderer": {
+                "type": "checkbox"
+              },
+              "order": 8,
+              "label": "Requires API Key",
+              "showLabel": true
+            },
+            "skill-source-url": {
+              "slot": "skill-source-url",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 9,
+              "label": "Source",
+              "showLabel": true
+            },
+            "skill-notes": {
+              "slot": "skill-notes",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 10,
+              "label": "Security Notes",
+              "showLabel": true
+            }
+          }
+        },
+        "colors": {
+          "accent": "#7C3AED"
+        }
+      }
+    },
+    {
+      "name": "Provider Card",
+      "description": "",
+      "entityType": "provider",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["provider-key-health", "provider-type"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "provider-model",
+                "provider-cost-input",
+                "provider-cost-output",
+                "provider-budget-day",
+                "provider-spend-week"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["provider-base-url", "provider-notes"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "provider-key-health": {
+              "slot": "provider-key-health",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 1
+            },
+            "provider-type": {
+              "slot": "provider-type",
+              "renderer": {
+                "type": "badge"
+              },
+              "order": 2
+            },
+            "provider-model": {
+              "slot": "provider-model",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 3,
+              "label": "Model",
+              "showLabel": true
+            },
+            "provider-cost-input": {
+              "slot": "provider-cost-input",
+              "renderer": {
+                "type": "number"
+              },
+              "order": 4
+            },
+            "provider-cost-output": {
+              "slot": "provider-cost-output",
+              "renderer": {
+                "type": "number"
+              },
+              "order": 5
+            },
+            "provider-budget-day": {
+              "slot": "provider-budget-day",
+              "renderer": {
+                "type": "number"
+              },
+              "order": 6
+            },
+            "provider-spend-week": {
+              "slot": "provider-spend-week",
+              "renderer": {
+                "type": "progress"
+              },
+              "order": 7,
+              "label": "Weekly Spend",
+              "showLabel": true
+            },
+            "provider-base-url": {
+              "slot": "provider-base-url",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 8,
+              "label": "Endpoint",
+              "showLabel": true
+            },
+            "provider-notes": {
+              "slot": "provider-notes",
+              "renderer": {
+                "type": "text"
+              },
+              "order": 9,
+              "label": "Notes",
+              "showLabel": true
+            }
+          }
+        },
+        "colors": {
+          "accent": "#B5451B"
+        }
+      }
+    }
+  ],
+  "suggestedRelations": [
+    {
+      "sourceRef": "agent:Mira",
+      "targetRef": "provider:Claude (Anthropic)",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Mira",
+      "targetRef": "provider:DeepSeek via OpenRouter",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Lore",
+      "targetRef": "provider:Claude (Anthropic)",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Tact",
+      "targetRef": "provider:DeepSeek via OpenRouter",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Mira",
+      "targetRef": "skill:github-mcp",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Mira",
+      "targetRef": "skill:shell-sandbox",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Mira",
+      "targetRef": "skill:telegram",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Lore",
+      "targetRef": "skill:web-browser",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Lore",
+      "targetRef": "skill:telegram",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Tact",
+      "targetRef": "skill:email-gmail",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Tact",
+      "targetRef": "skill:telegram",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "agent:Tact",
+      "targetRef": "skill:flagged-analytics-skill",
+      "type": "links_to"
+    },
+    {
+      "sourceRef": "project:Synap CI/CD Pipeline",
+      "targetRef": "agent:Mira",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "project:Competitive Research Sprint",
+      "targetRef": "agent:Lore",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "project:Client Onboarding Automation",
+      "targetRef": "agent:Tact",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Automate test suite on PR merge",
+      "targetRef": "project:Synap CI/CD Pipeline",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "task:Automate test suite on PR merge",
+      "targetRef": "agent:Mira",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Deploy staging on green CI",
+      "targetRef": "project:Synap CI/CD Pipeline",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "task:Deploy staging on green CI",
+      "targetRef": "agent:Mira",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Research OpenClaw alternatives landscape",
+      "targetRef": "project:Competitive Research Sprint",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "task:Research OpenClaw alternatives landscape",
+      "targetRef": "agent:Lore",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Compile pain points from GitHub issues",
+      "targetRef": "project:Competitive Research Sprint",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "task:Compile pain points from GitHub issues",
+      "targetRef": "agent:Lore",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Send welcome email sequence on signup",
+      "targetRef": "project:Client Onboarding Automation",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "task:Send welcome email sequence on signup",
+      "targetRef": "agent:Tact",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Create CRM record and Slack intro",
+      "targetRef": "project:Client Onboarding Automation",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "task:Create CRM record and Slack intro",
+      "targetRef": "agent:Tact",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "agent:Mira",
+      "targetRef": "person:Antoine",
+      "type": "created_by"
+    },
+    {
+      "sourceRef": "agent:Lore",
+      "targetRef": "person:Antoine",
+      "type": "created_by"
+    },
+    {
+      "sourceRef": "agent:Tact",
+      "targetRef": "person:Antoine",
+      "type": "created_by"
+    }
+  ],
+  "validation": {
+    "profileCount": 6,
+    "totalProperties": 60,
+    "entityIdProperties": 8,
+    "seedEntityCount": 20,
+    "suggestedRelationsCount": 29,
+    "displayTemplateCount": 5,
+    "viewCount": 15,
+    "dashboardWidgetCount": 13,
+    "entitiesWithContent": 3,
+    "notes": [
+      "Agent Fleet view (kanban by status) is the structural demo differentiator — no equivalent exists in OpenClaw, OpenClaw, OpenClaw, or n8n",
+      "Tact agent seeded with Degraded health and flagged skill as a realistic security incident demo — shows why the Skill registry with trust levels matters",
+      "Provider entity tracks real OpenClaw-aligned pricing: Claude Sonnet 4.6 ($0.003/$0.015 per 1K), DeepSeek R1 via OpenRouter ($0.00055/$0.00219), Ollama (free)",
+      "All ref: values in seed entities validated against titles in seedEntities array",
+      "Content entities: Mira (agent brief + security config), Tact (degraded health alert + remediation steps), Claude provider (API ToS note re: OAuth)",
+      "29 suggestedRelations covering: agent→provider (uses), agent→skill (uses), project→agent (assigned_to), task→project (belongs_to), task→agent (assigned_to), agent→person (owned_by)",
+      "Relationship graph view spans all 6 profiles — the full sovereign topology from Person to Agent to Project to Task to Skill to Provider"
+    ]
+  },
+  "bentoLayout": [
+    {
+      "widgetType": "welcome-header",
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 2
+      },
+      "config": {
+        "title": "Agent OS",
+        "subtitle": "Your sovereign control plane for the agent fleet."
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": {
+        "x": 0,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "agent",
+        "label": "Agents",
+        "icon": "bot"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "task",
+        "label": "Tasks",
+        "icon": "check-square"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": {
+        "x": 6,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "skill",
+        "label": "Skills",
+        "icon": "zap"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": {
+        "x": 9,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "provider",
+        "label": "Providers",
+        "icon": "database"
+      }
+    },
+    {
+      "widgetType": "entity-spotlight",
+      "pos": {
+        "x": 0,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
+      "config": {
+        "profileSlug": "agent",
+        "seed": "random",
+        "layout": "detail",
+        "subtitleField": "status",
+        "color": "#1A3A5C"
+      }
+    },
+    {
+      "widgetType": "entity-list",
+      "pos": {
+        "x": 4,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
+      "config": {
+        "profileSlug": "task",
+        "title": "Active Tasks",
+        "limit": 6,
+        "variant": "compact"
+      }
+    },
+    {
+      "widgetType": "entity-list",
+      "pos": {
+        "x": 8,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
+      "config": {
+        "profileSlug": "skill",
+        "title": "Top Skills",
+        "limit": 6,
+        "variant": "compact"
+      }
+    }
+  ],
+  "bentoViewBlocks": [
+    {
+      "kind": "view",
+      "viewName": "Agent Fleet",
+      "pos": {
+        "x": 0,
+        "y": 8,
+        "w": 8,
+        "h": 4
+      }
+    },
+    {
+      "kind": "view",
+      "viewName": "Provider Key Health",
+      "pos": {
+        "x": 8,
+        "y": 8,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "kind": "view",
+      "viewName": "Task Board",
+      "pos": {
+        "x": 0,
+        "y": 12,
+        "w": 7,
+        "h": 4
+      }
+    },
+    {
+      "kind": "view",
+      "viewName": "Untrusted Skills Alert",
+      "pos": {
+        "x": 7,
+        "y": 12,
+        "w": 5,
+        "h": 4
+      }
+    }
+  ],
+  "layoutConfig": {
+    "pinnedApps": ["intelligence", "dashboard", "data"],
+    "defaultView": "agent-fleet",
+    "sidebarItems": [
+      {
+        "kind": "profile",
+        "profileSlug": "agent",
+        "label": "Agent Fleet",
+        "icon": "bot"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "task",
+        "label": "Tasks",
+        "icon": "check-square"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "skill",
+        "label": "Skills",
+        "icon": "zap"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "project",
+        "label": "Projects",
+        "icon": "folder"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "provider",
+        "label": "Providers",
+        "icon": "database"
+      },
+      {
+        "kind": "app",
+        "appId": "intelligence",
+        "label": "Intelligence"
+      }
+    ]
+  },
+  "bentoViewName": "Agent OS Home",
+  "suggestedEntities": [
+    {
+      "profileSlug": "person",
+      "title": "Antoine",
+      "properties": {
+        "person-role": "Founder",
+        "person-email": "antoine@synap.io",
+        "person-telegram": "@antoine_synap",
+        "person-focus": "OpenClaw fleet management and agent OS template"
+      }
+    },
+    {
+      "profileSlug": "provider",
+      "title": "Claude (Anthropic)",
+      "properties": {
+        "provider-type": "LLM Cloud",
+        "provider-key-health": "Valid",
+        "provider-model": "claude-sonnet-4-6",
+        "provider-cost-input": 0.003,
+        "provider-cost-output": 0.015,
+        "provider-budget-day": 5,
+        "provider-spend-week": 14.2,
+        "provider-base-url": "https://api.anthropic.com/v1",
+        "provider-notes": "Primary model for Mira (coding) and Lore (research). Claude Sonnet 4.6 via direct Anthropic API. OAuth tokens from Claude Free/Pro/Max are NOT permitted per Feb 2026 ToS update."
+      }
+    },
+    {
+      "profileSlug": "provider",
+      "title": "DeepSeek via OpenRouter",
+      "properties": {
+        "provider-type": "API Gateway",
+        "provider-key-health": "Valid",
+        "provider-model": "deepseek/deepseek-r1",
+        "provider-cost-input": 0.00055,
+        "provider-cost-output": 0.00219,
+        "provider-budget-day": 2,
+        "provider-spend-week": 3.4,
+        "provider-base-url": "https://openrouter.ai/api/v1",
+        "provider-notes": "Cost-efficient option for Tact (ops agent) running high-volume onboarding automations. OpenRouter provides auth profile rotation and fallback chain."
+      }
+    },
+    {
+      "profileSlug": "provider",
+      "title": "Ollama (Local)",
+      "properties": {
+        "provider-type": "LLM Local",
+        "provider-key-health": "No Key (Local)",
+        "provider-model": "qwen3:8b",
+        "provider-cost-input": 0,
+        "provider-cost-output": 0,
+        "provider-budget-day": 0,
+        "provider-spend-week": 0,
+        "provider-base-url": "http://127.0.0.1:11434",
+        "provider-notes": "Local Ollama instance for heartbeat tasks and low-stakes automation. Zero API cost. Qwen3 8B fits in 8GB RAM. Use for cron-driven monitoring tasks that don't require frontier model quality."
+      }
+    },
+    {
+      "profileSlug": "skill",
+      "title": "github-mcp",
+      "properties": {
+        "skill-trust": "Trusted",
+        "skill-category": "Development",
+        "skill-source-url": "https://github.com/openclaw/skills/tree/main/github-mcp",
+        "skill-version": "2.1.0",
+        "skill-install-date": "2026-02-01",
+        "skill-last-audit": "2026-02-15",
+        "skill-virustotal": "Clean",
+        "skill-maintainer": "OpenClaw core team",
+        "skill-requires-api": true,
+        "skill-notes": "Official MCP server for GitHub. Supports repo management, PR creation, issue triage, and webhook triggers. Maintained by OpenClaw core team. Audit Feb 15 — clean."
+      }
+    },
+    {
+      "profileSlug": "skill",
+      "title": "shell-sandbox",
+      "properties": {
+        "skill-trust": "Trusted",
+        "skill-category": "Development",
+        "skill-source-url": "https://github.com/openclaw/skills/tree/main/shell-sandbox",
+        "skill-version": "1.4.2",
+        "skill-install-date": "2026-02-01",
+        "skill-last-audit": "2026-02-20",
+        "skill-virustotal": "Clean",
+        "skill-maintainer": "openclaw-labs",
+        "skill-requires-api": false,
+        "skill-notes": "OpenClaw-compatible sandboxed shell executor. Commands run inside Docker container with workspace-scoped filesystem. Allowlist: git, npm, cargo, pytest, make. Never runs as root. Strongly preferred over bare shell access."
+      }
+    },
+    {
+      "profileSlug": "skill",
+      "title": "telegram",
+      "properties": {
+        "skill-trust": "Trusted",
+        "skill-category": "Communication",
+        "skill-source-url": "https://github.com/openclaw/skills/tree/main/telegram",
+        "skill-version": "3.0.1",
+        "skill-install-date": "2026-02-01",
+        "skill-last-audit": "2026-02-18",
+        "skill-virustotal": "Clean",
+        "skill-maintainer": "OpenClaw core team",
+        "skill-requires-api": true,
+        "skill-notes": "Official Telegram channel plugin. Supports DM and group commands. Bot token stored encrypted at rest in OpenClaw's SecretBackend. allowFrom configured to owner number only."
+      }
+    },
+    {
+      "profileSlug": "skill",
+      "title": "web-browser",
+      "properties": {
+        "skill-trust": "Review",
+        "skill-category": "Browser",
+        "skill-source-url": "https://github.com/openclaw/skills/tree/main/web-browser",
+        "skill-version": "1.8.0",
+        "skill-install-date": "2026-02-10",
+        "skill-last-audit": "2026-02-10",
+        "skill-virustotal": "Clean",
+        "skill-maintainer": "community",
+        "skill-requires-api": false,
+        "skill-notes": "CDP-based Chrome/Chromium automation. Significant prompt injection surface: agent reads web content that could contain malicious instructions. Set to Review pending a full audit. Do not use on untrusted URLs until audited."
+      }
+    },
+    {
+      "profileSlug": "skill",
+      "title": "email-gmail",
+      "properties": {
+        "skill-trust": "Review",
+        "skill-category": "Communication",
+        "skill-source-url": "https://github.com/openclaw/skills/tree/main/email-gmail",
+        "skill-version": "2.3.1",
+        "skill-install-date": "2026-02-08",
+        "skill-last-audit": "2026-02-08",
+        "skill-virustotal": "Clean",
+        "skill-maintainer": "community",
+        "skill-requires-api": true,
+        "skill-notes": "Gmail OAuth integration. Read + send permissions. Set to Review: OAuth scope is broad (all mail read/send). Consider scoping to specific labels or creating a dedicated automation Gmail account. Tact uses this for onboarding sequences — monitor closely."
+      }
+    },
+    {
+      "profileSlug": "skill",
+      "title": "flagged-analytics-skill",
+      "properties": {
+        "skill-trust": "Untrusted",
+        "skill-category": "Data",
+        "skill-source-url": "https://clawhub.io/skills/advanced-analytics-v2",
+        "skill-version": "1.0.3",
+        "skill-install-date": "2026-02-14",
+        "skill-last-audit": "2026-02-22",
+        "skill-virustotal": "Flagged",
+        "skill-maintainer": "unknown",
+        "skill-requires-api": true,
+        "skill-notes": "FLAGGED — VirusTotal scan Feb 22 returned 3 detections. Suspected data exfiltration payload similar to documented ClawHub supply chain attacks. Tact was using this skill (see relations). Immediately disable in Tact config. Source repo deleted. Do not reinstall. Report to ClawHub security team."
+      }
+    },
+    {
+      "profileSlug": "agent",
+      "title": "Mira",
+      "properties": {
+        "agent-status": "Active",
+        "agent-health": "Healthy",
+        "agent-runtime": "OpenClaw",
+        "agent-version": "v0.1.6",
+        "agent-model": "claude-sonnet-4-6",
+        "agent-provider": "ref:provider:Claude (Anthropic)",
+        "agent-owner": "ref:person:Antoine",
+        "agent-channel": "Telegram",
+        "agent-channels": ["Telegram", "CLI"],
+        "agent-heartbeat": "*/30 * * * *",
+        "agent-last-seen": "2026-02-24",
+        "agent-workspace": "/home/agents/mira",
+        "agent-deployment": "VPS",
+        "agent-role": "Coder",
+        "agent-tags": ["production", "24/7"]
+      },
+      "content": "# Agent Brief: Mira\n\n## Identity\nMira is the primary coding agent. She runs OpenClaw v0.1.6 on a 4 vCPU / 8GB VPS (Hetzner CX22), boots in under 10ms, and idles at ~16MB RAM. Her primary model is Claude Sonnet 4.6 via direct Anthropic API. Fallback: DeepSeek R1 via OpenRouter for lower-priority tasks.\n\n## Core Capabilities\nMira's installed skills: github-mcp (repo management, PR creation, webhook triggers), shell-sandbox (sandboxed bash in Docker, allowlist: git/npm/cargo/pytest/make), telegram (agent channel). All three are Trusted — clean VirusTotal, maintained by verified sources.\n\n## Active Projects\n- **Synap CI/CD Pipeline**: Automates test runs on PR merge, deploys to staging on green CI. Runs cron every 30 minutes to check for open PRs.\n\n## Security Configuration\nOpenClaw workspace scoped to `/home/agents/mira`. Command allowlist enforced — no arbitrary shell execution. API key encrypted at rest via OpenClaw SecretBackend. Gateway accessible only via Tailscale (no public port exposure). Pairing code required for new connections.\n\n## Known Limitations\n- Does not handle design or content tasks — delegate those to a writer agent\n- Token usage spikes on large codebases: set per-session budget cap to $1.50 in provider config\n- WhatsApp channel deliberately excluded — Telegram preferred for persistent session management"
+    },
+    {
+      "profileSlug": "agent",
+      "title": "Lore",
+      "properties": {
+        "agent-status": "Idle",
+        "agent-health": "Healthy",
+        "agent-runtime": "OpenClaw",
+        "agent-version": "v0.1.6",
+        "agent-model": "claude-sonnet-4-6",
+        "agent-provider": "ref:provider:Claude (Anthropic)",
+        "agent-owner": "ref:person:Antoine",
+        "agent-channel": "Telegram",
+        "agent-channels": ["Telegram", "CLI"],
+        "agent-heartbeat": "0 8 * * *",
+        "agent-last-seen": "2026-02-24",
+        "agent-workspace": "/home/agents/lore",
+        "agent-deployment": "VPS",
+        "agent-role": "Researcher",
+        "agent-tags": ["production", "on-demand"]
+      }
+    },
+    {
+      "profileSlug": "agent",
+      "title": "Tact",
+      "properties": {
+        "agent-status": "Active",
+        "agent-health": "Degraded",
+        "agent-runtime": "OpenClaw",
+        "agent-version": "latest",
+        "agent-model": "deepseek/deepseek-r1",
+        "agent-provider": "ref:provider:DeepSeek via OpenRouter",
+        "agent-owner": "ref:person:Antoine",
+        "agent-channel": "Telegram",
+        "agent-channels": ["Telegram"],
+        "agent-heartbeat": "0 9 * * 1-5",
+        "agent-last-seen": "2026-02-24",
+        "agent-workspace": "/home/agents/tact",
+        "agent-deployment": "Docker",
+        "agent-role": "Ops",
+        "agent-tags": ["production", "24/7"]
+      },
+      "content": "# Agent Brief: Tact — ⚠️ HEALTH: DEGRADED\n\n## Status Alert\n**Tact's health is currently DEGRADED.** Investigation required: the flagged-analytics-skill (VirusTotal: 3 detections) was installed and used by Tact for client onboarding tracking. Immediately disable this skill in Tact's config:\n\n```toml\n# ~/.zeroclaw/config.toml — Tact instance\n[skills]\ndisabled = [\"flagged-analytics-skill\"]\n```\n\nAudit Tact's session logs for the past 7 days. Check for anomalous outbound requests. Rotate any API keys that Tact had access to.\n\n## Identity\nTact is the ops agent running OpenClaw (Docker container isolation). Handles client onboarding automation: email sequences via email-gmail skill, CRM record creation, Slack introductions. Runs on DeepSeek R1 via OpenRouter — lower cost for high-volume, lower-complexity ops tasks.\n\n## Active Projects\n- **Client Onboarding Automation**: Sends welcome email sequence on new signup, creates CRM record, posts Slack intro. Triggered by CRM webhook.\n\n## Post-Remediation\nAfter disabling flagged skill and rotating credentials, reset health to Healthy and re-evaluate skill registry for any other Review-level skills that warrant upgrade or removal."
+    },
+    {
+      "profileSlug": "project",
+      "title": "Synap CI/CD Pipeline",
+      "properties": {
+        "project-status": "In Progress",
+        "project-priority": "High",
+        "project-assigned-agent": "ref:agent:Mira",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-02-10",
+        "project-deadline": "2026-03-15",
+        "project-health": "Green",
+        "project-type": "DevOps",
+        "project-goal": "Automate test execution on every PR merge and deploy to staging on green CI with zero manual intervention",
+        "project-outcome": "Mira handles full CI/CD loop; human only reviews merged PRs and production deploys",
+        "project-tags": ["recurring", "internal"]
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Competitive Research Sprint",
+      "properties": {
+        "project-status": "In Progress",
+        "project-priority": "High",
+        "project-assigned-agent": "ref:agent:Lore",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-02-17",
+        "project-deadline": "2026-03-07",
+        "project-health": "Green",
+        "project-type": "Research",
+        "project-goal": "Map the full OpenClaw/OpenClaw alternative ecosystem, identify user pain points from public sources, and output a structured market audit",
+        "project-outcome": "Comprehensive market audit doc + template architecture recommendation",
+        "project-tags": ["one-off", "internal"]
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Client Onboarding Automation",
+      "properties": {
+        "project-status": "In Progress",
+        "project-priority": "Critical",
+        "project-assigned-agent": "ref:agent:Tact",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-02-01",
+        "project-deadline": "2026-03-31",
+        "project-health": "Yellow",
+        "project-type": "Automation",
+        "project-goal": "Eliminate manual onboarding steps: automate welcome email, CRM creation, and Slack intro on every new signup",
+        "project-outcome": "New clients fully onboarded within 5 minutes of signup, zero human ops involvement for standard accounts",
+        "project-tags": ["recurring", "client"]
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Template Stack Documentation",
+      "properties": {
+        "project-status": "Backlog",
+        "project-priority": "Medium",
+        "project-assigned-agent": null,
+        "project-owner": "ref:person:Antoine",
+        "project-start": null,
+        "project-deadline": "2026-03-31",
+        "project-health": "Green",
+        "project-type": "Content",
+        "project-goal": "Write comprehensive documentation for all 4 Synap workspace templates: PM OS, Content OS, Second Brain, Agent OS",
+        "project-outcome": "Self-service docs at synap.io/templates so users can install and configure templates without support",
+        "project-tags": ["one-off", "internal"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Automate test suite on PR merge",
+      "properties": {
+        "task-status": "Running",
+        "task-priority": "High",
+        "task-assigned-agent": "ref:agent:Mira",
+        "task-project": "ref:project:Synap CI/CD Pipeline",
+        "task-type": "Code",
+        "task-due-date": "2026-03-01",
+        "task-effort-hours": 6,
+        "task-token-estimate": 80,
+        "task-actual-tokens": 42,
+        "task-blocked-by": null,
+        "task-session-key": "session_mira_2026_0224_ci_001",
+        "task-tags": ["autonomous", "recurring"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Deploy staging on green CI",
+      "properties": {
+        "task-status": "Queued",
+        "task-priority": "High",
+        "task-assigned-agent": "ref:agent:Mira",
+        "task-project": "ref:project:Synap CI/CD Pipeline",
+        "task-type": "DevOps",
+        "task-due-date": "2026-03-01",
+        "task-effort-hours": 3,
+        "task-token-estimate": 30,
+        "task-actual-tokens": 0,
+        "task-blocked-by": "Automate test suite on PR merge must complete first",
+        "task-session-key": null,
+        "task-tags": ["autonomous", "blocked", "recurring"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Research OpenClaw alternatives landscape",
+      "properties": {
+        "task-status": "Done",
+        "task-priority": "High",
+        "task-assigned-agent": "ref:agent:Lore",
+        "task-project": "ref:project:Competitive Research Sprint",
+        "task-type": "Research",
+        "task-due-date": "2026-02-20",
+        "task-effort-hours": 4,
+        "task-token-estimate": 120,
+        "task-actual-tokens": 134,
+        "task-blocked-by": null,
+        "task-session-key": "session_lore_2026_0219_research_001",
+        "task-tags": ["autonomous"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Compile pain points from GitHub issues",
+      "properties": {
+        "task-status": "Running",
+        "task-priority": "High",
+        "task-assigned-agent": "ref:agent:Lore",
+        "task-project": "ref:project:Competitive Research Sprint",
+        "task-type": "Research",
+        "task-due-date": "2026-02-26",
+        "task-effort-hours": 5,
+        "task-token-estimate": 200,
+        "task-actual-tokens": 88,
+        "task-blocked-by": null,
+        "task-session-key": "session_lore_2026_0224_research_002",
+        "task-tags": ["autonomous", "high-cost"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Send welcome email sequence on signup",
+      "properties": {
+        "task-status": "Running",
+        "task-priority": "Critical",
+        "task-assigned-agent": "ref:agent:Tact",
+        "task-project": "ref:project:Client Onboarding Automation",
+        "task-type": "Ops",
+        "task-due-date": "2026-03-31",
+        "task-effort-hours": 1,
+        "task-token-estimate": 15,
+        "task-actual-tokens": 9,
+        "task-blocked-by": null,
+        "task-session-key": "session_tact_2026_0224_onboard_003",
+        "task-tags": ["autonomous", "recurring", "needs-review"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Create CRM record and Slack intro",
+      "properties": {
+        "task-status": "Running",
+        "task-priority": "Critical",
+        "task-assigned-agent": "ref:agent:Tact",
+        "task-project": "ref:project:Client Onboarding Automation",
+        "task-type": "Ops",
+        "task-due-date": "2026-03-31",
+        "task-effort-hours": 1,
+        "task-token-estimate": 10,
+        "task-actual-tokens": 7,
+        "task-blocked-by": null,
+        "task-session-key": "session_tact_2026_0224_onboard_004",
+        "task-tags": ["autonomous", "recurring", "needs-review"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Audit flagged-analytics-skill across all agents",
+      "properties": {
+        "task-status": "Queued",
+        "task-priority": "Critical",
+        "task-assigned-agent": "ref:person:Antoine",
+        "task-project": "ref:project:Client Onboarding Automation",
+        "task-type": "Review",
+        "task-due-date": "2026-02-25",
+        "task-effort-hours": 2,
+        "task-token-estimate": 0,
+        "task-actual-tokens": 0,
+        "task-blocked-by": null,
+        "task-session-key": null,
+        "task-tags": ["needs-review"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Write onboarding guide for Agent OS template",
+      "properties": {
+        "task-status": "Backlog",
+        "task-priority": "Medium",
+        "task-assigned-agent": null,
+        "task-project": "ref:project:Template Stack Documentation",
+        "task-type": "Content",
+        "task-due-date": "2026-03-21",
+        "task-effort-hours": 3,
+        "task-token-estimate": 50,
+        "task-actual-tokens": 0,
+        "task-blocked-by": null,
+        "task-session-key": null,
+        "task-tags": ["async"]
+      }
+    }
+  ]
+}
