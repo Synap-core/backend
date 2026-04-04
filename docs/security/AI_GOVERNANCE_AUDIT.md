@@ -191,7 +191,7 @@ Also apply to `postToA2AIChannel` and `pollA2AIChannel`.
 
 ```typescript
 // An attacker with a valid Hub Protocol key can do:
-POST /trpc/hubProtocol.channels.sendExternalMessage
+POST /api/hub/threads/:threadId/messages
 {
   agentUserId: "uuid-of-agent-from-different-workspace",
   workspaceId: "attacker-workspace-id",

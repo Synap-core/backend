@@ -77,7 +77,7 @@ This is not a hierarchy. Synap's IS and external agents like OpenClaw are **peer
 | Component        | Role                                                | Transport                     |
 | ---------------- | --------------------------------------------------- | ----------------------------- |
 | Backend App      | Auth, routing, channel management, AI orchestration | tRPC over HTTP                |
-| Data Pod         | PostgreSQL + governance layer. Zero intelligence.   | tRPC (Hub Protocol)           |
+| Data Pod         | PostgreSQL + governance layer. Zero intelligence.   | REST (Hub Protocol /api/hub/) |
 | Intelligence Hub | AI brain — LLM + tools + streaming                  | SSE (POST /api/chat/stream)   |
 | Hub Protocol     | Governed API gateway for external agents            | REST (Bearer token)           |
 | MCP Client       | Synap IS ← external tools                           | HTTP Streamable Transport     |
@@ -92,7 +92,7 @@ This is not a hierarchy. Synap's IS and external agents like OpenClaw are **peer
 The Intelligence Hub talks directly to the Data Pod via tRPC. This is the trusted internal path. All AI tool calls (read entity, search, create document) go through Hub Protocol which auto-brands requests and routes them through `checkPermissionOrPropose`.
 
 ```
-Intelligence Hub → POST {dataPodUrl}/trpc/hubProtocol.entities.readEntity
+Intelligence Hub → GET {dataPodUrl}/api/hub/entities/:id
                  → Bearer hub-protocol-api-key
                  → checkPermissionOrPropose()
                    → autoApproveFor["entity.read"] → GRANTED immediately
@@ -104,7 +104,7 @@ Intelligence Hub → POST {dataPodUrl}/trpc/hubProtocol.entities.readEntity
 External agents (OpenClaw, any MCP client, custom scripts) can interact with Synap data by authenticating with a Hub Protocol API key. Every write goes through governance. Every read is either auto-approved (in the whitelist) or creates a proposal.
 
 ```
-OpenClaw → POST {podUrl}/trpc/hubProtocol.channels.sendExternalMessage
+OpenClaw → POST {podUrl}/api/hub/threads/:threadId/messages
          → Bearer openclaw-hub-api-key
          → autoApproved if "a2ai.*" in workspace autoApproveFor
          → else: creates Proposal → user sees in Inbox → approves/rejects
@@ -127,7 +127,7 @@ This is automatic. No special prompt engineering needed. The LLM sees the availa
 
 ## 4. Hub Protocol — The Universal AI Gateway
 
-Hub Protocol is the REST API that any external agent uses to read and write Synap workspace data. It is implemented as a set of tRPC procedures under the `hubProtocol.*` namespace.
+Hub Protocol is the REST API that any external agent uses to read and write Synap workspace data. It is implemented as a set of Hono REST routes under the `/api/hub/*` path prefix.
 
 ### Authentication
 
@@ -148,19 +148,18 @@ The `agentUserId` field on write routes is **always an explicit input** — it i
 
 ### Available Namespaces
 
-| Namespace                       | What it does                                                                                     |
-| ------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `hubProtocol.context.*`         | Read workspace context, summaries, recent activity                                               |
-| `hubProtocol.search.*`          | Typesense-backed semantic search                                                                 |
-| `hubProtocol.entities.*`        | CRUD on entities — all writes go through governance                                              |
-| `hubProtocol.documents.*`       | Read/create documents                                                                            |
-| `hubProtocol.channels.*`        | Create channels, send messages, A2AI operations                                                  |
-| `hubProtocol.branches.*`        | Create research branches                                                                         |
-| `hubProtocol.linking.*`         | Create relationships between entities                                                            |
-| `hubProtocol.skills.*`          | Discover installed skills                                                                        |
-| `hubProtocol.proposals.*`       | Read/update governance proposals                                                                 |
-| `hubProtocol.backgroundTasks.*` | Long-running task tracking                                                                       |
-| `hubProtocol.services.*`        | Register/update intelligence services (trusted provisioning path — auto-sets `mcpApproved=true`) |
+| REST Path                            | What it does                                        |
+| ------------------------------------ | --------------------------------------------------- |
+| `GET /api/hub/users/:userId/context` | Read workspace context, summaries, recent activity  |
+| `GET /api/hub/search`                | Typesense-backed full-text search                   |
+| `GET/POST/PATCH /api/hub/entities`   | CRUD on entities — all writes go through governance |
+| `GET/POST /api/hub/documents`        | Read/create documents                               |
+| `GET/POST /api/hub/threads`          | Create channels, send messages, A2AI operations     |
+| `POST /api/hub/threads`              | Create research branches                            |
+| `GET/POST/DELETE /api/hub/relations` | Create relationships between entities               |
+| `GET /api/hub/profiles`              | Discover installed profiles                         |
+| `GET/POST /api/hub/memory`           | Memory read/write/search                            |
+| `GET /api/hub/graph/traverse`        | Graph traversal                                     |
 
 ### Governance Integration
 
@@ -245,11 +244,11 @@ An A2AI channel is an asynchronous message bus between AI agents. It has no requ
    → title, topic, visibility, participants
 
 2. OpenClaw discovers available channels via:
-   POST {podUrl}/trpc/hubProtocol.channels.listA2AIChannels
-   → { workspaceId, agentUserId }
+   GET {podUrl}/api/hub/threads?type=a2ai&workspaceId=...
+   → returns A2AI channels for the workspace
 
 3. OpenClaw posts a message via:
-   POST {podUrl}/trpc/hubProtocol.channels.postToA2AIChannel
+   POST {podUrl}/api/hub/threads/:threadId/messages
    → { agentUserId, channelId, workspaceId, content }
 
 4. Backend governance check:
@@ -262,8 +261,7 @@ An A2AI channel is an asynchronous message bus between AI agents. It has no requ
    → Assistant message saved to channel
 
 6. OpenClaw polls for response:
-   POST {podUrl}/trpc/hubProtocol.channels.pollA2AIChannel
-   → { channelId, since: ISO timestamp, limit: 20 }
+   GET {podUrl}/api/hub/threads/:threadId/messages?since=ISO_TIMESTAMP&limit=20
    → returns new messages since last poll
 ```
 
@@ -356,9 +354,9 @@ Telegram ← OpenClaw (outbound relay) ← relayToExternalChannel ← assistant 
 ### Inbound Path (Telegram → Synap)
 
 1. A Telegram message arrives at OpenClaw's webhook
-2. OpenClaw's AI (instructed by the `synap-os` skill) calls:
+2. OpenClaw (instructed by the `synap-os` skill) calls the Hub Protocol REST endpoint directly:
    ```
-   POST {podUrl}/trpc/hubProtocol.channels.sendExternalMessage
+   POST {podUrl}/api/hub/threads/:threadId/messages
    {
      agentUserId, workspaceId,
      externalSource: "telegram",
@@ -733,16 +731,17 @@ OpenClaw's MCP tools become available to Synap's AI automatically on registratio
 
 ## 14. Design Decisions and Trade-offs
 
-### Why Hub Protocol (not OAuth, not REST, not WebSocket)
+### Why Hub Protocol REST
 
-Hub Protocol is tRPC — the same type-safe RPC system used throughout Synap. This means:
+Hub Protocol is a set of Hono REST routes (`/api/hub/*`) with Zod-validated inputs and Bearer token auth. This means:
 
-- External agents use the same API as internal consumers
-- Type safety is maintained end-to-end (same Zod schemas)
-- Governance (`checkPermissionOrPropose`) is applied uniformly at the procedure level
-- No separate gateway to maintain
+- External agents use a standard REST API (no tRPC client needed)
+- Type safety is maintained via Zod schemas on all inputs
+- Governance (`checkPermissionOrPropose`) is applied uniformly at the route handler level
+- OpenClaw's `synap-memory` and `synap-os` skills call Hub Protocol REST directly — no MCP indirection needed
+- MCP is available for other integrations (Claude Desktop, Cursor, etc.) but is not required for OpenClaw
 
-The trade-off: agents must speak tRPC JSON format. The `synap-os` skill and example curl commands in SKILL.md make this straightforward.
+The benefit: any HTTP client can call Hub Protocol. The `synap-os` skill and example curl commands in SKILL.md make this straightforward.
 
 ### Why OpenClaw as the First External Agent
 

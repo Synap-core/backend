@@ -152,9 +152,9 @@
 
 **Key endpoints on the pod**:
 
-- `POST {podUrl}/trpc/hubProtocol.*` — all Hub Protocol write operations
-- `POST {podUrl}/trpc/hubProtocol.sessions.*` — session management
-- `POST {podUrl}/trpc/hubProtocol.compactedStates.*` — memory compaction
+- `{podUrl}/api/hub/*` — all Hub Protocol REST operations (entities, documents, threads, search, memory, etc.)
+- `POST {podUrl}/api/hub/memory` — session-scoped memory operations
+- `POST {podUrl}/api/hub/memory/search` — memory search
 
 **Key endpoints on the hub**:
 
@@ -323,8 +323,8 @@ To add a new external service that can read/write data on the pod:
 
 ### Option A — Hub Protocol (recommended for AI/agent services)
 
-1. The service authenticates with a Hub Protocol API key (`POST {pod}/trpc/apiKeys.create` during onboarding)
-2. All writes go through `POST {pod}/trpc/hubProtocol.*`
+1. The service authenticates with a Hub Protocol API key (created during onboarding)
+2. All reads/writes go through `{pod}/api/hub/*` REST endpoints
 3. The governance layer (`checkPermissionOrPropose`) automatically applies — writes are proposals until whitelisted
 4. Register the service in `intelligence_services` table with `serviceId`, `webhookUrl`, and encrypted `apiKey`
 5. The service shows up in the Intelligence app's Agents tab automatically via `useAgentServices()`

@@ -95,7 +95,7 @@ One permanent `AI_THREAD` per `(userId, workspaceId)` with `metadata.isPersonal 
 The IS can create branches directly during execution (via `create_branch` tool):
 
 ```
-IS → POST /trpc/hubProtocol.createThread
+IS → POST /api/hub/threads
   { userId, workspaceId, parentChannelId, agentType, branchPurpose }
 ```
 
