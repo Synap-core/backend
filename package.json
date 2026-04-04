@@ -63,7 +63,7 @@
     "overrides": {
       "drizzle-orm": "^0.45.1",
       "drizzle-zod": "0.8.3",
-      "zod": "^4.0.0",
+      "zod": "4.3.6",
       "zod-to-json-schema": "3.23.2",
       "fast-xml-parser": ">=5.5.6",
       "socket.io-parser": ">=4.2.6",

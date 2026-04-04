@@ -7,7 +7,7 @@ settings:
 overrides:
   drizzle-orm: ^0.45.1
   drizzle-zod: 0.8.3
-  zod: ^4.0.0
+  zod: 4.3.6
   zod-to-json-schema: 3.23.2
   fast-xml-parser: '>=5.5.6'
   socket.io-parser: '>=4.2.6'
@@ -257,7 +257,7 @@ importers:
         specifier: ^9.0.2
         version: 9.0.3
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@types/bcrypt':
@@ -303,7 +303,7 @@ importers:
         specifier: 0.8.3
         version: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
       zod-to-json-schema:
         specifier: 3.23.2
@@ -440,7 +440,7 @@ importers:
         specifier: ^13.6.29
         version: 13.6.29
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@trpc/react-query':
@@ -548,7 +548,7 @@ importers:
         specifier: ^15.1.3
         version: 15.1.3
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@types/node':
@@ -591,7 +591,7 @@ importers:
         specifier: ^4.7.0
         version: 4.21.0
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@types/bcrypt':
@@ -640,7 +640,7 @@ importers:
         specifier: 0.8.3
         version: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@types/node':
@@ -668,7 +668,7 @@ importers:
         specifier: 0.8.3
         version: 0.8.3(drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@types/node':
@@ -748,7 +748,7 @@ importers:
         specifier: ^10.1.5
         version: 10.4.2
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       typescript:
@@ -922,7 +922,7 @@ importers:
         specifier: ^13.6.11
         version: 13.6.29
       zod:
-        specifier: ^4.0.0
+        specifier: 4.3.6
         version: 4.3.6
     devDependencies:
       '@synap-core/core':
@@ -947,13 +947,13 @@ packages:
     resolution: {integrity: sha512-YSzjlko7JvuiyQFmI9RN1tNZdEiZxc+6xld/0tq/VkJaHpEzGAb1yiNxxvmYVcjvfu/PcvCxAAYXmTYQQ63IHQ==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: ^4.0.0
+      zod: 4.3.6
 
   '@ai-sdk/provider-utils@2.2.8':
     resolution: {integrity: sha512-fqhG+4sCVv8x7nFzYnFo19ryhAa3w096Kmc3hWxMQfW/TubPOmt3A6tYZhl4mUfQWWQMsuSkLrtjlWuXBVSGQA==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: ^4.0.0
+      zod: 4.3.6
 
   '@ai-sdk/provider@1.1.3':
     resolution: {integrity: sha512-qZMxYJ0qqX/RfnuIaab+zp8UAeJn/ygXXAffR5I4N0n1IrvA6qBsjc8hXLmBiMV2zoXlifkacF7sEFnYnjBcqg==}
@@ -964,7 +964,7 @@ packages:
     engines: {node: '>=18'}
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
-      zod: ^4.0.0
+      zod: 4.3.6
     peerDependenciesMeta:
       zod:
         optional: true
@@ -973,7 +973,7 @@ packages:
     resolution: {integrity: sha512-3zcwCc8ezzFlwp3ZD15wAPjf2Au4s3vAbKsXQVyhxODHcmu0iyPO2Eua6D/vicq/AUm/BAo60r97O6HU+EI0+w==}
     engines: {node: '>=18'}
     peerDependencies:
-      zod: ^4.0.0
+      zod: 4.3.6
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -2441,7 +2441,7 @@ packages:
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
-      zod: ^4.0.0
+      zod: 4.3.6
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
@@ -4052,7 +4052,7 @@ packages:
     engines: {node: '>=18'}
     peerDependencies:
       react: ^18 || ^19 || ^19.0.0-rc
-      zod: ^4.0.0
+      zod: 4.3.6
     peerDependenciesMeta:
       react:
         optional: true
@@ -4745,7 +4745,7 @@ packages:
     resolution: {integrity: sha512-66yVOuvGhKJnTdiqj1/Xaaz9/qzOdRJADpDa68enqS6g3t0kpNkwNYjUuaeXgZfO/UWuIM9HIhSlJ6C5ZraMww==}
     peerDependencies:
       drizzle-orm: ^0.45.1
-      zod: ^4.0.0
+      zod: 4.3.6
 
   dts-bundle-generator@9.5.1:
     resolution: {integrity: sha512-DxpJOb2FNnEyOzMkG11sxO2dmxPjthoVWxfKqWYJ/bI/rT1rvTMktF5EKjAYrRZu6Z6t3NhOUZ0sZ5ZXevOfbA==}
@@ -6059,7 +6059,7 @@ packages:
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
-      zod: ^4.0.0
+      zod: 4.3.6
     peerDependenciesMeta:
       ws:
         optional: true
@@ -7540,13 +7540,13 @@ packages:
   zod-to-json-schema@3.23.2:
     resolution: {integrity: sha512-uSt90Gzc/tUfyNqxnjlfBs8W6WSGpNBv0rVsNxP/BVSMHMKGdthPYff4xtCHYloJGM0CFxFsb3NbC0eqPhfImw==}
     peerDependencies:
-      zod: ^4.0.0
+      zod: 4.3.6
 
   zod-validation-error@4.0.2:
     resolution: {integrity: sha512-Q6/nZLe6jxuU80qb/4uJ4t5v2VEZ44lzQjPDhYJNztRQ4wyWc6VF3D3Kb/fAuPetZQnhS3hnajCf9CsWesghLQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      zod: ^4.0.0
+      zod: 4.3.6
 
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
