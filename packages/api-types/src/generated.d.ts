@@ -7188,6 +7188,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				}[];
 			};
 			meta: object;
@@ -7212,6 +7213,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				};
 				effectiveProperties: EffectiveProperty[];
 			};
@@ -7246,6 +7248,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				};
 				existing: boolean;
 				status?: undefined;
@@ -7273,6 +7276,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				};
 				existing?: undefined;
 				status?: undefined;
@@ -7307,6 +7311,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				};
 			};
 			meta: object;
@@ -7349,6 +7354,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				}[];
 			};
 			meta: object;
@@ -7383,6 +7389,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				}[];
 			};
 			meta: object;
@@ -7408,6 +7415,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
+					entityScope: "workspace" | "pod";
 				}[];
 			};
 			meta: object;
@@ -8295,8 +8303,16 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				ok: boolean;
+				enabled: boolean;
+				message: string;
+				botUsername?: undefined;
+				webhookUrl?: undefined;
+			} | {
+				ok: boolean;
 				botUsername: string;
 				webhookUrl: string;
+				enabled?: undefined;
+				message?: undefined;
 			};
 			meta: object;
 		}>;
@@ -8304,8 +8320,16 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				configured: boolean;
+				botUsername: null;
+				source: null;
+				enabled: boolean;
+				message: string;
+			} | {
+				configured: boolean;
 				botUsername: string | null;
 				source: "env" | "workspace" | null;
+				enabled?: undefined;
+				message?: undefined;
 			};
 			meta: object;
 		}>;

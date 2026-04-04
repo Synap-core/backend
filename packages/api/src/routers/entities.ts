@@ -293,18 +293,12 @@ export const entitiesRouter = router({
       }
 
       // 3. Materialize — inline DB write (auto-approved)
-      const entityWorkspaceId = input.global
-        ? null
-        : (input.targetWorkspaceId ?? ctx.workspaceId);
-
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
       const docRepo = new DocumentRepository(database, eventRepo);
 
-      // Merge profile.defaultValues into caller-supplied properties.
-      // Profile defaults are applied first; caller values take precedence.
-      // For profileSlug path: resolve now. For profileId path: already resolved above.
+      // Resolve profile for defaultValues and entityScope
       let resolvedProfile: any = earlyResolvedProfile;
       if (!resolvedProfile && input.profileSlug) {
         const resolutionService = new ProfileResolutionService(database);
@@ -314,6 +308,22 @@ export const entitiesRouter = router({
           ctx.workspaceId
         );
       }
+      if (!resolvedProfile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${profileSlug}`,
+        });
+      }
+
+      // Determine workspaceId: explicit global flag > profile entityScope > workspace-scoped
+      const profileEntityScope = resolvedProfile.entityScope ?? "workspace";
+      const entityWorkspaceId = input.global
+        ? null
+        : profileEntityScope === "pod"
+          ? null
+          : (input.targetWorkspaceId ?? ctx.workspaceId);
+
+      // Merge profile.defaultValues into caller-supplied properties.
       const profileDefaults =
         (resolvedProfile?.defaultValues as Record<string, unknown>) ?? {};
       const effectiveProperties: Record<string, unknown> = {
@@ -349,7 +359,7 @@ export const entitiesRouter = router({
 
         createdEntity = await entityRepo.create(
           {
-            workspaceId: entityWorkspaceId!,
+            workspaceId: entityWorkspaceId,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
@@ -363,7 +373,7 @@ export const entitiesRouter = router({
         // Simple entity creation
         createdEntity = await entityRepo.create(
           {
-            workspaceId: entityWorkspaceId!,
+            workspaceId: entityWorkspaceId,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
@@ -476,18 +486,43 @@ export const entitiesRouter = router({
     .query(async ({ input, ctx }) => {
       const userCondition = eq(entities.userId, ctx.userId);
 
-      // Workspace filter: workspace-specific + global, or global-only
-      const workspaceCondition = input.globalOnly
-        ? isNull(entities.workspaceId)
-        : or(
-            eq(entities.workspaceId, ctx.workspaceId),
-            isNull(entities.workspaceId)
-          );
-
-      const conditions: any[] = [userCondition, workspaceCondition];
+      const conditions: any[] = [userCondition, isNull(entities.deletedAt)];
 
       if (input.profileSlug) {
         conditions.push(eq(entities.type, input.profileSlug));
+
+        // Check if this profile type is pod-wide — if so, skip workspace filter
+        const database = await getDb();
+        const profileService = new ProfileResolutionService(database);
+        const entityScope = await profileService.getEntityScope(
+          input.profileSlug,
+          ctx.workspaceId
+        );
+
+        if (entityScope === "pod") {
+          // Pod-wide: show all entities of this type regardless of workspace
+          // (userCondition already ensures ownership — no workspaceId filter needed)
+        } else {
+          // Workspace-scoped: this workspace + global entities
+          conditions.push(
+            input.globalOnly
+              ? isNull(entities.workspaceId)
+              : or(
+                  eq(entities.workspaceId, ctx.workspaceId),
+                  isNull(entities.workspaceId)
+                )
+          );
+        }
+      } else {
+        // No profile filter — use standard workspace scoping
+        conditions.push(
+          input.globalOnly
+            ? isNull(entities.workspaceId)
+            : or(
+                eq(entities.workspaceId, ctx.workspaceId),
+                isNull(entities.workspaceId)
+              )
+        );
       }
 
       const results = await db.query.entities.findMany({
@@ -655,16 +690,34 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const conditions: any[] = [
-        eq(entities.userId, ctx.userId),
-        or(
-          eq(entities.workspaceId, ctx.workspaceId),
-          isNull(entities.workspaceId)
-        ),
-      ];
+      const conditions: any[] = [eq(entities.userId, ctx.userId)];
 
       if (input.profileSlug) {
         conditions.push(eq(entities.type, input.profileSlug));
+
+        // Check if this profile type is pod-wide — if so, skip workspace filter
+        const database = await getDb();
+        const profileService = new ProfileResolutionService(database);
+        const entityScope = await profileService.getEntityScope(
+          input.profileSlug,
+          ctx.workspaceId
+        );
+
+        if (entityScope !== "pod") {
+          conditions.push(
+            or(
+              eq(entities.workspaceId, ctx.workspaceId),
+              isNull(entities.workspaceId)
+            )
+          );
+        }
+      } else {
+        conditions.push(
+          or(
+            eq(entities.workspaceId, ctx.workspaceId),
+            isNull(entities.workspaceId)
+          )
+        );
       }
 
       const results = await db.query.entities.findMany({

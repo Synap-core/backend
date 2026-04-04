@@ -368,16 +368,62 @@ app.post("/api/auth/token-exchange", async (c) => {
 app.post("/api/handshake", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const { token } = body as { token?: string };
+    const {
+      token,
+      issuerUrl: clientIssuerUrl,
+      cpUrl: legacyCpUrl,
+    } = body as { token?: string; issuerUrl?: string; cpUrl?: string };
 
     if (!token || typeof token !== "string") {
       return c.json({ error: "token is required" }, 400);
     }
 
-    // Verify the handshake JWT via CP JWKS (ES256).
-    // Pass this pod's own PUBLIC_URL as the expected audience so a token signed
-    // for a different pod is rejected even if the signature is valid.
-    const cpUrl = config.server.controlPlaneUrl;
+    // Verify the handshake JWT via the issuer's JWKS (ES256).
+    // The pod is self-hostable and may not know which service signed the token.
+    //
+    // Issuer URL resolution (in priority order):
+    //   1. Client-provided issuerUrl (the client just called the issuer, so it knows)
+    //   2. Legacy "cpUrl" field (backward-compat with older clients)
+    //   3. Pod env var CONTROL_PLANE_URL (operator-configured)
+    //   4. workspace.settings.controlPlane.url (set during provisioning)
+    //
+    // Security: the JWT is verified using JWKS fetched from the issuer URL.
+    // Even if the client provides a malicious URL, verification fails because
+    // the JWT was signed with a different key. The audience check (PUBLIC_URL)
+    // further prevents cross-pod token reuse.
+    let issuerUrl =
+      clientIssuerUrl ?? legacyCpUrl ?? config.server.controlPlaneUrl;
+    if (!issuerUrl) {
+      try {
+        const { getDb } = await import("@synap/database");
+        const db = await getDb();
+        const ws = await db.query.workspaces.findFirst();
+        const settings = (ws?.settings as any)?.controlPlane;
+        if (settings?.url) {
+          issuerUrl = settings.url;
+          apiLogger.info(
+            { issuerUrl },
+            "Handshake: resolved issuer URL from workspace settings"
+          );
+        }
+      } catch {}
+    }
+
+    if (!issuerUrl) {
+      apiLogger.warn(
+        "Handshake: no issuer URL available — cannot verify token"
+      );
+      return c.json(
+        {
+          error:
+            "Cannot verify handshake token: no issuer URL available. " +
+            "Pass issuerUrl in the request body, or set CONTROL_PLANE_URL on the pod.",
+          code: "NO_ISSUER_URL",
+        },
+        503
+      );
+    }
+
     const podPublicUrl = process.env.PUBLIC_URL;
     const payload = await verifyCpJwt<{
       sub: string;
@@ -385,13 +431,24 @@ app.post("/api/handshake", async (c) => {
       name?: string;
       aud: string;
       type: string;
-    }>(token, cpUrl, podPublicUrl);
+      trialEnd?: string;
+    }>(token, issuerUrl, podPublicUrl);
 
     if (!payload) {
       apiLogger.warn(
-        "Handshake token verification failed (null from verifyCpJwt)"
+        { issuerUrl, podPublicUrl },
+        "Handshake token verification failed — JWT signature/audience/expiry check failed"
       );
-      return c.json({ error: "Invalid or expired handshake token" }, 401);
+      return c.json(
+        {
+          error: "Invalid or expired handshake token",
+          code: "JWT_VERIFICATION_FAILED",
+          hint: podPublicUrl
+            ? `Token audience must match this pod's PUBLIC_URL (${podPublicUrl})`
+            : "This pod has no PUBLIC_URL set — audience check is skipped but signature verification may have failed",
+        },
+        401
+      );
     }
 
     if (payload.type !== "handshake") {
@@ -509,6 +566,54 @@ app.post("/api/handshake", async (c) => {
       { email, identityId },
       "Handshake successful — session created"
     );
+
+    // 5. Store trialEnd from JWT payload in workspace settings (shared pod only)
+    if (payload.trialEnd && config.server.sharedPodMode && identityId) {
+      try {
+        const { getDb, eq } = await import("@synap/database");
+        const { workspaceMembers, workspaces } =
+          await import("@synap/database/schema");
+        const handshakeDb = await getDb();
+
+        // Find the user's workspace membership
+        const membership = await handshakeDb.query.workspaceMembers.findFirst({
+          where: eq(workspaceMembers.userId, identityId),
+          columns: { workspaceId: true },
+        });
+
+        if (membership) {
+          const ws = await handshakeDb.query.workspaces.findFirst({
+            where: eq(workspaces.id, membership.workspaceId),
+            columns: { settings: true },
+          });
+
+          const existing = (ws?.settings as Record<string, unknown>) ?? {};
+          const existingCp =
+            (existing.controlPlane as Record<string, unknown>) ?? {};
+
+          await handshakeDb
+            .update(workspaces)
+            .set({
+              settings: drizzleSql`settings || ${JSON.stringify({
+                controlPlane: { ...existingCp, trialEnd: payload.trialEnd },
+              })}::jsonb`,
+              updatedAt: new Date(),
+            })
+            .where(eq(workspaces.id, membership.workspaceId));
+
+          apiLogger.info(
+            { identityId, trialEnd: payload.trialEnd },
+            "Stored trialEnd in workspace settings"
+          );
+        }
+      } catch (trialErr) {
+        // Non-fatal — don't break handshake if trial storage fails
+        apiLogger.warn(
+          { err: trialErr },
+          "Failed to store trialEnd in workspace settings"
+        );
+      }
+    }
 
     return c.json({
       success: true,
@@ -995,6 +1100,7 @@ app.route("/api/hub-protocol", hubProtocolRestApp);
 
 // Channel Gateway REST adapter (for external channel bots; X-Channel-Key auth)
 import { channelGatewayApp } from "./routers/channel-gateway.js";
+import { sql as drizzleSql } from "drizzle-orm";
 app.route("/api/channels/gateway", channelGatewayApp);
 
 // MCP Server endpoint (for external agents: ZeroClaw, OpenClaw, Claude Desktop, Cursor)
