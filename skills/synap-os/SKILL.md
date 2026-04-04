@@ -1,10 +1,8 @@
 ---
 name: synap-os
 description: >
-  Connect OpenClaw to your Synap workspace. Read and search entities and documents,
-  relay external messages (Telegram, WhatsApp, etc.) into Synap channels,
-  communicate with the Synap AI through A2AI channels, and execute governed workspace
-  actions through Synap's proposal and approval system.
+  World interface for Synap workspaces. Relay Telegram, WhatsApp, Slack,
+  and Discord messages. Communicate with Synap AI via A2AI channels.
 version: 1.3.0
 metadata:
   openclaw:
@@ -18,10 +16,15 @@ metadata:
         - SYNAP_AGENT_USER_ID
         - SYNAP_DEFAULT_CHANNEL_ID
     primaryEnv: SYNAP_HUB_API_KEY
+    emoji: "\U0001F310"
     homepage: https://synap.live/openclaw
     capabilities:
       - channels
       - chat
+    os:
+      - macos
+      - linux
+      - windows
 user-invocable: false
 ---
 

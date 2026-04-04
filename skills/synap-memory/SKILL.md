@@ -1,9 +1,8 @@
 ---
 name: synap-memory
 description: >
-  Structured knowledge management for AI agents via Synap. Store entities,
-  documents, and facts. Search your knowledge graph. Build relationships
-  between data points. All writes governed by Synap's proposal system.
+  Structured knowledge graph for AI agents. Store entities, documents, and
+  facts in PostgreSQL. Search, link, and govern all AI writes.
 version: 1.0.0
 metadata:
   openclaw:
@@ -16,10 +15,15 @@ metadata:
         - SYNAP_AGENT_USER_ID
         - SYNAP_CONFIG_URL
     primaryEnv: SYNAP_HUB_API_KEY
+    emoji: "\U0001F9E0"
     homepage: https://synap.live/openclaw
     capabilities:
       - memory
       - knowledge-graph
+    os:
+      - macos
+      - linux
+      - windows
 user-invocable: false
 ---
 
