@@ -21,10 +21,57 @@ export class ProfileResolutionService {
   private profilePropertyRepo: ProfilePropertyRepository;
   private propertyDefRepo: PropertyDefRepository;
 
+  /** TTL cache for entityScope lookups (60s) */
+  private static entityScopeCache = new Map<
+    string,
+    { scope: "pod" | "workspace"; expiresAt: number }
+  >();
+  private static CACHE_TTL = 60_000;
+
   constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
     this.profileRepo = new ProfileRepository(db);
     this.profilePropertyRepo = new ProfilePropertyRepository(db);
     this.propertyDefRepo = new PropertyDefRepository(db);
+  }
+
+  /**
+   * Get the entity scope for a profile — determines whether entities of
+   * this type are pod-wide (visible everywhere) or workspace-scoped.
+   * Results are cached for 60 seconds.
+   */
+  async getEntityScope(
+    profileSlug: string,
+    workspaceId: string
+  ): Promise<"pod" | "workspace"> {
+    const cacheKey = `${profileSlug}:${workspaceId}`;
+    const cached = ProfileResolutionService.entityScopeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.scope;
+
+    const profile = await this.profileRepo.getBySlugForWorkspace(
+      profileSlug,
+      workspaceId
+    );
+    const scope = profile?.entityScope === "pod" ? "pod" : "workspace";
+
+    ProfileResolutionService.entityScopeCache.set(cacheKey, {
+      scope,
+      expiresAt: Date.now() + ProfileResolutionService.CACHE_TTL,
+    });
+
+    return scope;
+  }
+
+  /** Invalidate the entityScope cache (call on profile updates) */
+  static invalidateEntityScopeCache(profileSlug?: string): void {
+    if (profileSlug) {
+      for (const key of ProfileResolutionService.entityScopeCache.keys()) {
+        if (key.startsWith(`${profileSlug}:`)) {
+          ProfileResolutionService.entityScopeCache.delete(key);
+        }
+      }
+    } else {
+      ProfileResolutionService.entityScopeCache.clear();
+    }
   }
 
   /**

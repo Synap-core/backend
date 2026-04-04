@@ -359,7 +359,7 @@ export const entitiesRouter = router({
 
         createdEntity = await entityRepo.create(
           {
-            workspaceId: entityWorkspaceId,
+            workspaceId: entityWorkspaceId ?? undefined,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
@@ -373,7 +373,7 @@ export const entitiesRouter = router({
         // Simple entity creation
         createdEntity = await entityRepo.create(
           {
-            workspaceId: entityWorkspaceId,
+            workspaceId: entityWorkspaceId ?? undefined,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,

@@ -76,6 +76,16 @@ export const profiles = pgTable(
       onDelete: "cascade",
     }), // If scope = "workspace"
 
+    // Entity scoping — determines whether entities of this profile type
+    // are pod-wide (visible in all workspaces) or workspace-scoped.
+    // Pod-wide: Person, Company, Note, Task (core types shared everywhere)
+    // Workspace-scoped: Deal, Pipeline, custom types (app-specific)
+    entityScope: text("entity_scope", {
+      enum: ["pod", "workspace"],
+    })
+      .notNull()
+      .default("workspace"),
+
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),
     version: integer("version").default(1).notNull(),
