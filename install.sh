@@ -272,6 +272,7 @@ else
   HUB_JWT_SECRET=$(_gen)
   SYNAP_SERVICE_ENCRYPTION_KEY=$(_gen)
   VAULT_SERVER_KEY=$(_gen)
+  PROVISIONING_TOKEN=$(_gen)
 
   success "Secrets generated"
 
@@ -341,6 +342,10 @@ SYNAP_SERVICE_ENCRYPTION_KEY=$SYNAP_SERVICE_ENCRYPTION_KEY
 # ── Secrets vault ─────────────────────────────────────────────────────────────
 # Used for add-on provisioning (OpenClaw, ZeroClaw bootstrap credentials).
 VAULT_SERVER_KEY=$VAULT_SERVER_KEY
+
+# ── Self-Hosted Agent Setup ──────────────────────────────────────────────
+# Required by setup-openclaw.sh to create agent users and API keys.
+PROVISIONING_TOKEN=$PROVISIONING_TOKEN
 
 # ── Control Plane Integration ─────────────────────────────────────────────────
 # For Synap-managed deployments only. Leave blank for fully self-hosted setups.
@@ -460,8 +465,18 @@ warn "Back up ${BOLD}$INSTALL_DIR/.env${RESET} securely — it contains all secr
 
 if [[ -n "$ADMIN_EMAIL" ]]; then
   blank
-  info "Admin account: ${BOLD}$ADMIN_EMAIL${RESET}"
-  info "Visit ${BOLD}https://$DOMAIN/registration${RESET} to set your password."
+  heading "Next steps"
+  info "1. Visit ${BOLD}https://$DOMAIN/registration${RESET} to create your admin account"
+  info "   Use email: ${BOLD}$ADMIN_EMAIL${RESET}"
+  info "2. To add OpenClaw (AI agent), run:"
+  info "   ${BOLD}cd $INSTALL_DIR && bash setup-openclaw.sh${RESET}"
+else
+  blank
+  heading "Next steps"
+  warn "No ADMIN_EMAIL was provided."
+  info "Set ${BOLD}ADMIN_EMAIL${RESET} in $INSTALL_DIR/.env, then restart:"
+  info "   ${BOLD}docker compose -f $INSTALL_DIR/docker-compose.yml restart backend${RESET}"
+  info "Then visit ${BOLD}https://$DOMAIN/registration${RESET} to create your account."
 fi
 
 blank

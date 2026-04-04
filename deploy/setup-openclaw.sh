@@ -126,8 +126,14 @@ if [ "$HTTP_CODE" != "200" ]; then
   ERROR_MSG=$(echo "$HTTP_BODY" | jq -r '.error // empty' 2>/dev/null || true)
   if [ -n "$ERROR_MSG" ]; then
     echo "  $ERROR_MSG"
-  else
-    echo "  Response: $HTTP_BODY"
+  fi
+  if echo "$HTTP_BODY" | grep -qi "no workspace"; then
+    echo ""
+    echo "  No workspace found. You must create an admin account first:"
+    echo "  1. Set ADMIN_EMAIL in your .env file"
+    echo "  2. Restart the backend: docker compose restart backend"
+    echo "  3. Visit https://your-domain/registration to create your account"
+    echo "  4. Re-run this script"
   fi
   exit 1
 fi
