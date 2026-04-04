@@ -560,17 +560,39 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
 
     const createdProfiles = new Map<string, string>();
 
+    // Pod-wide profiles: entities of these types are visible across all workspaces
+    const POD_WIDE_SLUGS = new Set([
+      "note",
+      "task",
+      "project",
+      "event",
+      "person",
+      "contact",
+      "company",
+      "bookmark",
+      "website",
+      "article",
+    ]);
+
     // First pass: create all profiles without parent links
     for (const profile of profiles) {
       const existing = await profileRepo.getBySlug(profile.slug);
+      const expectedScope = POD_WIDE_SLUGS.has(profile.slug)
+        ? "pod"
+        : "workspace";
       if (existing) {
         createdProfiles.set(profile.slug, existing.id);
+        // Backfill entityScope on existing profiles (idempotent)
+        if (existing.entityScope !== expectedScope) {
+          await profileRepo.update(existing.id, { entityScope: expectedScope });
+        }
       } else {
         const created = await profileRepo.create({
           slug: profile.slug,
           displayName: profile.displayName,
           uiHints: profile.uiHints,
           scope: ProfileScope.SYSTEM,
+          entityScope: expectedScope,
         });
         createdProfiles.set(profile.slug, created.id);
         profilesCreated++;

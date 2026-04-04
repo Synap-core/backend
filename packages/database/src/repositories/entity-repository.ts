@@ -34,7 +34,7 @@ export interface CreateEntityInput {
   // Properties (validated against profile)
   properties?: Record<string, unknown>;
 
-  workspaceId: string;
+  workspaceId?: string | null; // null for pod-wide entities
   userId: string;
 
   /**
@@ -141,36 +141,49 @@ export class EntityRepository extends BaseRepository<
     // 1. Resolve profile (required)
     let profileId: string | null = null;
     let entityType: string;
+    let resolvedProfile: any = null;
 
     if (data.profileId) {
       profileId = data.profileId;
       const profile = await this.profileResolution.resolveProfile(
         profileId,
         userId,
-        data.workspaceId
+        data.workspaceId ?? ""
       );
       if (!profile) {
-        throw new ProfileNotFoundError(profileId, userId, data.workspaceId);
+        throw new ProfileNotFoundError(
+          profileId,
+          userId,
+          data.workspaceId ?? ""
+        );
       }
       entityType = profile.slug;
+      resolvedProfile = profile;
     } else if (data.profileSlug) {
       const profile = await this.profileResolution.resolveProfile(
         data.profileSlug,
         userId,
-        data.workspaceId
+        data.workspaceId ?? ""
       );
       if (!profile) {
         throw new ProfileNotFoundError(
           data.profileSlug,
           userId,
-          data.workspaceId
+          data.workspaceId ?? ""
         );
       }
       profileId = profile.id;
       entityType = profile.slug;
+      resolvedProfile = profile;
     } else {
       throw new Error("Either profileId or profileSlug must be provided");
     }
+
+    // 1b. Determine effective workspaceId based on profile's entityScope
+    // Pod-wide profiles (entityScope === 'pod') create entities with null workspaceId
+    const resolvedEntityScope = resolvedProfile?.entityScope ?? "workspace";
+    const effectiveWorkspaceId =
+      resolvedEntityScope === "pod" ? null : (data.workspaceId ?? null);
 
     // 2. Validate and normalize properties
     let validatedProperties: Record<string, unknown> = {};
@@ -210,7 +223,7 @@ export class EntityRepository extends BaseRepository<
       .insert(entities)
       .values({
         userId,
-        workspaceId: data.workspaceId,
+        workspaceId: effectiveWorkspaceId,
         profileId,
         type: entityType,
         title: data.title,
@@ -264,7 +277,7 @@ export class EntityRepository extends BaseRepository<
       const newProfile = await this.profileResolution.resolveProfile(
         data.profileSlug,
         userId,
-        existing.workspaceId
+        existing.workspaceId ?? ""
       );
       if (newProfile) {
         newProfileId = newProfile.id;

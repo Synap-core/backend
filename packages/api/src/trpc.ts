@@ -238,3 +238,22 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
 
 export const router = t.router as typeof t.router;
 export const middleware = t.middleware as typeof t.middleware;
+
+/**
+ * Workspace mutation procedure (workspace-scoped + trial guard)
+ *
+ * Same as workspaceProcedure but additionally checks whether the workspace
+ * trial has expired (shared pod mode only). Use this for all write operations
+ * that should be blocked after trial expiry.
+ *
+ * Usage:
+ *   import { workspaceMutationProcedure } from "../trpc.js";
+ *   myRouter = router({
+ *     create: workspaceMutationProcedure.input(...).mutation(...)
+ *   });
+ */
+import { trialGuardMiddleware } from "./middleware/trial-guard.js";
+export { trialGuardMiddleware };
+
+export const workspaceMutationProcedure =
+  workspaceProcedure.use(trialGuardMiddleware);

@@ -119,6 +119,8 @@ export const profilesRouter = router({
          * The calling workspace is always included automatically.
          */
         allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
+        /** Whether entities of this type are pod-wide or workspace-scoped */
+        entityScope: z.enum(["pod", "workspace"]).optional(),
         source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
@@ -245,6 +247,7 @@ export const profilesRouter = router({
         uiHints: input.uiHints,
         defaultValues: input.defaultValues,
         scope: input.scope as ProfileScope,
+        entityScope: input.entityScope,
         userId,
         workspaceId,
       });
@@ -431,6 +434,8 @@ export const profilesRouter = router({
          * The owning workspace always keeps access.
          */
         allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
+        /** Whether entities of this type are pod-wide or workspace-scoped */
+        entityScope: z.enum(["pod", "workspace"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -503,7 +508,13 @@ export const profilesRouter = router({
         uiHints: input.uiHints,
         defaultValues: input.defaultValues,
         scope: input.scope as ProfileScope | undefined,
+        entityScope: input.entityScope,
       });
+
+      // Invalidate entityScope cache when changed
+      if (input.entityScope !== undefined) {
+        ProfileResolutionService.invalidateEntityScopeCache(existing.slug);
+      }
 
       // When upgrading to "shared" — grant access to owning workspace + extras
       if (input.scope === "shared") {
@@ -560,6 +571,9 @@ export const profilesRouter = router({
       }
 
       await profileRepo.delete(input.id);
+
+      // Invalidate entityScope cache for deleted profile
+      ProfileResolutionService.invalidateEntityScopeCache(existing.slug);
 
       logger.info(
         { profileId: input.id, userId: ctx.userId },

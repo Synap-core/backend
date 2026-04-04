@@ -3687,12 +3687,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				metadata: Record<string, unknown> | null;
 				version: string | null;
 				status: string;
+				description: string | null;
 				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
@@ -3733,12 +3733,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				name: string;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				metadata: Record<string, unknown> | null;
 				version: string | null;
 				status: string;
+				description: string | null;
 				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
@@ -4448,12 +4448,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				services: {
 					name: string;
 					id: string;
-					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: Record<string, unknown> | null;
 					version: string | null;
 					status: string;
+					description: string | null;
 					capabilities: string[];
 					serviceId: string;
 					webhookUrl: string;
@@ -5016,9 +5016,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				id: string;
 				type: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
+				description: string | null;
 				settings: WorkspaceSettings;
 				ownerId: string;
 				subscriptionTier: string | null;
@@ -5036,9 +5036,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				id: string;
 				type: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
+				description: string | null;
 				settings: WorkspaceSettings;
 				ownerId: string;
 				subscriptionTier: string | null;
@@ -5544,12 +5544,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5583,12 +5583,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				query: unknown;
 				type: string;
-				description: string | null;
 				columns: unknown;
 				updatedAt: Date;
 				createdAt: Date;
 				metadata: unknown;
 				documentId: string | null;
+				description: string | null;
 				category: string;
 				scopeProfileIds: string[] | null;
 				scopeMode: string | null;
@@ -5617,12 +5617,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5651,12 +5651,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5686,12 +5686,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5719,12 +5719,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -5813,12 +5813,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -6070,9 +6070,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				workspaceId: string | null;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
+				description: string | null;
 				createdBy: string;
 				permissions: unknown;
 				filters: unknown;
@@ -6087,9 +6087,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				workspaceId: string | null;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
+				description: string | null;
 				createdBy: string;
 				permissions: unknown;
 				filters: unknown;
@@ -6222,12 +6222,12 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					query: unknown;
 					type: string;
-					description: string | null;
 					columns: unknown;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: unknown;
 					documentId: string | null;
+					description: string | null;
 					category: string;
 					scopeProfileIds: string[] | null;
 					scopeMode: string | null;
@@ -6448,7 +6448,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "link" | "relations" | "tag" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
+								type: "number" | "date" | "relations" | "tag" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -6562,7 +6562,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "link" | "relations" | "tag" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
+								type: "number" | "date" | "relations" | "tag" | "link" | "text" | "badge" | "avatar" | "progress" | "checkbox" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -6621,11 +6621,11 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string | null;
 				workspaceId: string | null;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				version: number;
 				entityType: string | null;
+				description: string | null;
 				config: unknown;
 				targetType: string;
 				inboxItemType: string | null;
@@ -7228,6 +7228,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "user" | "shared" | "system" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
+				entityScope?: "workspace" | "pod" | undefined;
 				source?: "user" | "system" | "ai" | "intelligence" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
@@ -7294,6 +7295,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "user" | "shared" | "system" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
+				entityScope?: "workspace" | "pod" | undefined;
 			};
 			output: {
 				profile: {
@@ -7647,9 +7649,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string;
 					id: string;
-					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
+					description: string | null;
 					slug: string;
 					uiHints: unknown;
 					displayName: string;
@@ -7671,9 +7673,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string;
 					id: string;
-					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
+					description: string | null;
 					slug: string;
 					uiHints: unknown;
 					displayName: string;
@@ -7695,9 +7697,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string;
 					id: string;
-					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
+					description: string | null;
 					slug: string;
 					uiHints: unknown;
 					displayName: string;
@@ -7873,11 +7875,11 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					id: string;
 					errorMessage: string | null;
-					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: Record<string, unknown>;
 					status: McpStatus;
+					description: string | null;
 					url: string | null;
 					enabled: boolean;
 					slug: string;
@@ -7908,11 +7910,11 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					id: string;
 					errorMessage: string | null;
-					description: string | null;
 					updatedAt: Date;
 					createdAt: Date;
 					metadata: Record<string, unknown>;
 					status: McpStatus;
+					description: string | null;
 					url: string | null;
 					enabled: boolean;
 					slug: string;
@@ -8145,11 +8147,11 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				source: string | null;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				version: string | null;
 				isActive: boolean;
+				description: string | null;
 				category: string | null;
 				typeKey: string;
 				icon: string | null;
@@ -8178,11 +8180,11 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				source: string | null;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				version: string | null;
 				isActive: boolean;
+				description: string | null;
 				category: string | null;
 				typeKey: string;
 				icon: string | null;
@@ -8228,11 +8230,11 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				source: string | null;
 				id: string;
-				description: string | null;
 				updatedAt: Date;
 				createdAt: Date;
 				version: string | null;
 				isActive: boolean;
+				description: string | null;
 				category: string | null;
 				typeKey: string;
 				icon: string | null;
@@ -8467,7 +8469,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
-				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
+				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -8477,7 +8479,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "governance" | "ai" | "inbox";
+					category: "data" | "system" | "ai" | "governance" | "inbox";
 					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;

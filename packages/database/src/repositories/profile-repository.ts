@@ -22,6 +22,8 @@ export interface CreateProfileInput {
   /** Default property values applied when creating a new entity of this type. */
   defaultValues?: Record<string, unknown>;
   scope?: ProfileScope;
+  /** Whether entities of this profile are pod-wide or workspace-scoped */
+  entityScope?: "pod" | "workspace";
   userId?: string;
   workspaceId?: string;
   /**
@@ -62,6 +64,7 @@ export class ProfileRepository {
         uiHints: input.uiHints || {},
         defaultValues: input.defaultValues || {},
         scope: input.scope || ProfileScope.WORKSPACE,
+        entityScope: input.entityScope || "workspace",
         userId: input.userId || null,
         workspaceId: input.workspaceId || null,
         semanticSlug: resolvedSemanticSlug,
@@ -313,6 +316,8 @@ export class ProfileRepository {
     if (input.defaultValues !== undefined)
       updateData.defaultValues = input.defaultValues;
     if (input.scope !== undefined) updateData.scope = input.scope;
+    if (input.entityScope !== undefined)
+      updateData.entityScope = input.entityScope;
     if (input.userId !== undefined) updateData.userId = input.userId || null;
     if (input.workspaceId !== undefined)
       updateData.workspaceId = input.workspaceId || null;

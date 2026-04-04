@@ -441,7 +441,8 @@ app.get("/entities/:id", async (c) => {
 
 /**
  * POST /entities
- * Requires workspaceId in body so the same event chain (requested → validated → executor) is used.
+ * workspaceId is optional — pod-wide profiles (entityScope='pod') create entities
+ * with null workspaceId. Falls back to user's first accessible workspace for caller context.
  */
 app.post("/entities", async (c) => {
   if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
@@ -450,7 +451,7 @@ app.post("/entities", async (c) => {
   const body = (await c.req.json()) as {
     userId: string;
     agentUserId?: string;
-    workspaceId: string;
+    workspaceId?: string;
     type: string;
     profileSlug?: string;
     title: string;
@@ -458,12 +459,20 @@ app.post("/entities", async (c) => {
     properties?: Record<string, unknown>;
     sourceMessageId?: string;
   };
-  if (!body.workspaceId) {
-    return c.json(
-      { error: "workspaceId is required for entity creation (event chain)" },
-      400
-    );
+
+  // Resolve workspace context: explicit > human user's first accessible workspace
+  let effectiveWorkspaceId = body.workspaceId;
+  if (!effectiveWorkspaceId) {
+    const wsIds = await getUserAccessibleWorkspaceIds(body.userId);
+    effectiveWorkspaceId = wsIds[0];
+    if (!effectiveWorkspaceId) {
+      return c.json(
+        { error: "No accessible workspace found for this user" },
+        400
+      );
+    }
   }
+
   try {
     // When agentUserId is provided, use the agent's identity for permission checks
     const actorResolution = await resolveActorId(body.agentUserId, body.userId);
@@ -471,7 +480,7 @@ app.post("/entities", async (c) => {
       return c.json({ error: actorResolution.error }, 400);
     const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
-      workspaceId: body.workspaceId,
+      workspaceId: effectiveWorkspaceId,
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
