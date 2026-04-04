@@ -461,14 +461,14 @@ if (!["editor", "admin", "owner"].includes(ctx.memberRole)) {
 
 ---
 
-### L-3 — `synap-os` Skill Hard-codes GitHub URL
+### L-3 — `synap` Skill Hard-codes GitHub URL
 
-**File:** `synap-backend/skills/synap-os/SKILL.md`
+**File:** `synap-backend/skills/synap/SKILL.md`
 
 **Issue:** The skill install URL is:
 
 ```
-https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap-os/SKILL.md
+https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap/SKILL.md
 ```
 
 This URL points to a repository that does not yet exist publicly (`synap-app/synap-backend`). Until the repository is public and the URL is live, the skill install command in the OpenClaw provisioning response will fail silently.
@@ -518,7 +518,7 @@ Before launching the OpenClaw integration to production, verify the following:
 
 ### Correctness
 
-- [ ] `registerOnPod` fixed to call tRPC endpoint (`/trpc/intelligenceRegistry.register`) not REST (`/api/intelligence/services`)
+- [ ] `registerOnPod` fixed to call the correct endpoint for service registration
 - [ ] Integration test: register OpenClaw → verify `intelligence_services` row exists → verify `resolveIntelligenceService` returns it
 - [ ] `relayToExternalChannel` fixed to use `capability: "channels"` after capability routing is added
 - [ ] `triggerA2AIResponse` queued via PgBoss (or at minimum: verified that silence-on-failure is acceptable)
@@ -527,7 +527,7 @@ Before launching the OpenClaw integration to production, verify the following:
 
 - [ ] OpenClaw provisioning state persisted to database (not in-memory Map)
 - [ ] Volume isolation verified for multi-tenant pod deployments
-- [ ] `synap-os` SKILL.md URL tested — GitHub repository exists and URL is accessible
+- [ ] `synap` SKILL.md URL tested — GitHub repository exists and URL is accessible
 
 ### Testing
 
@@ -556,6 +556,6 @@ Before launching the OpenClaw integration to production, verify the following:
 | M-5 | 🟡 Medium   | OpenClaw volume not scoped per user in multi-tenant pods    | Open              |
 | L-1 | 🔵 Low      | Hub Protocol scope enforcement needs test coverage          | Open              |
 | L-2 | 🔵 Low      | createA2AIChannel available to all workspace members        | Accept / Decide   |
-| L-3 | 🔵 Low      | synap-os skill GitHub URL not yet live                      | Open              |
+| L-3 | 🔵 Low      | synap skill GitHub URL not yet live                         | Open              |
 | L-4 | 🔵 Low      | pollA2AIChannel returns messages to any Hub Protocol caller | Open              |
 | L-5 | 🔵 Low      | No audit log for auto-approved Hub Protocol writes          | Backlog           |

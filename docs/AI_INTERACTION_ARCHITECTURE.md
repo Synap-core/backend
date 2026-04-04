@@ -354,7 +354,7 @@ Telegram ← OpenClaw (outbound relay) ← relayToExternalChannel ← assistant 
 ### Inbound Path (Telegram → Synap)
 
 1. A Telegram message arrives at OpenClaw's webhook
-2. OpenClaw (instructed by the `synap-os` skill) calls the Hub Protocol REST endpoint directly:
+2. OpenClaw (instructed by the `synap` skill) calls the Hub Protocol REST endpoint directly:
    ```
    POST {podUrl}/api/hub/threads/:threadId/messages
    {
@@ -545,7 +545,7 @@ Agents are workspace members with roles (editor by default). This means all RBAC
 
 ## 11. The Synap OS Skill — Teaching OpenClaw
 
-`synap-backend/skills/synap-os/SKILL.md` is the bridge between OpenClaw and Synap. It's a SKILL.md file (YAML frontmatter + markdown instructions) that teaches OpenClaw:
+`synap-backend/skills/synap/SKILL.md` is the bridge between OpenClaw and Synap. It's a SKILL.md file (YAML frontmatter + markdown instructions) that teaches OpenClaw:
 
 1. **Its identity** — "You are connected to a Synap workspace. Use Hub Protocol to interact with workspace data."
 2. **What to auto-approve** — Search, read, memory recall. No proposal needed.
@@ -557,7 +557,7 @@ Agents are workspace members with roles (editor by default). This means all RBAC
 Installation:
 
 ```bash
-openclaw skill install https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap-os/SKILL.md
+openclaw skill install https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap/SKILL.md
 ```
 
 This is the "configuration as instruction" pattern. Rather than building a custom SDK, the skill teaches OpenClaw's general-purpose LLM to behave correctly when interacting with Synap.
@@ -611,7 +611,7 @@ The external messaging architecture generalizes beyond Telegram:
 
 1. Choose a platform (WhatsApp, Slack, Discord, Signal)
 2. Configure OpenClaw to connect to that platform
-3. Update the `synap-os` skill with platform-specific relay instructions
+3. Update the `synap` skill with platform-specific relay instructions
 4. The rest of the architecture — EXTERNAL_IMPORT channels, relay, governance — works identically
 
 The only new code needed per platform is the human-readable label and icon in the frontend (`PLATFORM_LABELS`, `PLATFORM_ICONS` in `ChatHeader.tsx`).
@@ -671,7 +671,7 @@ This section documents the specific code artifacts created or modified in the Op
 
 ### Intelligence
 
-**`synap-backend/skills/synap-os/SKILL.md`**
+**`synap-backend/skills/synap/SKILL.md`**
 
 - Complete skill file teaching OpenClaw to use Synap's Hub Protocol
 - Covers read ops, write ops (governance), external relay, A2AI channels, filesystem rules
@@ -738,10 +738,10 @@ Hub Protocol is a set of Hono REST routes (`/api/hub/*`) with Zod-validated inpu
 - External agents use a standard REST API (no tRPC client needed)
 - Type safety is maintained via Zod schemas on all inputs
 - Governance (`checkPermissionOrPropose`) is applied uniformly at the route handler level
-- OpenClaw's `synap-memory` and `synap-os` skills call Hub Protocol REST directly — no MCP indirection needed
+- OpenClaw's `synap` and `synap` skills call Hub Protocol REST directly — no MCP indirection needed
 - MCP is available for other integrations (Claude Desktop, Cursor, etc.) but is not required for OpenClaw
 
-The benefit: any HTTP client can call Hub Protocol. The `synap-os` skill and example curl commands in SKILL.md make this straightforward.
+The benefit: any HTTP client can call Hub Protocol. The `synap` skill and example curl commands in SKILL.md make this straightforward.
 
 ### Why OpenClaw as the First External Agent
 
@@ -757,7 +757,7 @@ The `channel_type` column is a text column with a TypeScript enum — not a Post
 
 ### Why Telegram First (Not WhatsApp)
 
-WhatsApp's unofficial Baileys library violates WhatsApp's Terms of Service and can result in account bans. WhatsApp official API requires Meta business verification (4–8 weeks) and charges per message ($0.01–0.06). Telegram is free, requires no approval, and can be set up in 1–3 days. The architecture is platform-agnostic — WhatsApp official can be added later by updating the `synap-os` skill.
+WhatsApp's unofficial Baileys library violates WhatsApp's Terms of Service and can result in account bans. WhatsApp official API requires Meta business verification (4–8 weeks) and charges per message ($0.01–0.06). Telegram is free, requires no approval, and can be set up in 1–3 days. The architecture is platform-agnostic — WhatsApp official can be added later by updating the `synap` skill.
 
 ---
 
@@ -868,7 +868,7 @@ Both OpenClaw and ZeroClaw provisioning use this shared utility. The function cr
 
 1. Poll `http://openclaw:3050/health` up to 10 times (10s intervals)
 2. Create Hub Protocol API key via `createHubApiKeyOnPod()`
-3. Register OpenClaw on pod: `POST /trpc/hubProtocol.services.register`
+3. Register OpenClaw on pod via Hub Protocol REST
 4. Update `addons.openclaw.status = "running"` with `url` + `mcpEndpoint`
 
 > TODO: Step 1 requires Docker deployment on pod server. A pod agent API will be added to handle Docker container lifecycle. The current job polls the internal address assuming OpenClaw is already running via docker-compose.
