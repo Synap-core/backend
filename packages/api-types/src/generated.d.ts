@@ -1505,6 +1505,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				profileSlug?: string | undefined;
+				includeDescendants?: boolean | undefined;
 				limit?: number | undefined;
 				globalOnly?: boolean | undefined;
 			};

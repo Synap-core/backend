@@ -32,8 +32,9 @@ export const t = initTRPC.context<Context>().create({
 
     return {
       ...shape,
-      message:
-        isInternal && !isDev ? "An unexpected error occurred" : shape.message,
+      // Always expose the error message — clients need it for debugging.
+      // Stack traces are NOT included (only the message string).
+      message: shape.message,
     };
   },
 });

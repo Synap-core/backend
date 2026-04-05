@@ -372,18 +372,32 @@ export const entitiesRouter = router({
         );
       } else {
         // Simple entity creation
-        createdEntity = await entityRepo.create(
-          {
-            workspaceId: entityWorkspaceId ?? undefined,
-            userId: ctx.userId,
-            title: input.title || undefined,
-            preview: input.description || undefined,
-            documentId: input.documentId || undefined,
-            properties: effectiveProperties,
+        try {
+          createdEntity = await entityRepo.create(
+            {
+              workspaceId: entityWorkspaceId ?? undefined,
+              userId: ctx.userId,
+              title: input.title || undefined,
+              preview: input.description || undefined,
+              documentId: input.documentId || undefined,
+              properties: effectiveProperties,
+              profileSlug,
+            },
+            ctx.userId
+          );
+        } catch (createErr) {
+          const msg =
+            createErr instanceof Error ? createErr.message : String(createErr);
+          console.error("[entities.create] Entity creation failed:", msg, {
             profileSlug,
-          },
-          ctx.userId
-        );
+            title: input.title,
+            workspaceId: entityWorkspaceId,
+          });
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Entity creation failed: ${msg}`,
+          });
+        }
       }
 
       // 3b. Auto-sync entity_id properties → relations (non-blocking)
