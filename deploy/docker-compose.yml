@@ -59,6 +59,11 @@ services:
       HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}
       INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
       INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
+    volumes:
+      # Docker socket for spawning the updater one-shot container
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Deploy directory (read-only) so the backend can reference compose file path
+      - .:/opt/synap/deploy:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -438,6 +443,22 @@ services:
       - synap-net
     profiles:
       - monitoring
+
+  # ============================================================================
+  # POD SELF-UPDATER (one-shot, spawned by trigger-update handler)
+  # ============================================================================
+  updater:
+    image: docker:cli
+    restart: "no"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/deploy:rw
+    working_dir: /deploy
+    entrypoint: ["/bin/sh", "/deploy/update-pod.sh"]
+    networks:
+      - synap-net
+    profiles:
+      - updater
 
 volumes:
   postgres_data:

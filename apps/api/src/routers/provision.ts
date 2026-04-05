@@ -1321,12 +1321,28 @@ provisionRouter.post("/disconnect", async (c) => {
 
 // ─── POST /api/provision/trigger-update ──────────────────────────────────────
 //
-// Self-hosted pod update trigger. CP calls this instead of SSH.
-// Runs `./synap update --version <tag>` in the background.
-// Auth: CP-signed JWT (same as other provision endpoints).
+// Pod update trigger. CP calls this with a signed JWT containing the target
+// version. The backend spawns a detached `updater` container (docker:cli)
+// that pulls images, runs migrations, restarts services, and calls back
+// to the CP with the result. The updater survives the backend restart.
 //
-// Body (from JWT claims): { targetVersion: string, updateId?: string }
+// Auth: CP-signed ES256 JWT (verified via JWKS).
+// Replay protection: nonce in JWT, rejected if already seen.
+// Rate limiting: rejects if an update is already in progress.
+//
 // Returns immediately: { accepted: true } — update runs asynchronously.
+
+// Nonce cache for replay protection (10 min TTL, matching JWT expiry)
+const seenNonces = new Map<string, number>();
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [nonce, ts] of seenNonces) {
+    if (ts < cutoff) seenNonces.delete(nonce);
+  }
+}, 60_000);
+
+// In-memory update lock
+let updateInProgress = false;
 
 provisionRouter.post("/trigger-update", async (c) => {
   const authHeader = c.req.header("Authorization") ?? "";
@@ -1361,6 +1377,9 @@ provisionRouter.post("/trigger-update", async (c) => {
     targetVersion?: string;
     updateId?: string;
     podId?: string;
+    nonce?: string;
+    callbackUrl?: string;
+    callbackJwt?: string;
   }>(token, cpUrl);
   if (!payload || payload.type !== "provision") {
     return c.json({ error: "Invalid or expired JWT" }, 401);
@@ -1371,25 +1390,70 @@ provisionRouter.post("/trigger-update", async (c) => {
     return c.json({ error: "targetVersion is required in JWT claims" }, 400);
   }
 
+  // Replay protection: reject seen nonces
+  if (payload.nonce) {
+    if (seenNonces.has(payload.nonce)) {
+      return c.json(
+        { error: "Duplicate nonce — update already triggered" },
+        409
+      );
+    }
+    seenNonces.set(payload.nonce, Date.now());
+  }
+
+  // Rate limiting: reject if update already running
+  if (updateInProgress) {
+    return c.json({ error: "Update already in progress" }, 409);
+  }
+
   logger.info(
-    { targetVersion, updateId: payload.updateId },
+    { targetVersion, updateId: payload.updateId, nonce: payload.nonce },
     "Received update trigger from CP"
   );
 
-  // Run the update asynchronously — don't block the response.
-  // Uses the pod's own `synap` CLI which handles pull, migrate, restart, health.
-  const { exec } = await import("child_process");
-  exec(
-    `cd /opt/synap/deploy && ./synap update --version ${targetVersion.replace(/[^a-zA-Z0-9._-]/g, "")} 2>&1 | tee /tmp/synap-update.log`,
-    { timeout: 600_000 }, // 10 min max
-    (err, _stdout, stderr) => {
-      if (err) {
-        logger.error({ err: err.message, stderr }, "Self-update failed");
-      } else {
-        logger.info({ targetVersion }, "Self-update completed");
-      }
-    }
-  );
+  // Sanitize version tag (defense in depth — JWT is trusted, but shell injection is bad)
+  const sanitizedVersion = targetVersion.replace(/[^a-zA-Z0-9._-]/g, "");
 
-  return c.json({ accepted: true, targetVersion });
+  // Spawn detached updater container via Docker socket.
+  // The updater runs update-pod.sh which: pulls, migrates, restarts, health-checks,
+  // and calls back to CP with the result. It survives the backend container restart.
+  const { exec } = await import("child_process");
+
+  const callbackUrl = payload.callbackUrl || "";
+  const callbackJwt = payload.callbackJwt || "";
+  const updateId = payload.updateId || "";
+
+  // Use docker compose with the updater profile to spawn a detached one-shot container
+  const cmd = [
+    "docker compose",
+    "-f /opt/synap/deploy/docker-compose.yml",
+    "--profile updater",
+    "run -d --rm updater",
+    sanitizedVersion,
+    updateId,
+    `"${callbackUrl}"`,
+    `"${callbackJwt}"`,
+  ].join(" ");
+
+  updateInProgress = true;
+  exec(cmd, { timeout: 30_000 }, (err, stdout, stderr) => {
+    if (err) {
+      logger.error(
+        { err: err.message, stderr },
+        "Failed to spawn updater container"
+      );
+      updateInProgress = false;
+    } else {
+      logger.info({ stdout: stdout.trim() }, "Updater container spawned");
+      // Release the lock after 15 min max (safety net if callback never fires)
+      setTimeout(
+        () => {
+          updateInProgress = false;
+        },
+        15 * 60 * 1000
+      );
+    }
+  });
+
+  return c.json({ accepted: true, targetVersion, updateId });
 });
