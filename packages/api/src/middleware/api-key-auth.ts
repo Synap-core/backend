@@ -4,7 +4,7 @@
  * Validates API keys and adds authentication context to tRPC procedures.
  */
 
-import { middleware } from "../trpc.js";
+import { t } from "../init-trpc.js";
 import { TRPCError } from "@trpc/server";
 import { apiKeyService } from "../services/api-keys.js";
 import { createLogger } from "@synap-core/core";
@@ -41,7 +41,7 @@ function hasScope(keyScopes: string[], requiredScope: string): boolean {
  *
  * Validates Bearer token and enriches context with authentication data.
  */
-export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
+export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
   // Short-circuit: if context is already authenticated with scopes (hub protocol server-side call),
   // skip Bearer token extraction — auth already done at the Hono middleware layer.
   if (ctx.authenticated && "scopes" in ctx && "apiKeyId" in ctx) {
@@ -152,7 +152,7 @@ export const apiKeyMiddleware = middleware(async ({ ctx, next, path }) => {
  * Create a procedure that requires specific scopes
  */
 export function createScopedProcedure(requiredScopes: string[]) {
-  return middleware(async ({ ctx, next, path }) => {
+  return t.middleware(async ({ ctx, next, path }) => {
     // Type guard to check if context has scopes
     if (!("scopes" in ctx) || !Array.isArray(ctx.scopes)) {
       throw new TRPCError({

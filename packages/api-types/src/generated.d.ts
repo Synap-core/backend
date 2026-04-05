@@ -3340,13 +3340,13 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				id: string;
+				message: string | null;
 				createdAt: Date;
 				documentId: string;
 				version: number;
 				content: string;
 				author: string;
 				authorId: string;
-				message: string | null;
 			};
 			meta: object;
 		}>;
@@ -3610,8 +3610,8 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				workspaceId: string;
 				id: string;
-				data: unknown;
 				type: string;
+				data: unknown;
 				updatedAt: Date;
 				createdAt: Date;
 				timestamp: Date;
@@ -6674,13 +6674,13 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				versions: {
 					id: string;
+					message: string | null;
 					createdAt: Date;
 					documentId: string;
 					version: number;
 					content: string;
 					author: string;
 					authorId: string;
-					message: string | null;
 				}[];
 				latest: {
 					currentVersion: number;
@@ -6707,13 +6707,13 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				version: {
 					id: string;
+					message: string | null;
 					createdAt: Date;
 					documentId: string;
 					version: number;
 					content: string;
 					author: string;
 					authorId: string;
-					message: string | null;
 				};
 				metadata: {
 					size: number;

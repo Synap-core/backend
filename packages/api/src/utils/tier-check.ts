@@ -15,7 +15,7 @@
 
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
-import { middleware } from "../trpc.js";
+import { t } from "../init-trpc.js";
 import { getDb } from "@synap/database";
 
 const logger = createLogger({ module: "tier-check" });
@@ -133,7 +133,7 @@ async function fetchPackageRequiredTier(slug: string): Promise<string | null> {
  *   export const advancedViewProcedure = protectedProcedure.use(requireTier("pro"));
  */
 export function requireTier(minTier: keyof typeof TIER_RANK) {
-  return middleware(async (opts) => {
+  return t.middleware(async (opts) => {
     const { ctx, next } = opts;
     const cpUrl = config.server.controlPlaneUrl;
 

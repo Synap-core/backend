@@ -15,13 +15,13 @@
 
 import { TRPCError } from "@trpc/server";
 import { config, createLogger } from "@synap-core/core";
-import { middleware } from "../trpc.js";
+import { t } from "../init-trpc.js";
 import { db, eq } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 
 const logger = createLogger({ module: "trial-guard" });
 
-export const trialGuardMiddleware = middleware(async (opts) => {
+export const trialGuardMiddleware = t.middleware(async (opts) => {
   const { ctx, next } = opts;
 
   // Only enforce on shared pods

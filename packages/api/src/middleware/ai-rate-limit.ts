@@ -8,7 +8,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { middleware } from "../trpc.js";
+import { t } from "../init-trpc.js";
 
 // Simple in-memory rate limit store
 // In production, replace with Redis for distributed systems
@@ -86,7 +86,7 @@ function checkRateLimit(key: string): {
  * });
  * ```
  */
-export const aiRateLimitMiddleware = middleware(async (opts) => {
+export const aiRateLimitMiddleware = t.middleware(async (opts) => {
   const { ctx } = opts;
 
   // Generate rate limit key (prefer user ID over IP)

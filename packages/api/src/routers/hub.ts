@@ -6,12 +6,8 @@
  */
 
 import { z } from "zod";
-import {
-  router,
-  protectedProcedure,
-  publicProcedure,
-  middleware,
-} from "../trpc.js";
+import { router, protectedProcedure, publicProcedure } from "../trpc.js";
+import { t } from "../init-trpc.js";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import {
@@ -77,7 +73,7 @@ const SubmitInsightInputSchema = z.object({
 //   limit: z.number().int().min(1).max(100).default(10),
 // });
 
-const hubTokenMiddleware = middleware(async (opts) => {
+const hubTokenMiddleware = t.middleware(async (opts) => {
   const { input, ctx } = opts;
   const token = (input as { token?: string })?.token;
   if (!token) {

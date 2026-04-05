@@ -9,9 +9,8 @@
  * Commands publish events → Workers validate permissions → DB operations
  */
 
-import { initTRPC, TRPCError } from "@trpc/server";
-import superjson from "superjson";
-import type { Context } from "./context.js";
+import { TRPCError } from "@trpc/server";
+import { t } from "./init-trpc.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and, drizzleSql, inArray } from "@synap/database";
@@ -25,41 +24,6 @@ import {
 } from "./utils/error-mappers.js";
 
 const logger = createLogger({ module: "trpc" });
-
-const isDev = process.env.NODE_ENV !== "production";
-
-const t = initTRPC.context<Context>().create({
-  transformer: superjson,
-
-  /**
-   * Global error formatter — runs after every procedure error.
-   * Responsible for:
-   *   1. Logging all errors (once, in one place)
-   *   2. Stripping internal error messages in production
-   */
-  errorFormatter({ shape, error, type, path }) {
-    const isInternal = shape.data.code === "INTERNAL_SERVER_ERROR";
-
-    // Log server errors with full context
-    if (isInternal) {
-      logger.error(
-        { err: error.cause ?? error, type, path, code: shape.data.code },
-        "Internal server error in tRPC procedure"
-      );
-    } else {
-      logger.debug(
-        { type, path, code: shape.data.code, message: shape.message },
-        "tRPC procedure error"
-      );
-    }
-
-    return {
-      ...shape,
-      message:
-        isInternal && !isDev ? "An unexpected error occurred" : shape.message,
-    };
-  },
-});
 
 /**
  * Base error-catching middleware.
@@ -99,11 +63,12 @@ const errorCatchingMiddleware = t.middleware(async ({ next }) => {
     // Truly unexpected — log will happen in errorFormatter
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message: isDev
-        ? error instanceof Error
-          ? error.message
-          : String(error)
-        : "An unexpected error occurred",
+      message:
+        process.env.NODE_ENV !== "production"
+          ? error instanceof Error
+            ? error.message
+            : String(error)
+          : "An unexpected error occurred",
       cause: error,
     });
   }
@@ -236,6 +201,7 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
   return opts.next({ ctx });
 });
 
+export { t };
 export const router = t.router as typeof t.router;
 export const middleware = t.middleware as typeof t.middleware;
 
