@@ -168,7 +168,8 @@ app.use("*", async (c, next) => {
       .some((h) => h.trim() === "authorization");
 
   const ALLOW_METHODS = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
-  const ALLOW_HEADERS = "Content-Type, Authorization, Cookie, X-Workspace-Id";
+  const ALLOW_HEADERS =
+    "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Session-Token";
   const EXPOSE_HEADERS = "Content-Length, X-Request-Id, Set-Cookie";
 
   if (isApiKeyMode) {
