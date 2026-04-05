@@ -18,6 +18,7 @@ import {
   and,
   or,
   isNull,
+  inArray,
   getDb,
   ProfileResolutionService,
   EventRepository,
@@ -473,6 +474,9 @@ export const entitiesRouter = router({
     .input(
       z.object({
         profileSlug: z.string().optional(),
+        /** When true and profileSlug is set, also return entities of child profiles.
+         *  e.g. profileSlug='person' + includeDescendants=true → returns person + contact + any custom children. */
+        includeDescendants: z.boolean().optional().default(false),
         limit: z.number().min(1).max(100).default(50),
         /** When true, only return global entities */
         globalOnly: z.boolean().optional().default(false),
@@ -489,11 +493,27 @@ export const entitiesRouter = router({
       const conditions: any[] = [userCondition, isNull(entities.deletedAt)];
 
       if (input.profileSlug) {
-        conditions.push(eq(entities.type, input.profileSlug));
-
-        // Check if this profile type is pod-wide — if so, skip workspace filter
+        // Resolve profile slugs to query (optionally including child profiles)
         const database = await getDb();
         const profileService = new ProfileResolutionService(database);
+
+        let profileSlugs = [input.profileSlug];
+        if (input.includeDescendants) {
+          const descendants = await profileService.getDescendantSlugs(
+            input.profileSlug,
+            ctx.workspaceId
+          );
+          profileSlugs = [input.profileSlug, ...descendants];
+        }
+
+        // Use inArray for multiple slugs, eq for single (simpler query plan)
+        if (profileSlugs.length === 1) {
+          conditions.push(eq(entities.type, profileSlugs[0]));
+        } else {
+          conditions.push(inArray(entities.type, profileSlugs));
+        }
+
+        // Check if this profile type is pod-wide — if so, skip workspace filter
         const entityScope = await profileService.getEntityScope(
           input.profileSlug,
           ctx.workspaceId

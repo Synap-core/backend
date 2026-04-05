@@ -17,6 +17,7 @@ export interface EffectiveProperty extends PropertyDef {
 }
 
 export class ProfileResolutionService {
+  private _db: PostgresJsDatabase<typeof import("../schema/index.js")>;
   private profileRepo: ProfileRepository;
   private profilePropertyRepo: ProfilePropertyRepository;
   private propertyDefRepo: PropertyDefRepository;
@@ -29,6 +30,7 @@ export class ProfileResolutionService {
   private static CACHE_TTL = 60_000;
 
   constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
+    this._db = db;
     this.profileRepo = new ProfileRepository(db);
     this.profilePropertyRepo = new ProfilePropertyRepository(db);
     this.propertyDefRepo = new PropertyDefRepository(db);
@@ -131,6 +133,60 @@ export class ProfileResolutionService {
    */
   async getProfileHierarchy(profileId: string): Promise<Profile[]> {
     return this.profileRepo.getHierarchy(profileId);
+  }
+
+  /**
+   * Get all descendant profile slugs for a given profile slug.
+   * Walks DOWN the profile tree (parent → children → grandchildren).
+   * Returns only the descendant slugs (not the parent itself).
+   *
+   * Uses a single query to fetch all profiles and walks the tree in-memory
+   * (profiles are bounded in number — typically <50 per pod).
+   */
+  async getDescendantSlugs(
+    parentSlug: string,
+    _workspaceId?: string
+  ): Promise<string[]> {
+    // Fetch all profiles (bounded set — typically <50 per pod)
+    const allProfiles = await this._db.query.profiles.findMany({
+      columns: { id: true, slug: true, parentProfileId: true },
+    });
+
+    // Build parent → children map
+    const childrenOf = new Map<string, string[]>();
+    const slugById = new Map<string, string>();
+    const idBySlug = new Map<string, string>();
+
+    for (const p of allProfiles) {
+      slugById.set(p.id, p.slug);
+      idBySlug.set(p.slug, p.id);
+      if (p.parentProfileId) {
+        const children = childrenOf.get(p.parentProfileId) ?? [];
+        children.push(p.id);
+        childrenOf.set(p.parentProfileId, children);
+      }
+    }
+
+    // BFS from the parent slug
+    const parentId = idBySlug.get(parentSlug);
+    if (!parentId) return [];
+
+    const result: string[] = [];
+    const queue = [parentId];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const children = childrenOf.get(currentId) ?? [];
+      for (const childId of children) {
+        const childSlug = slugById.get(childId);
+        if (childSlug) {
+          result.push(childSlug);
+          queue.push(childId); // Continue BFS for grandchildren
+        }
+      }
+    }
+
+    return result;
   }
 
   /**
