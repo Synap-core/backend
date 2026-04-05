@@ -496,8 +496,15 @@ app.post("/api/handshake", async (c) => {
           credentials: {
             password: {
               config: {
-                // Random password — this user authenticates via handshake, not password
-                password: crypto.randomBytes(32).toString("hex"),
+                // Deterministic password derived from pod secret + email
+                // Used by the handshake to create a login session via self-service flow
+                password: crypto
+                  .createHmac(
+                    "sha256",
+                    process.env.JWT_SECRET || "synap-pod-default"
+                  )
+                  .update(email)
+                  .digest("hex"),
               },
             },
           },
@@ -526,26 +533,69 @@ app.post("/api/handshake", async (c) => {
       apiLogger.info({ email, identityId }, "Created Kratos identity");
     }
 
-    // 3. Create a Kratos session for the identity via admin API
-    const sessionResp = await fetch(
-      `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      }
-    );
+    // 3. Create a Kratos session via self-service login flow
+    //    (admin session creation is not available in Kratos OSS v1.3+)
+    const kratosPublicUrl =
+      process.env.KRATOS_PUBLIC_URL || "http://kratos:4433";
 
-    if (!sessionResp.ok) {
-      const errBody = await sessionResp.text();
+    // Derive the same deterministic password used at identity creation
+    const derivedPassword = crypto
+      .createHmac("sha256", process.env.JWT_SECRET || "synap-pod-default")
+      .update(email)
+      .digest("hex");
+
+    // For existing users created with a random password (before this fix),
+    // update their password via admin API so login works
+    await fetch(`${kratosAdminUrl}/admin/identities/${identityId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        schema_id: "default",
+        traits: { email, ...(name ? { name } : {}) },
+        credentials: {
+          password: { config: { password: derivedPassword } },
+        },
+        state: "active",
+      }),
+    }).catch(() => {
+      // Non-fatal — password may already be correct for new users
+    });
+
+    // Step 3a: Initiate a native (API) login flow
+    const flowResp = await fetch(`${kratosPublicUrl}/self-service/login/api`);
+    if (!flowResp.ok) {
       apiLogger.error(
-        { status: sessionResp.status, body: errBody },
-        "Failed to create Kratos session"
+        { status: flowResp.status },
+        "Failed to create Kratos login flow"
+      );
+      return c.json({ error: "Failed to create login flow" }, 500);
+    }
+    const flow = (await flowResp.json()) as {
+      id: string;
+      ui: { action: string };
+    };
+
+    // Step 3b: Submit login credentials
+    const loginResp = await fetch(flow.ui.action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        method: "password",
+        identifier: email,
+        password: derivedPassword,
+      }),
+    });
+
+    if (!loginResp.ok) {
+      const errBody = await loginResp.text();
+      apiLogger.error(
+        { status: loginResp.status, body: errBody.substring(0, 500) },
+        "Failed to create Kratos session via login"
       );
       return c.json({ error: "Failed to create session" }, 500);
     }
 
-    const sessionData = (await sessionResp.json()) as {
+    const sessionData = (await loginResp.json()) as {
       session?: { id: string; active: boolean };
       session_token?: string;
     };
