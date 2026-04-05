@@ -53,11 +53,34 @@ PREV_VERSION=$(grep "^BACKEND_VERSION=" "${DEPLOY_DIR}/.env" 2>/dev/null | cut -
 log "Previous version: ${PREV_VERSION}"
 
 # ─── Step 1: Pull images ───
-log "Pulling images..."
-if ! $COMPOSE pull backend realtime backend-migrate 2>&1 | tee -a "$LOG"; then
-  log "ERROR: Image pull failed"
-  report "failed" "Image pull failed"
-  exit 1
+# Try pulling from the CP registry mirror (registry.synap.live) first.
+# This avoids GHCR rate limits during fleet-wide rolling updates since the mirror
+# caches images after the first pull. Falls back to GHCR on any failure.
+REGISTRY_MIRROR="${REGISTRY_MIRROR:-registry.synap.live}"
+MIRROR_USED=false
+
+if [ -n "$REGISTRY_MIRROR" ]; then
+  log "Attempting pull from registry mirror: ${REGISTRY_MIRROR}..."
+  ORIG_IMAGE=$(grep -m1 'image:.*ghcr.io' "${DEPLOY_DIR}/docker-compose.yml" | sed 's/.*image: *//' | sed "s/\${BACKEND_VERSION:-latest}/${VERSION}/g" | sed "s/\${GITHUB_REPOSITORY:-synap-core\/backend}/synap-core\/backend/g")
+  MIRROR_IMAGE="${REGISTRY_MIRROR}/${ORIG_IMAGE#ghcr.io/}"
+
+  if docker pull "$MIRROR_IMAGE" 2>&1 | tee -a "$LOG"; then
+    # Tag the mirror image as the original so docker compose sees it
+    docker tag "$MIRROR_IMAGE" "$ORIG_IMAGE" 2>&1 | tee -a "$LOG"
+    MIRROR_USED=true
+    log "Mirror pull succeeded"
+  else
+    log "WARN: Mirror pull failed, falling back to GHCR"
+  fi
+fi
+
+if [ "$MIRROR_USED" = "false" ]; then
+  log "Pulling images from GHCR..."
+  if ! $COMPOSE pull backend realtime backend-migrate 2>&1 | tee -a "$LOG"; then
+    log "ERROR: Image pull failed"
+    report "failed" "Image pull failed"
+    exit 1
+  fi
 fi
 
 # ─── Step 2: Update .env version ───

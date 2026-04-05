@@ -115,6 +115,10 @@ const COMMANDS = {
     script: "configure-pod.sh",
     args: (p) => [p.callbackUrl || "", p.callbackJwt || "", ...(p.envVars || []), ...(p.profiles || []).map((pr) => `--profile ${pr}`)],
   },
+  exec: {
+    script: null, // special case — exec directly via docker exec
+    args: (p) => [p.container || "backend", p.command || "echo ok"],
+  },
 };
 
 // ── HTTP Server ──
@@ -152,11 +156,51 @@ http
         usedNonces.set(payload.nonce, Date.now());
       }
       if (!COMMANDS[payload.type]) return respond(res, 400, { error: `unknown type: ${payload.type}` });
+
+      // exec requires explicit allowExec claim in JWT
+      if (payload.type === "exec" && !payload.allowExec) {
+        return respond(res, 403, { error: "exec requires allowExec claim" });
+      }
+
       if (activeOps.has(payload.type)) return respond(res, 429, { error: "busy" });
 
       activeOps.add(payload.type);
       const cmd = COMMANDS[payload.type];
       log(`${payload.type} accepted`);
+
+      // exec: run docker exec and return output synchronously
+      if (payload.type === "exec") {
+        const [container, command] = cmd.args(payload);
+        execFile("docker", ["exec", container, "sh", "-c", command], { timeout: 60_000 }, (err, stdout, stderr) => {
+          activeOps.delete(payload.type);
+          const output = (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
+          if (err) log(`exec failed: ${err.message}`);
+          else log(`exec done`);
+
+          // Callback with output if callbackUrl is provided
+          if (payload.callbackUrl && payload.callbackJwt) {
+            const body = JSON.stringify({
+              type: "exec",
+              success: !err,
+              output: output.slice(0, 50_000),
+              error: err ? err.message : null,
+            });
+            const cbReq = https.request(payload.callbackUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${payload.callbackJwt}`,
+                "Content-Length": Buffer.byteLength(body),
+              },
+              timeout: 10_000,
+            });
+            cbReq.on("error", (e) => log(`exec callback failed: ${e.message}`));
+            cbReq.end(body);
+          }
+        });
+
+        return respond(res, 202, { accepted: true, type: "exec" });
+      }
 
       execFile("/bin/sh", [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)], { cwd: DEPLOY_DIR, timeout: 600_000 }, (err) => {
         activeOps.delete(payload.type);
