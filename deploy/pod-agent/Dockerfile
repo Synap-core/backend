@@ -1,14 +1,10 @@
 FROM node:20-alpine
 
-WORKDIR /app
+# Docker CLI + compose plugin + wget (for callbacks in shell scripts)
+RUN apk add --no-cache docker-cli docker-cli-compose wget
 
-# No npm dependencies — just stdlib
+WORKDIR /app
 COPY server.js .
 
-# Non-root user (needs Docker socket access via group)
-# The docker group GID is mapped at runtime via --group-add
-USER node
-
 EXPOSE 4002
-
 CMD ["node", "server.js"]
