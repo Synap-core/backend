@@ -19,6 +19,8 @@ export type {
   WorkspaceSidebarSection,
   WorkspaceLayoutConfig,
   McpServerConfig,
+  // Workspace definition (used by createFromDefinition — apps, presets, packages)
+  WorkspaceDefinitionInput,
 } from "@synap/database";
 
 // Derived types for API convenience

@@ -56,10 +56,16 @@ export type AutomationStepStatus =
 export type AutomationNodeType =
   | "trigger"
   | "command"
+  | "query"
   | "condition"
   | "delay"
   | "output"
-  | "loop";
+  | "loop"
+  | "transform"
+  | "fetch"
+  | "switch"
+  | "skill"
+  | "sub_automation";
 
 export type AutomationOutputType =
   | "notification"
@@ -67,6 +73,24 @@ export type AutomationOutputType =
   | "entity_update"
   | "webhook"
   | "channel_message";
+
+// ── API input types ─────────────────────────────────────────────────────────
+
+/** Input for creating an automation via the tRPC API. */
+export interface CreateAutomationInput {
+  name: string;
+  description?: string;
+  triggerType: AutomationTriggerType;
+  triggerConfig: Record<string, unknown>;
+  flowDefinition: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+  };
+  status?: AutomationStatus;
+  metadata?: Record<string, unknown>;
+  agentUserId?: string;
+  source?: "user" | "ai" | "intelligence" | "system" | "agent";
+}
 
 // ── Execution context (chain tracking) ──────────────────────────────────────
 

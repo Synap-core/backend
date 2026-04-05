@@ -111,9 +111,17 @@ const COMMANDS = {
     script: "restore-archive-pod.sh",
     args: (p) => [p.archiveUrl || "", p.callbackUrl || "", p.callbackJwt || ""],
   },
+  archive: {
+    script: "archive-pod.sh",
+    args: (p) => [p.presignedUploadUrl || "", p.callbackUrl || "", p.callbackJwt || ""],
+  },
   configure: {
     script: "configure-pod.sh",
     args: (p) => [p.callbackUrl || "", p.callbackJwt || "", ...(p.envVars || []), ...(p.profiles || []).map((pr) => `--profile ${pr}`)],
+  },
+  "agent-update": {
+    script: "update-agent.sh",
+    args: (p) => [p.callbackUrl || "", p.callbackJwt || ""],
   },
   exec: {
     script: null, // special case — exec directly via docker exec
