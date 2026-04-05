@@ -16,6 +16,7 @@ export default [
       "**/*.generated.ts",
       "**/*.generated.d.ts",
       "**/*.d.ts", // Declaration files (auto-generated, not hand-written)
+      "**/deploy/pod-agent/**", // Standalone Node.js agent (not part of TS build)
     ],
   },
   js.configs.recommended,
