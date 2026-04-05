@@ -60,8 +60,6 @@ services:
       INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
       INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
     volumes:
-      # Docker socket for spawning the updater one-shot container
-      - /var/run/docker.sock:/var/run/docker.sock
       # Deploy directory (read-only) so the backend can reference compose file path
       - .:/opt/synap/deploy:ro
     depends_on:
@@ -445,7 +443,39 @@ services:
       - monitoring
 
   # ============================================================================
-  # POD SELF-UPDATER (one-shot, spawned by trigger-update handler)
+  # POD AGENT (always-running command receiver for CP-initiated operations)
+  # ============================================================================
+  pod-agent:
+    build:
+      context: ./pod-agent
+      dockerfile: Dockerfile
+    image: synap-pod-agent:latest
+    restart: always
+    environment:
+      POD_AGENT_PORT: 4002
+      DEPLOY_DIR: /deploy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/deploy:rw
+    ports:
+      - "4002:4002"
+    networks:
+      - synap-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:4002/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================================
+  # POD SELF-UPDATER (one-shot, spawned by update-pod.sh via pod-agent)
   # ============================================================================
   updater:
     image: docker:cli

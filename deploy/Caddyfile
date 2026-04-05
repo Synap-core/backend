@@ -60,6 +60,11 @@
         reverse_proxy minio:9001
     }
 
+    # Pod Agent (CP-initiated commands: update, suspend, restore, configure)
+    handle /api/pod-agent/* {
+        reverse_proxy pod-agent:4002
+    }
+
     # Health check
     handle /health {
         reverse_proxy backend:4000
