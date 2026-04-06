@@ -492,6 +492,8 @@ export const entitiesRouter = router({
          *  e.g. profileSlug='person' + includeDescendants=true → returns person + contact + any custom children. */
         includeDescendants: z.boolean().optional().default(false),
         limit: z.number().min(1).max(100).default(50),
+        /** Skip the first N results (for pagination). */
+        offset: z.number().min(0).default(0),
         /** When true, only return global entities */
         globalOnly: z.boolean().optional().default(false),
       })
@@ -563,9 +565,13 @@ export const entitiesRouter = router({
         where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
+        offset: input.offset,
       });
 
-      return { entities: results.map(toApiEntity) };
+      return {
+        entities: results.map(toApiEntity),
+        hasMore: results.length === input.limit,
+      };
     }),
 
   /**
