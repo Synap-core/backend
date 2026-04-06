@@ -11,7 +11,6 @@ import type { Context } from "./context.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "trpc" });
-const isDev = process.env.NODE_ENV !== "production";
 
 export const t = initTRPC.context<Context>().create({
   transformer: superjson,
