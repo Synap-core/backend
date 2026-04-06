@@ -1113,7 +1113,6 @@ export const channelsRouter = router({
           dataPodUrl: process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
           dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
           // Billing channel: Browser chat is included in subscription
-          billingChannel: "browser",
         });
 
         for await (const chunk of stream) {
@@ -1268,7 +1267,6 @@ export const channelsRouter = router({
             dataPodUrl:
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
             dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
-            billingChannel: "browser",
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down

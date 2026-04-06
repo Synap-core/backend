@@ -45,6 +45,14 @@ const RATE_LIMITS = {
 const rateLimiter = new Map<string, { count: number; resetAt: number }>();
 
 /**
+ * Debounce tracking for lastUsedAt updates.
+ * Stores the timestamp (epoch ms) of the last DB write per key ID.
+ * Updates are skipped if the last write was less than 60 seconds ago.
+ */
+const lastUsedAtWriteCache = new Map<string, number>();
+const LAST_USED_AT_DEBOUNCE_MS = 60_000; // 1 minute
+
+/**
  * API Key Service
  */
 export class ApiKeyService {
@@ -161,14 +169,23 @@ export class ApiKeyService {
     for (const candidate of candidates) {
       const isValid = await bcrypt.compare(apiKey, candidate.keyHash);
       if (isValid) {
-        // 4. Update last_used_at and usage_count
-        await db
-          .update(apiKeys)
-          .set({
-            lastUsedAt: new Date(),
-            usageCount: sql`${apiKeys.usageCount} + 1`,
-          })
-          .where(eq(apiKeys.id, candidate.id));
+        // 4. Update last_used_at and usage_count (debounced — at most once per minute)
+        const now = Date.now();
+        const lastWrite = lastUsedAtWriteCache.get(candidate.id) ?? 0;
+
+        if (now - lastWrite >= LAST_USED_AT_DEBOUNCE_MS) {
+          lastUsedAtWriteCache.set(candidate.id, now);
+          // Fire-and-forget — don't block the request on a usage counter update
+          db.update(apiKeys)
+            .set({
+              lastUsedAt: new Date(),
+              usageCount: sql`${apiKeys.usageCount} + 1`,
+            })
+            .where(eq(apiKeys.id, candidate.id))
+            .catch(() => {
+              // Non-fatal — usage tracking is best-effort
+            });
+        }
 
         return candidate;
       }

@@ -41,6 +41,7 @@ import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitSideEffects } from "@synap/jobs";
 import { notifications } from "@synap/database/schema";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -162,7 +163,7 @@ export const proposalsRouter = router({
    */
   list: protectedProcedure
     .input(
-      z.object({
+      paginatedInput.extend({
         workspaceId: z.string().optional(),
         targetType: z
           .enum(["document", "entity", "whiteboard", "view", "profile"])
@@ -173,7 +174,6 @@ export const proposalsRouter = router({
         status: z
           .enum(["pending", "validated", "rejected", "all"])
           .default("pending"),
-        limit: z.number().default(50),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -232,20 +232,28 @@ export const proposalsRouter = router({
         }
       }
 
-      const items = await db.query.proposals.findMany({
+      const rows = await db.query.proposals.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
         orderBy: desc(proposals.createdAt),
-        limit: input.limit,
+        limit: input.limit + 1,
+        offset: input.offset,
       });
 
       // Enrich each proposal with a pre-formed `request` object so the
       // frontend doesn't need to reconstruct it from the JSONB data column.
-      const enriched = items.map((row) => ({
+      const enriched = rows.map((row) => ({
         ...row,
         request: buildRequestFromProposal(row),
       }));
 
-      return { proposals: enriched };
+      const { items, pagination } = buildPaginatedResponse(enriched, input);
+
+      return {
+        items,
+        pagination,
+        /** @deprecated Use `items` instead */
+        proposals: items,
+      };
     }),
 
   /**

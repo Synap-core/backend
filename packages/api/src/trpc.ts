@@ -22,6 +22,7 @@ import {
   mapDbErrorToTRPC,
   statusCodeToTRPCCode,
 } from "./utils/error-mappers.js";
+import { auditLogMiddleware } from "./middleware/audit-log.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -85,27 +86,29 @@ export const publicProcedure = t.procedure.use(errorCatchingMiddleware);
  *
  * Validates Ory Kratos session. Authorization handled by permissionValidator worker.
  */
-export const protectedProcedure = publicProcedure.use(async (opts) => {
-  const { ctx } = opts;
+export const protectedProcedure = publicProcedure
+  .use(async (opts) => {
+    const { ctx } = opts;
 
-  if (!ctx.authenticated) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Authentication required",
+    if (!ctx.authenticated) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Authentication required",
+      });
+    }
+
+    const userId = requireUserId(ctx.userId);
+
+    logger.debug({ userId }, "Protected procedure - authentication validated");
+
+    return opts.next({
+      ctx: {
+        ...ctx,
+        userId, // Ensure userId is always a string in protected procedures
+      },
     });
-  }
-
-  const userId = requireUserId(ctx.userId);
-
-  logger.debug({ userId }, "Protected procedure - authentication validated");
-
-  return opts.next({
-    ctx: {
-      ...ctx,
-      userId, // Ensure userId is always a string in protected procedures
-    },
-  });
-});
+  })
+  .use(auditLogMiddleware);
 
 /**
  * Workspace-scoped procedure (auth + workspace required)

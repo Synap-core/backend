@@ -17,11 +17,13 @@ import {
   EventRepository,
   EntityRepository,
   sql,
+  drizzleSql,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 export const projectsRouter = router({
   /**
@@ -29,11 +31,9 @@ export const projectsRouter = router({
    */
   list: workspaceProcedure
     .input(
-      z
-        .object({
+      paginatedInput
+        .extend({
           status: z.enum(["active", "archived", "completed"]).optional(),
-          limit: z.number().min(1).max(100).default(50),
-          offset: z.number().min(0).default(0),
         })
         .optional()
     )
@@ -55,28 +55,35 @@ export const projectsRouter = router({
         });
       }
 
+      const limit = input?.limit ?? 50;
+      const offset = input?.offset ?? 0;
+
       const conditions: any[] = [
         eq(entities.workspaceId, ctx.workspaceId),
         eq(entities.userId, ctx.userId),
         eq(entities.profileId, projectProfile.id),
       ];
 
+      // Filter by status in SQL using JSONB operator (was post-query filtering)
+      if (input?.status) {
+        conditions.push(
+          drizzleSql`${entities.properties}->>'status' = ${input.status}`
+        );
+      }
+
       const results = await db.query.entities.findMany({
         where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
-        limit: input?.limit || 50,
-        offset: input?.offset || 0,
+        limit: limit + 1,
+        offset,
       });
 
-      let filtered = results;
-      if (input?.status) {
-        filtered = results.filter((entity) => {
-          const props = entity.properties as Record<string, unknown>;
-          return props?.status === input.status;
-        });
-      }
+      const { items: resultItems, pagination } = buildPaginatedResponse(
+        results,
+        { limit, offset }
+      );
 
-      const projects = filtered.map((entity) => ({
+      const projects = resultItems.map((entity) => ({
         id: entity.id,
         name: entity.title || "Untitled",
         description: entity.preview || null,
@@ -99,7 +106,12 @@ export const projectsRouter = router({
         updatedAt: entity.updatedAt,
       }));
 
-      return { projects };
+      return {
+        items: projects,
+        pagination,
+        /** @deprecated Use `items` instead */
+        projects,
+      };
     }),
 
   /**

@@ -208,6 +208,24 @@ app.use("*", rateLimitMiddleware); // 500 req/15min per IP
 app.use("*", secureHeaders()); // Hono built-in security headers
 apiLogger.info("Security middleware registered");
 
+// HTTP Cache Headers — allow short browser caching for GET (query) requests,
+// no caching for POST (mutation) requests. Simple single-instance optimization.
+app.use("*", async (c, next) => {
+  await next();
+  if (c.req.method === "GET") {
+    // Allow private (browser-only) caching for 60 seconds on read requests.
+    // stale-while-revalidate lets the browser use a stale response while fetching fresh data.
+    if (!c.res.headers.has("Cache-Control")) {
+      c.header(
+        "Cache-Control",
+        "private, max-age=60, stale-while-revalidate=30"
+      );
+    }
+  } else {
+    c.header("Cache-Control", "no-store");
+  }
+});
+
 // Logging
 app.use("*", logger());
 

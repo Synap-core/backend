@@ -34,6 +34,7 @@ import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 /** Standard entity shape for API responses */
 function toApiEntity(entity: any): Entity {
@@ -486,21 +487,13 @@ export const entitiesRouter = router({
    */
   list: workspaceProcedure
     .input(
-      z.object({
+      paginatedInput.extend({
         profileSlug: z.string().optional(),
         /** When true and profileSlug is set, also return entities of child profiles.
          *  e.g. profileSlug='person' + includeDescendants=true → returns person + contact + any custom children. */
         includeDescendants: z.boolean().optional().default(false),
-        limit: z.number().min(1).max(100).default(50),
-        /** Skip the first N results (for pagination). */
-        offset: z.number().min(0).default(0),
         /** When true, only return global entities */
         globalOnly: z.boolean().optional().default(false),
-      })
-    )
-    .output(
-      z.object({
-        entities: z.array(EntitySchema),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -564,13 +557,22 @@ export const entitiesRouter = router({
       const results = await db.query.entities.findMany({
         where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
-        limit: input.limit,
+        limit: input.limit + 1,
         offset: input.offset,
       });
 
+      const { items, pagination } = buildPaginatedResponse(
+        results.map(toApiEntity),
+        input
+      );
+
       return {
-        entities: results.map(toApiEntity),
-        hasMore: results.length === input.limit,
+        items,
+        pagination,
+        /** @deprecated Use `items` instead */
+        entities: items,
+        /** @deprecated Use `pagination.hasMore` instead */
+        hasMore: pagination.hasMore,
       };
     }),
 

@@ -1248,6 +1248,18 @@ export interface ExecutionStats {
 	toolCallCount?: number;
 	[key: string]: unknown;
 }
+/**
+ * Standard paginated response envelope.
+ */
+export type PaginatedResponse<T> = {
+	items: T[];
+	pagination: {
+		hasMore: boolean;
+		total?: number;
+		limit: number;
+		offset: number;
+	};
+};
 declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	ctx: Context;
 	meta: object;
@@ -1504,12 +1516,40 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
 				profileSlug?: string | undefined;
 				includeDescendants?: boolean | undefined;
-				limit?: number | undefined;
 				globalOnly?: boolean | undefined;
 			};
 			output: {
+				items: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
+				}[];
+				pagination: {
+					hasMore: boolean;
+					total?: number;
+					limit: number;
+					offset: number;
+				};
 				entities: {
 					id: string;
 					userId: string;
@@ -1531,6 +1571,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
 				}[];
+				hasMore: boolean;
 			};
 			meta: object;
 		}>;
@@ -2001,13 +2042,56 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				offset?: number | undefined;
 				workspaceId?: string | undefined;
 				channelType?: "ai_thread" | "branch" | "main" | undefined;
-				limit?: number | undefined;
 				contextObjectId?: string | undefined;
 				contextObjectType?: "entity" | "document" | "view" | undefined;
+				limit?: number | undefined;
 			};
 			output: {
+				channels: never[];
+				items: never[];
+				pagination: {
+					hasMore: boolean;
+					total?: number;
+					limit: number;
+					offset: number;
+				};
+			} | {
+				items: {
+					hasAssistantMessage: boolean;
+					origin: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					title: string | null;
+					externalSource: string | null;
+					status: "active" | "merged" | "archived";
+					channelType: "ai_thread" | "branch" | "thread" | "entity_comments" | "document_review" | "view_discussion" | "direct" | "external_import" | "a2ai";
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					parentChannelId: string | null;
+					branchedFromMessageId: string | null;
+					branchPurpose: string | null;
+					agentId: string;
+					agentType: string;
+					agentConfig: unknown;
+					mcpServerIds: string[] | null;
+					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
+					externalChannelId: string | null;
+					mergedAt: Date | null;
+				}[];
+				pagination: {
+					hasMore: boolean;
+					limit: number;
+					offset: number;
+				};
 				channels: {
 					hasAssistantMessage: boolean;
 					origin: string;
@@ -2393,14 +2477,43 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
 				workspaceId?: string | undefined;
 				targetType?: "entity" | "document" | "view" | "whiteboard" | "profile" | undefined;
 				targetId?: string | undefined;
 				threadId?: string | undefined;
 				status?: "pending" | "rejected" | "validated" | "all" | undefined;
-				limit?: number | undefined;
 			};
 			output: {
+				items: {
+					request: UpdateRequest;
+					workspaceId: string;
+					sourceMessageId: string | null;
+					id: string;
+					data: unknown;
+					updatedAt: Date;
+					createdAt: Date;
+					status: "approved" | "pending" | "rejected" | "auto_approved";
+					expiresAt: Date | null;
+					createdBy: string | null;
+					threadId: string | null;
+					targetType: string;
+					targetId: string;
+					proposalType: string;
+					commandRunId: string | null;
+					agentUserId: string | null;
+					reviewedBy: string | null;
+					reviewedAt: Date | null;
+					rejectionReason: string | null;
+					comments: unknown;
+				}[];
+				pagination: {
+					hasMore: boolean;
+					total?: number;
+					limit: number;
+					offset: number;
+				};
 				proposals: {
 					request: UpdateRequest;
 					workspaceId: string;
@@ -3136,10 +3249,10 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					userId: string;
 					id: string;
+					secret: string;
 					createdAt: Date;
 					url: string;
 					eventTypes: string[];
-					secret: string;
 					active: boolean;
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -3613,9 +3726,9 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				type: string;
 				data: unknown;
+				timestamp: Date;
 				updatedAt: Date;
 				createdAt: Date;
-				timestamp: Date;
 				title: string;
 				preview: string | null;
 				status: string | null;
@@ -5206,10 +5319,10 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				id: string;
 				type: "workspace" | "pod";
+				token: string;
 				createdAt: Date;
 				role: string;
 				expiresAt: Date;
-				token: string;
 				invitedBy: string;
 			}[];
 			meta: object;
@@ -5573,11 +5686,13 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
 				workspaceIds?: string[] | undefined;
 				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
-			output: {
+			output: PaginatedResponse<{
 				name: string;
 				userId: string;
 				workspaceId: string | null;
@@ -5602,7 +5717,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				schemaSnapshot: unknown;
 				snapshotUpdatedAt: Date | null;
 				embeddedViewIds: string[] | null;
-			}[];
+			}>;
 			meta: object;
 		}>;
 		getHome: import("@trpc/server").TRPCQueryProcedure<{

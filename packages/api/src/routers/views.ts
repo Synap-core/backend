@@ -51,6 +51,7 @@ import { emitSideEffects } from "@synap/jobs";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { randomUUID } from "crypto";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 // Proper package imports
 import {
@@ -328,7 +329,7 @@ export const viewsRouter = router({
    */
   list: protectedProcedure
     .input(
-      z.object({
+      paginatedInput.extend({
         /** Filter to one or more workspaces. Omit to return all user's views. */
         workspaceIds: z.array(z.string().uuid()).optional(),
         type: z
@@ -357,7 +358,7 @@ export const viewsRouter = router({
           ? inArray(views.workspaceId, input.workspaceIds)
           : undefined;
 
-      const query = db.query.views.findMany({
+      const results = await db.query.views.findMany({
         where: and(
           eq(views.userId, ctx.userId),
           workspaceCondition,
@@ -369,9 +370,11 @@ export const viewsRouter = router({
             : undefined
         ),
         orderBy: [desc(views.updatedAt)],
+        limit: input.limit + 1,
+        offset: input.offset,
       });
 
-      return await query;
+      return buildPaginatedResponse(results, input);
     }),
 
   /**
