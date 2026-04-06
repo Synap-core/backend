@@ -1707,6 +1707,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				documentId?: string | null | undefined;
 				properties?: Record<string, unknown> | undefined;
+				profileSlug?: string | undefined;
 				source?: "user" | "system" | "ai" | "intelligence" | "agent" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;

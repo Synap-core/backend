@@ -860,6 +860,8 @@ export const entitiesRouter = router({
         description: z.string().optional(),
         documentId: z.string().uuid().nullable().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
+        /** Change entity's profile type by slug (e.g. 'person' → 'contact') */
+        profileSlug: z.string().optional(),
         source: z
           .enum(["user", "ai", "intelligence", "system", "agent"])
           .optional(),
@@ -886,6 +888,7 @@ export const entitiesRouter = router({
           description: input.description,
           properties: input.properties,
           documentId: input.documentId,
+          profileSlug: input.profileSlug,
         },
       });
 
@@ -905,6 +908,7 @@ export const entitiesRouter = router({
           description: input.description,
           properties: input.properties,
           documentId: input.documentId,
+          profileSlug: input.profileSlug,
         },
       });
 
@@ -942,6 +946,7 @@ export const entitiesRouter = router({
           preview: input.description || undefined,
           documentId: input.documentId,
           properties: input.properties || undefined,
+          profileSlug: input.profileSlug || undefined,
         },
         ctx.userId
       );
