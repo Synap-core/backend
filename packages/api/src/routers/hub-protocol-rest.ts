@@ -3867,11 +3867,12 @@ app.post("/entity-share/deliver", async (c) => {
 
 // ─── POST /setup/agent ───────────────────────────────────────────────────────
 //
-// Self-hosted setup endpoint. Creates an agent user + Hub Protocol API key
-// for external services (e.g. OpenClaw) without requiring a Control Plane.
+// Agent setup endpoint. Creates an agent user + Hub Protocol API key
+// for external services (e.g. OpenClaw).
 //
-// Auth: Bearer <PROVISIONING_TOKEN> — the same token set in the pod's .env
-//       (no CP JWT, no session cookies — works headlessly from a setup script).
+// Auth (dual mode):
+//   1. CP-signed JWT (type: "agent_setup" | "addon_activate") — managed pods
+//   2. Bearer <PROVISIONING_TOKEN> — self-hosted pods (fallback)
 //
 // Body: { agentType: string, workspaceId?: string }
 //
@@ -3888,32 +3889,54 @@ app.post("/entity-share/deliver", async (c) => {
 //
 
 app.post("/setup/agent", async (c) => {
-  // ── Auth: PROVISIONING_TOKEN ────────────────────────────────────────────────
+  // ── Auth: CP JWT (preferred) or PROVISIONING_TOKEN (self-hosted fallback) ──
   const authHeader = c.req.header("authorization") ?? "";
   const token = authHeader.startsWith("Bearer ")
     ? authHeader.slice(7).trim()
     : null;
 
-  const provisioningToken = process.env.PROVISIONING_TOKEN;
-  if (!provisioningToken) {
-    return c.json(
-      {
-        error:
-          "PROVISIONING_TOKEN is not configured on this pod. Set it in your .env file.",
-      },
-      503
-    );
+  if (!token) {
+    return c.json({ error: "Missing Authorization header" }, 401);
   }
 
-  if (!token || token !== provisioningToken) {
+  let authenticated = false;
+  let authMethod: "jwt" | "provisioning_token" = "provisioning_token";
+
+  // Try 1: CP-signed JWT (for managed pods via CLI / CP relay)
+  const cpUrl = config.server.controlPlaneUrl;
+  try {
+    const payload = await verifyCpJwt<{ type: string }>(token, cpUrl);
+    if (
+      payload &&
+      (payload.type === "agent_setup" || payload.type === "addon_activate")
+    ) {
+      authenticated = true;
+      authMethod = "jwt";
+    }
+  } catch {
+    // Not a valid JWT — fall through to PROVISIONING_TOKEN check
+  }
+
+  // Try 2: PROVISIONING_TOKEN (for self-hosted pods)
+  if (!authenticated) {
+    const provisioningToken = process.env.PROVISIONING_TOKEN;
+    if (provisioningToken && token === provisioningToken) {
+      authenticated = true;
+      authMethod = "provisioning_token";
+    }
+  }
+
+  if (!authenticated) {
     return c.json(
       {
         error:
-          "Invalid or missing PROVISIONING_TOKEN. Use Authorization: Bearer <PROVISIONING_TOKEN>",
+          "Invalid credentials. Use a CP-signed JWT or PROVISIONING_TOKEN.",
       },
       401
     );
   }
+
+  logger.info({ authMethod }, "setup/agent: authenticated");
 
   // ── Parse body ──────────────────────────────────────────────────────────────
   const body = await c.req.json().catch(() => null);
@@ -3986,7 +4009,7 @@ app.post("/setup/agent", async (c) => {
         kratosIdentityId: null,
         agentMetadata: {
           agentType,
-          description: `${agentLabel} — external agent (self-hosted setup)`,
+          description: `${agentLabel} — external agent (${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup)`,
           createdByUserId: ownerUserId ?? agentUserId,
           isPersonalAgent: false,
           writesRequireProposal: true,
@@ -4063,13 +4086,19 @@ app.post("/setup/agent", async (c) => {
         ],
         userId: agentUserId,
         keyType: "hub_inbound",
-        description: `Hub Protocol auth token for ${agentLabel} agent — created via self-hosted setup`,
+        description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup`,
       },
       agentUserId
     );
 
     logger.info(
-      { agentUserId, keyId: apiKey.id, workspaceId: ws.id, agentType },
+      {
+        agentUserId,
+        keyId: apiKey.id,
+        workspaceId: ws.id,
+        agentType,
+        authMethod,
+      },
       "setup/agent: Hub API key created"
     );
 
