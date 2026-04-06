@@ -1,0 +1,577 @@
+/**
+ * OpenAI-Compatible Chat Completions API — /v1/chat/completions
+ *
+ * Lets OpenClaw (and any OpenAI-compatible client) use Synap's Intelligence
+ * Service as their AI provider. Translates between the OpenAI wire format
+ * and the Synap IS SSE protocol.
+ *
+ * Auth: Bearer API key with scope "chat.stream" (same as external chat).
+ *
+ * Supported model aliases:
+ *   synap/auto     — four-tier auto-routing (default)
+ *   synap/free     — DeepSeek V3
+ *   synap/balanced — Kimi K2.5
+ *   synap/advanced — Claude Sonnet
+ *   synap/complex  — Claude Opus
+ *   <any other>    — passed through as-is to IS
+ */
+
+import { Hono } from "hono";
+import { z } from "zod";
+import { db, eq, and } from "@synap/database";
+import { workspaceMembers } from "@synap/database/schema";
+import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
+import { ensurePersonalChannel } from "../../utils/personal-channel.js";
+import { createLogger } from "@synap-core/core";
+import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
+
+const logger = createLogger({ module: "openai-compat" });
+
+// ── Model alias → IS tier mapping ────────────────────────────────────────────
+
+const MODEL_TIER_MAP: Record<string, string> = {
+  "synap/auto": "auto",
+  "synap/free": "free",
+  "synap/balanced": "balanced",
+  "synap/advanced": "advanced",
+  "synap/complex": "complex",
+};
+
+// ── Zod schemas ──────────────────────────────────────────────────────────────
+
+const messageSchema = z.object({
+  role: z.enum(["system", "user", "assistant"]),
+  content: z.string(),
+});
+
+const completionRequestSchema = z.object({
+  model: z.string().default("synap/auto"),
+  messages: z.array(messageSchema).min(1),
+  stream: z.boolean().default(false),
+  temperature: z.number().min(0).max(2).optional(),
+  max_tokens: z.number().int().positive().optional(),
+});
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function generateId(): string {
+  return `chatcmpl-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+/** Build an OpenAI-format error body */
+function oaiErrorBody(message: string, type: string, code: string | null) {
+  return { error: { message, type, param: null, code } };
+}
+
+/**
+ * Extract the last user message as the query, and build system prompt
+ * from system messages.
+ */
+function extractQueryAndHistory(messages: z.infer<typeof messageSchema>[]): {
+  query: string;
+  systemPrompt: string | undefined;
+} {
+  let query = "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      query = messages[i].content;
+      break;
+    }
+  }
+
+  const systemParts = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content);
+  const systemPrompt =
+    systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
+
+  return { query, systemPrompt };
+}
+
+// ── Route ────────────────────────────────────────────────────────────────────
+
+export const openaiCompatApp = new Hono<{
+  Variables: ExternalApiVariables;
+}>();
+
+openaiCompatApp.post(
+  "/chat/completions",
+  externalApiKeyAuth("chat.stream"),
+  async (c) => {
+    const userId = c.get("userId");
+    const completionId = generateId();
+    const created = Math.floor(Date.now() / 1000);
+
+    // ── Parse request ────────────────────────────────────────────────────────
+    let input: z.infer<typeof completionRequestSchema>;
+    try {
+      const raw = await c.req.json();
+      const parsed = completionRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json(
+          oaiErrorBody(
+            parsed.error.issues.map((i) => i.message).join("; "),
+            "invalid_request_error",
+            "invalid_body"
+          ),
+          400
+        );
+      }
+      input = parsed.data;
+    } catch {
+      return c.json(
+        oaiErrorBody(
+          "Request body must be valid JSON",
+          "invalid_request_error",
+          "parse_error"
+        ),
+        400
+      );
+    }
+
+    const { query, systemPrompt } = extractQueryAndHistory(input.messages);
+    if (!query) {
+      return c.json(
+        oaiErrorBody(
+          "No user message found in messages array",
+          "invalid_request_error",
+          "missing_user_message"
+        ),
+        400
+      );
+    }
+
+    // ── Resolve model tier ───────────────────────────────────────────────────
+    const requestedModel = input.model;
+    const knownTier = MODEL_TIER_MAP[requestedModel];
+    // knownTier is defined for synap/* aliases, undefined for pass-through models
+    const tierLabel = knownTier ?? "passthrough";
+
+    // ── Resolve workspace ────────────────────────────────────────────────────
+    const workspaceIdHeader = c.req.header("x-synap-workspace-id");
+    let resolvedWorkspaceId: string;
+
+    if (workspaceIdHeader) {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, workspaceIdHeader),
+          eq(workspaceMembers.userId, userId)
+        ),
+        columns: { workspaceId: true },
+      });
+      if (!membership) {
+        return c.json(
+          oaiErrorBody(
+            "Workspace not found or access denied",
+            "invalid_request_error",
+            "workspace_not_found"
+          ),
+          404
+        );
+      }
+      resolvedWorkspaceId = membership.workspaceId;
+    } else {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: eq(workspaceMembers.userId, userId),
+        columns: { workspaceId: true },
+      });
+      if (!membership) {
+        return c.json(
+          oaiErrorBody(
+            "No workspace found for this user",
+            "invalid_request_error",
+            "no_workspace"
+          ),
+          404
+        );
+      }
+      resolvedWorkspaceId = membership.workspaceId;
+    }
+
+    // ── Resolve channel (auto-create personal channel) ───────────────────────
+    let resolvedChannelId: string;
+    try {
+      const personalChannel = await ensurePersonalChannel(
+        userId,
+        resolvedWorkspaceId
+      );
+      resolvedChannelId = personalChannel.id;
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to ensure personal channel"
+      );
+      return c.json(
+        oaiErrorBody(
+          "Failed to resolve chat channel",
+          "server_error",
+          "channel_error"
+        ),
+        500
+      );
+    }
+
+    // ── Resolve IS endpoint ──────────────────────────────────────────────────
+    let isUrl: string;
+    let isApiKey: string;
+    try {
+      const resolved = await resolveIntelligenceService({
+        userId,
+        workspaceId: resolvedWorkspaceId,
+      });
+      isUrl = resolved.endpoint;
+      isApiKey = resolved.serviceApiKey;
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to resolve intelligence service"
+      );
+      return c.json(
+        oaiErrorBody(
+          "Intelligence service unavailable",
+          "server_error",
+          "service_unavailable"
+        ),
+        502
+      );
+    }
+
+    // ── Build IS request ─────────────────────────────────────────────────────
+    const agentConfig: Record<string, unknown> = {};
+
+    if (knownTier) {
+      // Known synap/* alias
+      if (knownTier === "complex") {
+        // deepAnalysis flag routes to Opus tier
+      }
+      // For non-auto tiers, pass tier preference via workspace settings
+    } else {
+      // Pass-through model: forward as explicit modelId
+      agentConfig.modelId = requestedModel;
+    }
+
+    if (input.temperature !== undefined) {
+      agentConfig.temperature = input.temperature;
+    }
+
+    if (systemPrompt) {
+      agentConfig.systemPromptOverride = systemPrompt;
+    }
+
+    const isBody: Record<string, unknown> = {
+      query,
+      threadId: resolvedChannelId,
+      userId,
+      workspaceId: resolvedWorkspaceId,
+      agentType: "meta",
+      dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
+      stream: input.stream,
+    };
+
+    if (knownTier === "complex") {
+      isBody.deepAnalysis = true;
+    }
+
+    if (knownTier && knownTier !== "auto") {
+      isBody.workspaceSettings = {
+        agentModelPreferences: { defaultTier: knownTier },
+      };
+    }
+
+    if (Object.keys(agentConfig).length > 0) {
+      isBody.agentConfig = agentConfig;
+    }
+
+    // ── Non-streaming path ───────────────────────────────────────────────────
+    if (!input.stream) {
+      let isResponse: Response;
+      try {
+        isResponse = await fetch(`${isUrl}/api/chat/stream`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": isApiKey,
+          },
+          body: JSON.stringify(isBody),
+          signal: AbortSignal.timeout(120_000),
+        });
+      } catch (err) {
+        logger.error(
+          { err: err instanceof Error ? err.message : String(err) },
+          "Failed to reach intelligence service"
+        );
+        return c.json(
+          oaiErrorBody(
+            "Intelligence service unreachable",
+            "server_error",
+            "service_unreachable"
+          ),
+          502
+        );
+      }
+
+      if (!isResponse.ok) {
+        await isResponse.text().catch(() => "");
+        return c.json(
+          oaiErrorBody(
+            `Upstream AI service error (${isResponse.status})`,
+            "server_error",
+            "upstream_error"
+          ),
+          502
+        );
+      }
+
+      let content = "";
+      try {
+        const data = (await isResponse.json()) as { content?: string };
+        content = data.content ?? "";
+      } catch {
+        return c.json(
+          oaiErrorBody(
+            "Failed to parse intelligence service response",
+            "server_error",
+            "parse_error"
+          ),
+          502
+        );
+      }
+
+      return c.json(
+        {
+          id: completionId,
+          object: "chat.completion" as const,
+          created,
+          model: requestedModel,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant" as const, content },
+              finish_reason: "stop" as const,
+            },
+          ],
+          usage: {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+          },
+        },
+        200,
+        { "X-Synap-Model-Tier": tierLabel }
+      );
+    }
+
+    // ── Streaming path ───────────────────────────────────────────────────────
+    let isResponse: Response;
+    try {
+      isResponse = await fetch(`${isUrl}/api/chat/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": isApiKey,
+        },
+        body: JSON.stringify(isBody),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to reach intelligence service"
+      );
+      return c.json(
+        oaiErrorBody(
+          "Intelligence service unreachable",
+          "server_error",
+          "service_unreachable"
+        ),
+        502
+      );
+    }
+
+    if (!isResponse.ok) {
+      await isResponse.text().catch(() => "");
+      return c.json(
+        oaiErrorBody(
+          `Upstream AI service error (${isResponse.status})`,
+          "server_error",
+          "upstream_error"
+        ),
+        502
+      );
+    }
+
+    if (!isResponse.body) {
+      return c.json(
+        oaiErrorBody(
+          "Intelligence service returned empty response",
+          "server_error",
+          "empty_response"
+        ),
+        502
+      );
+    }
+
+    // Transform IS SSE → OpenAI SSE
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    let sentRole = false;
+    let streamFinished = false;
+    const transformStream = new ReadableStream({
+      async start(controller) {
+        const reader = isResponse.body!.getReader();
+        let buffer = "";
+
+        function sendDone() {
+          if (streamFinished) return;
+          streamFinished = true;
+          const finalChunk = {
+            id: completionId,
+            object: "chat.completion.chunk",
+            created,
+            model: requestedModel,
+            choices: [
+              {
+                index: 0,
+                delta: {},
+                finish_reason: "stop",
+              },
+            ],
+          };
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`)
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        }
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process complete SSE lines
+            const lines = buffer.split("\n");
+            // Keep the last potentially incomplete line in the buffer
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith("data: ")) continue;
+
+              const dataStr = trimmed.slice(6); // Remove "data: "
+              if (dataStr === "[DONE]") continue;
+
+              let event: {
+                type: string;
+                content?: string;
+                data?: { content?: string };
+                error?: string;
+              };
+              try {
+                event = JSON.parse(dataStr);
+              } catch {
+                continue; // skip malformed lines
+              }
+
+              // Only convert "content" events to OpenAI deltas
+              if (event.type === "content" && event.content) {
+                const delta: Record<string, string> = {};
+
+                // Send role in first chunk
+                if (!sentRole) {
+                  delta.role = "assistant";
+                  sentRole = true;
+                }
+                delta.content = event.content;
+
+                const chunk = {
+                  id: completionId,
+                  object: "chat.completion.chunk",
+                  created,
+                  model: requestedModel,
+                  choices: [
+                    {
+                      index: 0,
+                      delta,
+                      finish_reason: null,
+                    },
+                  ],
+                };
+
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                );
+              }
+
+              // "complete" or "error" event means we're done
+              if (event.type === "complete" || event.type === "error") {
+                sendDone();
+              }
+            }
+          }
+
+          // If IS stream ended without a "complete" event, close gracefully
+          if (!streamFinished && sentRole) {
+            sendDone();
+          }
+        } catch (err) {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err) },
+            "Error transforming IS SSE to OpenAI format"
+          );
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return c.newResponse(transformStream, 200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+      "X-Synap-Model-Tier": tierLabel,
+    });
+  }
+);
+
+// ── Models listing (useful for OpenAI-compatible clients) ────────────────────
+
+openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), (c) => {
+  const models = [
+    {
+      id: "synap/auto",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+    {
+      id: "synap/free",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+    {
+      id: "synap/balanced",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+    {
+      id: "synap/advanced",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+    {
+      id: "synap/complex",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+  ];
+
+  return c.json({ object: "list" as const, data: models });
+});

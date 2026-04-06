@@ -39,6 +39,7 @@ import {
   fileUploadApp,
   externalSkillsApp,
   externalChatApp,
+  openaiCompatApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -1173,6 +1174,11 @@ app.route("/api/external/skills", externalSkillsApp);
 // GET  /api/external/chat/channels — list channels user can chat in
 // POST /api/external/chat/stream   — proxy to IS chat stream (SSE)
 app.route("/api/external/chat", externalChatApp);
+
+// OpenAI-compatible chat completions API (API key auth, scope: chat.stream)
+// POST /v1/chat/completions — OpenAI format request/response with SSE streaming
+// GET  /v1/models           — list available model aliases
+app.route("/v1", openaiCompatApp);
 
 // File Upload REST endpoint (multipart/form-data — not tRPC)
 // Auth: Kratos session cookie (applied inside fileUploadApp)
