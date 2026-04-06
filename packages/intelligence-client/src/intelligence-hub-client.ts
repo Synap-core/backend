@@ -58,6 +58,8 @@ export interface IntelligenceHubRequest {
   /** Entity context: channel is scoped to this entity (entity_comments channels) */
   contextObjectType?: string;
   contextObjectId?: string;
+  /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */
+  billingChannel?: "browser" | "api" | "relay";
 }
 
 // Re-export from types package
@@ -194,6 +196,9 @@ export class IntelligenceHubClient {
               ...(request.requestId
                 ? { "X-Request-Id": request.requestId }
                 : {}),
+              ...(request.billingChannel
+                ? { "X-Synap-Channel": request.billingChannel }
+                : {}),
             },
             body: JSON.stringify({
               query: request.query,
@@ -296,6 +301,9 @@ export class IntelligenceHubClient {
             Accept: "text/event-stream",
             "X-API-Key": this.apiKey,
             ...(request.requestId ? { "X-Request-Id": request.requestId } : {}),
+            ...(request.billingChannel
+              ? { "X-Synap-Channel": request.billingChannel }
+              : {}),
           },
           body: JSON.stringify({
             query: request.query,

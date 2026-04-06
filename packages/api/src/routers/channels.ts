@@ -65,6 +65,7 @@ import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/jobs";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 const logger = createLogger({ module: "channels" });
 
@@ -1111,6 +1112,8 @@ export const channelsRouter = router({
           // Pod credentials — IS uses these to call back into this pod via Hub Protocol
           dataPodUrl: process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
           dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
+          // Billing channel: Browser chat is included in subscription
+          billingChannel: "browser",
         });
 
         for await (const chunk of stream) {
@@ -1265,6 +1268,7 @@ export const channelsRouter = router({
             dataPodUrl:
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
             dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
+            billingChannel: "browser",
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down
@@ -1805,13 +1809,17 @@ export const channelsRouter = router({
    */
   list: protectedProcedure
     .input(
-      z.object({
-        workspaceId: z.string().uuid().optional(),
-        channelType: z.enum(["main", "branch", "ai_thread"]).optional(),
-        limit: z.number().min(1).max(100).default(20),
-        contextObjectId: z.string().uuid().optional(),
-        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
-      })
+      paginatedInput
+        .extend({
+          workspaceId: z.string().uuid().optional(),
+          channelType: z.enum(["main", "branch", "ai_thread"]).optional(),
+          contextObjectId: z.string().uuid().optional(),
+          contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+        })
+        .extend({
+          // Override default limit to 20 for channels (backward compat)
+          limit: z.number().min(1).max(100).default(20),
+        })
     )
     .query(async ({ input, ctx }) => {
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
@@ -1847,14 +1855,24 @@ export const channelsRouter = router({
       const allChannels = await db.query.channels.findMany({
         where: and(...conditions),
         orderBy: [desc(channels.updatedAt)],
-        limit: input.limit,
+        limit: input.limit + 1,
+        offset: input.offset,
       });
 
       if (allChannels.length === 0) {
-        return { channels: [] };
+        const empty = buildPaginatedResponse([], input);
+        return {
+          ...empty,
+          /** @deprecated Use `items` instead */
+          channels: [],
+        };
       }
 
-      const channelIds = allChannels.map((c) => c.id);
+      // Trim to limit before enriching (avoid unnecessary work on the extra row)
+      const hasMore = allChannels.length > input.limit;
+      const trimmed = hasMore ? allChannels.slice(0, input.limit) : allChannels;
+
+      const channelIds = trimmed.map((c) => c.id);
       const rowsWithAssistant = await db
         .select({ channelId: messages.channelId })
         .from(messages)
@@ -1868,13 +1886,22 @@ export const channelsRouter = router({
         rowsWithAssistant.map((r) => r.channelId)
       );
 
-      const channelsWithFlags = allChannels.map((c) => ({
+      const channelsWithFlags = trimmed.map((c) => ({
         ...c,
         hasAssistantMessage: channelIdsWithAssistant.has(c.id),
         origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
       }));
 
-      return { channels: channelsWithFlags };
+      return {
+        items: channelsWithFlags,
+        pagination: {
+          hasMore,
+          limit: input.limit,
+          offset: input.offset,
+        },
+        /** @deprecated Use `items` instead */
+        channels: channelsWithFlags,
+      };
     }),
 
   /**

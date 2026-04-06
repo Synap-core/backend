@@ -232,6 +232,7 @@ externalChatApp.post(
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": isApiKey,
+          "X-Synap-Channel": "api",
         },
         body: JSON.stringify(isBody),
         signal: AbortSignal.timeout(120_000), // 2 min timeout for long AI responses
