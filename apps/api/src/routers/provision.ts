@@ -980,11 +980,9 @@ provisionRouter.post("/activate-addon", async (c) => {
     );
   }
 
-  if (!registeredPodId) {
-    return c.json({ error: "Pod is not yet provisioned" }, 409);
-  }
-
-  if (payload.podId !== registeredPodId) {
+  // If the pod has a registered CP podId, verify it matches the JWT.
+  // If not registered (self-hosted or pre-CP pods), trust the valid JWT signature.
+  if (registeredPodId && payload.podId !== registeredPodId) {
     logger.warn(
       { jwtPodId: payload.podId, registeredPodId },
       "activate-addon: podId mismatch — rejecting"
