@@ -128,6 +128,8 @@ jobs:
             -e HUB_JWT_SECRET=smoke-test-hub-secret-at-least-32-chars \
             -e KRATOS_PUBLIC_URL=http://localhost:9999 \
             -e KRATOS_ADMIN_URL=http://localhost:9999 \
+            -e HYDRA_PUBLIC_URL=http://localhost:9999 \
+            -e HYDRA_ADMIN_URL=http://localhost:9999 \
             -e TYPESENSE_API_KEY=test \
             -e TYPESENSE_ADMIN_API_KEY=test \
             -e TYPESENSE_HOST=localhost \
