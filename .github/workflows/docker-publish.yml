@@ -130,6 +130,9 @@ jobs:
             -e KRATOS_ADMIN_URL=http://localhost:9999 \
             -e HYDRA_PUBLIC_URL=http://localhost:9999 \
             -e HYDRA_ADMIN_URL=http://localhost:9999 \
+            -e ORY_HYDRA_SECRETS_SYSTEM=smoke-test-hydra-secret-32chars!! \
+            -e KRATOS_SECRETS_COOKIE=smoke-test-kratos-cookie-secret \
+            -e KRATOS_SECRETS_CIPHER=smoke-test-kratos-cipher-secret \
             -e TYPESENSE_API_KEY=test \
             -e TYPESENSE_ADMIN_API_KEY=test \
             -e TYPESENSE_HOST=localhost \
