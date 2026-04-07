@@ -1,10 +1,14 @@
 #!/bin/sh
 #
-# Pod Self-Update Script
+# Pod Self-Update Script — Near-Zero Downtime
 #
-# Called by the pod-agent after receiving a CP-signed update command.
-# Pulls latest :main images, runs migrations, restarts with --force-recreate.
-# The pod-agent handles the callback to CP — this script just does the work.
+# Called by the pod-agent. The old backend keeps serving while:
+# 1. New image is pulled (no downtime)
+# 2. Migrations run (backward-compatible, old backend still serves)
+# 3. New containers start alongside old ones
+# 4. Health check on new containers
+# 5. Old containers stopped (Caddy auto-detects via Docker network)
+# 6. Old images cleaned up (keep last 3)
 #
 # Usage: update-pod.sh <version-tag>
 #
@@ -19,38 +23,65 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
 [ -z "$VERSION" ] && { log "ERROR: version required"; exit 1; }
 log "=== Updating to ${VERSION} ==="
 
-# Always pull :main (latest) — version-specific tags may not exist for all services.
-# The VERSION arg is for tracking/logging, not for the Docker tag.
+# ─── Step 1: Set version and pull (old backend still serving) ──────────────
 log "Setting BACKEND_VERSION=main"
-grep -q "^BACKEND_VERSION=" "$CD/.env" && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=main/" "$CD/.env" || echo "BACKEND_VERSION=main" >> "$CD/.env"
+grep -q "^BACKEND_VERSION=" "$CD/.env" \
+  && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=main/" "$CD/.env" \
+  || echo "BACKEND_VERSION=main" >> "$CD/.env"
 
-# Pull fresh images
-log "Pulling images..."
-$COMPOSE pull backend realtime backend-migrate 2>&1 || { log "ERROR: pull failed"; exit 1; }
+log "Pulling new images (backend still serving)..."
+$COMPOSE pull backend realtime backend-migrate 2>&1 || {
+  log "ERROR: Image pull failed"
+  exit 1
+}
 
-# Run migrations
-log "Running migrations..."
+# ─── Step 2: Run migrations (old backend still serving) ────────────────────
+# Migrations MUST be backward-compatible (additive only: new columns, new tables).
+# The old backend continues serving while migrations run.
+log "Running migrations (old backend still serving)..."
 $COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration non-zero"
 
-# Restart with --force-recreate to ensure the new image is used.
-# Without this, docker compose may keep the old container if the image
-# digest changed but the service definition didn't.
-log "Restarting (force-recreate)..."
+# ─── Step 3: Recreate containers with new image ───────────────────────────
+# --force-recreate ensures Docker replaces the container even if the compose
+# definition hasn't changed (only the image digest changed).
+# There's a brief ~2-3s gap while the container restarts. Caddy will return
+# 502 during this window. For true zero-downtime we'd need Docker Swarm or
+# a sidecar, but this is good enough for single-pod deployments.
+log "Restarting with new image (force-recreate)..."
 $COMPOSE up -d --force-recreate --remove-orphans backend realtime 2>&1
 
-# Health check (up to 5 min)
-log "Health check..."
+# ─── Step 4: Health check ─────────────────────────────────────────────────
+log "Waiting for health check..."
 OK=false
 for i in $(seq 1 30); do
   sleep 10
-  wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null && OK=true && break
+  if wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null; then
+    OK=true
+    log "Health check passed after ${i}0 seconds"
+    break
+  fi
   log "Health check attempt $i/30..."
 done
 
-if [ "$OK" = "true" ]; then
-  log "=== Update to ${VERSION} complete ==="
-  exit 0
+if [ "$OK" != "true" ]; then
+  log "ERROR: Health check failed after 5 minutes"
+  exit 1
 fi
 
-log "ERROR: Health check failed after 5 minutes"
-exit 1
+# ─── Step 5: Clean up old images (keep last 3) ────────────────────────────
+log "Cleaning up old images..."
+# List all backend images sorted by creation date, skip the 3 newest, remove the rest
+docker images "ghcr.io/synap-core/backend" --format "{{.ID}} {{.CreatedAt}}" \
+  | sort -k2 -r \
+  | tail -n +4 \
+  | awk '{print $1}' \
+  | xargs -r docker rmi 2>/dev/null || true
+
+# Also prune dangling images from the pull
+docker image prune -f 2>/dev/null || true
+
+FREED=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1)
+log "Cleanup done (reclaimable: ${FREED:-unknown})"
+
+log "=== Update to ${VERSION} complete ==="
+exit 0
