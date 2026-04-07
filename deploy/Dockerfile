@@ -41,8 +41,9 @@ RUN --mount=type=cache,id=pnpm-backend,target=/root/.local/share/pnpm/store \
 # ── Layer 2: source + build (re-runs on every source change) ──
 COPY . .
 
-# Build API + realtime in one turbo pass (turbo cache speeds up unchanged packages)
-RUN --mount=type=cache,id=turbo-backend,target=/app/.turbo \
+# Build API + realtime in one turbo pass
+# NOTE: turbo cache (id=turbo-backend-v2) — bump the version suffix to bust stale caches
+RUN --mount=type=cache,id=turbo-backend-v2,target=/app/.turbo \
     NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
       --filter=api \
       --filter=@synap/realtime \
