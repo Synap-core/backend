@@ -15,6 +15,7 @@ import {
   db,
   eq,
   and,
+  entities,
   EntityRepository,
   eventRepository,
 } from "@synap/database";

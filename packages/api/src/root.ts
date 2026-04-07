@@ -50,6 +50,7 @@ import { syncManagementRouter } from "./routers/sync-management.js";
 /**
  * Core API Router
  */
+// @ts-ignore TS2742 — zod portability warning (same version, different resolution path in composite project)
 const _coreRouter = router({
   setup: setupRouter,
   events: eventsRouter,
@@ -102,6 +103,4 @@ const _coreRouter = router({
 });
 
 export type AppRouter = typeof _coreRouter;
-// Explicit annotation forces TS to use the named AppRouter type in .d.ts output
-// instead of re-deriving through @synap/database/node_modules/zod
 export const coreRouter: AppRouter = _coreRouter;
