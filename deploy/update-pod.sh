@@ -23,6 +23,9 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
 [ -z "$VERSION" ] && { log "ERROR: version required"; exit 1; }
 log "=== Updating to ${VERSION} ==="
 
+# Save current version for rollback
+PREV_VERSION=$(grep "^BACKEND_VERSION=" "$CD/.env" 2>/dev/null | cut -d= -f2 || echo "")
+
 # ─── Step 1: Set version and pull (old backend still serving) ──────────────
 # Map version tag to Docker image tag:
 #   main-<sha>  → "main" (SHA-specific tags are for audit; :main is the pull target)
@@ -75,6 +78,30 @@ done
 
 if [ "$OK" != "true" ]; then
   log "ERROR: Health check failed after 5 minutes"
+
+  if [ -n "$PREV_VERSION" ] && [ "$PREV_VERSION" != "$DOCKER_TAG" ]; then
+    log "Rolling back to previous version: $PREV_VERSION"
+    sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${PREV_VERSION}/" "$CD/.env"
+    $COMPOSE up -d --force-recreate --remove-orphans backend realtime 2>&1
+
+    # Wait for rollback health
+    ROLLBACK_OK=false
+    for j in $(seq 1 12); do
+      sleep 10
+      if wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null; then
+        ROLLBACK_OK=true
+        log "Rollback health check passed"
+        break
+      fi
+    done
+
+    if [ "$ROLLBACK_OK" = "true" ]; then
+      log "=== Rolled back to ${PREV_VERSION} ==="
+    else
+      log "ERROR: Rollback also failed — pod may be down"
+    fi
+  fi
+
   exit 1
 fi
 

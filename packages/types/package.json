@@ -98,7 +98,7 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && tsup && tsc --emitDeclarationOnly",
+    "build": "rm -rf dist && tsc && node scripts/verify-exports.mjs",
     "dev": "tsup --watch",
     "type-check": "tsc --noEmit"
   },

@@ -1,18 +1,13 @@
 name: Publish Docker Images
 
 on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, develop]
   push:
-    branches:
-      - main
-      - develop
     tags:
       - "v*"
-    paths:
-      - "packages/**"
-      - "apps/**"
-      - "deploy/**"
-      - "Dockerfile"
-      - ".github/workflows/docker-publish.yml"
   workflow_dispatch:
 
 # Branch → image tag mapping:
@@ -26,14 +21,51 @@ env:
 jobs:
   build-and-push-backend-api:
     runs-on: ubuntu-latest
+    # Only run if CI passed (workflow_run), or if triggered by tag push / manual dispatch
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     permissions:
       contents: read
       packages: write
       id-token: write
 
+    outputs:
+      resolved_ref: ${{ steps.resolve.outputs.ref }}
+      resolved_sha: ${{ steps.resolve.outputs.sha }}
+
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg15
+        env:
+          POSTGRES_USER: synap
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: synap
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
     steps:
+      - name: Resolve ref and sha
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "ref=refs/heads/${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,13 +91,60 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
             type=sha,prefix={{branch}}-
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/develop' }}
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
+            type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build and push Backend image
+      - name: Build Backend image (local)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deploy/Dockerfile
+          push: false
+          load: true
+          tags: synap-backend:smoke-test
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Smoke test — verify container starts
+        run: |
+          docker run -d --name smoke-test \
+            --network host \
+            -e DATABASE_URL=postgresql://synap:testpass@localhost:5432/synap \
+            -e NODE_ENV=production \
+            -e JWT_SECRET=smoke-test-secret \
+            -e KRATOS_PUBLIC_URL=http://localhost:9999 \
+            -e KRATOS_ADMIN_URL=http://localhost:9999 \
+            -e TYPESENSE_API_KEY=test \
+            -e TYPESENSE_ADMIN_API_KEY=test \
+            -e TYPESENSE_HOST=localhost \
+            -e MINIO_ENDPOINT=http://localhost:9999 \
+            -e MINIO_ACCESS_KEY=test \
+            -e MINIO_SECRET_KEY=test \
+            -e SYNAP_SERVICE_ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000 \
+            synap-backend:smoke-test
+
+          # Wait up to 30s for health check
+          for i in $(seq 1 6); do
+            sleep 5
+            if curl -sf http://localhost:4000/health; then
+              echo "Smoke test passed!"
+              docker rm -f smoke-test
+              exit 0
+            fi
+            echo "Attempt $i/6..."
+          done
+
+          echo "SMOKE TEST FAILED — container logs:"
+          docker logs smoke-test
+          docker rm -f smoke-test
+          exit 1
+
+      - name: Push Backend image to GHCR
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -82,16 +161,20 @@ jobs:
     needs:
       - build-and-push-backend-api
     # Only notify CP on main branch and version tags — not on develop
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: >
+      needs.build-and-push-backend-api.outputs.resolved_ref == 'refs/heads/main' ||
+      startsWith(needs.build-and-push-backend-api.outputs.resolved_ref, 'refs/tags/v')
 
     steps:
       - name: Compute image tag
         id: tag
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG="${{ github.ref_name }}"
+          REF="${{ needs.build-and-push-backend-api.outputs.resolved_ref }}"
+          SHA="${{ needs.build-and-push-backend-api.outputs.resolved_sha }}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            TAG="${REF#refs/tags/}"
           else
-            TAG="main-$(echo '${{ github.sha }}' | cut -c1-7)"
+            TAG="main-$(echo "$SHA" | cut -c1-7)"
           fi
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
@@ -99,8 +182,8 @@ jobs:
         run: |
           PAYLOAD=$(jq -n \
             --arg tag "${{ steps.tag.outputs.tag }}" \
-            --arg gitSha "${{ github.sha }}" \
-            --arg gitRef "${{ github.ref }}" \
+            --arg gitSha "${{ needs.build-and-push-backend-api.outputs.resolved_sha }}" \
+            --arg gitRef "${{ needs.build-and-push-backend-api.outputs.resolved_ref }}" \
             '{tag: $tag, gitSha: $gitSha, gitRef: $gitRef}')
 
           SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.CP_WEBHOOK_SECRET }}" | awk '{print $2}')
