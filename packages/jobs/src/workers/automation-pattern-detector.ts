@@ -129,12 +129,8 @@ async function callDetectPatterns(
   activitySummary: Array<{ type: string; count: number }>,
   existingTriggerTypes: string[]
 ): Promise<PatternProposal[]> {
-  const isUrl =
-    process.env.AGENT_HUB_URL ||
-    process.env.INTELLIGENCE_HUB_URL ||
-    "http://localhost:3002";
-  const isApiKey =
-    process.env.AGENT_HUB_API_KEY || process.env.INTELLIGENCE_HUB_API_KEY || "";
+  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), IS_TIMEOUT_MS);

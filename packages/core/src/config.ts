@@ -414,29 +414,26 @@ export function validateConfig(
       break;
 
     case "intelligenceHub": {
-      // Accept new AGENT_HUB_URL name with INTELLIGENCE_HUB_URL as fallback
-      const hubUrl =
-        process.env.AGENT_HUB_URL || process.env.INTELLIGENCE_HUB_URL;
-      const hubApiKey =
-        process.env.AGENT_HUB_API_KEY || process.env.INTELLIGENCE_HUB_API_KEY;
+      const hubUrl = process.env.INTELLIGENCE_HUB_URL;
+      const hubApiKey = process.env.INTELLIGENCE_HUB_API_KEY;
 
       if (!hubUrl) {
         configLogger.warn(
-          "AGENT_HUB_URL is not set — AI routing will fall back to http://localhost:3002. " +
+          "INTELLIGENCE_HUB_URL is not set — AI routing will fall back to http://localhost:3002. " +
             "Set this in production to route agent requests to the correct intelligence service."
         );
       }
 
       if (!hubApiKey) {
         configLogger.warn(
-          "AGENT_HUB_API_KEY is not set — embedding workers and default intelligence routing " +
+          "INTELLIGENCE_HUB_API_KEY is not set — embedding workers and default intelligence routing " +
             "will send unauthenticated requests to the hub. Set this in production."
         );
       }
 
       if (config.server.nodeEnv === "production" && (!hubUrl || !hubApiKey)) {
         configLogger.warn(
-          "AGENT_HUB_URL or AGENT_HUB_API_KEY is not set in production. " +
+          "INTELLIGENCE_HUB_URL or INTELLIGENCE_HUB_API_KEY is not set in production. " +
             "AI features (chat, search, analysis) will be disabled until an Intelligence Service is configured."
         );
       }

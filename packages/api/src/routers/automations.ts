@@ -480,14 +480,8 @@ export const automationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const isUrl =
-        process.env.AGENT_HUB_URL ||
-        process.env.INTELLIGENCE_HUB_URL ||
-        "http://localhost:3002";
-      const isApiKey =
-        process.env.AGENT_HUB_API_KEY ||
-        process.env.INTELLIGENCE_HUB_API_KEY ||
-        "";
+      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+      const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
       const response = await fetch(`${isUrl}/api/automations/diagnose-run`, {
         method: "POST",
@@ -525,14 +519,8 @@ export const automationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const isUrl =
-        process.env.AGENT_HUB_URL ||
-        process.env.INTELLIGENCE_HUB_URL ||
-        "http://localhost:3002";
-      const isApiKey =
-        process.env.AGENT_HUB_API_KEY ||
-        process.env.INTELLIGENCE_HUB_API_KEY ||
-        "";
+      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+      const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
       const response = await fetch(`${isUrl}/api/automations/generate-flow`, {
         method: "POST",

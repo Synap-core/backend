@@ -20,7 +20,7 @@ export interface IntelligenceEndpoint {
 
 /**
  * Resolve the default active intelligence service endpoint from the DB.
- * Falls back to AGENT_HUB_URL / INTELLIGENCE_HUB_URL env vars if none registered.
+ * Falls back to INTELLIGENCE_HUB_URL env var if none registered.
  */
 export async function resolveDefaultIntelligenceEndpoint(): Promise<IntelligenceEndpoint> {
   try {
@@ -47,13 +47,7 @@ export async function resolveDefaultIntelligenceEndpoint(): Promise<Intelligence
   }
 
   return {
-    endpoint:
-      process.env.AGENT_HUB_URL ||
-      process.env.INTELLIGENCE_HUB_URL ||
-      "http://localhost:3001",
-    apiKey:
-      process.env.AGENT_HUB_API_KEY ||
-      process.env.INTELLIGENCE_HUB_API_KEY ||
-      "",
+    endpoint: process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001",
+    apiKey: process.env.INTELLIGENCE_HUB_API_KEY || "",
   };
 }

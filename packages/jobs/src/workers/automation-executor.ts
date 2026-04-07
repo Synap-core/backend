@@ -35,6 +35,8 @@ import {
   automationStepRuns,
   entities,
   messages,
+  channels,
+  notifications,
   drizzleSql,
   EntityRepository,
   eventRepository,
@@ -248,12 +250,8 @@ async function executeCommandStep(
     prompt += `\n\nInputs:\n${inputSummary}`;
   }
 
-  const isUrl =
-    process.env.AGENT_HUB_URL ||
-    process.env.INTELLIGENCE_HUB_URL ||
-    "http://localhost:3002";
-  const isApiKey =
-    process.env.AGENT_HUB_API_KEY || process.env.INTELLIGENCE_HUB_API_KEY || "";
+  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
   // ── Skill trigger routing ──────────────────────────────────────────────
   // Commands with commandSlug "__skill_trigger" are event-triggered skills
@@ -455,40 +453,155 @@ async function executeOutputStep(
     }
 
     case "notification": {
-      const message = config.message as string;
-      // Notifications queue — for now, log and store in output
-      // TODO: Wire to notification system when available
-      logger.info({ workspaceId, message }, "Automation notification");
-      return { status: "sent", message };
+      // Accepts: config.title + config.body (or config.message as body fallback)
+      // Optional: config.entityId (person/entity to link to — stored as sourceId)
+      //           config.category ('governance'|'data'|'ai'|'system'|'inbox') — default 'ai'
+      //           config.priority ('low'|'normal'|'high'|'urgent') — default 'normal'
+      //           config.groupKey — for collapsing similar notifications in the bell panel
+      const body = (config.body ?? config.message) as string | undefined;
+      const title = (config.title ?? "Automation notification") as string;
+      const category = (config.category ?? "ai") as string;
+      const priority = (config.priority ?? "normal") as string;
+      const entityId = config.entityId as string | undefined;
+      const groupKey =
+        (config.groupKey as string | undefined) ??
+        (entityId
+          ? `automation.${automationContext.automationId}.${entityId}`
+          : undefined);
+
+      if (!body) {
+        logger.warn(
+          { workspaceId },
+          "notification output missing body/message"
+        );
+        return { status: "skipped" };
+      }
+
+      await db.insert(notifications).values({
+        id: randomUUID(),
+        workspaceId,
+        userId: ownerId,
+        type: "automation.notification",
+        title,
+        body,
+        category: category as any,
+        priority: priority as any,
+        status: "unread",
+        sourceType: "automation",
+        // entityId takes priority as sourceId so frontend can deep-link to the entity
+        sourceId: entityId ?? automationContext.automationId,
+        ...(groupKey ? { groupKey } : {}),
+      });
+
+      return { status: "sent", title, body };
     }
 
     case "channel_message": {
-      const channelId = config.channelId as string;
+      // Accepts explicit channelId OR channelType:'personal'|'proactive'
+      // 'personal'  → user's chat channel (isPersonal: true) — user↔AI conversation
+      // 'proactive' → user's feed channel (isProactiveFeed: true) — automation outputs
+      let channelId = config.channelId as string | undefined;
       const content = config.content as string;
+      const metadata = (config.metadata ?? {}) as Record<string, unknown>;
 
-      if (!channelId || !content) {
-        throw new Error("channel_message requires channelId and content");
+      if (!content) {
+        throw new Error("channel_message requires content");
       }
 
-      const { createHash, randomUUID } = await import("crypto");
+      // Resolve chat channel (isPersonal)
+      if (!channelId && config.channelType === "personal") {
+        const personalChannel = await db.query.channels.findFirst({
+          where: and(
+            eq(channels.userId, ownerId),
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
+            drizzleSql`${channels.status} = 'active'`
+          ),
+          columns: { id: true },
+        });
+        channelId = personalChannel?.id;
+
+        if (!channelId) {
+          const [newChannel] = await db
+            .insert(channels)
+            .values({
+              id: randomUUID(),
+              userId: ownerId,
+              workspaceId,
+              channelType: "ai_thread" as any,
+              status: "active" as any,
+              agentId: "personal",
+              agentType: "personal" as any,
+              metadata: { isPersonal: true, isProactiveFeed: false } as any,
+            })
+            .returning({ id: channels.id });
+          channelId = newChannel.id;
+        }
+      }
+
+      // Resolve proactive feed channel (isProactiveFeed)
+      if (!channelId && config.channelType === "proactive") {
+        const proactiveChannel = await db.query.channels.findFirst({
+          where: and(
+            eq(channels.userId, ownerId),
+            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`,
+            drizzleSql`${channels.status} = 'active'`
+          ),
+          columns: { id: true },
+        });
+        channelId = proactiveChannel?.id;
+
+        if (!channelId) {
+          const [newChannel] = await db
+            .insert(channels)
+            .values({
+              id: randomUUID(),
+              userId: ownerId,
+              workspaceId,
+              channelType: "ai_thread" as any,
+              status: "active" as any,
+              agentId: "proactive",
+              agentType: "personal" as any,
+              metadata: { isPersonal: false, isProactiveFeed: true } as any,
+            })
+            .returning({ id: channels.id });
+          channelId = newChannel.id;
+        }
+      }
+
+      if (!channelId) {
+        throw new Error(
+          "channel_message requires channelId or channelType:'personal'|'proactive'"
+        );
+      }
+
+      const { createHash } = await import("crypto");
       const hash = createHash("sha256")
-        .update(JSON.stringify({ channelId, content, role: "system" }))
+        .update(JSON.stringify({ channelId, content, role: "assistant" }))
         .digest("hex");
-      const values: typeof messages.$inferInsert = {
-        id: randomUUID(),
-        channelId,
-        userId: "system",
-        role: "system",
-        content,
-        hash,
-        metadata: {
-          automationMessage: true,
-          ...automationContext,
-        } as (typeof messages.$inferInsert)["metadata"],
-      };
+
+      // Tag proactive channel messages so the feed can identify their type
+      // without needing to know which channel they came from.
+      const proactiveType =
+        config.channelType === "proactive"
+          ? (metadata.proactiveType ?? config.proactiveType ?? "insight")
+          : undefined;
+
       const [msg] = await db
         .insert(messages)
-        .values(values)
+        .values({
+          id: randomUUID(),
+          channelId,
+          userId: "system",
+          role: "assistant",
+          content,
+          hash,
+          metadata: {
+            automationMessage: true,
+            ...(proactiveType ? { proactiveType, proactiveAi: true } : {}),
+            ...metadata,
+            ...automationContext,
+          } as (typeof messages.$inferInsert)["metadata"],
+        })
         .returning({ id: messages.id });
 
       return { status: "sent", messageId: msg.id, channelId };
@@ -1168,13 +1281,8 @@ async function executeAutomationFlow(params: {
               .where(eq(automationStepRuns.id, stepRun.id));
 
             const isUrl =
-              process.env.AGENT_HUB_URL ||
-              process.env.INTELLIGENCE_HUB_URL ||
-              "http://localhost:3002";
-            const isApiKey =
-              process.env.AGENT_HUB_API_KEY ||
-              process.env.INTELLIGENCE_HUB_API_KEY ||
-              "";
+              process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+            const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
 
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 60_000);

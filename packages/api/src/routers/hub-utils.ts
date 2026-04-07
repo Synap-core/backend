@@ -5,6 +5,7 @@
  * for the Hub Protocol V1.0
  */
 
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { createLogger } from "@synap-core/core";
 import { getEventRepository } from "@synap/database";
@@ -16,14 +17,24 @@ const logger = createLogger({ module: "hub-utils" });
 // JWT CONFIGURATION
 // ============================================================================
 
+// HUB_JWT_SECRET: explicit env var takes priority. If not set, derive deterministically
+// from JWT_SECRET (which every pod already has). This eliminates a redundant secret.
 const HUB_JWT_SECRET =
   process.env.HUB_JWT_SECRET ||
-  process.env.SYNAP_SECRET_TOKEN ||
-  "change-me-in-production";
+  (process.env.JWT_SECRET
+    ? crypto
+        .createHmac("sha256", process.env.JWT_SECRET)
+        .update("hub-jwt-secret")
+        .digest("hex")
+    : "change-me-in-production");
 
-if (process.env.NODE_ENV === "production" && !process.env.HUB_JWT_SECRET) {
+if (
+  process.env.NODE_ENV === "production" &&
+  !process.env.HUB_JWT_SECRET &&
+  !process.env.JWT_SECRET
+) {
   throw new Error(
-    "HUB_JWT_SECRET is required in production. Set it to a secure random string of at least 32 characters."
+    "Neither HUB_JWT_SECRET nor JWT_SECRET is set. At least one is required in production."
   );
 }
 

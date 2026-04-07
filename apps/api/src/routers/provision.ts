@@ -68,22 +68,52 @@ provisionRouter.post("/connect", async (c) => {
   }
   const { token } = parsed.data;
 
-  // Verify the JWT via CP JWKS (ES256). cpUrl may be baked into the JWT as
-  // controlPlaneUrl, but for the first-ever provision the pod uses the env var.
-  const cpUrl =
-    config.server.controlPlaneUrl ??
-    (() => {
-      // Try to decode without verifying to extract controlPlaneUrl for JWKS fetch.
-      // This is safe — we verify the full signature right after.
-      try {
-        const decoded = JSON.parse(
-          Buffer.from(token.split(".")[1], "base64url").toString("utf-8")
-        ) as { controlPlaneUrl?: string };
-        return decoded.controlPlaneUrl;
-      } catch {
-        return undefined;
+  // Resolve the CP URL for JWKS verification, in trust-priority order:
+  //   1. CONTROL_PLANE_URL env var — most trusted (operator-set)
+  //   2. Previously-stored workspace.settings.controlPlane.url — trusted from prior provision
+  //   3. controlPlaneUrl claim in the unverified JWT — bootstrapping only (first provision)
+  //      RISK: on first provision only, we fetch JWKS from an untrusted URL. This is a
+  //      bootstrapping necessity. Mitigated by: (a) signature verification follows immediately,
+  //      (b) the CP URL is persisted after first provision so subsequent calls use path 1 or 2.
+  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+
+  if (!cpUrl) {
+    // Check previously stored CP URL from a successful prior provision
+    try {
+      const db = await getDb();
+      const [ws] = await db
+        .select({ settings: workspaces.settings })
+        .from(workspaces)
+        .limit(1);
+      const storedCp = (ws?.settings as Record<string, unknown>)
+        ?.controlPlane as { url?: string } | undefined;
+      if (storedCp?.url) {
+        cpUrl = storedCp.url;
       }
-    })();
+    } catch {
+      // DB may not be ready — continue to JWT fallback
+    }
+  }
+
+  if (!cpUrl) {
+    // Last resort: extract from unverified JWT (first-time provision only)
+    try {
+      const decoded = JSON.parse(
+        Buffer.from(token.split(".")[1], "base64url").toString("utf-8")
+      ) as { controlPlaneUrl?: string };
+      cpUrl = decoded.controlPlaneUrl;
+      if (cpUrl) {
+        logger.warn(
+          { cpUrl },
+          "provision/connect: CONTROL_PLANE_URL env var not set — using controlPlaneUrl " +
+            "from JWT claim for JWKS fetch. This is acceptable for first-time provisioning. " +
+            "Set CONTROL_PLANE_URL in .env to eliminate this trust dependency on future calls."
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   const payload = await verifyCpJwt<{
     type: string;

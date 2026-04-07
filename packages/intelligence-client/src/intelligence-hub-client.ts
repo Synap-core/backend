@@ -155,15 +155,8 @@ export class IntelligenceHubClient {
 
   constructor(baseUrl?: string, apiKey?: string) {
     this.baseUrl =
-      baseUrl ||
-      process.env.AGENT_HUB_URL ||
-      process.env.INTELLIGENCE_HUB_URL ||
-      "http://localhost:3002";
-    this.apiKey =
-      apiKey ||
-      process.env.AGENT_HUB_API_KEY ||
-      process.env.INTELLIGENCE_HUB_API_KEY ||
-      "";
+      baseUrl || process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+    this.apiKey = apiKey || process.env.INTELLIGENCE_HUB_API_KEY || "";
   }
 
   /**

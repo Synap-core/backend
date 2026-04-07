@@ -283,13 +283,9 @@ export async function getDefaultActiveService(): Promise<{
 
 /**
  * Create default client from environment.
- * Reads AGENT_HUB_URL first, falls back to INTELLIGENCE_HUB_URL for backward compat.
  */
 function createDefaultClient(): ResolvedService {
-  const baseUrl =
-    process.env.AGENT_HUB_URL ||
-    process.env.INTELLIGENCE_HUB_URL ||
-    "http://localhost:3001";
+  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
   return {
     serviceId: "default",
     endpoint: baseUrl,
