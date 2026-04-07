@@ -2820,7 +2820,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string;
 				schema: {
 					type: string;
-					properties: Record<string, import("zod").ZodType<unknown, unknown, import("zod/v4/core").$ZodTypeInternals<unknown, unknown>>>;
+					properties: Record<string, import("zod/index.cjs").ZodType<unknown, unknown, import("zod/v4/core/schemas.cjs").$ZodTypeInternals<unknown, unknown>>>;
 					required: string[];
 				};
 				metadata: {
