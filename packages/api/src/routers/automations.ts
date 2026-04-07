@@ -7,7 +7,9 @@
 
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
-import { validateEventPattern } from "@synap-core/types";
+// Import from events/unified sub-path because tsup's code-splitting drops
+// validateEventPattern from the main index.js and events/index.js bundles.
+import { validateEventPattern } from "@synap-core/types/events/unified";
 import {
   getDb,
   eq,

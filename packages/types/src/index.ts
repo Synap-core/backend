@@ -63,7 +63,22 @@ export * from "./profiles/index.js";
 export * from "./vault/index.js";
 
 // Unified event naming system (SubjectType, EventAction, EventPhase, EventName)
-export * from "./events/unified.js";
+export {
+  SUBJECT_TYPES,
+  EVENT_ACTIONS,
+  EVENT_PHASES,
+  buildEventName,
+  subjectTrigger,
+  validateEventPattern,
+  parseEventPattern,
+} from "./events/unified.js";
+export type {
+  SubjectType,
+  EventAction,
+  EventPhase,
+  EventName,
+  EventPattern,
+} from "./events/unified.js";
 
 // Automations (workflow DAGs)
 export * from "./automations/index.js";

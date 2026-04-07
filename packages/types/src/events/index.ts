@@ -192,4 +192,19 @@ export type DomainEventName =
   (typeof DomainEventNames)[keyof typeof DomainEventNames];
 
 // Unified backend event system (SubjectType, EventAction, EventPhase, EventName)
-export * from "./unified.js";
+export {
+  SUBJECT_TYPES,
+  EVENT_ACTIONS,
+  EVENT_PHASES,
+  buildEventName,
+  subjectTrigger,
+  validateEventPattern,
+  parseEventPattern,
+} from "./unified.js";
+export type {
+  SubjectType,
+  EventAction,
+  EventPhase,
+  EventName,
+  EventPattern,
+} from "./unified.js";

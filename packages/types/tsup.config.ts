@@ -16,6 +16,7 @@ export default defineConfig({
     "src/preferences/index.ts",
     "src/realtime/index.ts",
     "src/events/index.ts",
+    "src/events/unified.ts",
     "src/proposals/index.ts",
     "src/vault/index.ts",
     "src/notifications/index.ts",
@@ -24,6 +25,7 @@ export default defineConfig({
   format: ["esm"],
   dts: false,
   clean: true,
+  splitting: false,
   external: [
     "yjs",
     "@synap/database",
