@@ -75,14 +75,10 @@ app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
 app.use("/*", async (c, next) => {
   // /health — no auth. /entity-share/deliver — CP JWT auth handled inline.
   // /setup/agent — self-hosted setup, uses PROVISIONING_TOKEN auth handled inline.
-  const path = c.req.path;
   if (
-    path === "/health" ||
-    path.endsWith("/health") ||
-    path === "/entity-share/deliver" ||
-    path.endsWith("/entity-share/deliver") ||
-    path === "/setup/agent" ||
-    path.endsWith("/setup/agent")
+    c.req.path === "/health" ||
+    c.req.path === "/entity-share/deliver" ||
+    c.req.path === "/setup/agent"
   ) {
     return next();
   }
