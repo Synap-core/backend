@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
+import { validateEventPattern } from "@synap-core/types";
 import {
   getDb,
   eq,
@@ -159,6 +160,22 @@ export const automationsRouter = router({
       const database = await getDb();
       const createdBy = input.agentUserId ?? ctx.userId!;
 
+      // Validate event pattern at API boundary so bad patterns are caught early
+      // rather than silently never matching at runtime.
+      if (
+        input.triggerType === "event" &&
+        typeof input.triggerConfig?.eventPattern === "string"
+      ) {
+        try {
+          validateEventPattern(input.triggerConfig.eventPattern);
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (err as Error).message,
+          });
+        }
+      }
+
       const [row] = await database
         .insert(automations)
         .values({
@@ -223,6 +240,25 @@ export const automationsRouter = router({
           code: "NOT_FOUND",
           message: "Automation not found",
         });
+      }
+
+      // Validate event pattern on update too
+      if (
+        input.triggerConfig !== undefined &&
+        typeof (input.triggerConfig as Record<string, unknown>)
+          ?.eventPattern === "string"
+      ) {
+        try {
+          validateEventPattern(
+            (input.triggerConfig as Record<string, unknown>)
+              .eventPattern as string
+          );
+        } catch (err) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: (err as Error).message,
+          });
+        }
       }
 
       const updates: Record<string, unknown> = {
