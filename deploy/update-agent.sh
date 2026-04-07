@@ -10,10 +10,12 @@ set -e
 
 CALLBACK_URL="${1:-}"
 CALLBACK_JWT="${2:-}"
+DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE="docker compose -p synap -f ${DEPLOY_DIR}/docker-compose.yml"
 
 echo "[update-agent] Rebuilding pod-agent container..."
-docker compose build pod-agent
-docker compose up -d --force-recreate pod-agent
+$COMPOSE build pod-agent
+$COMPOSE up -d --force-recreate pod-agent
 
 echo "[update-agent] Done."
 

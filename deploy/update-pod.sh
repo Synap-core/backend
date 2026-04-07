@@ -24,10 +24,20 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
 log "=== Updating to ${VERSION} ==="
 
 # ─── Step 1: Set version and pull (old backend still serving) ──────────────
-log "Setting BACKEND_VERSION=main"
+# Map version tag to Docker image tag:
+#   main-<sha>  → "main" (SHA-specific tags are for audit; :main is the pull target)
+#   v1.2.3      → "v1.2.3" (exact release tag)
+#   latest/main → "main" (safe default)
+case "$VERSION" in
+  main-*|main) DOCKER_TAG="main" ;;
+  v*)          DOCKER_TAG="$VERSION" ;;
+  *)           DOCKER_TAG="main" ;;
+esac
+
+log "Setting BACKEND_VERSION=${DOCKER_TAG} (from version=${VERSION})"
 grep -q "^BACKEND_VERSION=" "$CD/.env" \
-  && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=main/" "$CD/.env" \
-  || echo "BACKEND_VERSION=main" >> "$CD/.env"
+  && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${DOCKER_TAG}/" "$CD/.env" \
+  || echo "BACKEND_VERSION=${DOCKER_TAG}" >> "$CD/.env"
 
 log "Pulling new images (backend still serving)..."
 $COMPOSE pull backend realtime backend-migrate 2>&1 || {
