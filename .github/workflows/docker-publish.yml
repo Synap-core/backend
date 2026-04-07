@@ -18,11 +18,6 @@ on:
 #   main     → :main + :sha-* (production ring — notifies CP)
 #   v*       → :vX.Y.Z + :latest (release — notifies CP)
 
-# Prevent duplicate runs: if push and workflow_run fire for the same commit, one wins
-concurrency:
-  group: docker-publish-${{ github.event.workflow_run.head_sha || github.sha }}
-  cancel-in-progress: true
-
 env:
   REGISTRY: ghcr.io
 
