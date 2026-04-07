@@ -135,6 +135,7 @@ jobs:
             -e MINIO_ACCESS_KEY=test \
             -e MINIO_SECRET_KEY=test \
             -e SYNAP_SERVICE_ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000 \
+            -e ALLOWED_ORIGINS=http://localhost:3000 \
             synap-backend:smoke-test
 
           # Wait up to 30s for health check
