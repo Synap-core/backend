@@ -2,150 +2,55 @@
 #
 # Pod Self-Update Script
 #
-# Runs inside a detached one-shot container (docker:cli) spawned by the
-# backend's trigger-update handler. This container survives the backend
-# restart because it runs independently via Docker socket.
+# Called by the pod-agent after receiving a CP-signed update command.
+# Pulls latest :main images, runs migrations, restarts with --force-recreate.
+# The pod-agent handles the callback to CP — this script just does the work.
 #
-# Usage: update-pod.sh <version> <update-id> <callback-url> <callback-jwt>
-#
-# Steps:
-#   1. Pull new images
-#   2. Run database migrations
-#   3. Restart backend + realtime services
-#   4. Wait for health check (up to 5 min)
-#   5. Report result to CP via callback
-#   6. On failure: rollback to previous version
+# Usage: update-pod.sh <version-tag>
 #
 set -e
 
 VERSION="$1"
-UPDATE_ID="$2"
-CALLBACK_URL="$3"
-CALLBACK_JWT="$4"
-DEPLOY_DIR="/deploy"
-COMPOSE="docker compose -f ${DEPLOY_DIR}/docker-compose.yml"
-LOG="/tmp/synap-update-${UPDATE_ID}.log"
+CD="$(dirname "$0")"
+COMPOSE="docker compose -f $CD/docker-compose.yml"
 
-log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG"; }
+log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
 
-report() {
-  STATUS="$1"
-  ERROR="$2"
-  if [ -n "$CALLBACK_URL" ] && [ -n "$CALLBACK_JWT" ]; then
-    wget -q -O - --timeout=10 \
-      --header="Authorization: Bearer ${CALLBACK_JWT}" \
-      --header="Content-Type: application/json" \
-      --post-data="{\"updateId\":\"${UPDATE_ID}\",\"status\":\"${STATUS}\",\"version\":\"${VERSION}\",\"error\":$(printf '%s' "${ERROR:-null}" | sed 's/"/\\"/g; s/^/"/; s/$/"/' | sed 's/^"null"$/null/')}" \
-      "$CALLBACK_URL" 2>/dev/null || log "WARN: callback failed (non-fatal)"
-  fi
-}
+[ -z "$VERSION" ] && { log "ERROR: version required"; exit 1; }
+log "=== Updating to ${VERSION} ==="
 
-# Validate inputs
-if [ -z "$VERSION" ]; then
-  log "ERROR: version argument required"
-  exit 1
-fi
+# Always pull :main (latest) — version-specific tags may not exist for all services.
+# The VERSION arg is for tracking/logging, not for the Docker tag.
+log "Setting BACKEND_VERSION=main"
+grep -q "^BACKEND_VERSION=" "$CD/.env" && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=main/" "$CD/.env" || echo "BACKEND_VERSION=main" >> "$CD/.env"
 
-log "=== Starting pod update to ${VERSION} ==="
+# Pull fresh images
+log "Pulling images..."
+$COMPOSE pull backend realtime backend-migrate 2>&1 || { log "ERROR: pull failed"; exit 1; }
 
-# Save current version for rollback
-PREV_VERSION=$(grep "^BACKEND_VERSION=" "${DEPLOY_DIR}/.env" 2>/dev/null | cut -d= -f2 || echo "latest")
-log "Previous version: ${PREV_VERSION}"
-
-# ─── Step 1: Pull images ───
-# Try pulling from the CP registry mirror (registry.synap.live) first.
-# This avoids GHCR rate limits during fleet-wide rolling updates since the mirror
-# caches images after the first pull. Falls back to GHCR on any failure.
-REGISTRY_MIRROR="${REGISTRY_MIRROR:-registry.synap.live}"
-MIRROR_USED=false
-
-if [ -n "$REGISTRY_MIRROR" ]; then
-  log "Attempting pull from registry mirror: ${REGISTRY_MIRROR}..."
-  ORIG_IMAGE=$(grep -m1 'image:.*ghcr.io' "${DEPLOY_DIR}/docker-compose.yml" | sed 's/.*image: *//' | sed "s/\${BACKEND_VERSION:-latest}/${VERSION}/g" | sed "s/\${GITHUB_REPOSITORY:-synap-core\/backend}/synap-core\/backend/g")
-  MIRROR_IMAGE="${REGISTRY_MIRROR}/${ORIG_IMAGE#ghcr.io/}"
-
-  if docker pull "$MIRROR_IMAGE" 2>&1 | tee -a "$LOG"; then
-    # Tag the mirror image as the original so docker compose sees it
-    docker tag "$MIRROR_IMAGE" "$ORIG_IMAGE" 2>&1 | tee -a "$LOG"
-    MIRROR_USED=true
-    log "Mirror pull succeeded"
-  else
-    log "WARN: Mirror pull failed, falling back to GHCR"
-  fi
-fi
-
-if [ "$MIRROR_USED" = "false" ]; then
-  log "Pulling images from GHCR..."
-  if ! $COMPOSE pull backend realtime backend-migrate 2>&1 | tee -a "$LOG"; then
-    log "ERROR: Image pull failed"
-    report "failed" "Image pull failed"
-    exit 1
-  fi
-fi
-
-# ─── Step 2: Update .env version ───
-if [ "$VERSION" != "latest" ]; then
-  if grep -q "^BACKEND_VERSION=" "${DEPLOY_DIR}/.env" 2>/dev/null; then
-    sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${VERSION}/" "${DEPLOY_DIR}/.env"
-  else
-    echo "BACKEND_VERSION=${VERSION}" >> "${DEPLOY_DIR}/.env"
-  fi
-  log "Updated .env BACKEND_VERSION=${VERSION}"
-fi
-
-# ─── Step 3: Run migrations ───
+# Run migrations
 log "Running migrations..."
-$COMPOSE run --rm backend-migrate 2>&1 | tee -a "$LOG" || log "WARN: Migration exited non-zero (may be OK)"
+$COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration non-zero"
 
-# ─── Step 4: Restart services ───
-log "Restarting backend + realtime..."
-$COMPOSE up -d --remove-orphans backend realtime 2>&1 | tee -a "$LOG"
+# Restart with --force-recreate to ensure the new image is used.
+# Without this, docker compose may keep the old container if the image
+# digest changed but the service definition didn't.
+log "Restarting (force-recreate)..."
+$COMPOSE up -d --force-recreate --remove-orphans backend realtime 2>&1
 
-# ─── Step 5: Health check ───
-log "Waiting for health check..."
-HEALTHY=false
+# Health check (up to 5 min)
+log "Health check..."
+OK=false
 for i in $(seq 1 30); do
   sleep 10
-  if wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null; then
-    HEALTHY=true
-    log "Health check passed after ${i}0 seconds"
-    break
-  fi
+  wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null && OK=true && break
   log "Health check attempt $i/30..."
 done
 
-if [ "$HEALTHY" = "true" ]; then
-  log "=== Update to ${VERSION} completed successfully ==="
-  report "completed" ""
+if [ "$OK" = "true" ]; then
+  log "=== Update to ${VERSION} complete ==="
   exit 0
 fi
 
-# ─── Step 6: Rollback ───
-log "ERROR: Health check failed after 5 minutes. Rolling back to ${PREV_VERSION}..."
-
-if [ "$PREV_VERSION" != "latest" ] && [ -n "$PREV_VERSION" ]; then
-  sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${PREV_VERSION}/" "${DEPLOY_DIR}/.env"
-fi
-
-$COMPOSE pull backend realtime 2>&1 | tee -a "$LOG"
-$COMPOSE up -d --remove-orphans backend realtime 2>&1 | tee -a "$LOG"
-
-# Wait for rollback health
-ROLLBACK_OK=false
-for i in $(seq 1 18); do
-  sleep 10
-  if wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null; then
-    ROLLBACK_OK=true
-    break
-  fi
-done
-
-if [ "$ROLLBACK_OK" = "true" ]; then
-  log "Rollback to ${PREV_VERSION} succeeded"
-  report "rolled_back" "Health check failed after update. Rolled back to ${PREV_VERSION}."
-else
-  log "CRITICAL: Both update and rollback failed"
-  report "failed" "Update and rollback both failed. Manual intervention required."
-fi
-
+log "ERROR: Health check failed after 5 minutes"
 exit 1
