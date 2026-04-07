@@ -95,3 +95,4 @@ log "Cleanup done (reclaimable: ${FREED:-unknown})"
 
 log "=== Update to ${VERSION} complete ==="
 exit 0
+

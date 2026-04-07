@@ -30,6 +30,7 @@
  * - getStats()        - Relation count statistics
  * - getConnections()  - UNIFIED: graph + property links + thread references
  * - create()          - Create a new semantic relation
+ * - update()          - Update relation metadata (by ID or by source+target+type)
  * - delete()          - Delete a semantic relation
  */
 
@@ -274,30 +275,47 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const allRelations = await db.query.relations.findMany({
-        where: and(
-          eq(relations.userId, ctx.userId),
-          or(
-            eq(relations.sourceEntityId, input.entityId),
-            eq(relations.targetEntityId, input.entityId)
-          )
-        ),
-      });
+      // Use SQL COUNT to avoid loading all rows into memory
+      const countByType = async (direction: "source" | "target") => {
+        const col =
+          direction === "source"
+            ? relations.sourceEntityId
+            : relations.targetEntityId;
+        const rows = await db
+          .select({ type: relations.type })
+          .from(relations)
+          .where(
+            and(eq(col, input.entityId), eq(relations.userId, ctx.userId))
+          );
+        const counts: Record<string, number> = {};
+        for (const r of rows) {
+          counts[r.type] = (counts[r.type] ?? 0) + 1;
+        }
+        return counts;
+      };
 
-      // Count by type
+      const [outCounts, inCounts] = await Promise.all([
+        countByType("source"),
+        countByType("target"),
+      ]);
+
       const byType: Record<string, number> = {};
-      allRelations.forEach((rel) => {
-        byType[rel.type] = (byType[rel.type] || 0) + 1;
-      });
+      let outgoingCount = 0;
+      let incomingCount = 0;
+
+      for (const [t, c] of Object.entries(outCounts)) {
+        byType[t] = (byType[t] ?? 0) + c;
+        outgoingCount += c;
+      }
+      for (const [t, c] of Object.entries(inCounts)) {
+        byType[t] = (byType[t] ?? 0) + c;
+        incomingCount += c;
+      }
 
       return {
-        total: allRelations.length,
-        outgoing: allRelations.filter(
-          (r) => r.sourceEntityId === input.entityId
-        ).length,
-        incoming: allRelations.filter(
-          (r) => r.targetEntityId === input.entityId
-        ).length,
+        total: outgoingCount + incomingCount,
+        outgoing: outgoingCount,
+        incoming: incomingCount,
         byType,
       };
     }),
@@ -603,6 +621,116 @@ export const relationsRouter = router({
           threads: channelLinks.length,
         },
       };
+    }),
+
+  /**
+   * Update a relation's metadata (and optionally its type).
+   *
+   * Identify the relation either by its ID or by the (sourceEntityId, targetEntityId, type)
+   * triple — the triple form is used by Relay's campaign contact pipeline where the
+   * caller doesn't have the relation ID at hand.
+   *
+   * Only metadata and type are updatable. The source/target/workspace are immutable.
+   */
+  update: protectedProcedure
+    .input(
+      z
+        .object({
+          // Identify by ID
+          id: z.string().uuid().optional(),
+          // OR identify by triple (source + target + type) — at least one form required
+          sourceEntityId: z.string().uuid().optional(),
+          targetEntityId: z.string().uuid().optional(),
+          // Fields to update
+          type: z.string().min(1).optional(),
+          metadata: z.record(z.string(), z.any()).optional(),
+          workspaceId: z.string().uuid().optional(),
+        })
+        .refine(
+          (v) => v.id || (v.sourceEntityId && v.targetEntityId),
+          "Provide either id or (sourceEntityId + targetEntityId)"
+        )
+    )
+    .mutation(async ({ input, ctx }) => {
+      const effectiveWorkspaceId =
+        input.workspaceId || ctx.workspaceId || undefined;
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const relationRepo = new RelationRepository(database, eventRepo);
+
+      // Resolve relation ID if not provided directly
+      let relationId = input.id;
+      if (!relationId) {
+        const existing = await database.query.relations.findFirst({
+          where: and(
+            eq(relations.sourceEntityId, input.sourceEntityId!),
+            eq(relations.targetEntityId, input.targetEntityId!),
+            ...(input.type ? [eq(relations.type, input.type)] : []),
+            ...(effectiveWorkspaceId
+              ? [eq(relations.workspaceId, effectiveWorkspaceId as any)]
+              : [])
+          ),
+          columns: { id: true },
+        });
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Relation not found",
+          });
+        }
+        relationId = existing.id;
+      }
+
+      // 1. Permission check
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: effectiveWorkspaceId,
+        subjectType: "relation",
+        action: "update",
+        data: { id: relationId },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      // 2. Update
+      const relation = await relationRepo.update(
+        relationId,
+        { type: input.type, metadata: input.metadata },
+        ctx.userId
+      );
+
+      // 3. Audit + side-effects
+      auditLog({
+        subjectType: "relation",
+        action: "update",
+        phase: "completed",
+        subjectId: relationId,
+        userId: ctx.userId,
+        workspaceId: effectiveWorkspaceId,
+        data: { metadata: input.metadata, type: input.type },
+      });
+
+      emitSideEffects({
+        subjectType: "relation",
+        action: "update",
+        subjectId: relationId,
+        userId: ctx.userId,
+        workspaceId: effectiveWorkspaceId,
+        data: {
+          relationType: relation.type,
+          fromEntityId: relation.sourceEntityId,
+          toEntityId: relation.targetEntityId,
+        },
+      });
+
+      return { id: relation.id, status: "updated" as const };
     }),
 
   /**
