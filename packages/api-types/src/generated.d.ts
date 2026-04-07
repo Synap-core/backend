@@ -8496,6 +8496,39 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		telegramContacts: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				people: {
+					externalId: string;
+					name: string;
+					phone?: string | null | undefined;
+					username?: string | null | undefined;
+					messageCount?: number | undefined;
+				}[];
+			};
+			output: {
+				jobId: string | null;
+				total: number;
+			};
+			meta: object;
+		}>;
+		linkedInContacts: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				contacts: {
+					externalId: string;
+					name: string;
+					email?: string | null | undefined;
+					company?: string | null | undefined;
+					role?: string | null | undefined;
+					connectedOn?: string | null | undefined;
+				}[];
+			};
+			output: {
+				jobId: string | null;
+				total: number;
+			};
+			meta: object;
+		}>;
 	}>>;
 	connectors: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

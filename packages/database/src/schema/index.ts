@@ -118,6 +118,9 @@ export * from "./widget-definitions.js";
 // NEW: Entity External Links (connector sync tracking)
 export * from "./entity-external-links.js";
 
+// NEW: Entity Identity Signals (cross-source person dedup)
+export * from "./entity-identity-signals.js";
+
 // NEW: Unified Notification System
 export * from "./notifications.js";
 

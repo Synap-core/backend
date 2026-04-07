@@ -21,6 +21,15 @@ import {
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { entitiesRouter } from "./entities.js";
 import { channelsRouter } from "./channels.js";
+import { getBoss } from "@synap/jobs";
+import {
+  TELEGRAM_BULK_IMPORT_QUEUE,
+  type TelegramPersonPayload,
+} from "@synap/jobs/workers/telegram-bulk-import.js";
+import {
+  LINKEDIN_BULK_IMPORT_QUEUE,
+  type LinkedInContactPayload,
+} from "@synap/jobs/workers/linkedin-bulk-import.js";
 
 const logger = createLogger({ module: "import-router" });
 
@@ -320,5 +329,98 @@ export const importRouter = router({
         batchId,
         ...stats,
       };
+    }),
+
+  // ─── Telegram contacts bulk import ──────────────────────────────────────────
+
+  /**
+   * Queue a batch of Telegram contacts for server-side entity creation.
+   *
+   * The client (relay-app, browser) parses the Telegram Desktop JSON export
+   * and sends the contact list here. Heavy entity creation + dedup runs
+   * asynchronously via pg-boss so the HTTP request returns immediately.
+   *
+   * Returns a job ID — clients can poll background-tasks for progress.
+   */
+  telegramContacts: workspaceProcedure
+    .input(
+      z.object({
+        people: z
+          .array(
+            z.object({
+              externalId: z.string().min(1),
+              name: z.string().min(1).max(500),
+              phone: z.string().nullable().optional(),
+              username: z.string().nullable().optional(),
+              messageCount: z.number().int().nonnegative().optional(),
+            })
+          )
+          .min(1)
+          .max(5000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId!;
+      const userId = ctx.userId!;
+
+      const boss = getBoss();
+      const jobId = await boss.send(TELEGRAM_BULK_IMPORT_QUEUE, {
+        workspaceId,
+        userId,
+        people: input.people as TelegramPersonPayload[],
+      });
+
+      logger.info(
+        { workspaceId, userId, total: input.people.length, jobId },
+        "Telegram bulk import job queued"
+      );
+
+      return { jobId, total: input.people.length };
+    }),
+
+  // ─── LinkedIn connections bulk import ───────────────────────────────────────
+
+  /**
+   * Queue a batch of LinkedIn connections for server-side entity creation.
+   *
+   * The client parses the LinkedIn Connections.csv and sends the contact list
+   * here. Heavy entity creation + dedup runs asynchronously via pg-boss so
+   * the HTTP request returns immediately.
+   */
+  linkedInContacts: workspaceProcedure
+    .input(
+      z.object({
+        contacts: z
+          .array(
+            z.object({
+              externalId: z.string().min(1),
+              name: z.string().min(1).max(500),
+              email: z.string().nullable().optional(),
+              company: z.string().nullable().optional(),
+              role: z.string().nullable().optional(),
+              connectedOn: z.string().nullable().optional(),
+            })
+          )
+          .min(1)
+          .max(5000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId!;
+      const userId = ctx.userId!;
+
+      const boss = getBoss();
+      const jobId = await boss.send(LINKEDIN_BULK_IMPORT_QUEUE, {
+        workspaceId,
+        userId,
+        contacts: input.contacts as LinkedInContactPayload[],
+      });
+
+      logger.info(
+        { workspaceId, userId, total: input.contacts.length, jobId },
+        "LinkedIn bulk import job queued"
+      );
+
+      return { jobId, total: input.contacts.length };
     }),
 });

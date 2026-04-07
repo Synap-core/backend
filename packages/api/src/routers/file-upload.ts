@@ -11,12 +11,14 @@ import { Hono } from "hono";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { storage } from "@synap/storage";
-import { db, eq, and } from "@synap/database";
 import {
-  entities,
-  channelContextItems,
-  profiles,
-} from "@synap/database/schema";
+  db,
+  eq,
+  and,
+  EntityRepository,
+  eventRepository,
+} from "@synap/database";
+import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
 
 const logger = createLogger({ module: "file-upload" });
@@ -97,8 +99,8 @@ fileUploadApp.post("/upload", async (c) => {
     }
 
     const originalFileName = file.name || "unnamed";
-    const entityId = randomUUID();
-    const storagePath = `files/${workspaceId}/${entityId}/${originalFileName}`;
+    const storageId = randomUUID();
+    const storagePath = `files/${workspaceId}/${storageId}/${originalFileName}`;
 
     // Read file into Buffer
     const arrayBuffer = await file.arrayBuffer();
@@ -106,42 +108,34 @@ fileUploadApp.post("/upload", async (c) => {
 
     // Upload to storage (MinIO / R2)
     logger.info(
-      { entityId, fileName: originalFileName, size: file.size, mimeType },
+      { storageId, fileName: originalFileName, size: file.size, mimeType },
       "Uploading file to storage"
     );
 
     await storage.upload(storagePath, buffer, { contentType: mimeType });
 
-    // Resolve the "file" profile ID
-    const fileProfile = await db.query.profiles.findFirst({
-      where: eq(profiles.slug, "file"),
-      columns: { id: true },
-    });
-
-    // Build entity properties
-    const properties: Record<string, unknown> = {
-      fileName: originalFileName,
-      mimeType,
-      fileSize: file.size,
-      storageKey: storagePath,
-    };
-
-    // Create entity
-    const [_entity] = await db
-      .insert(entities)
-      .values({
-        id: entityId,
-        userId,
-        workspaceId,
-        type: "file",
-        profileId: fileProfile?.id ?? null,
+    // Create entity via EntityRepository — handles profile resolution, property indexing, event emission
+    const entityRepo = new EntityRepository(db, eventRepository);
+    const createdEntity = await entityRepo.create(
+      {
+        profileSlug: "file",
         title: originalFileName,
-        properties,
-      })
-      .returning();
+        workspaceId,
+        userId,
+        properties: {
+          fileName: originalFileName,
+          mimeType,
+          fileSize: file.size,
+          storageKey: storagePath,
+        },
+      },
+      userId
+    );
+    // Use the canonical entity ID returned by the repository
+    const createdEntityId = createdEntity.id;
 
     logger.info(
-      { entityId, workspaceId, fileName: originalFileName },
+      { entityId: createdEntityId, workspaceId, fileName: originalFileName },
       "File entity created"
     );
 
@@ -153,7 +147,7 @@ fileUploadApp.post("/upload", async (c) => {
           .values({
             channelId,
             objectType: "entity",
-            objectId: entityId,
+            objectId: createdEntityId,
             relationshipType: "used_as_context",
             userId,
             workspaceId,
@@ -162,7 +156,7 @@ fileUploadApp.post("/upload", async (c) => {
       } catch (err) {
         // Non-fatal — entity is still created
         logger.warn(
-          { err, entityId, channelId },
+          { err, entityId: createdEntityId, channelId },
           "Failed to link file to channel context"
         );
       }
@@ -179,7 +173,7 @@ fileUploadApp.post("/upload", async (c) => {
     }
 
     return c.json({
-      entityId,
+      entityId: createdEntityId,
       fileName: originalFileName,
       mimeType,
       size: file.size,

@@ -64,6 +64,14 @@ import {
   SYNC_PUSH_FILES_QUEUE,
 } from "./sync-push-files.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
+import {
+  handleTelegramBulkImport,
+  TELEGRAM_BULK_IMPORT_QUEUE,
+} from "./telegram-bulk-import.js";
+import {
+  handleLinkedInBulkImport,
+  LINKEDIN_BULK_IMPORT_QUEUE,
+} from "./linkedin-bulk-import.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -107,6 +115,8 @@ const ALL_QUEUES = [
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
   SYNC_PULL_QUEUE,
+  TELEGRAM_BULK_IMPORT_QUEUE,
+  LINKEDIN_BULK_IMPORT_QUEUE,
 ];
 
 /**
@@ -319,6 +329,18 @@ export async function registerAllWorkers(): Promise<void> {
   // Sync pull (cron: every 60 seconds — pulls events from pull/bidirectional peers)
   await boss.work(SYNC_PULL_QUEUE, async () => handleSyncPull());
   logger.info("Registered worker: sync-pull");
+
+  // Telegram bulk import (on-demand — triggered by relay-app / browser after parsing export)
+  await boss.work(TELEGRAM_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
+    handleTelegramBulkImport(job)
+  );
+  logger.info("Registered worker: telegram-bulk-import");
+
+  // LinkedIn bulk import (on-demand — triggered by relay-app after parsing Connections.csv)
+  await boss.work(LINKEDIN_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
+    handleLinkedInBulkImport(job)
+  );
+  logger.info("Registered worker: linkedin-bulk-import");
 
   logger.info("All workers registered");
 }

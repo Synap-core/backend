@@ -124,6 +124,34 @@ function mapNangoRecord(
       }
       return null;
     }
+    case "google-mail": {
+      // Emails map to "note" entities — they're captured communications.
+      // The subject becomes the title; body_text + snippet go into content.
+      // from_email is stored so the pod can later match it to a person entity.
+      const fromEmail = (record.from_email as string) || "";
+      const subject = (record.subject as string) || "(no subject)";
+      const bodyText = (record.body_text as string) || null;
+      const snippet = (record.snippet as string) || null;
+      const content = bodyText || snippet || null;
+      const date = (record.date as string) || null;
+
+      return {
+        profileSlug: "note",
+        title: subject,
+        externalId: record.id as string,
+        properties: {
+          content,
+          fromEmail,
+          fromName: record.from_name || null,
+          toEmails: Array.isArray(record.to_emails) ? record.to_emails : [],
+          emailDate: date,
+          threadId: record.thread_id || null,
+          isUnread: record.is_unread ?? false,
+          source: "google-mail",
+          tags: ["email"],
+        },
+      };
+    }
     default:
       return null;
   }

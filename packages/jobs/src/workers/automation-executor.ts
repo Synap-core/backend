@@ -36,6 +36,8 @@ import {
   entities,
   messages,
   drizzleSql,
+  EntityRepository,
+  eventRepository,
 } from "@synap/database";
 import type {
   FlowDefinition,
@@ -362,31 +364,23 @@ async function executeOutputStep(
 
   switch (data.outputType) {
     case "entity_create": {
-      const profileSlug = config.profileSlug as string;
+      const profileSlug = (config.profileSlug as string) ?? "note";
       const title = config.title as string;
       const properties = (config.properties ?? {}) as Record<string, unknown>;
 
-      const [entity] = await db
-        .insert(entities)
-        .values({
-          userId: "system",
-          workspaceId,
-          type: profileSlug ?? "note",
+      // EntityRepository handles: profile resolution, pod-wide scoping, property indexing, event emission
+      const entityRepo = new EntityRepository(db, eventRepository);
+      const entity = await entityRepo.create(
+        {
+          profileSlug,
           title,
           properties,
-        })
-        .returning({ id: entities.id, title: entities.title });
-
-      // Emit side effects so the entity gets indexed, embedded, and can trigger further automations
-      await emitSideEffects({
-        subjectType: "entity",
-        action: "create",
-        subjectId: entity.id,
-        userId: "system",
-        workspaceId,
-        data: { profileSlug, title },
-        automationContext,
-      });
+          workspaceId,
+          userId: ownerId,
+          skipValidation: true,
+        },
+        ownerId
+      );
 
       return { status: "created", entityId: entity.id, title: entity.title };
     }
