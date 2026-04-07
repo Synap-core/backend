@@ -11,7 +11,7 @@ CALLBACK_JWT="$2"
 shift 2 2>/dev/null || true
 
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -f ${DEPLOY_DIR}/docker-compose.yml"
+COMPOSE="docker compose -p synap -f ${DEPLOY_DIR}/docker-compose.yml"
 ENV_FILE="${DEPLOY_DIR}/.env"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [configure] $*"; }

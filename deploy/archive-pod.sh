@@ -13,7 +13,7 @@ UPLOAD_URL="$1"
 CALLBACK_URL="$2"
 CALLBACK_JWT="$3"
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -f ${DEPLOY_DIR}/docker-compose.yml"
+COMPOSE="docker compose -p synap -f ${DEPLOY_DIR}/docker-compose.yml"
 
 ARCHIVE="/tmp/pod-archive.tar.gz"
 DB_DUMP="/tmp/database.sql.gz"
