@@ -50,7 +50,6 @@ import { syncManagementRouter } from "./routers/sync-management.js";
 /**
  * Core API Router
  */
-// @ts-ignore TS2742 — zod portability warning (same version, different resolution path in composite project)
 const _coreRouter = router({
   setup: setupRouter,
   events: eventsRouter,
