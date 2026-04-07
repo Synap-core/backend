@@ -73,13 +73,12 @@ app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
  * Middleware: validate API key and set userId + scopes (skip for /health)
  */
 app.use("/*", async (c, next) => {
-  // /health — no auth. /entity-share/deliver — CP JWT auth handled inline.
-  // /setup/agent — self-hosted setup, uses PROVISIONING_TOKEN auth handled inline.
-  if (
-    c.req.path === "/health" ||
-    c.req.path === "/entity-share/deliver" ||
-    c.req.path === "/setup/agent"
-  ) {
+  // Skip auth for endpoints that handle their own authentication inline.
+  // c.req.path may include the mount prefix (/api/hub/...) depending on
+  // Hono version, so we check both forms.
+  const reqPath = c.req.path;
+  const skipAuthPaths = ["/health", "/entity-share/deliver", "/setup/agent"];
+  if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
     return next();
   }
   const authHeader = c.req.header("authorization") ?? null;
