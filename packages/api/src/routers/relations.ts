@@ -700,9 +700,13 @@ export const relationsRouter = router({
       }
 
       // 2. Update
+      const updateData: { type?: string; metadata?: Record<string, unknown> } =
+        {};
+      if (input.type !== undefined) updateData.type = input.type;
+      if (input.metadata !== undefined) updateData.metadata = input.metadata;
       const relation = await relationRepo.update(
         relationId,
-        { type: input.type, metadata: input.metadata },
+        updateData as Parameters<typeof relationRepo.update>[1],
         ctx.userId
       );
 
