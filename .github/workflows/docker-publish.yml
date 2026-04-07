@@ -124,7 +124,8 @@ jobs:
             --network host \
             -e DATABASE_URL=postgresql://synap:testpass@localhost:5432/synap \
             -e NODE_ENV=production \
-            -e JWT_SECRET=smoke-test-secret \
+            -e JWT_SECRET=smoke-test-secret-that-is-at-least-32-chars \
+            -e HUB_JWT_SECRET=smoke-test-hub-secret-at-least-32-chars \
             -e KRATOS_PUBLIC_URL=http://localhost:9999 \
             -e KRATOS_ADMIN_URL=http://localhost:9999 \
             -e TYPESENSE_API_KEY=test \
