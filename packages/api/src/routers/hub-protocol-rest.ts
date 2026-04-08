@@ -3909,17 +3909,25 @@ app.post("/setup/agent", async (c) => {
 
   let authenticated = false;
   let authMethod: "jwt" | "provisioning_token" = "provisioning_token";
+  let jwtEmail: string | null = null;
+  let jwtName: string | null = null;
 
   // Try 1: CP-signed JWT (for managed pods via CLI / CP relay)
   const cpUrl = config.server.controlPlaneUrl;
   try {
-    const payload = await verifyCpJwt<{ type: string }>(token, cpUrl);
+    const payload = await verifyCpJwt<{
+      type: string;
+      email?: string;
+      name?: string;
+    }>(token, cpUrl);
     if (
       payload &&
       (payload.type === "agent_setup" || payload.type === "addon_activate")
     ) {
       authenticated = true;
       authMethod = "jwt";
+      jwtEmail = typeof payload.email === "string" ? payload.email : null;
+      jwtName = typeof payload.name === "string" ? payload.name : null;
     }
   } catch {
     // Not a valid JWT — fall through to PROVISIONING_TOKEN check
@@ -3984,10 +3992,32 @@ app.post("/setup/agent", async (c) => {
     // If no Agent OS workspace exists (pod is fresh or only has generic workspaces),
     // auto-seed one from the bundled template.
     if (!ws && !requestedWorkspaceId) {
-      const ownerCandidate = await db.query.users.findFirst({
+      let ownerCandidate = await db.query.users.findFirst({
         where: (u, { eq }) => eq(u.userType, "human"),
         columns: { id: true, name: true },
       });
+
+      // No human user on pod yet — create one from the CP JWT identity.
+      // This handles fresh dedicated pods where the Kratos webhook hasn't fired.
+      // kratosIdentityId is null; it will be linked when the user logs in via Browser/Relay.
+      if (!ownerCandidate && jwtEmail) {
+        const newUserId = randomUUID();
+        await db.insert(users).values({
+          id: newUserId,
+          email: jwtEmail,
+          name: jwtName ?? null,
+          userType: "human",
+          emailVerified: true,
+          kratosIdentityId: null,
+          timezone: "UTC",
+          locale: "en",
+        });
+        ownerCandidate = { id: newUserId, name: jwtName ?? null };
+        logger.info(
+          { userId: newUserId, email: jwtEmail },
+          "setup/agent: created human user from CP JWT (Kratos webhook not yet fired)"
+        );
+      }
 
       if (ownerCandidate) {
         // 1) definition from CLI body  2) bundled file fallback (dist/ → ../../../ = repo root)
