@@ -2820,7 +2820,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string;
 				schema: {
 					type: string;
-					properties: Record<string, import("zod/index.cjs").ZodType<unknown, unknown, import("zod/v4/core/schemas.cjs").$ZodTypeInternals<unknown, unknown>>>;
+					properties: Record<string, import("zod").ZodType<unknown, unknown, import("zod/v4/core").$ZodTypeInternals<unknown, unknown>>>;
 					required: string[];
 				};
 				metadata: {
@@ -4927,6 +4927,26 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					structural: number;
 					threads: number;
 				};
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id?: string | undefined;
+				sourceEntityId?: string | undefined;
+				targetEntityId?: string | undefined;
+				type?: string | undefined;
+				metadata?: Record<string, any> | undefined;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+				id?: undefined;
+			} | {
+				id: string;
+				status: "updated";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -8753,7 +8773,7 @@ declare const _coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					enabled?: boolean | undefined;
 					frequencyDays?: number | undefined;
 				} | undefined;
-				nudgeDensity?: "minimal" | "balanced" | "proactive" | undefined;
+				nudgeDensity?: "proactive" | "minimal" | "balanced" | undefined;
 				mutedUntil?: string | null | undefined;
 			};
 			output: {

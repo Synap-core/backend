@@ -43,7 +43,10 @@ import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
-import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import {
+  ensurePersonalChannel,
+  ensureProactiveFeedChannel,
+} from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 
 const logger = createLogger({ module: "workspaces" });
@@ -646,13 +649,21 @@ export const workspacesRouter = router({
         },
       });
 
-      // 4. Auto-provision personal AI timeline for the new member (idempotent)
+      // 4. Auto-provision personal chat + proactive feed channels for the new member (idempotent)
       ensurePersonalChannel(input.userId, input.workspaceId).catch((err) => {
         logger.warn(
           { err },
           "Failed to provision personal channel on workspace join"
         );
       });
+      ensureProactiveFeedChannel(input.userId, input.workspaceId).catch(
+        (err) => {
+          logger.warn(
+            { err },
+            "Failed to provision proactive feed channel on workspace join"
+          );
+        }
+      );
 
       return {
         status: "added" as const,

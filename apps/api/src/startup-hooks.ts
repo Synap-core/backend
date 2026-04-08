@@ -194,11 +194,56 @@ async function loadCorsOrigins(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Critical secrets validation — fail fast before accepting traffic
+// ---------------------------------------------------------------------------
+
+const REQUIRED_SECRETS: string[] = [
+  "JWT_SECRET",
+  "POSTGRES_PASSWORD",
+  "SYNAP_SERVICE_ENCRYPTION_KEY",
+  "KRATOS_SECRETS_COOKIE",
+];
+
+const RECOMMENDED_SECRETS: string[] = [
+  "VAULT_SERVER_KEY",
+  "HUB_PROTOCOL_API_KEY",
+  "KRATOS_SECRETS_CIPHER",
+];
+
+function validateCriticalSecrets(): void {
+  const missing = REQUIRED_SECRETS.filter((key) => !process.env[key]?.trim());
+
+  if (missing.length > 0) {
+    logger.error(
+      { missing },
+      "FATAL: Required environment variables are not set. " +
+        "The pod cannot start safely without these secrets. " +
+        "Run install.sh to generate them, or set them manually in .env."
+    );
+    process.exit(1);
+  }
+
+  const missingRecommended = RECOMMENDED_SECRETS.filter(
+    (key) => !process.env[key]?.trim()
+  );
+  if (missingRecommended.length > 0) {
+    logger.warn(
+      { missingRecommended },
+      "Some optional but recommended secrets are not set. " +
+        "Vault features and Hub Protocol may be unavailable."
+    );
+  }
+}
+
 /**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
+
+  // Validate critical secrets first — exits the process if any are missing
+  validateCriticalSecrets();
 
   ensureChannelGatewayKey();
   await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod

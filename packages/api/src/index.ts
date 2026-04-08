@@ -26,7 +26,10 @@ export { syncReceiveApp } from "./routers/sync.js";
 export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js";
 export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
-export { ensurePersonalChannel } from "./utils/personal-channel.js";
+export {
+  ensurePersonalChannel,
+  ensureProactiveFeedChannel,
+} from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
 export { fileUploadApp } from "./routers/file-upload.js";
 export { externalSkillsApp } from "./routers/external/skills.js";

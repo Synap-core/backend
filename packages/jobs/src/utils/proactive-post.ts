@@ -4,6 +4,8 @@
  * Lightweight version of @synap/api's postProactiveMessage for use in cron workers.
  * The jobs package cannot import @synap/api (circular dep), so we replicate the
  * core posting logic here: preference check, dedup, insert, realtime emit.
+ *
+ * Posts to the PROACTIVE FEED channel (isProactiveFeed: true) — NOT the personal chat channel.
  */
 
 import { randomUUID, createHash } from "crypto";
@@ -67,8 +69,8 @@ export async function getProactivePrefsForWorkspace(
   return settings.proactiveAi ?? getDefaultProactiveAiPreferences();
 }
 
-/** Get or create the user's personal AI timeline channel (pod-wide). */
-async function ensurePersonalChannel(
+/** Get or create the user's proactive FEED channel (pod-wide). */
+async function ensureProactiveFeedChannel(
   userId: string,
   workspaceId?: string
 ): Promise<Channel> {
@@ -77,7 +79,7 @@ async function ensurePersonalChannel(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
     ),
   });
 
@@ -90,9 +92,9 @@ async function ensurePersonalChannel(
       workspaceId: workspaceId ?? null,
       channelType: ChannelType.AI_THREAD,
       status: ChannelStatus.ACTIVE,
-      agentId: "personal",
+      agentId: "proactive",
       agentType: ChannelAgentType.PERSONAL,
-      metadata: { isPersonal: true },
+      metadata: { isPersonal: false, isProactiveFeed: true },
     })
     .returning();
 
@@ -168,7 +170,7 @@ export async function postProactiveMessage(
     }
 
     // Deduplication: skip if same proactiveType already sent today
-    const channel = await ensurePersonalChannel(userId, workspaceId);
+    const channel = await ensureProactiveFeedChannel(userId, workspaceId);
     const todayStart = startOfTodayUTC();
 
     const todayMessages = await db.query.messages.findMany({

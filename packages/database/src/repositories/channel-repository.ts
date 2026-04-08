@@ -208,12 +208,13 @@ export class ChannelRepository {
   }
 
   /**
-   * Get or create the user's personal AI timeline for a workspace.
-   * Idempotent — returns existing channel if one already exists.
+   * Get or create the user's personal CHAT channel (pod-wide).
+   * Pure user↔AI conversation — nothing automated goes here.
+   * Pod-wide: one per user across all workspaces (workspaceId NOT in WHERE clause).
    */
   async ensurePersonalChannel(
     userId: string,
-    workspaceId: string
+    workspaceId?: string
   ): Promise<Channel> {
     const [existing] = await this.db
       .select()
@@ -221,7 +222,6 @@ export class ChannelRepository {
       .where(
         and(
           eq(channels.userId, userId),
-          eq(channels.workspaceId, workspaceId),
           eq(channels.channelType, ChannelType.AI_THREAD),
           eq(channels.status, ChannelStatus.ACTIVE),
           drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
@@ -235,8 +235,41 @@ export class ChannelRepository {
       userId,
       workspaceId,
       channelType: ChannelType.AI_THREAD,
-      agentType: ChannelAgentType.META,
-      metadata: { isPersonal: true },
+      agentType: ChannelAgentType.PERSONAL,
+      metadata: { isPersonal: true, isProactiveFeed: false },
+    });
+  }
+
+  /**
+   * Get or create the user's proactive FEED channel (pod-wide).
+   * AI-initiated posts: morning briefings, event prep, automation summaries.
+   * Pod-wide: one per user across all workspaces.
+   */
+  async ensureProactiveFeedChannel(
+    userId: string,
+    workspaceId?: string
+  ): Promise<Channel> {
+    const [existing] = await this.db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, userId),
+          eq(channels.channelType, ChannelType.AI_THREAD),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+        )
+      )
+      .limit(1);
+
+    if (existing) return existing;
+
+    return this.create({
+      userId,
+      workspaceId,
+      channelType: ChannelType.AI_THREAD,
+      agentType: ChannelAgentType.PERSONAL,
+      metadata: { isPersonal: false, isProactiveFeed: true },
     });
   }
 

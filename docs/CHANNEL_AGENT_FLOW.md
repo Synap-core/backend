@@ -86,9 +86,16 @@ Client → trpc.chat.createChannel({ parentChannelId?, agentType?, agentConfig?,
 
 Both branch and main thread paths return `{ channelId, channel }` — the full channel object.
 
-### 4B. Personal Channel
+### 4B. Pod-Wide User Channels
 
-One permanent `AI_THREAD` per `(userId, workspaceId)` with `metadata.isPersonal = true`. Created lazily via `trpc.chat.getPersonalChannel`. Always `agentType = "meta"`.
+Two permanent `AI_THREAD` channels per user (pod-wide, `workspaceId = null`):
+
+| Channel        | `metadata`              | `agentId`     | Purpose                                                                              |
+| -------------- | ----------------------- | ------------- | ------------------------------------------------------------------------------------ |
+| Personal chat  | `isPersonal: true`      | `"personal"`  | User types, AI responds. Nothing automated.                                          |
+| Proactive feed | `isProactiveFeed: true` | `"proactive"` | AI posts: morning briefings, event prep, automation outputs. Read-only for the user. |
+
+Both are created lazily on workspace join. The personal chat channel is resolved by `ensurePersonalChannel()`. The proactive feed is resolved by `ensureProactiveFeedChannel()`. Both are included in `listChannels` results alongside workspace-scoped channels.
 
 ### 4C. Branch via Hub Protocol REST
 

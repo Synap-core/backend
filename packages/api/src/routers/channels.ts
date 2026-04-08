@@ -1742,11 +1742,12 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + personal channels (pod-wide)
+        // Include workspace channels + pod-wide channels (personal chat + proactive feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
+            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
           )!
         );
       }
@@ -1823,11 +1824,12 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + personal channels (pod-wide)
+        // Include workspace channels + pod-wide channels (personal chat + proactive feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
+            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
           )!
         );
       }

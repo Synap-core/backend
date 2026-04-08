@@ -158,28 +158,28 @@ async function checkFrequency(
 
   if (members.length === 0) return true;
 
-  // Check the first member's personal channel for the last health_check message
+  // Check the first member's proactive feed channel for the last health_check message
   // (all members get the same health check at the same time, so checking one is sufficient)
   const firstUserId = members[0]!.userId;
 
-  const personalChannel = await db.query.channels.findFirst({
+  const proactiveFeedChannel = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, firstUserId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
     ),
     columns: { id: true },
   });
 
-  if (!personalChannel) return true; // No channel yet — first time
+  if (!proactiveFeedChannel) return true; // No channel yet — first time, send it
 
   // Find the most recent health_check message
   const cutoffDate = new Date(Date.now() - frequencyDays * 24 * 60 * 60 * 1000);
 
   const recentHealthChecks = await db.query.messages.findMany({
     where: and(
-      eq(messages.channelId, personalChannel.id),
+      eq(messages.channelId, proactiveFeedChannel.id),
       eq(messages.role, MessageRole.SYSTEM),
       gte(messages.timestamp, cutoffDate)
     ),

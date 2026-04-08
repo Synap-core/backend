@@ -6,11 +6,12 @@
  */
 
 import { Hono } from "hono";
-import { realpathSync, existsSync } from "fs";
+import { realpathSync, existsSync, readFileSync } from "fs";
 import { resolve as resolvePath } from "path";
 import { createLogger, config } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { apiKeyService } from "../services/api-keys.js";
+import { getBoss } from "@synap/jobs";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
@@ -37,10 +38,12 @@ import {
   mcpServers,
   inArray,
   workspaceMembers,
+  workspaces,
   entities,
   isNull,
   EventRepository,
   ApiKeyRepository,
+  createWorkspaceFromDefinition,
   sql,
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
@@ -234,13 +237,16 @@ app.get("/threads", async (c) => {
     // When workspaceId is explicit, return that workspace + personal.
     // When omitted, return ALL accessible workspaces + personal.
     let whereClause;
+    // Pod-wide channels: both personal chat (isPersonal) and proactive feed (isProactiveFeed)
+    const podWideFilter = or(
+      drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
+      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+    );
+
     if (workspaceId) {
       whereClause = and(
         eq(channels.userId, userId),
-        or(
-          eq(channels.workspaceId, workspaceId),
-          drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
-        )
+        or(eq(channels.workspaceId, workspaceId), podWideFilter)
       );
     } else {
       const accessibleWsIds = await getUserAccessibleWorkspaceIds(userId);
@@ -250,7 +256,7 @@ app.get("/threads", async (c) => {
           ...(accessibleWsIds.length > 0
             ? [inArray(channels.workspaceId, accessibleWsIds)]
             : []),
-          drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+          podWideFilter
         )
       );
     }
@@ -3545,7 +3551,7 @@ app.post("/channels/trigger-ai", async (c) => {
 /**
  * POST /proactive/post
  * Allows the Intelligence Service to proactively post a message into a
- * user's personal channel (morning briefings, insights, nudges, etc.).
+ * user's proactive FEED channel (morning briefings, insights, nudges, etc.).
  *
  * Rate-limited: max 3 messages/hour and 10 messages/24h per user+workspace.
  * Delegates to postProactiveMessage() from Phase 1 utility.
@@ -3608,10 +3614,13 @@ app.post("/proactive/post", async (c) => {
   try {
     // ── Rate limiting (DB-backed) ───────────────────────────────────────────
     // Count proactive messages for this user+workspace in the last hour and 24h.
-    // We query the personal channel's system messages with proactiveAi metadata.
-    const { ensurePersonalChannel } =
+    // We query the proactive feed channel's system messages with proactiveAi metadata.
+    const { ensureProactiveFeedChannel } =
       await import("../utils/personal-channel.js");
-    const channel = await ensurePersonalChannel(body.userId, body.workspaceId);
+    const channel = await ensureProactiveFeedChannel(
+      body.userId,
+      body.workspaceId
+    );
 
     const now = new Date();
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -3947,23 +3956,125 @@ app.post("/setup/agent", async (c) => {
     typeof body.agentType === "string" ? body.agentType : "openclaw";
   const requestedWorkspaceId: string | undefined =
     typeof body.workspaceId === "string" ? body.workspaceId : undefined;
+  /** Optional workspace template definition sent by the CLI. Takes priority over
+   *  the pod's bundled agent-os.json. */
+  const bodyDefinition: Record<string, unknown> | null =
+    body.definition &&
+    typeof body.definition === "object" &&
+    !Array.isArray(body.definition)
+      ? (body.definition as Record<string, unknown>)
+      : null;
 
   const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
 
   try {
     // ── Find target workspace ───────────────────────────────────────────────
-    const ws = requestedWorkspaceId
+    // Prefer a workspace that was previously seeded as Agent OS.
+    // If none exists yet (no workspace at all, or only generic workspaces),
+    // create a fresh Agent OS workspace from the bundled template.
+    let ws = requestedWorkspaceId
       ? await db.query.workspaces.findFirst({
           where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
         })
-      : await db.query.workspaces.findFirst();
+      : await db.query.workspaces.findFirst({
+          where: drizzleSql`${workspaces.settings}->>'packageSlug' = 'agent-os'`,
+          orderBy: (w) => asc(w.createdAt),
+        });
+
+    // If no Agent OS workspace exists (pod is fresh or only has generic workspaces),
+    // auto-seed one from the bundled template.
+    if (!ws && !requestedWorkspaceId) {
+      const ownerCandidate = await db.query.users.findFirst({
+        where: (u, { eq }) => eq(u.userType, "human"),
+        columns: { id: true, name: true },
+      });
+
+      if (ownerCandidate) {
+        // 1) definition from CLI body  2) bundled file fallback (dist/ → ../../../ = repo root)
+        let agentOsDefinition: Record<string, unknown> | null = bodyDefinition;
+        if (!agentOsDefinition) {
+          try {
+            const templatePath = resolvePath(
+              new URL(".", import.meta.url).pathname,
+              "../../../templates/agent-os.json"
+            );
+            agentOsDefinition = JSON.parse(readFileSync(templatePath, "utf-8"));
+          } catch {
+            // Template not available — fall back to blank workspace below
+          }
+        }
+
+        let newWsId: string;
+        if (agentOsDefinition) {
+          const result = await createWorkspaceFromDefinition({
+            definition: agentOsDefinition as Parameters<
+              typeof createWorkspaceFromDefinition
+            >[0]["definition"],
+            userId: ownerCandidate.id,
+            packageSlug: "agent-os",
+            workspaceName: "OpenClaw Agent OS",
+            // "personal" keeps the human as owner — the OpenClaw agent user gets editor access
+            workspaceType: "personal",
+            createdBy: "provisioning",
+          });
+          newWsId = result.workspaceId;
+          logger.info(
+            { workspaceId: newWsId, ownerId: ownerCandidate.id },
+            "setup/agent: auto-seeded Agent OS workspace from template"
+          );
+        } else {
+          // Fallback: plain blank workspace
+          const [newWs] = await db
+            .insert(workspaces)
+            .values({
+              name: ownerCandidate.name
+                ? `${ownerCandidate.name}'s Space`
+                : "My Space",
+              type: "personal",
+              ownerId: ownerCandidate.id,
+              settings: {},
+            })
+            .returning();
+          await db.insert(workspaceMembers).values({
+            id: randomUUID(),
+            workspaceId: newWs.id,
+            userId: ownerCandidate.id,
+            role: "owner",
+          });
+          newWsId = newWs.id;
+          logger.info(
+            { workspaceId: newWsId, ownerId: ownerCandidate.id },
+            "setup/agent: auto-created blank workspace (template unavailable)"
+          );
+        }
+
+        // Enqueue workspace-init to seed whiteboard, commands, relation defs, etc.
+        try {
+          const boss = getBoss();
+          await boss.send("workspace-init", {
+            workspaceId: newWsId,
+            userId: ownerCandidate.id,
+            packageSlug: "agent-os",
+          });
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId: newWsId },
+            "setup/agent: could not enqueue workspace-init (non-fatal)"
+          );
+        }
+
+        ws = await db.query.workspaces.findFirst({
+          where: (w, { eq }) => eq(w.id, newWsId),
+        });
+      }
+    }
 
     if (!ws) {
       return c.json(
         {
           error: requestedWorkspaceId
             ? `Workspace ${requestedWorkspaceId} not found`
-            : "No workspace found on this pod",
+            : "No workspace found on this pod. Please log in to your pod and complete setup first.",
         },
         404
       );

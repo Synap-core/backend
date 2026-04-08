@@ -24,6 +24,7 @@ export interface CreateRelationInput {
 
 export interface UpdateRelationInput {
   type?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export class RelationRepository extends BaseRepository<
@@ -71,11 +72,13 @@ export class RelationRepository extends BaseRepository<
     data: UpdateRelationInput,
     userId: string
   ): Promise<Relation> {
+    const updates: Partial<NewRelation> = {};
+    if (data.type !== undefined) updates.type = data.type;
+    if (data.metadata !== undefined) updates.metadata = data.metadata as any;
+
     const [relation] = await this.db
       .update(relations)
-      .set({
-        type: data.type,
-      } as Partial<NewRelation>)
+      .set(updates)
       .where(and(eq(relations.id, id), eq(relations.userId, userId)))
       .returning();
 

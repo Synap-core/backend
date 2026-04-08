@@ -13,10 +13,12 @@ build/
 **/src/**/*.js.map
 **/src/**/*.d.ts.map
 
-# Environment
+# Local dev secrets — never commit
 .env
 .env.local
 .env.*.local
+.env.test
+.env.development
 
 # IDE
 .vscode/

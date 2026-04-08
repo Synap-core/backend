@@ -2,9 +2,10 @@
  * Proactive Channel Post Utility
  *
  * Posts AI-initiated proactive messages (morning briefings, weekly digests,
- * health checks, nudges, insights) to a user's personal channel.
+ * health checks, nudges, insights) to the user's PROACTIVE FEED channel.
  *
  * Key behaviors:
+ * - Targets the proactive feed channel (isProactiveFeed: true) — NOT the personal chat channel
  * - Checks proactiveAi.enabled + mutedUntil before posting
  * - Deduplicates: at most one message per proactiveType per user+workspace per day
  * - Emits chat:message via the realtime bridge so the frontend updates live
@@ -25,7 +26,7 @@ import type {
   ProactiveAiPreferences,
 } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
-import { ensurePersonalChannel } from "./personal-channel.js";
+import { ensureProactiveFeedChannel } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { createLogger } from "@synap-core/core";
@@ -129,7 +130,7 @@ export async function postProactiveMessage(
     }
 
     // ── 3. Deduplication: skip if same proactiveType already sent today ────
-    const channel = await ensurePersonalChannel(userId, workspaceId);
+    const channel = await ensureProactiveFeedChannel(userId, workspaceId);
     const todayStart = startOfTodayUTC();
 
     // Query all system messages from today in this channel, then check metadata.
