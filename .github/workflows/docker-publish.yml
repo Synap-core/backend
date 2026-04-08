@@ -118,26 +118,15 @@ jobs:
           docker run -d --name smoke-test \
             --network host \
             -e DATABASE_URL=postgresql://synap:testpass@localhost:5432/synap \
-            -e POSTGRES_PASSWORD=testpass \
             -e NODE_ENV=production \
             -e PORT=4000 \
-            -e JWT_SECRET=smoke-test-secret-that-is-at-least-32-chars \
-            -e HUB_JWT_SECRET=smoke-test-hub-secret-at-least-32-chars \
+            -e SKIP_SECRET_VALIDATION=true \
+            -e ALLOWED_ORIGINS=http://localhost:3000 \
             -e KRATOS_PUBLIC_URL=http://localhost:9999 \
             -e KRATOS_ADMIN_URL=http://localhost:9999 \
             -e HYDRA_PUBLIC_URL=http://localhost:9999 \
             -e HYDRA_ADMIN_URL=http://localhost:9999 \
-            -e ORY_HYDRA_SECRETS_SYSTEM=smoke-test-hydra-secret-32chars!! \
-            -e KRATOS_SECRETS_COOKIE=smoke-test-kratos-cookie-secret \
-            -e KRATOS_SECRETS_CIPHER=smoke-test-kratos-cipher-secret \
-            -e TYPESENSE_API_KEY=test \
-            -e TYPESENSE_ADMIN_API_KEY=test \
-            -e TYPESENSE_HOST=localhost \
-            -e MINIO_ENDPOINT=http://localhost:9999 \
-            -e MINIO_ACCESS_KEY=test \
-            -e MINIO_SECRET_KEY=test \
-            -e SYNAP_SERVICE_ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000 \
-            -e ALLOWED_ORIGINS=http://localhost:3000 \
+            -e ORY_HYDRA_SECRETS_SYSTEM=smoke-test \
             synap-backend:smoke-test
 
           # Wait up to 30s for health check

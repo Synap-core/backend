@@ -212,6 +212,14 @@ const RECOMMENDED_SECRETS: string[] = [
 ];
 
 function validateCriticalSecrets(): void {
+  // CI smoke tests set this to skip secret validation — they only verify the image starts.
+  if (process.env.SKIP_SECRET_VALIDATION === "true") {
+    logger.warn(
+      "SKIP_SECRET_VALIDATION is set — skipping critical secrets check (CI smoke test)"
+    );
+    return;
+  }
+
   const missing = REQUIRED_SECRETS.filter((key) => !process.env[key]?.trim());
 
   if (missing.length > 0) {
