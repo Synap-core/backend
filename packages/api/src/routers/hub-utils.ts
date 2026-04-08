@@ -31,7 +31,8 @@ const HUB_JWT_SECRET =
 if (
   process.env.NODE_ENV === "production" &&
   !process.env.HUB_JWT_SECRET &&
-  !process.env.JWT_SECRET
+  !process.env.JWT_SECRET &&
+  process.env.SKIP_SECRET_VALIDATION !== "true"
 ) {
   throw new Error(
     "Neither HUB_JWT_SECRET nor JWT_SECRET is set. At least one is required in production."
