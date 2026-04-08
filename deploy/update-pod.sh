@@ -48,6 +48,14 @@ $COMPOSE pull backend realtime backend-migrate 2>&1 || {
   exit 1
 }
 
+# ─── Step 1b: Ensure Kratos/Hydra databases exist ─────────────────────────
+# The docker-entrypoint-initdb.d script only runs on first postgres init.
+# If postgres was recreated with an existing volume, these databases may be
+# missing. Idempotent — harmless if they already exist.
+log "Ensuring kratos and hydra databases exist..."
+$COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" 2>/dev/null || true
+$COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" 2>/dev/null || true
+
 # ─── Step 2: Run migrations (old backend still serving) ────────────────────
 # Migrations MUST be backward-compatible (additive only: new columns, new tables).
 # The old backend continues serving while migrations run.
