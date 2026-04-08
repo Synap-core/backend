@@ -200,7 +200,8 @@ async function loadCorsOrigins(): Promise<void> {
 
 const REQUIRED_SECRETS: string[] = [
   "JWT_SECRET",
-  "POSTGRES_PASSWORD",
+  // POSTGRES_PASSWORD is NOT checked here — it's interpolated into DATABASE_URL
+  // by docker-compose and not passed as a separate env var to the container.
   "SYNAP_SERVICE_ENCRYPTION_KEY",
   "KRATOS_SECRETS_COOKIE",
 ];
