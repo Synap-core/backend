@@ -4080,7 +4080,7 @@ app.post("/setup/agent", async (c) => {
       );
     }
 
-    // Find workspace owner for attribution
+    // ── Find workspace owner, repair if missing ─────────────────────────────
     const ownerMember = await db.query.workspaceMembers.findFirst({
       where: and(
         eq(workspaceMembers.workspaceId, ws.id),
@@ -4088,7 +4088,40 @@ app.post("/setup/agent", async (c) => {
       ),
       columns: { userId: true },
     });
-    const ownerUserId = ownerMember?.userId ?? null;
+
+    let ownerUserId = ownerMember?.userId ?? null;
+
+    // If no owner member exists (stale/broken workspace), find the first human user
+    // and make them the owner — self-healing for workspaces created by interrupted runs
+    if (!ownerUserId) {
+      const humanUser = await db.query.users.findFirst({
+        where: (u, { eq }) => eq(u.userType, "human"),
+        columns: { id: true },
+      });
+      if (humanUser) {
+        // Check if they're already a member with a different role
+        const existingMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, humanUser.id),
+            eq(workspaceMembers.workspaceId, ws.id)
+          ),
+          columns: { id: true, role: true },
+        });
+        if (!existingMembership) {
+          await db.insert(workspaceMembers).values({
+            id: randomUUID(),
+            workspaceId: ws.id,
+            userId: humanUser.id,
+            role: "owner",
+          });
+          logger.info(
+            { workspaceId: ws.id, userId: humanUser.id },
+            "setup/agent: assigned human user as workspace owner (self-repair)"
+          );
+        }
+        ownerUserId = humanUser.id;
+      }
+    }
 
     // ── 1. Find or create the agent user (pod-wide singleton per agentType) ─
     const existingAgent = await db.query.users.findFirst({
