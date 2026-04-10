@@ -26,6 +26,9 @@ import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { recordCaptureMessages } from "../utils/personal-channel.js";
+import { emitSideEffects } from "@synap/jobs";
+import { eventRepository } from "@synap/database";
+import { randomUUID as _captureUUID } from "crypto";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -493,6 +496,7 @@ export const captureRouter = router({
       const created: Array<{
         tempId: string;
         entityId: string;
+        profileSlug: string;
         linked: boolean;
       }> = [];
       for (const result of createResults) {
@@ -568,6 +572,44 @@ export const captureRouter = router({
         },
         "Capture execute completed"
       );
+
+      // Emit capture.complete event — enables automation triggers + event log audit trail
+      if (created.length > 0) {
+        const captureEventId = _captureUUID();
+        const entityIds = created.map((c) => c.entityId);
+        const profileSlugs = [...new Set(created.map((c) => c.profileSlug))];
+        const eventData = {
+          workspaceId,
+          entityIds,
+          profileSlugs,
+          entityCount: created.filter((c) => !c.linked).length,
+          linkedCount: created.filter((c) => c.linked).length,
+        };
+
+        // pg-boss side-effects → automation-trigger-matcher receives capture.complete.completed
+        emitSideEffects({
+          subjectType: "capture",
+          action: "complete",
+          subjectId: captureEventId,
+          userId,
+          workspaceId,
+          data: eventData,
+        }).catch(() => {}); // fire-and-forget
+
+        // Event log → audit trail + sync replication
+        eventRepository
+          .append({
+            id: captureEventId,
+            version: "v1",
+            type: "capture.complete.completed",
+            subjectType: "capture",
+            data: eventData,
+            userId,
+            source: "api",
+            timestamp: new Date(),
+          })
+          .catch(() => {}); // non-blocking
+      }
 
       return { created, relations: createdRelations };
     }),

@@ -235,9 +235,12 @@ export const profilePropertiesRouter = router({
         });
       }
 
-      // Get effective properties (with inheritance)
+      // Get effective properties (with inheritance) through this workspace's lens
       const effectiveProperties =
-        await resolutionService.getEffectiveProperties(input.profileId);
+        await resolutionService.getEffectiveProperties(
+          input.profileId,
+          ctx.workspaceId
+        );
 
       return { properties: effectiveProperties };
     }),

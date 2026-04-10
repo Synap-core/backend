@@ -24,7 +24,13 @@ import {
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { relations as relationsTable } from "@synap/database/schema";
-import { channels, ChannelType, ChannelStatus } from "@synap/database/schema";
+import {
+  channels,
+  ChannelType,
+  ChannelStatus,
+  ChannelPurpose,
+} from "@synap/database/schema";
+import { or } from "drizzle-orm";
 import { count } from "drizzle-orm";
 import { drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -167,7 +173,10 @@ async function checkFrequency(
       eq(channels.userId, firstUserId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+      or(
+        eq(channels.channelPurpose, ChannelPurpose.FEED),
+        drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+      )
     ),
     columns: { id: true },
   });

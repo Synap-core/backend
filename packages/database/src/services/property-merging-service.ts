@@ -53,12 +53,16 @@ export class PropertyMergingService {
   }
 
   /**
-   * Merge properties from multiple profiles
-   * Returns a map of property slug -> MergedProperty
+   * Merge properties from multiple profiles (used by multi-profile views).
+   *
+   * When `workspaceId` is provided, overlay props owned by other workspaces
+   * are excluded from the merge — a view rendered in workspace A sees A's
+   * own overlays plus all base props, never B's overlays.
    */
   async mergePropertiesFromProfiles(
     scopeProfileIds: string[],
-    db: PostgresJsDatabase<typeof import("../schema/index.js")>
+    db: PostgresJsDatabase<typeof import("../schema/index.js")>,
+    workspaceId?: string | null
   ): Promise<Map<string, MergedProperty>> {
     if (scopeProfileIds.length === 0) {
       return new Map();
@@ -69,10 +73,13 @@ export class PropertyMergingService {
     // Pre-fetch indexed property definitions (avoid N+1)
     const indexedPropertyDefIds = await this.getIndexedPropertyDefIds(db);
 
-    // Get effective properties from all profiles
+    // Get effective properties from all profiles, through the workspace lens
     for (const profileId of scopeProfileIds) {
       const effectiveProps =
-        await this.profileResolution.getEffectiveProperties(profileId);
+        await this.profileResolution.getEffectiveProperties(
+          profileId,
+          workspaceId
+        );
 
       for (const prop of effectiveProps) {
         // prop.id is property_defs.id (from EffectiveProperty extends PropertyDef)

@@ -25,8 +25,10 @@ import {
   notificationPreferences,
   and,
   eq,
+  eventRepository,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { randomUUID } from "crypto";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { getNotificationDef } from "./registry.js";
 import type {
@@ -197,6 +199,28 @@ export const NotificationService = {
         .returning({ id: notifications.id });
 
       if (!row) return undefined;
+
+      // Write to event log for audit trail + cross-pod sync
+      eventRepository
+        .append({
+          id: randomUUID(),
+          version: "v1",
+          type: "notification.created",
+          subjectType: "notification",
+          subjectId: row.id,
+          data: {
+            notificationId: row.id,
+            notificationType: input.type,
+            category: def.category,
+            workspaceId: input.workspaceId,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+          },
+          userId: input.userId,
+          source: "system",
+          timestamp: new Date(),
+        })
+        .catch(() => {}); // non-blocking, non-fatal
 
       // Emit real-time event to all workspace members
       const payload: NotificationPayload = {

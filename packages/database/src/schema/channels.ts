@@ -50,6 +50,24 @@ export const ChannelType = {
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 
 /**
+ * Channel Purpose
+ *
+ * Replaces the legacy JSONB metadata flags (isPersonal, isProactiveFeed, isCaptureThread)
+ * with a typed, indexed column. Defaults to null for regular channels.
+ *
+ * chat   — bidirectional user↔AI conversation (was isPersonal: true)
+ * feed   — AI posts, user reads; proactive content (was isProactiveFeed: true)
+ * audit  — hidden audit trail; not user-facing (was isCaptureThread: true)
+ */
+export const ChannelPurpose = {
+  CHAT: "chat",
+  FEED: "feed",
+  AUDIT: "audit",
+} as const;
+export type ChannelPurpose =
+  (typeof ChannelPurpose)[keyof typeof ChannelPurpose];
+
+/**
  * Channel Status
  */
 export const ChannelStatus = {
@@ -114,6 +132,14 @@ export const channels = pgTable(
     })
       .notNull()
       .default(ChannelType.AI_THREAD),
+
+    /**
+     * Typed purpose for special system channels. Null for regular channels.
+     * Replaces JSONB metadata flags (isPersonal, isProactiveFeed, isCaptureThread).
+     */
+    channelPurpose: text("channel_purpose", {
+      enum: [ChannelPurpose.CHAT, ChannelPurpose.FEED, ChannelPurpose.AUDIT],
+    }),
 
     // Context: what object this channel is "about"
     // Set for ENTITY_COMMENTS, DOCUMENT_REVIEW, VIEW_DISCUSSION channels.
@@ -183,6 +209,7 @@ export const channels = pgTable(
       table.contextObjectType,
       table.contextObjectId
     ),
+    purposeIdx: index("channels_purpose_idx").on(table.channelPurpose),
   })
 );
 
@@ -193,6 +220,7 @@ export interface Channel {
   workspaceId: string | null;
   title: string | null;
   channelType: ChannelType;
+  channelPurpose: ChannelPurpose | null;
   contextObjectType: string | null;
   contextObjectId: string | null;
   parentChannelId: string | null;

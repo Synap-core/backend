@@ -56,6 +56,9 @@ export class ViewFilterCompiler {
     scopeProfileIds?: string[],
     propertyDefMap?: Map<string, string[]>
   ): Promise<CompiledFilter | null> {
+    // Note: workspaceId is baked into `propertyDefMap` at build time
+    // (via compileFilters → buildPropertyDefMap), so this level doesn't
+    // need to thread it further — unknown properties still fall through.
     const { field, operator, value } = filter;
 
     // Check if this is a property field (starts with "properties.")
@@ -137,20 +140,26 @@ export class ViewFilterCompiler {
   async compileFilters(
     filters: EntityFilter[],
     scopeProfileIds?: string[],
-    propertyDefMap?: Map<string, string[]>
+    propertyDefMap?: Map<string, string[]>,
+    workspaceId?: string | null
   ): Promise<SQL | null> {
     if (filters.length === 0) {
       return null;
     }
 
-    // Pre-resolve property definitions if not provided (avoid N+1)
+    // Pre-resolve property definitions if not provided (avoid N+1) — scoped
+    // to the calling workspace's lens so overlay props from other workspaces
+    // don't leak into filter compilation.
     let resolvedPropertyDefMap = propertyDefMap;
     if (
       !resolvedPropertyDefMap &&
       scopeProfileIds &&
       scopeProfileIds.length > 0
     ) {
-      resolvedPropertyDefMap = await this.buildPropertyDefMap(scopeProfileIds);
+      resolvedPropertyDefMap = await this.buildPropertyDefMap(
+        scopeProfileIds,
+        workspaceId
+      );
     }
 
     const compiledFilters: SQL[] = [];
@@ -185,11 +194,13 @@ export class ViewFilterCompiler {
    * Returns map of property slug -> propertyDefIds[]
    */
   private async buildPropertyDefMap(
-    scopeProfileIds: string[]
+    scopeProfileIds: string[],
+    workspaceId?: string | null
   ): Promise<Map<string, string[]>> {
     const merged = await this.propertyMerging.mergePropertiesFromProfiles(
       scopeProfileIds,
-      this.db
+      this.db,
+      workspaceId
     );
 
     const map = new Map<string, string[]>();

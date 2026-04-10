@@ -60,22 +60,52 @@ export type SystemEventType =
   (typeof SystemEventTypes)[keyof typeof SystemEventTypes];
 
 // ============================================================================
+// OPERATIONAL EVENTS (cross-domain pipeline events)
+// ============================================================================
+
+/**
+ * Operational Event Types
+ *
+ * Events emitted by backend workers, cron jobs, and pipeline completions.
+ * These are the events that automations react to, and that land in the event log.
+ *
+ * Pattern: {domain}.{action}.{modifier}
+ */
+export const OperationalEventTypes = {
+  // Quick capture completed (from capture router)
+  CAPTURE_COMPLETE: "capture.complete.completed",
+  // Connector sync completed (from bulk import workers)
+  CONNECTOR_SYNC_COMPLETE: "connector_sync.complete.completed",
+  // Proactive message posted to feed channel
+  PROACTIVE_POST: "proactive.post.completed",
+  // Notification persisted to DB
+  NOTIFICATION_CREATED: "notification.created",
+  // Channel message created via automation output step
+  CHANNEL_MESSAGE_CREATED: "channel_message.created.completed",
+} as const;
+
+export type OperationalEventType =
+  (typeof OperationalEventTypes)[keyof typeof OperationalEventTypes];
+
+// ============================================================================
 // COMBINED EVENT TYPES
 // ============================================================================
 
 /**
- * EventTypes - System event types
+ * EventTypes — all operational + system event type constants.
  *
- * For table events, use GeneratedEventTypes instead.
+ * For table-level CRUD events (entities.create.validated etc.), use
+ * GeneratedEventTypes from @synap/events instead.
  */
 export const EventTypes = {
   ...SystemEventTypes,
+  ...OperationalEventTypes,
 } as const;
 
 /**
  * All possible event type values
  */
-export type EventType = SystemEventType;
+export type EventType = SystemEventType | OperationalEventType;
 
 /**
  * Validate event type

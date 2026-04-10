@@ -87,9 +87,13 @@ export const profilesRouter = router({
         });
       }
 
-      // Get effective properties (with inheritance)
+      // Get effective properties through this workspace's lens
+      // (base props + this workspace's overlays, no other workspace's overlays)
       const effectiveProperties =
-        await resolutionService.getEffectiveProperties(profile.id);
+        await resolutionService.getEffectiveProperties(
+          profile.id,
+          ctx.workspaceId
+        );
 
       return {
         profile,
@@ -611,7 +615,10 @@ export const profilesRouter = router({
       }
 
       const effectiveProperties =
-        await resolutionService.getEffectiveProperties(input.profileId);
+        await resolutionService.getEffectiveProperties(
+          input.profileId,
+          ctx.workspaceId
+        );
 
       return { properties: effectiveProperties };
     }),

@@ -17,6 +17,7 @@ import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
+import { ChannelPurpose } from "@synap/database/schema";
 import type { ProactiveMessageType } from "../utils/proactive-channel-post.js";
 import { randomUUID, randomBytes } from "crypto";
 import {
@@ -42,6 +43,7 @@ import {
   entities,
   isNull,
   EventRepository,
+  eventRepository,
   ApiKeyRepository,
   createWorkspaceFromDefinition,
   sql,
@@ -237,8 +239,11 @@ app.get("/threads", async (c) => {
     // When workspaceId is explicit, return that workspace + personal.
     // When omitted, return ALL accessible workspaces + personal.
     let whereClause;
-    // Pod-wide channels: both personal chat (isPersonal) and proactive feed (isProactiveFeed)
+    // Pod-wide channels: personal chat (purpose='chat') and proactive feed (purpose='feed')
+    // OR-fallback includes legacy JSONB flags for channels created before migration
     const podWideFilter = or(
+      eq(channels.channelPurpose, ChannelPurpose.CHAT),
+      eq(channels.channelPurpose, ChannelPurpose.FEED),
       drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
       drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
     );
@@ -278,6 +283,49 @@ app.get("/threads", async (c) => {
     return c.json(threads);
   } catch (err) {
     logger.error({ err, userId }, "listThreads failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /events
+ * Query the event log for IS agents (query_recent_events tool).
+ * Supports: userId, workspaceId, type, subjectType, subjectId, fromDate, limit.
+ */
+app.get("/events", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.req.query("userId");
+  const workspaceId = c.req.query("workspaceId");
+  const type = c.req.query("type");
+  const subjectType = c.req.query("subjectType");
+  const subjectId = c.req.query("subjectId");
+  const fromDateStr = c.req.query("fromDate");
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+
+  if (!userId) return c.json({ error: "userId is required" }, 400);
+
+  try {
+    const events = await eventRepository.searchEvents({
+      userId,
+      eventType: type,
+      subjectType: subjectType as any,
+      subjectId,
+      fromDate: fromDateStr
+        ? new Date(fromDateStr)
+        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      limit,
+    });
+    return c.json({ events });
+  } catch (err) {
+    logger.error({ err, userId }, "listEvents failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500

@@ -190,16 +190,25 @@ export class ProfileResolutionService {
   }
 
   /**
-   * Get effective properties for a profile (with inheritance).
-   * Merges properties from parent profiles; child values override parent values.
+   * Get effective properties for a profile (with inheritance) as rendered
+   * through a specific workspace's lens.
+   *
+   * Merges properties from parent profiles (child values override parent).
+   * When `workspaceId` is provided, drops overlay defs owned by other
+   * workspaces — the caller sees only "base" defs plus its own overlays.
+   *
+   * Passing `workspaceId = null | undefined` returns the full unfiltered
+   * set (admin / introspection path). Almost every real caller has a
+   * workspace context and should pass it.
    *
    * Uses 3 flat queries regardless of hierarchy depth (no N+1):
    *   1. getHierarchy()   — profiles in ancestor chain
    *   2. getByProfiles()  — all profile_properties rows for those profiles
-   *   3. getManyByIds()   — all property_defs referenced by those rows
+   *   3. getManyByIds()   — workspace-filtered at SQL level
    */
   async getEffectiveProperties(
-    profileId: string
+    profileId: string,
+    workspaceId?: string | null
   ): Promise<EffectiveProperty[]> {
     // 1. Profile hierarchy (root → leaf) — 1 query per level (small, bounded depth)
     const hierarchy = await this.getProfileHierarchy(profileId);
@@ -212,13 +221,20 @@ export class ProfileResolutionService {
 
     if (allProfileProperties.length === 0) return [];
 
-    // 3. All property defs referenced by those links — 1 query
+    // 3. All property defs referenced by those links — 1 query, filtered
+    //    by workspace scope at SQL level (cheaper than fetch-then-drop).
     const propDefIds = [
       ...new Set(allProfileProperties.map((pp) => pp.propertyDefId)),
     ];
-    const propDefMap = await this.propertyDefRepo.getManyByIds(propDefIds);
+    const propDefMap = await this.propertyDefRepo.getManyByIds(
+      propDefIds,
+      workspaceId
+    );
 
-    // Merge: process root-to-leaf so child values override parent values
+    // Merge: process root-to-leaf so child values override parent values.
+    // Any propertyDef filtered out above simply won't be in the map, so the
+    // matching profile_properties link is skipped — exactly the intended
+    // "this workspace doesn't see that overlay" behaviour.
     const propertyMap = new Map<string, EffectiveProperty>();
 
     for (const profile of hierarchy) {
@@ -260,13 +276,17 @@ export class ProfileResolutionService {
   }
 
   /**
-   * Get effective property by slug
+   * Get effective property by slug — scoped to the given workspace lens.
    */
   async getEffectiveProperty(
     profileId: string,
-    propertySlug: string
+    propertySlug: string,
+    workspaceId?: string | null
   ): Promise<EffectiveProperty | null> {
-    const properties = await this.getEffectiveProperties(profileId);
+    const properties = await this.getEffectiveProperties(
+      profileId,
+      workspaceId
+    );
     return properties.find((p) => p.slug === propertySlug) || null;
   }
 }

@@ -26,18 +26,28 @@ export class PropertyValidationService {
   constructor(private profileResolution: ProfileResolutionService) {}
 
   /**
-   * Validate properties against a profile
+   * Validate properties against a profile.
+   *
+   * When `workspaceId` is provided, validation runs through that workspace's
+   * lens — overlay props owned by other workspaces are ignored, so writing
+   * to them produces "unknown property" rather than a type error. This
+   * matches the rendering contract: a workspace can only see/write its own
+   * base+overlay set.
    */
   async validateProperties(
     properties: Record<string, unknown>,
-    profileId: string
+    profileId: string,
+    workspaceId?: string | null
   ): Promise<ValidationResult> {
     const errors: string[] = [];
     const normalized: Record<string, unknown> = { ...properties };
 
-    // Get effective properties (with inheritance)
+    // Get effective properties (with inheritance + workspace filter)
     const effectiveProperties =
-      await this.profileResolution.getEffectiveProperties(profileId);
+      await this.profileResolution.getEffectiveProperties(
+        profileId,
+        workspaceId
+      );
 
     // Check required properties
     for (const prop of effectiveProperties) {

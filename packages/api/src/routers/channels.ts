@@ -1689,10 +1689,12 @@ export const channelsRouter = router({
           message: "Access denied to this channel",
         });
       }
-      // Personal channels are pod-wide — accessible from any workspace.
+      // Personal/feed channels are pod-wide — accessible from any workspace.
       const isPersonalMsg =
+        channel.channelPurpose === "chat" ||
+        channel.channelPurpose === "feed" ||
         (channel.metadata as { isPersonal?: boolean } | null)?.isPersonal ===
-        true;
+          true;
       if (
         !isPersonalMsg &&
         ctx.workspaceId &&
@@ -1742,10 +1744,13 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide channels (personal chat + proactive feed)
+        // Include workspace channels + pod-wide purpose channels (chat + feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
+            eq(channels.channelPurpose, "chat"),
+            eq(channels.channelPurpose, "feed"),
+            // Legacy fallback for pre-migration rows
             drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
             drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
           )!
@@ -1770,12 +1775,9 @@ export const channelsRouter = router({
         );
       }
 
-      // Exclude capture thread channels — they're audit-only, not user-facing
+      // Exclude audit (capture thread) channels — hidden, not user-facing
       conditions.push(
-        or(
-          drizzleSql`${channels.metadata}->>'isCaptureThread' IS NULL`,
-          drizzleSql`${channels.metadata}->>'isCaptureThread' != 'true'`
-        )!
+        drizzleSql`(${channels.channelPurpose} IS NULL OR ${channels.channelPurpose} != 'audit') AND (${channels.metadata}->>'isCaptureThread' IS NULL OR ${channels.metadata}->>'isCaptureThread' != 'true')`
       );
 
       const allChannels = await db.query.channels.findMany({
@@ -1832,10 +1834,13 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide channels (personal chat + proactive feed)
+        // Include workspace channels + pod-wide purpose channels (chat + feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
+            eq(channels.channelPurpose, "chat"),
+            eq(channels.channelPurpose, "feed"),
+            // Legacy fallback for pre-migration rows
             drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
             drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
           )!
@@ -1860,12 +1865,9 @@ export const channelsRouter = router({
         );
       }
 
-      // Exclude capture thread channels — they're audit-only, not user-facing
+      // Exclude audit (capture thread) channels — hidden, not user-facing
       conditions.push(
-        or(
-          drizzleSql`${channels.metadata}->>'isCaptureThread' IS NULL`,
-          drizzleSql`${channels.metadata}->>'isCaptureThread' != 'true'`
-        )!
+        drizzleSql`(${channels.channelPurpose} IS NULL OR ${channels.channelPurpose} != 'audit') AND (${channels.metadata}->>'isCaptureThread' IS NULL OR ${channels.metadata}->>'isCaptureThread' != 'true')`
       );
 
       const allChannels = await db.query.channels.findMany({
@@ -2136,10 +2138,12 @@ export const channelsRouter = router({
           message: "Channel not found",
         });
       }
-      // Personal channels are pod-wide — accessible from any workspace.
+      // Personal/feed channels are pod-wide — accessible from any workspace.
       const isPersonal =
+        channel.channelPurpose === "chat" ||
+        channel.channelPurpose === "feed" ||
         (channel.metadata as { isPersonal?: boolean } | null)?.isPersonal ===
-        true;
+          true;
       if (
         !isPersonal &&
         ctx.workspaceId &&

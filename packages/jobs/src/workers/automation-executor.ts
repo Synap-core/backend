@@ -30,6 +30,7 @@ import {
   db,
   eq,
   and,
+  or,
   automations,
   automationRuns,
   automationStepRuns,
@@ -41,6 +42,12 @@ import {
   EntityRepository,
   eventRepository,
 } from "@synap/database";
+import {
+  ChannelType,
+  ChannelStatus,
+  ChannelAgentType,
+  ChannelPurpose,
+} from "@synap/database/schema";
 import type {
   FlowDefinition,
   AutomationNode,
@@ -508,13 +515,17 @@ async function executeOutputStep(
         throw new Error("channel_message requires content");
       }
 
-      // Resolve chat channel (isPersonal)
+      // Resolve chat channel (channelPurpose='chat')
       if (!channelId && config.channelType === "personal") {
         const personalChannel = await db.query.channels.findFirst({
           where: and(
             eq(channels.userId, ownerId),
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
-            drizzleSql`${channels.status} = 'active'`
+            eq(channels.channelType, ChannelType.AI_THREAD),
+            eq(channels.status, ChannelStatus.ACTIVE),
+            or(
+              eq(channels.channelPurpose, ChannelPurpose.CHAT),
+              drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+            )
           ),
           columns: { id: true },
         });
@@ -527,24 +538,29 @@ async function executeOutputStep(
               id: randomUUID(),
               userId: ownerId,
               workspaceId,
-              channelType: "ai_thread" as any,
-              status: "active" as any,
+              channelType: ChannelType.AI_THREAD,
+              status: ChannelStatus.ACTIVE,
               agentId: "personal",
-              agentType: "personal" as any,
-              metadata: { isPersonal: true, isProactiveFeed: false } as any,
+              agentType: ChannelAgentType.PERSONAL,
+              channelPurpose: ChannelPurpose.CHAT,
+              metadata: { isPersonal: true, isProactiveFeed: false },
             })
             .returning({ id: channels.id });
           channelId = newChannel.id;
         }
       }
 
-      // Resolve proactive feed channel (isProactiveFeed)
+      // Resolve proactive feed channel (channelPurpose='feed')
       if (!channelId && config.channelType === "proactive") {
         const proactiveChannel = await db.query.channels.findFirst({
           where: and(
             eq(channels.userId, ownerId),
-            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`,
-            drizzleSql`${channels.status} = 'active'`
+            eq(channels.channelType, ChannelType.AI_THREAD),
+            eq(channels.status, ChannelStatus.ACTIVE),
+            or(
+              eq(channels.channelPurpose, ChannelPurpose.FEED),
+              drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+            )
           ),
           columns: { id: true },
         });
@@ -557,11 +573,12 @@ async function executeOutputStep(
               id: randomUUID(),
               userId: ownerId,
               workspaceId,
-              channelType: "ai_thread" as any,
-              status: "active" as any,
+              channelType: ChannelType.AI_THREAD,
+              status: ChannelStatus.ACTIVE,
               agentId: "proactive",
-              agentType: "personal" as any,
-              metadata: { isPersonal: false, isProactiveFeed: true } as any,
+              agentType: ChannelAgentType.PERSONAL,
+              channelPurpose: ChannelPurpose.FEED,
+              metadata: { isPersonal: false, isProactiveFeed: true },
             })
             .returning({ id: channels.id });
           channelId = newChannel.id;

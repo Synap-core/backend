@@ -19,17 +19,24 @@ export class PropertyIndexService {
   }
 
   /**
-   * Index all properties for an entity
-   * Only indexes properties that should be indexed (hot properties)
+   * Index all properties for an entity (hot properties only).
+   *
+   * The index is a projection used for fast querying. When `workspaceId` is
+   * supplied, it covers both "base" props and that workspace's overlay props.
+   * Entity reads filter the same way, so the index stays coherent.
    */
   async indexEntityProperties(
     entityId: string,
     properties: Record<string, unknown>,
-    profileId: string
+    profileId: string,
+    workspaceId?: string | null
   ): Promise<void> {
     // Get effective properties to know which ones to index
     const effectiveProperties =
-      await this.profileResolution.getEffectiveProperties(profileId);
+      await this.profileResolution.getEffectiveProperties(
+        profileId,
+        workspaceId
+      );
 
     // Index hot properties (commonly filtered/sorted properties)
     // These properties are frequently used in views and benefit from indexing
@@ -70,16 +77,26 @@ export class PropertyIndexService {
   }
 
   /**
-   * Reindex an entity (useful for backfills)
+   * Reindex an entity (useful for backfills / property updates).
+   *
+   * `workspaceId` should be the lens through which the write is happening
+   * — i.e. the calling workspace — so overlay props are indexed alongside
+   * base props for that workspace.
    */
   async reindexEntity(
     entityId: string,
     properties: Record<string, unknown>,
-    profileId: string
+    profileId: string,
+    workspaceId?: string | null
   ): Promise<void> {
     // Remove existing index
     await this.removeEntityIndex(entityId);
-    // Reindex
-    await this.indexEntityProperties(entityId, properties, profileId);
+    // Reindex through the workspace lens
+    await this.indexEntityProperties(
+      entityId,
+      properties,
+      profileId,
+      workspaceId
+    );
   }
 }

@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, desc, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, or, desc, sql as drizzleSql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   channels,
@@ -13,6 +13,7 @@ import {
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
+  ChannelPurpose,
 } from "../schema/channels.js";
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
@@ -33,6 +34,7 @@ export interface CreateChannelData {
   agentConfig?: Record<string, unknown>;
   externalSource?: string;
   externalChannelId?: string;
+  channelPurpose?: ChannelPurpose;
   metadata?: Record<string, unknown>;
 }
 
@@ -78,6 +80,7 @@ export class ChannelRepository {
         agentConfig: data.agentConfig,
         externalSource: data.externalSource,
         externalChannelId: data.externalChannelId,
+        channelPurpose: data.channelPurpose,
         metadata: data.metadata,
         status: ChannelStatus.ACTIVE,
       })
@@ -224,7 +227,10 @@ export class ChannelRepository {
           eq(channels.userId, userId),
           eq(channels.channelType, ChannelType.AI_THREAD),
           eq(channels.status, ChannelStatus.ACTIVE),
-          drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+          or(
+            eq(channels.channelPurpose, ChannelPurpose.CHAT),
+            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+          )
         )
       )
       .limit(1);
@@ -236,6 +242,7 @@ export class ChannelRepository {
       workspaceId,
       channelType: ChannelType.AI_THREAD,
       agentType: ChannelAgentType.PERSONAL,
+      channelPurpose: ChannelPurpose.CHAT,
       metadata: { isPersonal: true, isProactiveFeed: false },
     });
   }
@@ -257,7 +264,10 @@ export class ChannelRepository {
           eq(channels.userId, userId),
           eq(channels.channelType, ChannelType.AI_THREAD),
           eq(channels.status, ChannelStatus.ACTIVE),
-          drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+          or(
+            eq(channels.channelPurpose, ChannelPurpose.FEED),
+            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+          )
         )
       )
       .limit(1);
@@ -269,6 +279,7 @@ export class ChannelRepository {
       workspaceId,
       channelType: ChannelType.AI_THREAD,
       agentType: ChannelAgentType.PERSONAL,
+      channelPurpose: ChannelPurpose.FEED,
       metadata: { isPersonal: false, isProactiveFeed: true },
     });
   }

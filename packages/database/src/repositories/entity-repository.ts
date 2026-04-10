@@ -57,6 +57,14 @@ export interface UpdateEntityInput {
 
   /** Change entity's profile type by slug */
   profileSlug?: string;
+
+  /**
+   * The workspace context for validation/rendering. Required when updating
+   * pod-wide entities whose stored `workspaceId` is null — without this the
+   * write path can't resolve the caller's overlay property set. Callers in
+   * workspaceProcedure routers should always pass `ctx.workspaceId`.
+   */
+  workspaceId?: string | null;
 }
 
 export interface DeleteEntityOptions {
@@ -199,9 +207,13 @@ export class EntityRepository extends BaseRepository<
         propsToValidate["title"] = data.title;
       }
 
+      // Validate through the requesting workspace's lens — overlay props
+      // owned by other workspaces are treated as unknown (ignored), so cross-
+      // workspace schema leaks can't happen here.
       const validationResult = await this.propertyValidation.validateProperties(
         propsToValidate,
-        profileId
+        profileId,
+        data.workspaceId ?? null
       );
 
       if (!validationResult.valid) {
@@ -233,10 +245,16 @@ export class EntityRepository extends BaseRepository<
       } as NewEntity)
       .returning();
 
-    // 4. Index properties (async, non-blocking)
+    // 4. Index properties (async, non-blocking) — index through the
+    //    requesting workspace's lens so overlay props get indexed too.
     if (profileId && Object.keys(validatedProperties).length > 0) {
       this.propertyIndex
-        .indexEntityProperties(entity.id, validatedProperties, profileId)
+        .indexEntityProperties(
+          entity.id,
+          validatedProperties,
+          profileId,
+          data.workspaceId ?? null
+        )
         .catch((error) => {
           console.warn(
             `Failed to index properties for entity ${entity.id}:`,
@@ -295,9 +313,16 @@ export class EntityRepository extends BaseRepository<
         ...data.properties,
       };
 
+      // Lens resolution: the caller's workspace context (if supplied) takes
+      // precedence over the entity's stored workspace. Pod-wide entities
+      // have a null stored workspace, so without `data.workspaceId` we'd
+      // lose sight of the caller's overlay props. Callers in workspace
+      // procedures should always pass `ctx.workspaceId`.
+      const lensWorkspaceId = data.workspaceId ?? existing.workspaceId ?? null;
       const validationResult = await this.propertyValidation.validateProperties(
         mergedProperties,
-        validationProfileId
+        validationProfileId,
+        lensWorkspaceId
       );
 
       if (!validationResult.valid) {
@@ -334,14 +359,16 @@ export class EntityRepository extends BaseRepository<
       throw new Error("Entity not found");
     }
 
-    // 4. Reindex properties if changed
+    // 4. Reindex properties if changed — use the same lens as validation
     const reindexProfileId = newProfileId || existing.profileId;
     if (data.properties && reindexProfileId) {
+      const lensWorkspaceId = data.workspaceId ?? existing.workspaceId ?? null;
       this.propertyIndex
         .reindexEntity(
           entity.id,
           updatedProperties as Record<string, unknown>,
-          reindexProfileId
+          reindexProfileId,
+          lensWorkspaceId
         )
         .catch((error) => {
           console.warn(

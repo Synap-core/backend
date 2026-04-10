@@ -585,13 +585,16 @@ export const viewsRouter = router({
         conditions.push(inArray(entities.profileId, view.scopeProfileIds));
       }
 
-      // Pre-resolve property definitions (avoid N+1)
+      // Pre-resolve property definitions (avoid N+1), scoped to the
+      // calling workspace's lens so other workspaces' overlays don't leak
+      // into this view's compiled filters / column defaults.
       const dbInstance = await getDb();
       const propertyMerging = new PropertyMergingService(dbInstance);
       const mergedProperties =
         await propertyMerging.mergePropertiesFromProfiles(
           view.scopeProfileIds,
-          dbInstance
+          dbInstance,
+          ctx.workspaceId
         );
 
       // Build property definition map
@@ -1194,13 +1197,16 @@ export const viewsRouter = router({
         return { columns: [] };
       }
 
-      // Merge properties from scope profiles
+      // Merge properties from scope profiles — through the calling
+      // workspace's lens so default columns don't include another
+      // workspace's overlay props.
       const dbInstance = await getDb();
       const propertyMerging = new PropertyMergingService(dbInstance);
       const mergedProperties =
         await propertyMerging.mergePropertiesFromProfiles(
           view.scopeProfileIds,
-          dbInstance
+          dbInstance,
+          ctx.workspaceId
         );
 
       // Compute default columns

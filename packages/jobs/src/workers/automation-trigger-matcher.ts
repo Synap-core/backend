@@ -163,6 +163,27 @@ function matchTriggerSpecificFilters(
     }
   }
 
+  // ── capture trigger ─────────────────────────────────────────────────────
+  if (eventType.startsWith("capture.")) {
+    // Filter by profile slug (e.g. only fire when a "person" was captured)
+    if (config.profileSlug && config.profileSlug !== "any") {
+      const slugs = eventData?.profileSlugs as string[] | undefined;
+      if (!slugs?.includes(config.profileSlug as string)) {
+        return false;
+      }
+    }
+  }
+
+  // ── proactive trigger ───────────────────────────────────────────────────
+  if (eventType.startsWith("proactive.")) {
+    // Filter by proactive message type ("morning_briefing" | "weekly_digest" | "insight" | "any")
+    if (config.proactiveType && config.proactiveType !== "any") {
+      if (eventData?.proactiveType !== config.proactiveType) {
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 

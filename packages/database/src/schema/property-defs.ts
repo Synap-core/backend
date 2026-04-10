@@ -15,6 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { profiles } from "./profiles.js";
 import { relationDefs } from "./relation-defs.js";
+import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
@@ -58,8 +59,25 @@ export const propertyDefs = pgTable(
     slug: text("slug").notNull(),
 
     // Profile scope — null means global/system def; non-null means profile-scoped def.
-    // Unique constraint: (slug, profile_id) per profile, (slug) for global defs.
     profileId: uuid("profile_id").references(() => profiles.id, {
+      onDelete: "cascade",
+    }),
+
+    // Workspace scope (Phase 2 — see migration 0065).
+    //
+    // NULL → "base" def. The property is part of the profile for every
+    //        workspace that uses it. All shared/system fields live here.
+    // SET  → "overlay" def. The property belongs to that workspace only;
+    //        other workspaces using the same profile do NOT render it.
+    //        Used when a workspace extends a profile it doesn't own
+    //        (e.g. Relay adds `investmentThesis` to the pod-wide `person`).
+    //
+    // Uniqueness is enforced by three mutually-exclusive partial indexes
+    // (see migration 0065):
+    //   • (slug) WHERE profile_id IS NULL AND workspace_id IS NULL  — globals
+    //   • (slug, profile_id) WHERE workspace_id IS NULL             — base
+    //   • (slug, profile_id, workspace_id) WHERE both SET           — overlays
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
 
@@ -116,8 +134,9 @@ export const propertyDefs = pgTable(
   (table) => ({
     valueTypeIdx: index("property_defs_value_type_idx").on(table.valueType),
     profileIdIdx: index("property_defs_profile_id_idx").on(table.profileId),
-    // Note: unique constraints for (slug, profile_id) and global (slug WHERE profile_id IS NULL)
-    // are managed via partial unique indexes in migration 0039 (not expressible in Drizzle directly).
+    // Note: the partial unique indexes (global / profile-base / workspace-overlay)
+    // are managed in migration 0065 — they can't be expressed in Drizzle directly.
+    // Composite lookup index for the hot read path lives there too.
   })
 );
 

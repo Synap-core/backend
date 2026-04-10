@@ -5,11 +5,19 @@
  * The jobs package cannot import @synap/api (circular dep), so we replicate the
  * core posting logic here: preference check, dedup, insert, realtime emit.
  *
- * Posts to the PROACTIVE FEED channel (isProactiveFeed: true) — NOT the personal chat channel.
+ * Posts to the PROACTIVE FEED channel (channelPurpose='feed') — NOT the personal chat channel.
  */
 
 import { randomUUID, createHash } from "crypto";
-import { db, eq, and, gte, drizzleSql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  gte,
+  drizzleSql,
+  eventRepository,
+} from "@synap/database";
 import {
   messages,
   workspaces,
@@ -17,6 +25,7 @@ import {
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
+  ChannelPurpose,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -28,6 +37,7 @@ import type {
 } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { emitSideEffects } from "../emit-side-effects.js";
 
 const logger = createLogger({ module: "proactive-post" });
 
@@ -38,7 +48,9 @@ export type ProactiveMessageType =
   | "weekly_digest"
   | "health_check"
   | "nudge"
-  | "insight";
+  | "insight"
+  | "suggestion"
+  | "alert";
 
 export interface PostProactiveOptions {
   userId: string;
@@ -74,12 +86,16 @@ async function ensureProactiveFeedChannel(
   userId: string,
   workspaceId?: string
 ): Promise<Channel> {
+  // Query by channelPurpose column (new) OR legacy JSONB flag (migration fallback)
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+      or(
+        eq(channels.channelPurpose, ChannelPurpose.FEED),
+        drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+      )
     ),
   });
 
@@ -94,6 +110,7 @@ async function ensureProactiveFeedChannel(
       status: ChannelStatus.ACTIVE,
       agentId: "proactive",
       agentType: ChannelAgentType.PERSONAL,
+      channelPurpose: ChannelPurpose.FEED,
       metadata: { isPersonal: false, isProactiveFeed: true },
     })
     .returning();
@@ -138,10 +155,10 @@ function emitRealtimeEvent(payload: {
 // ── Main Function ────────────────────────────────────────────────────────────
 
 /**
- * Post a proactive AI message to the user's personal channel.
+ * Post a proactive AI message to the user's proactive feed channel.
  *
  * Checks workspace preferences, deduplicates (one per type per day),
- * inserts the message, and emits a realtime event.
+ * inserts the message, emits a realtime event, and fires the event chain.
  *
  * Never throws — returns { posted: false, reason } on any error.
  */
@@ -243,6 +260,37 @@ export async function postProactiveMessage(
       { userId, workspaceId, proactiveType, messageId },
       "Proactive message posted"
     );
+
+    // Emit event chain — enables automation triggers + audit log
+    const proactiveEventData = {
+      proactiveType,
+      workspaceId,
+      channelId: channel.id,
+      messageId,
+    };
+
+    emitSideEffects({
+      subjectType: "proactive",
+      action: "post",
+      subjectId: messageId,
+      userId,
+      workspaceId,
+      data: proactiveEventData,
+    }).catch(() => {});
+
+    eventRepository
+      .append({
+        id: messageId,
+        version: "v1",
+        type: "proactive.post.completed",
+        subjectType: "proactive",
+        subjectId: messageId,
+        data: proactiveEventData,
+        userId,
+        source: "system",
+        timestamp: new Date(),
+      })
+      .catch(() => {});
 
     return { posted: true, messageId };
   } catch (err) {

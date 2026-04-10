@@ -844,7 +844,10 @@ export const entitiesRouter = router({
       if (!profile) return { entity: typedEntity };
 
       const effectiveProperties =
-        await resolutionService.getEffectiveProperties(profile.id);
+        await resolutionService.getEffectiveProperties(
+          profile.id,
+          ctx.workspaceId
+        );
 
       return { entity: typedEntity, profile, effectiveProperties };
     }),
@@ -947,6 +950,8 @@ export const entitiesRouter = router({
           documentId: input.documentId,
           properties: input.properties || undefined,
           profileSlug: input.profileSlug || undefined,
+          // Thread the workspace lens so overlay props validate/index correctly
+          workspaceId: ctx.workspaceId,
         },
         ctx.userId
       );

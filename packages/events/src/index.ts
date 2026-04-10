@@ -152,8 +152,10 @@ export {
 export {
   EventTypes,
   SystemEventTypes,
+  OperationalEventTypes,
   type EventType,
   type SystemEventType,
+  type OperationalEventType,
   isValidEventType,
   getAllEventTypes,
 } from "./event-types.js";

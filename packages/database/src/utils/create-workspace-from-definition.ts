@@ -27,7 +27,10 @@ import { RelationRepository } from "../repositories/relation-repository.js";
 import { RelationDefRepository } from "../repositories/relation-def-repository.js";
 import { ProfileRelationRepository } from "../repositories/profile-relation-repository.js";
 import { entityTemplates } from "../schema/entity-templates.js";
-import type { WorkspaceSettings } from "../schema/workspaces.js";
+import type {
+  WorkspaceLayoutConfig,
+  WorkspaceSettings,
+} from "../schema/workspaces.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "create-workspace-from-definition" });
@@ -842,15 +845,20 @@ export async function createWorkspaceFromDefinition(
       profileIds.push(created!.id);
 
       // 4. Create property definitions.
-      // For reused profiles (system/shared), only add properties that don't already exist
-      // so templates can extend system profiles with custom fields without breaking them.
+      //
+      // For reused profiles (system/shared), we only add properties that
+      // aren't already visible in THIS workspace's lens (base + our own
+      // overlays). Another workspace's overlay with the same slug is
+      // invisible to us and will not block our create — `(slug, profile_id,
+      // workspace_id)` is a valid second row under the new uniqueness rules.
       const existingPropSlugs = new Set<string>();
       if (profileIsReused && (resolvedProperties ?? []).length > 0) {
         try {
           const existingLinks = await profilePropRepo.getByProfile(created!.id);
           if (existingLinks.length > 0) {
             const pdMap = await propDefRepo.getManyByIds(
-              existingLinks.map((l) => l.propertyDefId)
+              existingLinks.map((l) => l.propertyDefId),
+              workspaceId
             );
             for (const pd of pdMap.values()) existingPropSlugs.add(pd.slug);
           }
@@ -860,6 +868,20 @@ export async function createWorkspaceFromDefinition(
         }
       }
       if (profileIsReused && (resolvedProperties ?? []).length === 0) continue;
+
+      // Workspace scope for the property defs we're about to create:
+      //
+      //   profileIsReused === true  → we're extending a profile we don't own
+      //                               (e.g. adding a field to the pod-wide
+      //                               `person` profile). Tag the new defs
+      //                               with this workspace so they render as
+      //                               overlays and don't leak to siblings.
+      //   profileIsReused === false → we just created the profile ourselves;
+      //                               its defs are "base" defs (workspace_id
+      //                               = null) because the profile row itself
+      //                               already carries workspace scope via
+      //                               profile.workspace_id.
+      const overlayWorkspaceId = profileIsReused ? workspaceId : null;
 
       for (let i = 0; i < (resolvedProperties ?? []).length; i++) {
         const prop = resolvedProperties![i];
@@ -886,6 +908,7 @@ export async function createWorkspaceFromDefinition(
               ? { constraints: propConstraints }
               : {}),
             profileId: created!.id,
+            workspaceId: overlayWorkspaceId,
           });
           await profilePropRepo.link({
             profileId: created!.id,
@@ -1428,6 +1451,26 @@ export async function createWorkspaceFromDefinition(
     completedSteps.push("relations-seed");
   }
 
+  // Resolve sidebarItems.viewName → viewId now that all views exist.
+  // Definitions store human-readable viewName; the Browser sidebar expects viewId
+  // to navigate. Without this patch, clicking a sidebar view does nothing.
+  let resolvedLayout: WorkspaceLayoutConfig | undefined;
+  if (settings.layout?.sidebarItems?.length) {
+    const patchedItems = settings.layout.sidebarItems.map((item) => {
+      if (item.kind !== "view" || item.viewId || !item.viewName) return item;
+      const resolvedId = viewMap[item.viewName];
+      if (!resolvedId) {
+        logger.warn(
+          { viewName: item.viewName, workspaceId },
+          "sidebarItem references unknown view — keeping viewName for debug"
+        );
+        return item;
+      }
+      return { ...item, viewId: resolvedId };
+    });
+    resolvedLayout = { ...settings.layout, sidebarItems: patchedItems };
+  }
+
   // Atomically persist all accumulated settings in ONE call:
   // profileBentoViewIds, profileEntityBentoTemplates, homeDashboardViewId,
   // and final provisioningStatus / completedSteps.
@@ -1435,6 +1478,9 @@ export async function createWorkspaceFromDefinition(
     provisioningStatus: "active",
     completedSteps,
   };
+  if (resolvedLayout) {
+    finalSettingsPatch.layout = resolvedLayout;
+  }
   if (Object.keys(profileBentoViewIds).length > 0) {
     finalSettingsPatch.profileBentoViewIds = profileBentoViewIds;
   }

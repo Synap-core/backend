@@ -29,6 +29,7 @@ import {
   channels,
   messages,
   ChannelType,
+  ChannelPurpose,
   ChannelStatus,
   ChannelAgentType,
   MessageRole,
@@ -51,7 +52,8 @@ export async function ensurePersonalChannel(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+      // Check new column first, fallback to legacy JSONB flag for pre-migration rows
+      drizzleSql`(${channels.channelPurpose} = 'chat' OR ${channels.metadata}->>'isPersonal' = 'true')`
     ),
   });
 
@@ -66,6 +68,7 @@ export async function ensurePersonalChannel(
       status: ChannelStatus.ACTIVE,
       agentId: "personal",
       agentType: ChannelAgentType.PERSONAL,
+      channelPurpose: ChannelPurpose.CHAT,
       metadata: { isPersonal: true, isProactiveFeed: false },
     })
     .returning();
@@ -88,7 +91,7 @@ export async function ensureProactiveFeedChannel(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+      drizzleSql`(${channels.channelPurpose} = 'feed' OR ${channels.metadata}->>'isProactiveFeed' = 'true')`
     ),
   });
 
@@ -103,6 +106,7 @@ export async function ensureProactiveFeedChannel(
       status: ChannelStatus.ACTIVE,
       agentId: "proactive",
       agentType: ChannelAgentType.PERSONAL,
+      channelPurpose: ChannelPurpose.FEED,
       metadata: { isPersonal: false, isProactiveFeed: true },
     })
     .returning();
@@ -113,7 +117,7 @@ export async function ensureProactiveFeedChannel(
 /**
  * Get or create the user's capture THREAD channel (pod-wide).
  * Records AI capture interactions for transparency/audit.
- * Hidden from the main channel list (isCaptureThread: true).
+ * Hidden from the main channel list (channelPurpose='audit').
  */
 export async function ensureCaptureChannel(
   userId: string,
@@ -124,7 +128,7 @@ export async function ensureCaptureChannel(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.AI_THREAD),
       eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`${channels.metadata}->>'isCaptureThread' = 'true'`
+      drizzleSql`(${channels.channelPurpose} = 'audit' OR ${channels.metadata}->>'isCaptureThread' = 'true')`
     ),
   });
 
@@ -140,6 +144,7 @@ export async function ensureCaptureChannel(
       status: ChannelStatus.ACTIVE,
       agentId: "capture",
       agentType: ChannelAgentType.DEFAULT,
+      channelPurpose: ChannelPurpose.AUDIT,
       metadata: {
         isCaptureThread: true,
         isPersonal: false,

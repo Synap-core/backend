@@ -22,6 +22,8 @@ import {
   extractSignalsFromProperties,
   eventRepository,
 } from "@synap/database";
+import { randomUUID } from "crypto";
+import { emitSideEffects } from "../emit-side-effects.js";
 
 const logger = createLogger({ module: "telegram-bulk-import" });
 
@@ -126,4 +128,38 @@ export async function handleTelegramBulkImport(
     { workspaceId, created, updated, matched, failed, total: people.length },
     "Telegram bulk import complete"
   );
+
+  // Emit connector_sync event — enables automation triggers + event log audit trail
+  const syncEventId = randomUUID();
+  const syncData = {
+    provider: "telegram",
+    workspaceId,
+    entitiesCreated: created,
+    entitiesUpdated: updated,
+    entitiesMatched: matched,
+    failed,
+    syncStatus: failed === people.length ? "error" : "success",
+  };
+
+  emitSideEffects({
+    subjectType: "connector_sync",
+    action: "complete",
+    subjectId: syncEventId,
+    userId,
+    workspaceId,
+    data: syncData,
+  }).catch(() => {});
+
+  eventRepository
+    .append({
+      id: syncEventId,
+      version: "v1",
+      type: "connector_sync.complete.completed",
+      subjectType: "connector_sync",
+      data: syncData,
+      userId,
+      source: "system",
+      timestamp: new Date(),
+    })
+    .catch(() => {});
 }

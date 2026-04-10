@@ -30,6 +30,8 @@ import { ensureProactiveFeedChannel } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { createLogger } from "@synap-core/core";
+import { emitSideEffects } from "@synap/jobs";
+import { eventRepository } from "@synap/database";
 
 const logger = createLogger({ module: "proactive-channel-post" });
 
@@ -227,6 +229,36 @@ export async function postProactiveMessage(
       { userId, workspaceId, proactiveType, messageId },
       "Proactive message posted"
     );
+
+    // Emit proactive.post event — enables automation chains + event log audit trail
+    const proactiveEventData = {
+      proactiveType,
+      workspaceId,
+      channelId: channel.id,
+      messageId,
+    };
+    emitSideEffects({
+      subjectType: "proactive",
+      action: "post",
+      subjectId: messageId,
+      userId,
+      workspaceId,
+      data: proactiveEventData,
+    }).catch(() => {});
+
+    eventRepository
+      .append({
+        id: messageId, // reuse messageId as event id — 1:1 relationship
+        version: "v1",
+        type: "proactive.post.completed",
+        subjectType: "proactive",
+        subjectId: messageId,
+        data: proactiveEventData,
+        userId,
+        source: "system",
+        timestamp: new Date(),
+      })
+      .catch(() => {});
 
     return { posted: true, messageId };
   } catch (err) {

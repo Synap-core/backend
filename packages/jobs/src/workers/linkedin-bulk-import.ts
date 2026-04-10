@@ -20,6 +20,8 @@ import {
   extractSignalsFromProperties,
   eventRepository,
 } from "@synap/database";
+import { randomUUID } from "crypto";
+import { emitSideEffects } from "../emit-side-effects.js";
 
 const logger = createLogger({ module: "linkedin-bulk-import" });
 
@@ -121,4 +123,38 @@ export async function handleLinkedInBulkImport(
     { workspaceId, created, updated, matched, failed, total: contacts.length },
     "LinkedIn bulk import complete"
   );
+
+  // Emit connector_sync event — enables automation triggers + event log audit trail
+  const syncEventId = randomUUID();
+  const syncData = {
+    provider: "linkedin",
+    workspaceId,
+    entitiesCreated: created,
+    entitiesUpdated: updated,
+    entitiesMatched: matched,
+    failed,
+    syncStatus: failed === contacts.length ? "error" : "success",
+  };
+
+  emitSideEffects({
+    subjectType: "connector_sync",
+    action: "complete",
+    subjectId: syncEventId,
+    userId,
+    workspaceId,
+    data: syncData,
+  }).catch(() => {});
+
+  eventRepository
+    .append({
+      id: syncEventId,
+      version: "v1",
+      type: "connector_sync.complete.completed",
+      subjectType: "connector_sync",
+      data: syncData,
+      userId,
+      source: "system",
+      timestamp: new Date(),
+    })
+    .catch(() => {});
 }
