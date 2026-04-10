@@ -15,8 +15,7 @@
  *   - Neither path triggers the other's sync hook
  */
 
-import { eq, and, isNotNull } from "drizzle-orm";
-import { getDb, drizzleSql } from "@synap/database";
+import { getDb, drizzleSql, eq, and, isNotNull } from "@synap/database";
 import {
   propertyDefs,
   relations,

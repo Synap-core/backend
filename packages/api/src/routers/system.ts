@@ -34,7 +34,7 @@ import {
   documents,
   workspaceMembers,
 } from "@synap/database/schema";
-import { count } from "drizzle-orm";
+import { count } from "@synap/database";
 import {
   getDynamicCorsOrigins,
   setDynamicCorsOrigins,

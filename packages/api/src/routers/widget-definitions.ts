@@ -14,9 +14,8 @@
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { getDb } from "@synap/database";
+import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
-import { and, eq, or, isNull } from "drizzle-orm";
 import { requireUserId } from "../utils/user-scoped.js";
 import { compileWidgetSource } from "../utils/widget-compiler.js";
 

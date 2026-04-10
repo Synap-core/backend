@@ -156,6 +156,12 @@ export {
   notLike,
   ilike,
   notIlike,
+  // Aggregation
+  count,
+  sum,
+  avg,
+  min,
+  max,
   // Sorting
   asc,
   desc,

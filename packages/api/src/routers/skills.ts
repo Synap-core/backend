@@ -9,8 +9,7 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, desc } from "@synap/database";
-import type { SQL } from "drizzle-orm";
+import { db, eq, and, or, desc, type SQL } from "@synap/database";
 import {
   skills,
   skillTriggers,

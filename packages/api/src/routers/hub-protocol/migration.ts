@@ -26,9 +26,8 @@ import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { viewsRouter as regularViewsRouter } from "../views.js";
-import { getDb } from "@synap/database";
+import { getDb, and, eq } from "@synap/database";
 import { entities, workspaces } from "@synap/database/schema";
-import { and, eq } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "hub-protocol-migration" });

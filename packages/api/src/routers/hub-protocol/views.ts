@@ -19,9 +19,8 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { viewsRouter as regularViewsRouter } from "../views.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { getDb } from "@synap/database";
+import { getDb, and, eq } from "@synap/database";
 import { views } from "@synap/database/schema";
-import { and, eq } from "drizzle-orm";
 
 /** A single widget placement in the bento grid */
 const BentoWidgetInputSchema = z.object({

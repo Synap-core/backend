@@ -35,6 +35,8 @@ import {
   MessageAuthorType,
 } from "@synap/database/schema";
 import type { Channel } from "@synap/database/schema";
+import { createHash } from "crypto";
+import { randomUUID } from "crypto";
 
 /**
  * Get or create the user's personal CHAT channel (pod-wide).
@@ -168,23 +170,41 @@ export async function recordCaptureMessages(
     const channel = await ensureCaptureChannel(userId, workspaceId);
 
     // User message: the raw capture text
+    const userMsgId = randomUUID();
+    const userMsgHash = createHash("sha256")
+      .update(`${userMsgId}${userText}`)
+      .digest("hex");
     await db.insert(messages).values({
+      id: userMsgId,
       channelId: channel.id,
       userId,
       role: MessageRole.USER,
       authorType: MessageAuthorType.HUMAN,
       content: userText,
-      metadata: { captureSource: "quick_capture" },
+      hash: userMsgHash,
+      previousHash: "",
+      metadata: {
+        captureSource: "quick_capture",
+      } as (typeof messages.$inferInsert)["metadata"],
     });
 
     // AI message: summary of extracted entities + full proposals in metadata
+    const aiMsgId = randomUUID();
+    const aiMsgHash = createHash("sha256")
+      .update(`${aiMsgId}${aiSummary}`)
+      .digest("hex");
     await db.insert(messages).values({
+      id: aiMsgId,
       channelId: channel.id,
       userId,
       role: MessageRole.ASSISTANT,
       authorType: MessageAuthorType.AI_AGENT,
       content: aiSummary,
-      metadata: { captureProposals: proposals },
+      hash: aiMsgHash,
+      previousHash: userMsgHash,
+      metadata: {
+        captureProposals: proposals,
+      } as (typeof messages.$inferInsert)["metadata"],
     });
   } catch (err) {
     // Non-blocking — capture recording is best-effort

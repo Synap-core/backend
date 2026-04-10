@@ -14,9 +14,8 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { getDb } from "@synap/database";
+import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
-import { and, eq, or, isNull } from "drizzle-orm";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { TRPCError } from "@trpc/server";
 import { compileWidgetSource } from "../../utils/widget-compiler.js";

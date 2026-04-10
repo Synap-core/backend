@@ -19,8 +19,13 @@
  * 5. Logs errors non-fatally (never throws)
  */
 
-import { db, notifications, notificationPreferences } from "@synap/database";
-import { and, eq } from "drizzle-orm";
+import {
+  db,
+  notifications,
+  notificationPreferences,
+  and,
+  eq,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { getNotificationDef } from "./registry.js";

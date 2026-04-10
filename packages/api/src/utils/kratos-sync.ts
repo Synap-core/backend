@@ -12,7 +12,7 @@ import {
   workspaceMembers,
   invites,
 } from "@synap/database/schema";
-import { eq, and, gte } from "drizzle-orm";
+import { eq, and, gte } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "kratos-sync" });
