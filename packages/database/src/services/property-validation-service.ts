@@ -264,13 +264,18 @@ export class PropertyValidationService {
   }
 
   /**
-   * Normalize properties (cast and apply defaults)
+   * Normalize properties (cast and apply defaults) through a workspace lens.
    */
   async normalizeProperties(
     properties: Record<string, unknown>,
-    profileId: string
+    profileId: string,
+    workspaceId?: string | null
   ): Promise<Record<string, unknown>> {
-    const result = await this.validateProperties(properties, profileId);
+    const result = await this.validateProperties(
+      properties,
+      profileId,
+      workspaceId
+    );
     return result.normalized;
   }
 }

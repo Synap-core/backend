@@ -5,9 +5,9 @@
  */
 
 import { Hono } from "hono";
-import { publishEvent, createInboxItemAnalyzedEvent } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import { db, inboxItems, eq } from "@synap/database";
+import { createSynapEvent } from "@synap-core/core";
+import { db, inboxItems, eq, eventRepository } from "@synap/database";
 import { z } from "zod";
 
 const logger = createLogger({ module: "intelligence-webhooks" });
@@ -25,7 +25,7 @@ const AnalysisCallbackSchema = z.object({
       category: z.string().optional(),
       summary: z.string().optional(),
     })
-    .passthrough(), // Allow additional fields
+    .passthrough(),
 });
 
 /**
@@ -33,33 +33,32 @@ const AnalysisCallbackSchema = z.object({
  *
  * POST /webhooks/intelligence/callback
  *
- * Called by intelligence services to return analysis results
+ * Called by intelligence services to return analysis results.
  */
 intelligenceWebhookRouter.post("/callback", async (c) => {
   try {
     const body = await c.req.json();
-
-    // Validate payload
     const { requestId, itemId, analysis } = AnalysisCallbackSchema.parse(body);
 
     logger.info({ requestId, itemId }, "Received intelligence callback");
 
-    // Look up the inbox item to get the real userId for the event
     const inboxItem = await db.query.inboxItems.findFirst({
       where: eq(inboxItems.id, itemId),
       columns: { userId: true },
     });
 
-    // ✅ Type-safe event publishing
-    const event = createInboxItemAnalyzedEvent(itemId, {
-      requestId,
-      analysis,
-    });
+    const userId = inboxItem?.userId ?? "system";
 
-    await publishEvent(event, {
-      userId: inboxItem?.userId ?? "system",
-      source: "intelligence-callback",
-    });
+    await eventRepository.append(
+      createSynapEvent({
+        type: "inbox.item.analyzed",
+        subjectId: itemId,
+        subjectType: "inbox_item",
+        data: { requestId, analysis },
+        userId,
+        source: "intelligence",
+      })
+    );
 
     logger.info({ requestId, itemId }, "Intelligence callback processed");
 

@@ -49,33 +49,60 @@ export const propertyDefsRouter = router({
     const profileRepo = new ProfileRepository(db);
 
     // Get profiles accessible to this workspace, then return their property defs
-    // plus any global (profileId IS NULL) defs.
+    // plus any global (profileId IS NULL) defs — filtered through this
+    // workspace's lens so overlays owned by other workspaces don't leak.
     const accessibleProfiles = await profileRepo.getAccessibleProfiles(
       ctx.userId,
       ctx.workspaceId
     );
     const accessibleProfileIds = accessibleProfiles.map((p) => p.id);
 
-    const propertyDefs =
-      await propertyDefRepo.listForProfiles(accessibleProfileIds);
+    const propertyDefs = await propertyDefRepo.listForProfiles(
+      accessibleProfileIds,
+      ctx.workspaceId
+    );
 
     return { propertyDefs };
   }),
 
   /**
-   * Get property definition by slug
+   * Get property definition by slug — optionally scoped by profile + workspace.
+   *
+   * With Phase 2 layered schemas, the same slug can exist on multiple
+   * rows (global, profile-base, workspace overlays). Callers should pass
+   * `profileId` + `workspaceId` to target a specific scope. Omitting both
+   * is legacy behaviour: returns the first match (typically the global/base
+   * def), which is nondeterministic when overlays exist.
+   *
+   * Scope resolution for `workspaceScope`:
+   *   • 'any'     → no workspace filter (legacy)
+   *   • 'base'    → match only base defs (workspace_id IS NULL)
+   *   • 'current' → match only overlays owned by the calling workspace
    */
-  get: protectedProcedure
+  get: workspaceProcedure
     .input(
       z.object({
         slug: z.string(),
+        profileId: z.string().uuid().optional(),
+        workspaceScope: z.enum(["any", "base", "current"]).default("any"),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       const propertyDefRepo = new PropertyDefRepository(db);
 
-      const propertyDef = await propertyDefRepo.getBySlug(input.slug);
+      const workspaceFilter =
+        input.workspaceScope === "base"
+          ? null
+          : input.workspaceScope === "current"
+            ? ctx.workspaceId
+            : undefined;
+
+      const propertyDef = await propertyDefRepo.getBySlug(
+        input.slug,
+        input.profileId,
+        workspaceFilter
+      );
 
       if (!propertyDef) {
         throw new TRPCError({
@@ -90,11 +117,17 @@ export const propertyDefsRouter = router({
   /**
    * Create a new property definition.
    *
-   * When profileId is provided the def is profile-scoped — allowing each profile
-   * to define its own `status`, `type`, `owner`, etc. without slug collisions.
-   * When omitted the def is global (legacy behaviour).
+   * Three ways to scope the new def (see Phase 2 / migration 0065):
+   *   • `profileId` omitted               → global def (any profile)
+   *   • `profileId` set, overlay = false  → profile-base def (every workspace
+   *                                          that uses the profile renders it)
+   *   • `profileId` set, overlay = true   → workspace overlay (only the
+   *                                          calling workspace renders it)
+   *
+   * Use `overlay: true` from a UI flow like "Add a field just to this space"
+   * to extend a pod-wide profile without leaking the field to other spaces.
    */
-  create: protectedProcedure
+  create: workspaceProcedure
     .input(
       z.object({
         slug: z
@@ -107,16 +140,36 @@ export const propertyDefsRouter = router({
         uiHints: z.record(z.string(), z.unknown()).optional(),
         /** Profile UUID — scopes this def to a single profile. */
         profileId: z.string().uuid().optional(),
+        /**
+         * When true, the new def is an overlay owned by the calling workspace
+         * and invisible to other workspaces. Requires `profileId` (overlays
+         * without a profile are meaningless). Default false = base def.
+         */
+        overlay: z.boolean().default(false),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const propertyDefRepo = new PropertyDefRepository(db);
 
-      // Return existing on slug conflict (scoped to the same profile, or globally).
+      if (input.overlay && !input.profileId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "overlay=true requires profileId — overlays must attach to a profile",
+        });
+      }
+
+      const overlayWorkspaceId = input.overlay ? ctx.workspaceId : null;
+
+      // Return existing on slug conflict — match exactly the scope we're
+      // about to create into (base vs this workspace's overlay). An overlay
+      // in a different workspace is a distinct unique-index row and must
+      // NOT be treated as "existing".
       const existing = await propertyDefRepo.getBySlug(
         input.slug,
-        input.profileId
+        input.profileId,
+        overlayWorkspaceId
       );
       if (existing) {
         logger.info(
@@ -124,8 +177,9 @@ export const propertyDefsRouter = router({
             slug: input.slug,
             existingId: existing.id,
             profileId: input.profileId,
+            overlay: input.overlay,
           },
-          "Property def slug exists, returning existing"
+          "Property def slug exists in this scope, returning existing"
         );
         return { propertyDef: existing, existing: true };
       }
@@ -136,12 +190,15 @@ export const propertyDefsRouter = router({
         constraints: input.constraints,
         uiHints: input.uiHints,
         profileId: input.profileId,
+        workspaceId: overlayWorkspaceId,
       });
 
       logger.info(
         {
           propertyDefId: propertyDef.id,
           slug: propertyDef.slug,
+          profileId: propertyDef.profileId,
+          overlayWorkspaceId,
           userId: ctx.userId,
         },
         "Property definition created"
@@ -181,10 +238,17 @@ export const propertyDefsRouter = router({
         });
       }
 
-      // Check for slug conflict if slug is being changed
+      // Check for slug conflict if slug is being changed.
+      // Look up an exact replacement — same profile_id + same workspace_id
+      // scope as the row being updated. Finding a row in the same scope
+      // means the new slug would collide on the partial unique index.
       if (input.slug && input.slug !== existing.slug) {
-        const conflict = await propertyDefRepo.getBySlug(input.slug);
-        if (conflict) {
+        const conflict = await propertyDefRepo.getBySlug(
+          input.slug,
+          existing.profileId ?? undefined,
+          existing.workspaceId ?? null
+        );
+        if (conflict && conflict.id !== existing.id) {
           throw new TRPCError({
             code: "CONFLICT",
             message: `Property definition slug already exists: ${input.slug}`,

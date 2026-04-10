@@ -178,39 +178,9 @@ export class PropertyMergingService {
     return merged;
   }
 
-  /**
-   * Resolve property slug to all propertyDefIds across profiles
-   */
-  async resolvePropertyDefIds(
-    propertySlug: string,
-    scopeProfileIds: string[],
-    db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ): Promise<string[]> {
-    const merged = await this.mergePropertiesFromProfiles(scopeProfileIds, db);
-    const property = merged.get(propertySlug);
-
-    if (!property) {
-      return [];
-    }
-
-    return property.propertyDefIds;
-  }
-
-  /**
-   * Check if property is indexed (any propertyDefId is indexed)
-   */
-  async isPropertyIndexed(
-    propertySlug: string,
-    scopeProfileIds: string[],
-    db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ): Promise<boolean> {
-    const merged = await this.mergePropertiesFromProfiles(scopeProfileIds, db);
-    const property = merged.get(propertySlug);
-
-    if (!property) {
-      return false;
-    }
-
-    return property.indexed;
-  }
+  // Note: the old `resolvePropertyDefIds` and `isPropertyIndexed` helpers
+  // were removed as part of Phase 2 — both were thin wrappers around
+  // `mergePropertiesFromProfiles` and caused the filter compiler to merge
+  // twice per query. Callers read `propertyDefIds` and `indexed` directly
+  // from the `MergedProperty` returned by `mergePropertiesFromProfiles`.
 }

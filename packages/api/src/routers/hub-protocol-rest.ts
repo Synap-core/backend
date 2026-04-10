@@ -19,6 +19,7 @@ import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
 import { ChannelPurpose } from "@synap/database/schema";
 import type { ProactiveMessageType } from "../utils/proactive-channel-post.js";
+import { routeSignal } from "../utils/delivery-router.js";
 import { randomUUID, randomBytes } from "crypto";
 import {
   db,
@@ -303,7 +304,6 @@ app.get("/events", async (c) => {
     );
   }
   const userId = c.req.query("userId");
-  const workspaceId = c.req.query("workspaceId");
   const type = c.req.query("type");
   const subjectType = c.req.query("subjectType");
   const subjectId = c.req.query("subjectId");
@@ -1999,6 +1999,11 @@ app.post("/property-defs", async (c) => {
     uiHints?: Record<string, unknown>;
     agentUserId?: string;
     sourceMessageId?: string;
+    /**
+     * When true, create a workspace-scoped overlay def (invisible to other
+     * workspaces using the same profile). Default false = base def.
+     */
+    overlay?: boolean;
   };
   try {
     const actorResolution = await resolveActorId(body.agentUserId, body.userId);
@@ -2018,6 +2023,7 @@ app.post("/property-defs", async (c) => {
       constraints: body.constraints,
       uiHints: body.uiHints,
       ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+      ...(body.overlay ? { overlay: true, workspaceId: body.workspaceId } : {}),
     });
     return c.json(result);
   } catch (err) {
@@ -3710,13 +3716,14 @@ app.post("/proactive/post", async (c) => {
       });
     }
 
-    // ── Post the message ────────────────────────────────────────────────────
-    const { postProactiveMessage } =
-      await import("../utils/proactive-channel-post.js");
-    const result = await postProactiveMessage({
+    // ── Route the signal via delivery router ───────────────────────────────
+    // routeSignal respects workspace.settings.deliveryPreferences — the user
+    // can configure whether IS insights go to feed, chat, notification, or all.
+    const result = await routeSignal({
+      domain: "ai_insight",
+      content: body.content,
       userId: body.userId,
       workspaceId: body.workspaceId,
-      content: body.content,
       proactiveType: body.proactiveType as ProactiveMessageType,
       metadata: {
         ...body.metadata,
@@ -3724,7 +3731,7 @@ app.post("/proactive/post", async (c) => {
       },
     });
 
-    return c.json(result);
+    return c.json({ posted: result.delivered, ...result });
   } catch (err) {
     logger.error(
       { err, userId: body.userId, workspaceId: body.workspaceId },

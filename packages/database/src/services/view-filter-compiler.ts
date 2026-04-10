@@ -34,6 +34,17 @@ export interface CompiledFilter {
   usesIndex: boolean;
 }
 
+/**
+ * Per-slug resolved property metadata used during filter compilation.
+ * Carries both the resolved property_def IDs (for the indexed-path query)
+ * AND whether any of those defs is indexed — so we don't have to re-merge
+ * properties inside `compileFilter` just to answer "is it indexed?".
+ */
+export interface PropertyFilterMeta {
+  propertyDefIds: string[];
+  indexed: boolean;
+}
+
 export class ViewFilterCompiler {
   private propertyMerging: PropertyMergingService;
   private db: PostgresJsDatabase<typeof import("../schema/index.js")>;
@@ -54,11 +65,15 @@ export class ViewFilterCompiler {
   async compileFilter(
     filter: EntityFilter,
     scopeProfileIds?: string[],
-    propertyDefMap?: Map<string, string[]>
+    propertyMetaMap?: Map<string, PropertyFilterMeta>,
+    workspaceId?: string | null
   ): Promise<CompiledFilter | null> {
-    // Note: workspaceId is baked into `propertyDefMap` at build time
-    // (via compileFilters → buildPropertyDefMap), so this level doesn't
-    // need to thread it further — unknown properties still fall through.
+    // When `propertyMetaMap` is provided (the normal path from
+    // compileFilters → buildPropertyMetaMap), it carries both the resolved
+    // def IDs AND the indexed flag — we read both from the same pre-merged
+    // map instead of running a second merge per property filter. The
+    // `workspaceId` is only used on the degenerate fallback path where a
+    // caller invokes compileFilter directly without a pre-built map.
     const { field, operator, value } = filter;
 
     // Check if this is a property field (starts with "properties.")
@@ -75,19 +90,32 @@ export class ViewFilterCompiler {
       return null;
     }
 
-    // Resolve propertyDefIds (pre-resolved if provided, otherwise resolve now)
+    // Resolve propertyDefIds + indexed flag (pre-resolved if provided,
+    // otherwise run the merge inline — rare, typically only for direct
+    // compileFilter callers outside of view-query flows)
     let propertyDefIds: string[] = [];
-    if (propertyDefMap) {
-      propertyDefIds = propertyDefMap.get(propertySlug) || [];
+    let isIndexed = false;
+    if (propertyMetaMap) {
+      const meta = propertyMetaMap.get(propertySlug);
+      if (meta) {
+        propertyDefIds = meta.propertyDefIds;
+        isIndexed = meta.indexed;
+      }
     } else if (scopeProfileIds && scopeProfileIds.length > 0) {
-      propertyDefIds = await this.propertyMerging.resolvePropertyDefIds(
-        propertySlug,
+      // Single merge per inline call — resolves IDs + indexed in one pass.
+      const merged = await this.propertyMerging.mergePropertiesFromProfiles(
         scopeProfileIds,
-        this.db
+        this.db,
+        workspaceId
       );
+      const mergedProp = merged.get(propertySlug);
+      if (mergedProp) {
+        propertyDefIds = mergedProp.propertyDefIds;
+        isIndexed = mergedProp.indexed;
+      }
     }
 
-    // ✅ FIX: Error on unknown property (don't silently skip)
+    // ✅ Error on unknown property (don't silently skip)
     if (
       propertyDefIds.length === 0 &&
       scopeProfileIds &&
@@ -104,25 +132,16 @@ export class ViewFilterCompiler {
     }
 
     // Try to use index if property is indexed
-    if (scopeProfileIds && scopeProfileIds.length > 0) {
-      const isIndexed = await this.propertyMerging.isPropertyIndexed(
+    if (isIndexed && scopeProfileIds && scopeProfileIds.length > 0) {
+      const indexedFilter = await this.compileIndexedPropertyFilterMultiProfile(
+        propertyDefIds,
+        operator,
+        value,
         propertySlug,
-        scopeProfileIds,
-        this.db
+        scopeProfileIds
       );
-
-      if (isIndexed) {
-        const indexedFilter =
-          await this.compileIndexedPropertyFilterMultiProfile(
-            propertyDefIds,
-            operator,
-            value,
-            propertySlug,
-            scopeProfileIds
-          );
-        if (indexedFilter) {
-          return indexedFilter;
-        }
+      if (indexedFilter) {
+        return indexedFilter;
       }
     }
 
@@ -140,23 +159,20 @@ export class ViewFilterCompiler {
   async compileFilters(
     filters: EntityFilter[],
     scopeProfileIds?: string[],
-    propertyDefMap?: Map<string, string[]>,
+    propertyMetaMap?: Map<string, PropertyFilterMeta>,
     workspaceId?: string | null
   ): Promise<SQL | null> {
     if (filters.length === 0) {
       return null;
     }
 
-    // Pre-resolve property definitions if not provided (avoid N+1) — scoped
-    // to the calling workspace's lens so overlay props from other workspaces
-    // don't leak into filter compilation.
-    let resolvedPropertyDefMap = propertyDefMap;
-    if (
-      !resolvedPropertyDefMap &&
-      scopeProfileIds &&
-      scopeProfileIds.length > 0
-    ) {
-      resolvedPropertyDefMap = await this.buildPropertyDefMap(
+    // Pre-resolve property metadata if not provided (avoid N+1) — scoped to
+    // the calling workspace's lens so overlay props from other workspaces
+    // don't leak into filter compilation. The meta map carries both def IDs
+    // and the indexed flag, so compileFilter never re-merges.
+    let resolvedMetaMap = propertyMetaMap;
+    if (!resolvedMetaMap && scopeProfileIds && scopeProfileIds.length > 0) {
+      resolvedMetaMap = await this.buildPropertyMetaMap(
         scopeProfileIds,
         workspaceId
       );
@@ -168,7 +184,8 @@ export class ViewFilterCompiler {
       const compiled = await this.compileFilter(
         filter,
         scopeProfileIds,
-        resolvedPropertyDefMap
+        resolvedMetaMap,
+        workspaceId
       );
       if (compiled !== null) {
         compiledFilters.push(compiled.sql);
@@ -193,19 +210,27 @@ export class ViewFilterCompiler {
    * Build property definition map (pre-resolve to avoid N+1)
    * Returns map of property slug -> propertyDefIds[]
    */
-  private async buildPropertyDefMap(
+  /**
+   * Build the per-slug property metadata map used by `compileFilter`.
+   * Returns both the resolved def IDs and the indexed flag so filter
+   * compilation never needs to touch the merging service a second time.
+   */
+  private async buildPropertyMetaMap(
     scopeProfileIds: string[],
     workspaceId?: string | null
-  ): Promise<Map<string, string[]>> {
+  ): Promise<Map<string, PropertyFilterMeta>> {
     const merged = await this.propertyMerging.mergePropertiesFromProfiles(
       scopeProfileIds,
       this.db,
       workspaceId
     );
 
-    const map = new Map<string, string[]>();
+    const map = new Map<string, PropertyFilterMeta>();
     for (const [slug, prop] of merged) {
-      map.set(slug, prop.propertyDefIds);
+      map.set(slug, {
+        propertyDefIds: prop.propertyDefIds,
+        indexed: prop.indexed,
+      });
     }
 
     return map;

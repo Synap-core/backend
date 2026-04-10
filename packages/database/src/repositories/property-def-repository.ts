@@ -72,26 +72,48 @@ export class PropertyDefRepository {
   }
 
   /**
-   * Get property definition by slug.
-   * When profileId is provided, looks up a profile-scoped def first.
-   * Falls back to a global def (profileId IS NULL) if no scoped def exists.
+   * Get property definition by slug, scoped by (profile, workspace).
+   *
+   * Workspace semantics:
+   *   • `workspaceId === undefined` → legacy: no workspace filter (first match wins)
+   *   • `workspaceId === null`      → match only "base" defs (workspace_id IS NULL)
+   *   • `workspaceId === string`    → match only overlays for that workspace
+   *
+   * Pass `null` from existence-checks before creating a base def so you
+   * don't falsely match another workspace's overlay. Pass a UUID when
+   * checking for an overlay's existence inside its own workspace.
    */
   async getBySlug(
     slug: string,
-    profileId?: string
+    profileId?: string,
+    workspaceId?: string | null
   ): Promise<PropertyDef | null> {
+    const workspaceCondition =
+      workspaceId === undefined
+        ? undefined
+        : workspaceId === null
+          ? isNull(propertyDefs.workspaceId)
+          : eq(propertyDefs.workspaceId, workspaceId);
+
     if (profileId) {
+      const scopedConditions = [
+        eq(propertyDefs.slug, slug),
+        eq(propertyDefs.profileId, profileId),
+      ];
+      if (workspaceCondition) scopedConditions.push(workspaceCondition);
       const scoped = await this.db.query.propertyDefs.findFirst({
-        where: and(
-          eq(propertyDefs.slug, slug),
-          eq(propertyDefs.profileId, profileId)
-        ),
+        where: and(...scopedConditions),
       });
       if (scoped) return scoped;
     }
-    // Fall back to global def
+    // Fall back to global def (profile_id IS NULL)
+    const globalConditions = [
+      eq(propertyDefs.slug, slug),
+      isNull(propertyDefs.profileId),
+    ];
+    if (workspaceCondition) globalConditions.push(workspaceCondition);
     const global = await this.db.query.propertyDefs.findFirst({
-      where: and(eq(propertyDefs.slug, slug), isNull(propertyDefs.profileId)),
+      where: and(...globalConditions),
     });
     return global || null;
   }

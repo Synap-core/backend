@@ -1,0 +1,29 @@
+# openclaw_auth.snippet
+#
+# Auth directives for the OpenClaw dashboard subdomain.
+# This file is imported by the main Caddyfile at `/etc/caddy/openclaw_auth.snippet`.
+#
+# Default contents (shipped with the repo): a respond handler that returns 503
+# with setup instructions. This is effectively a no-op — when OPENCLAW_DOMAIN
+# is unset, the parent block uses `disabled.invalid` and Caddy never routes
+# any traffic here.
+#
+# When the user runs `synap openclaw setup-domain`, this file is REPLACED with
+# one of two generated variants:
+#
+#   cp-oauth (managed pods):
+#     forward_auth https://api.synap.live {
+#         uri /api/auth/me
+#         copy_headers X-Authenticated-User
+#         @unauthorized status 401
+#         handle_response @unauthorized {
+#             redir https://synap.live/login?redirect=https://{host}{uri} temporary
+#         }
+#     }
+#
+#   basic (self-hosted):
+#     basicauth {
+#         openclaw <bcrypt-hash>
+#     }
+
+respond "OpenClaw dashboard auth not configured. Run: synap openclaw setup-domain" 503

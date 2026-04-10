@@ -597,10 +597,17 @@ export const viewsRouter = router({
           ctx.workspaceId
         );
 
-      // Build property definition map
-      const propertyDefMap = new Map<string, string[]>();
+      // Build property metadata map (def IDs + indexed flag) for the
+      // filter compiler — one merge, no double work in compileFilter.
+      const propertyMetaMap = new Map<
+        string,
+        { propertyDefIds: string[]; indexed: boolean }
+      >();
       for (const [slug, prop] of mergedProperties) {
-        propertyDefMap.set(slug, prop.propertyDefIds);
+        propertyMetaMap.set(slug, {
+          propertyDefIds: prop.propertyDefIds,
+          indexed: prop.indexed,
+        });
       }
 
       // Apply custom filters (using ViewFilterCompiler with multi-profile support)
@@ -610,7 +617,8 @@ export const viewsRouter = router({
           const compiledFilters = await filterCompiler.compileFilters(
             filters as EntityFilter[],
             view.scopeProfileIds,
-            propertyDefMap
+            propertyMetaMap,
+            ctx.workspaceId
           );
 
           if (compiledFilters) {

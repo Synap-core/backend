@@ -172,7 +172,14 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     const createdPropertyDefs = new Map<string, string>();
 
     for (const propDef of propertyDefs) {
-      const existing = await propertyDefRepo.getBySlug(propDef.slug);
+      // Seed creates "base" defs (workspace_id IS NULL). Match only base
+      // rows so an overlay with the same slug in some workspace doesn't
+      // make the seed skip creating the canonical global/base def.
+      const existing = await propertyDefRepo.getBySlug(
+        propDef.slug,
+        undefined,
+        null
+      );
       if (existing) {
         createdPropertyDefs.set(propDef.slug, existing.id);
       } else {
@@ -403,7 +410,14 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     ];
 
     for (const propDef of capturePropertyDefs) {
-      const existing = await propertyDefRepo.getBySlug(propDef.slug);
+      // Seed creates "base" defs (workspace_id IS NULL). Match only base
+      // rows so an overlay with the same slug in some workspace doesn't
+      // make the seed skip creating the canonical global/base def.
+      const existing = await propertyDefRepo.getBySlug(
+        propDef.slug,
+        undefined,
+        null
+      );
       if (existing) {
         createdPropertyDefs.set(propDef.slug, existing.id);
       } else {

@@ -270,6 +270,9 @@ async function materializeEntity(
           (data.description as string) || (data.preview as string) || undefined,
         documentId: data.documentId as string | undefined,
         properties: (data.properties as Record<string, unknown>) || undefined,
+        // Thread the materializing workspace's lens for validation/indexing.
+        // Materialization runs from the workspace that emitted the event.
+        workspaceId: workspaceId ?? null,
       },
       userId
     );

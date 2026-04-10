@@ -50,7 +50,7 @@ import { syncManagementRouter } from "./routers/sync-management.js";
 /**
  * Core API Router
  */
-const _coreRouter = router({
+export const coreRouter = router({
   setup: setupRouter,
   events: eventsRouter,
   capture: captureRouter,
@@ -101,5 +101,4 @@ const _coreRouter = router({
   sync: syncManagementRouter,
 });
 
-export type AppRouter = typeof _coreRouter;
-export const coreRouter: AppRouter = _coreRouter;
+export type AppRouter = typeof coreRouter;

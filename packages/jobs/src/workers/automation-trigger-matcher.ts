@@ -98,7 +98,7 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 function matchTriggerSpecificFilters(
   eventType: string,
   eventData: Record<string, unknown> | undefined,
-  config: AutomationTriggerConfig & Record<string, unknown>
+  config: AutomationTriggerConfig
 ): boolean {
   // ── channel_message trigger ─────────────────────────────────────────────
   if (eventType.startsWith("channel_message.")) {
@@ -252,14 +252,7 @@ export async function handleAutomationTriggerMatch(job: {
     if (!matchFilters(data, config.filters)) continue;
 
     // ── Trigger-type-specific filter match ─────────────────────────────
-    if (
-      !matchTriggerSpecificFilters(
-        eventType,
-        data,
-        config as AutomationTriggerConfig & Record<string, unknown>
-      )
-    )
-      continue;
+    if (!matchTriggerSpecificFilters(eventType, data, config)) continue;
 
     // ── Create automation run ──────────────────────────────────────────
     logger.info(

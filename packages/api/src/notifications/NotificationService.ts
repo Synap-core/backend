@@ -303,42 +303,6 @@ export const NotificationService = {
   },
 
   /**
-   * Convenience wrapper for connector sync events.
-   */
-  async fromConnectorSync(opts: {
-    workspaceId: string;
-    userId: string;
-    connectorName: string;
-    itemCount?: number;
-    success: boolean;
-    errorMessage?: string;
-  }): Promise<void> {
-    if (opts.success) {
-      await NotificationService.create({
-        type: "connector.sync.complete",
-        workspaceId: opts.workspaceId,
-        userId: opts.userId,
-        sourceType: "connector",
-        data: {
-          connectorName: opts.connectorName,
-          itemCount: opts.itemCount ?? 0,
-        },
-      });
-    } else {
-      await NotificationService.create({
-        type: "connector.sync.failed",
-        workspaceId: opts.workspaceId,
-        userId: opts.userId,
-        sourceType: "connector",
-        data: {
-          connectorName: opts.connectorName,
-          errorMessage: opts.errorMessage ?? "Unknown error",
-        },
-      });
-    }
-  },
-
-  /**
    * Convenience wrapper for skill trigger events.
    */
   async fromSkillTrigger(opts: {

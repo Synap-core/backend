@@ -65,6 +65,17 @@ export interface UpdateEntityInput {
    * workspaceProcedure routers should always pass `ctx.workspaceId`.
    */
   workspaceId?: string | null;
+
+  /**
+   * Suppress the repository's standard `entities.update.completed` event.
+   *
+   * Callers that emit their own domain event (e.g. the automation executor
+   * wraps updates in an automation-context event via `emitSideEffects()`)
+   * pass `skipEvent: true` to avoid double-emission while still benefiting
+   * from validation, indexing, and the workspace lens. Downstream
+   * materializers react to the caller's event, not the repo's.
+   */
+  skipEvent?: boolean;
 }
 
 export interface DeleteEntityOptions {
@@ -378,8 +389,11 @@ export class EntityRepository extends BaseRepository<
         });
     }
 
-    // 5. Emit completed event
-    await this.emitCompleted("update", entity, userId);
+    // 5. Emit completed event (unless caller is wrapping the write in its
+    //    own domain event — see `skipEvent` on UpdateEntityInput)
+    if (!data.skipEvent) {
+      await this.emitCompleted("update", entity, userId);
+    }
 
     return entity;
   }

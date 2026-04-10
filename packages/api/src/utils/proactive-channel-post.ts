@@ -1,14 +1,15 @@
 /**
  * Proactive Channel Post Utility
  *
- * Posts AI-initiated proactive messages (morning briefings, weekly digests,
- * health checks, nudges, insights) to the user's PROACTIVE FEED channel.
+ * Posts a proactive message to the user's PROACTIVE FEED channel (feed surface only).
+ * Used by delivery-router.ts for the "feed" surface — other surfaces are handled separately.
  *
  * Key behaviors:
- * - Targets the proactive feed channel (isProactiveFeed: true) — NOT the personal chat channel
+ * - Targets the proactive feed channel (channelPurpose='feed')
  * - Checks proactiveAi.enabled + mutedUntil before posting
  * - Deduplicates: at most one message per proactiveType per user+workspace per day
- * - Emits chat:message via the realtime bridge so the frontend updates live
+ * - Emits chat:message via Socket.IO so the frontend updates live
+ * - Fires proactive.post.completed event (enables automation triggers + audit log)
  * - Never throws — returns { posted: false, reason } on any error
  */
 
@@ -28,23 +29,11 @@ import type {
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { ensureProactiveFeedChannel } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
-import { NotificationService } from "../notifications/NotificationService.js";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/jobs";
 import { eventRepository } from "@synap/database";
 
 const logger = createLogger({ module: "proactive-channel-post" });
-
-/** Human-readable titles for proactive message types (used in notifications). */
-const PROACTIVE_TITLES: Record<ProactiveMessageType, string> = {
-  morning_briefing: "Morning Briefing",
-  weekly_digest: "Weekly Digest",
-  health_check: "Health Check",
-  nudge: "AI Nudge",
-  insight: "AI Insight",
-  suggestion: "AI Suggestion",
-  alert: "AI Alert",
-};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -202,28 +191,6 @@ export async function postProactiveMessage(
       channelId: channel.id,
       userId,
     });
-
-    // ── 6. Create notification entry ──────────────────────────────────────
-    try {
-      await NotificationService.create({
-        type: `ai.proactive.${proactiveType}`,
-        workspaceId,
-        userId,
-        sourceType: "proactive_message",
-        sourceId: messageId,
-        data: {
-          proactiveType,
-          title: PROACTIVE_TITLES[proactiveType] || "AI Insight",
-          body: content.substring(0, 200),
-        },
-      });
-    } catch (notifErr) {
-      // Non-fatal — notifications must never break the proactive message flow
-      logger.warn(
-        { err: notifErr, proactiveType, messageId },
-        "Failed to create proactive notification (non-fatal)"
-      );
-    }
 
     logger.info(
       { userId, workspaceId, proactiveType, messageId },

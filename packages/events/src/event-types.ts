@@ -1,45 +1,19 @@
 /**
- * Event Types - Centralized Event Type Registry
+ * Event Types — Single Source of Truth for Automation-Triggerable Events
  *
- * V2.0: Simplified Schema-Driven Event Architecture
+ * OperationalEventTypes defines every event string that:
+ *   1. emitSideEffects() can produce (via the "automation-trigger-match" pg-boss queue)
+ *   2. Automation trigger configs can reference in their eventPattern field
+ *   3. IS agents can query via GET /api/hub/events?types[]=...
  *
- * Event types are now organized into:
- * 1. Generated events (auto-generated from database tables via @synap/events)
- * 2. System events (for cross-cutting concerns)
+ * Pattern: {singular-domain}.{action}.{modifier}
+ *   entity.create.completed   ← entity created (emitSideEffects: subjectType="entity", action="create")
+ *   capture.complete.completed ← quick capture pipeline finished
  *
- * Pattern: {table}.{action}.{modifier}
- * - entities.create.requested
- * - entities.create.validated
- *
- * @example
- * ```typescript
- * import { GeneratedEventTypes } from '@synap-core/core';
- *
- * // Use generated table events
- * const event = createSynapEvent({
- *   type: GeneratedEventTypes.entities['create.requested'],
- *   // Result: 'entities.create.requested'
- * });
- * ```
+ * Note: GeneratedEventTypes (in generator.ts) uses a different pattern
+ * ({plural-table}.{action}.{validated}) for schema-level documentation and
+ * admin introspection. Those strings are NOT what automation triggers match.
  */
-
-// ============================================================================
-// GENERATED EVENTS (from @synap/events)
-// ============================================================================
-
-// DISABLED: Circular dependency - events package depends on types
-// Re-export these from @synap/events directly in consuming code instead
-/*
-export { 
-  GeneratedEventTypes,
-  getAllGeneratedEventTypes,
-  isGeneratedEventType,
-  parseEventType,
-  type GeneratedEventType,
-  type TableAction,
-  type CoreTable,
-} from '@synap-core/core';
-*/
 
 // ============================================================================
 // SYSTEM EVENTS (cross-cutting operations)
@@ -72,15 +46,33 @@ export type SystemEventType =
  * Pattern: {domain}.{action}.{modifier}
  */
 export const OperationalEventTypes = {
-  // Quick capture completed (from capture router)
+  // ── Entity lifecycle ─────────────────────────────────────────────────────
+  ENTITY_CREATED: "entity.create.completed",
+  ENTITY_UPDATED: "entity.update.completed",
+  ENTITY_DELETED: "entity.delete.completed",
+
+  // ── Proposal governance ──────────────────────────────────────────────────
+  PROPOSAL_CREATED: "proposal.created.completed",
+  PROPOSAL_APPROVED: "proposal.approved.completed",
+  PROPOSAL_REJECTED: "proposal.rejected.completed",
+
+  // ── Relations ────────────────────────────────────────────────────────────
+  RELATION_CREATED: "relation.create.completed",
+  RELATION_DELETED: "relation.delete.completed",
+
+  // ── Quick capture ────────────────────────────────────────────────────────
   CAPTURE_COMPLETE: "capture.complete.completed",
-  // Connector sync completed (from bulk import workers)
+
+  // ── Connector sync ───────────────────────────────────────────────────────
   CONNECTOR_SYNC_COMPLETE: "connector_sync.complete.completed",
-  // Proactive message posted to feed channel
+
+  // ── Proactive intelligence ───────────────────────────────────────────────
   PROACTIVE_POST: "proactive.post.completed",
-  // Notification persisted to DB
+
+  // ── Notifications ────────────────────────────────────────────────────────
   NOTIFICATION_CREATED: "notification.created",
-  // Channel message created via automation output step
+
+  // ── Channel messages ─────────────────────────────────────────────────────
   CHANNEL_MESSAGE_CREATED: "channel_message.created.completed",
 } as const;
 
@@ -93,9 +85,7 @@ export type OperationalEventType =
 
 /**
  * EventTypes — all operational + system event type constants.
- *
- * For table-level CRUD events (entities.create.validated etc.), use
- * GeneratedEventTypes from @synap/events instead.
+ * This is the complete set of strings that automation triggers can match.
  */
 export const EventTypes = {
   ...SystemEventTypes,
@@ -107,33 +97,20 @@ export const EventTypes = {
  */
 export type EventType = SystemEventType | OperationalEventType;
 
-/**
- * Validate event type
- *
- * Checks if a string is a valid event type (system or generated).
- */
 // Imported statically to fix ESM 'require is not defined' error
 import { isGeneratedEventType } from "./generator.js";
 
 /**
- * Validate event type
- *
- * Checks if a string is a valid event type (system or generated).
+ * Check if a string is a known event type.
+ * Covers both OperationalEventTypes and GeneratedEventTypes (schema-level).
  */
 export function isValidEventType(eventType: string): boolean {
-  // Check system events
-  if (Object.values(EventTypes).includes(eventType as EventType)) {
-    return true;
-  }
-
-  // Check generated
+  if (Object.values(EventTypes).includes(eventType as EventType)) return true;
   return isGeneratedEventType(eventType);
 }
 
 /**
- * Get all event types (system only, not generated)
- *
- * For generated events, use getAllGeneratedEventTypes() from @synap/events
+ * All operational + system event type strings as a readonly array.
  */
 export function getAllEventTypes(): readonly EventType[] {
   return Object.values(EventTypes);

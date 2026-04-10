@@ -118,9 +118,16 @@ export const hubProfilesRouter = router({
     }),
 
   /**
-   * Create a property definition for a profile
+   * Create a property definition for a profile.
+   *
    * Requires: hub-protocol.write scope
    * Governance: auto-approved (property_def.create in DEFAULT_AUTO_APPROVE)
+   *
+   * Phase 2 layered schemas: pass `overlay: true` with a `workspaceId` to
+   * create a workspace-scoped overlay field (invisible to other workspaces).
+   * Default behaviour creates a "base" def visible to every workspace that
+   * uses the profile. Agents adding a custom field to a shared profile
+   * (Person, Task, …) should prefer overlays to avoid cross-workspace leaks.
    */
   createPropertyDef: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -137,13 +144,27 @@ export const hubProfilesRouter = router({
         constraints: z.record(z.string(), z.unknown()).optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
         agentUserId: z.string().uuid().optional(),
+        /**
+         * When true, create a workspace-scoped overlay (invisible to other
+         * workspaces). Requires `workspaceId`. Default false = base def.
+         */
+        overlay: z.boolean().optional(),
+        /** Target workspace for overlay creation. */
+        workspaceId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const overlay = input.overlay === true;
+      if (overlay && !input.workspaceId) {
+        throw new Error("createPropertyDef: overlay=true requires workspaceId");
+      }
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        undefined,
+        // Overlays need workspace context so ctx.workspaceId is populated;
+        // base defs can skip it (the regular router's workspaceProcedure
+        // will still demand some workspace, but one will be resolved).
+        overlay ? input.workspaceId : input.workspaceId,
         ctx.sourceMessageId ?? undefined
       );
       const caller = regularPropertyDefsRouter.createCaller(callerContext);
@@ -162,6 +183,7 @@ export const hubProfilesRouter = router({
         constraints: input.constraints,
         uiHints: input.uiHints,
         profileId: input.profileId,
+        overlay,
       });
     }),
 });

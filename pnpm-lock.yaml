@@ -756,7 +756,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.6.1
-        version: 1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17(vitest@4.0.17))
+        version: 1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17)
 
   packages/realtime:
     dependencies:
@@ -865,7 +865,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.0.4
-        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17(vitest@4.0.17))
+        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17)
 
   packages/test-e2e:
     dependencies:
@@ -908,7 +908,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.3.1
-        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17(vitest@4.0.17))
+        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17)
 
   packages/types:
     dependencies:
@@ -3606,8 +3606,8 @@ packages:
     peerDependencies:
       react: '>= 16'
 
-  '@tabler/icons@3.36.1':
-    resolution: {integrity: sha512-f4Jg3Fof/Vru5ioix/UO4GX+sdDsF9wQo47FbtvG+utIYYVQ/QVAC0QYgcBbAjQGfbdOh2CCf0BgiFOF9Ixtjw==}
+  '@tabler/icons@3.41.1':
+    resolution: {integrity: sha512-OaRnVbRmH2nHtFeg+RmMJ/7m2oBIF9XCJAUD5gQnMrpK9f05ydj8MZrAf3NZQqOXyxGN1UBL0D5IKLLEUfr74Q==}
 
   '@tanstack/query-core@5.90.16':
     resolution: {integrity: sha512-MvtWckSVufs/ja463/K4PyJeqT+HMlJWtw6PrCpywznd2NSgO3m4KwO9RqbFqGg6iDE8vVMFWMeQI4Io3eEYww==}
@@ -5194,6 +5194,7 @@ packages:
   git-raw-commits@4.0.0:
     resolution: {integrity: sha512-ICsMM1Wk8xSGMowkOmPrzo2Fgmfo4bMHLNX6ytHjajRJUqvHOw/TFapQ+QG75c3X/tTDDhOSRPGC52dDbNM8FQ==}
     engines: {node: '>=16'}
+    deprecated: This package is no longer maintained. For the JavaScript API, please use @conventional-changelog/git-client instead.
     hasBin: true
 
   glob-parent@6.0.2:
@@ -8282,7 +8283,7 @@ snapshots:
   '@commitlint/config-validator@20.3.1':
     dependencies:
       '@commitlint/types': 20.3.1
-      ajv: 8.13.0
+      ajv: 8.17.1
 
   '@commitlint/ensure@20.3.1':
     dependencies:
@@ -10741,10 +10742,10 @@ snapshots:
 
   '@tabler/icons-react@3.36.1(react@19.2.3)':
     dependencies:
-      '@tabler/icons': 3.36.1
+      '@tabler/icons': 3.41.1
       react: 19.2.3
 
-  '@tabler/icons@3.36.1': {}
+  '@tabler/icons@3.41.1': {}
 
   '@tanstack/query-core@5.90.16': {}
 
@@ -11001,7 +11002,7 @@ snapshots:
 
   '@types/pg-pool@2.0.6':
     dependencies:
-      '@types/pg': 8.15.6
+      '@types/pg': 8.16.0
 
   '@types/pg@8.15.6':
     dependencies:
@@ -11172,6 +11173,14 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.0.3
 
+  '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@20.19.28)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))':
+    dependencies:
+      '@vitest/spy': 4.0.17
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 7.3.1(@types/node@20.19.28)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+
   '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@24.10.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))':
     dependencies:
       '@vitest/spy': 4.0.17
@@ -11230,7 +11239,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/utils@1.6.1':
     dependencies:
@@ -14833,7 +14842,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.2
 
-  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17(vitest@4.0.17)):
+  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -14868,7 +14877,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17(vitest@4.0.17)):
+  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -14903,7 +14912,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17(vitest@4.0.17)):
+  vitest@1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -14941,7 +14950,7 @@ snapshots:
   vitest@4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.17
-      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@25.0.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))
+      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@20.19.28)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))
       '@vitest/pretty-format': 4.0.17
       '@vitest/runner': 4.0.17
       '@vitest/snapshot': 4.0.17

@@ -28,15 +28,59 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 // ── Flow definition types ───────────────────────────────────────────────────
 
+/**
+ * AutomationTriggerConfig
+ *
+ * Typed configuration stored as JSONB on the automations table.
+ * The discriminant is `automations.triggerType` (separate column), not a field here.
+ *
+ * For event triggers, all domain-specific filter fields are declared here so
+ * TypeScript sees them without `& Record<string, unknown>` casts.
+ */
 export interface AutomationTriggerConfig {
-  /** For event triggers: the event pattern to match (e.g. "entities.create.validated") */
+  // ── event trigger ──────────────────────────────────────────────────────
+  /** Event pattern to match. Supports trailing wildcard: "entities.*", "capture.complete.completed" */
   eventPattern?: string;
-  /** Property-level filters on the event payload (e.g. { profileSlug: "task" }) */
+  /** Generic key-value filters applied to event.data (dot-notation supported) */
   filters?: Record<string, unknown>;
-  /** For cron triggers: cron expression */
+
+  // ── cron trigger ───────────────────────────────────────────────────────
+  /** Cron expression (e.g. "0 9 * * MON") */
   expression?: string;
-  /** For webhook triggers: subscription ID to listen on */
+
+  // ── webhook trigger ────────────────────────────────────────────────────
+  /** Webhook subscription ID to listen on */
   webhookSubscriptionId?: string;
+
+  // ── channel_message domain filters ────────────────────────────────────
+  /** Only match messages in this specific channel */
+  channelId?: string;
+  /** Filter by message author role ("user" | "assistant" | "any") */
+  messageRole?: "user" | "assistant" | "any";
+
+  // ── connector_sync domain filters ─────────────────────────────────────
+  /** Only match events from this connector provider (e.g. "google-calendar", "github") */
+  provider?: string;
+  /** Filter by sync outcome ("success" | "error" | "any") */
+  syncStatus?: "success" | "error" | "any";
+
+  // ── relation domain filters ────────────────────────────────────────────
+  /** Only match this relation type slug */
+  relationType?: string;
+  /** Filter by change direction ("create" | "delete" | "any") */
+  changeType?: "create" | "delete" | "any";
+
+  // ── proposal domain filters ────────────────────────────────────────────
+  /** Filter by proposal lifecycle event ("created" | "approved" | "rejected" | "any") */
+  proposalEventType?: "created" | "approved" | "rejected" | "any";
+
+  // ── capture domain filters ─────────────────────────────────────────────
+  /** Only fire when a specific profile was captured (e.g. "person", "company", or "any") */
+  profileSlug?: string;
+
+  // ── proactive domain filters ───────────────────────────────────────────
+  /** Filter by proactive message type ("morning_briefing" | "weekly_digest" | "insight" | "any") */
+  proactiveType?: string;
 }
 
 export interface AutomationNodeBase {

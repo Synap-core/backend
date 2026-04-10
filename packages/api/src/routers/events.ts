@@ -15,7 +15,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 // import { subjectTypeSchema, EventSourceSchema } from '@synap/domain';
 import { createSynapEvent } from "@synap-core/core";
 import { db, getEventRepository } from "@synap/database";
-import type { EventType, SubjectType } from "@synap/events";
+import type { EventType } from "@synap/events";
 import { randomUUID } from "crypto";
 
 // Temporary schemas until we refactor
@@ -32,7 +32,7 @@ const subjectTypeSchema = z.enum([
   "message",
   "apiKey",
   "member",
-]) as z.ZodType<SubjectType>;
+]);
 const EventSourceSchema = z.enum([
   "api",
   "automation",

@@ -118,6 +118,8 @@ export async function handleAiAnalysis(
       title: classified.title || undefined,
       properties: mergedProperties,
       profileSlug: classified.profileSlug,
+      // Thread workspace lens so overlay props validate/index correctly
+      workspaceId,
     },
     userId
   );

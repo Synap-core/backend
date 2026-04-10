@@ -397,13 +397,21 @@ async function executeOutputStep(
       if (!entityId)
         throw new Error("entity_update requires entityId in config");
 
-      await db
-        .update(entities)
-        .set({
-          properties: drizzleSql`COALESCE(properties, '{}'::jsonb) || ${JSON.stringify(properties)}::jsonb`,
-          updatedAt: new Date(),
-        } as unknown as Record<string, unknown>)
-        .where(eq(entities.id, entityId));
+      // Route through EntityRepository so validation, entity_property_index
+      // reindex, and the workspace-scoped property lens (Phase 2) all run.
+      // `skipEvent: true` prevents double-emission — we emit our own
+      // automation-context event via emitSideEffects() below, which carries
+      // the automationContext metadata the repo doesn't know about.
+      const entityRepo = new EntityRepository(db, eventRepository);
+      await entityRepo.update(
+        entityId,
+        {
+          properties,
+          workspaceId,
+          skipEvent: true,
+        },
+        ownerId
+      );
 
       await emitSideEffects({
         subjectType: "entity",

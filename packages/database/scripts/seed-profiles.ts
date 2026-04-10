@@ -398,7 +398,12 @@ async function seedProfiles() {
     const createdPropertyDefs = new Map<string, string>();
 
     for (const propDef of propertyDefs) {
-      const existing = await propertyDefRepo.getBySlug(propDef.slug);
+      // Seed creates "base" defs only — match base rows, ignore overlays.
+      const existing = await propertyDefRepo.getBySlug(
+        propDef.slug,
+        undefined,
+        null
+      );
       if (existing) {
         console.log(`  ✓ Property '${propDef.slug}' already exists`);
         createdPropertyDefs.set(propDef.slug, existing.id);

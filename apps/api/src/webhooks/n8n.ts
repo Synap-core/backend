@@ -6,8 +6,9 @@
  */
 
 import { Hono } from "hono";
-import { publishEvent, createInboxItemReceivedEvent } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+import { createSynapEvent } from "@synap-core/core";
+import { eventRepository } from "@synap/database";
 import { z } from "zod";
 
 const logger = createLogger({ module: "n8n-webhooks" });
@@ -60,13 +61,9 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
     const userId = c.req.header("X-User-Id");
     const workspaceId = c.req.header("X-Workspace-Id");
 
-    if (!userId) {
-      return c.json({ error: "X-User-Id header required" }, 400);
-    }
-
-    if (!workspaceId) {
+    if (!userId) return c.json({ error: "X-User-Id header required" }, 400);
+    if (!workspaceId)
       return c.json({ error: "X-Workspace-Id header required" }, 400);
-    }
 
     const body = await c.req.json();
     const { items } = body;
@@ -84,30 +81,30 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
 
     for (const item of items) {
       try {
-        // Validate item
         const validated = InboxItemSchema.parse(item);
-
-        // Generate ID for the inbox item
         const itemId = `inbox_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // ✅ Type-safe event publishing with workspaceId
-        const event = createInboxItemReceivedEvent(itemId, {
-          provider: validated.provider,
-          account: validated.provider, // Use provider as account identifier
-          externalId: validated.externalId,
-          type: validated.type,
-          title: validated.title,
-          preview: validated.preview,
-          timestamp: new Date(validated.timestamp),
-          deepLink: validated.deepLink,
-          rawData: validated.data,
-          workspaceId, // ✅ Required workspace context
-        });
-
-        await publishEvent(event, {
-          userId,
-          source: "n8n-webhook",
-        });
+        await eventRepository.append(
+          createSynapEvent({
+            type: "inbox.item.received",
+            subjectId: itemId,
+            subjectType: "inbox_item",
+            data: {
+              provider: validated.provider,
+              account: validated.account,
+              externalId: validated.externalId,
+              type: validated.type,
+              title: validated.title,
+              preview: validated.preview,
+              timestamp: validated.timestamp,
+              deepLink: validated.deepLink,
+              rawData: validated.data,
+              workspaceId,
+            },
+            userId,
+            source: "api",
+          })
+        );
 
         results.published++;
       } catch (error: any) {
@@ -119,10 +116,7 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
 
     logger.info(results, "N8N inbox webhook processing complete");
 
-    return c.json({
-      success: true,
-      ...results,
-    });
+    return c.json({ success: true, ...results });
   } catch (error: any) {
     logger.error({ error }, "N8N webhook handler error");
     return c.json(

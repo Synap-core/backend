@@ -1,85 +1,44 @@
 /**
- * @synap/events - Schema-Driven Event System
+ * @synap/events — Event Type System
  *
- * This package provides:
- * - Type-safe domain event definitions
- * - Type-safe event publisher
- * - Auto-generated event types from database tables
- * - Type-safe payload schemas (Zod)
- * - Runtime event registry
+ * Two sets of event type constants live here:
  *
- * Pattern: {table}.{action}.{modifier}
- * Example: entities.create.requested
+ * 1. OperationalEventTypes — the strings that emitSideEffects() produces and
+ *    that automation triggers match against. THIS is the single source of truth
+ *    for event-driven automation in Synap.
  *
- * @example
- * ```typescript
- * import { publishEvent, createInboxItemReceivedEvent } from '@synap-core/core';
+ *    Examples: "entity.create.completed", "capture.complete.completed"
  *
- * // Type-safe event publishing
- * const event = createInboxItemReceivedEvent(itemId, {
- *   provider: 'gmail',
- *   externalId: '123',
- *   type: 'email',
- *   title: 'Meeting invite',
- *   timestamp: new Date(),
- *   rawData: {}
- * });
+ * 2. GeneratedEventTypes — a schema-documentation utility that enumerates the
+ *    3-phase (requested → approved → validated) event pattern per DB table.
+ *    Used by admin/introspection endpoints (system.ts, hub-transform.ts) for
+ *    capability listing. NOT used for automation triggers.
  *
- * await publishEvent(event, { userId: 'user_123' });
- * ```
+ *    Examples: "entities.create.validated", "entities.update.requested"
+ *
+ * The two systems use different naming conventions (singular vs plural table
+ * name, ".completed" vs ".validated" suffix) and are intentionally separate:
+ *   - OperationalEventTypes → what workers emit → what automations consume
+ *   - GeneratedEventTypes   → schema-level documentation → introspection only
  */
 
 // ============================================================================
-// DOMAIN EVENTS (Type-Safe Event System)
-// ============================================================================
-
-export type {
-  // Base types
-  BaseEvent,
-  DomainEvent,
-  // EventType, // ← Removed: conflicts with event-types.ts export
-  SubjectType,
-  EventDataFor,
-  SubjectTypeFor,
-  EventsForSubject,
-
-  // Inbox events
-  InboxItemReceivedEvent,
-  InboxItemAnalyzedEvent,
-  InboxItemStatusUpdatedEvent,
-
-  // Entity events
-  EntityCreateRequestedEvent,
-  EntityCreateCompletedEvent,
-  EntityUpdateRequestedEvent,
-
-  // Document events
-  DocumentCreateRequestedEvent,
-  DocumentCreateCompletedEvent,
-
-  // Message events
-  MessageCreateRequestedEvent,
-
-  // Chat thread events
-  ChatThreadCreateRequestedEvent,
-} from "./domain-events.js";
-
-// ============================================================================
-// TYPE-SAFE PUBLISHER
+// OPERATIONAL & SYSTEM EVENT TYPES (automation triggers — single source of truth)
 // ============================================================================
 
 export {
-  publishEvent,
-  createInboxItemReceivedEvent,
-  createInboxItemAnalyzedEvent,
-  createInboxItemStatusUpdatedEvent,
-  createEntityCreateRequestedEvent,
-  createEntityCreateCompletedEvent,
-  type PublishEventOptions,
-} from "./publisher.js";
+  EventTypes,
+  SystemEventTypes,
+  OperationalEventTypes,
+  isValidEventType,
+  getAllEventTypes,
+  type EventType,
+  type SystemEventType,
+  type OperationalEventType,
+} from "./event-types.js";
 
 // ============================================================================
-// GENERATOR (Auto-generated event types from tables)
+// GENERATED EVENT TYPES (schema documentation + admin introspection only)
 // ============================================================================
 
 export {
@@ -95,70 +54,5 @@ export {
   type GeneratedEventType,
 } from "./generator.js";
 
-// ============================================================================
-// PAYLOADS (Zod schemas for validation)
-// ============================================================================
-
-export {
-  // Base schemas
-  MetadataSchema,
-  RequestContextSchema,
-
-  // Entity schemas
-  EntityTypeSchema,
-  FileAttachmentSchema,
-  EntitiesCreateRequestedPayload,
-  EntitiesCreateCompletedPayload,
-  EntitiesUpdateRequestedPayload,
-
-  // Document schemas
-  DocumentsCreateRequestedPayload,
-  DocumentsCreateCompletedPayload,
-
-  // Message schemas
-  MessageAttachmentSchema,
-  ConversationMessagesCreateRequestedPayload,
-
-  // Chat thread schemas
-  ChatThreadsCreateRequestedPayload,
-
-  // Task details schemas
-  TaskDetailsCreateRequestedPayload,
-
-  // Schema registry
-  GeneratedPayloadSchemas,
-  getPayloadSchema,
-  validatePayload,
-  type EntityType,
-  type GeneratedPayloadSchemaType,
-} from "./payloads.js";
-
-// ============================================================================
-// REGISTRY (Runtime event tracking)
-// ============================================================================
-
-export {
-  eventRegistry,
-  registerGeneratedEvents,
-  getTableEventSummary,
-  type EventRegistration,
-  type EventRegistryStats,
-} from "./registry.js";
-
-// ============================================================================
-// EVENT TYPES (System event type constants)
-// ============================================================================
-
-export {
-  EventTypes,
-  SystemEventTypes,
-  OperationalEventTypes,
-  type EventType,
-  type SystemEventType,
-  type OperationalEventType,
-  isValidEventType,
-  getAllEventTypes,
-} from "./event-types.js";
-
-// Note: SynapEvent schema and event metadata types moved to @synap-core/core
-// to break circular dependency between database and events packages
+// Note: SynapEvent schema and event metadata types are in @synap-core/core
+// to break the circular dependency between the database and events packages.

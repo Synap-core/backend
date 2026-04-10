@@ -167,6 +167,38 @@ export function getDefaultProactiveAiPreferences(): ProactiveAiPreferences {
   };
 }
 
+// ── Delivery Preferences ────────────────────────────────────────────────────
+
+/**
+ * Which surface(s) receive a signal.
+ * - feed         → proactive feed channel (AI-initiated messages)
+ * - chat         → personal chat channel (conversational)
+ * - notification → notification bell (ephemeral, shown in notification center)
+ * - suppress     → don't deliver (silences this signal domain)
+ */
+export type SignalSurface = "feed" | "chat" | "notification" | "suppress";
+
+/** Routing rule for a single signal domain. */
+export interface SignalDeliveryRule {
+  surfaces: SignalSurface[];
+}
+
+/**
+ * Per-workspace delivery preferences.
+ * Maps signal domain → which surfaces receive it.
+ * Domains without an explicit rule fall back to DEFAULT_DELIVERY_RULES.
+ */
+export interface DeliveryPreferences {
+  /** AI-initiated briefings, digests, insights, nudges */
+  proactive?: SignalDeliveryRule;
+  /** Automation output channel_message nodes */
+  automation?: SignalDeliveryRule;
+  /** Connector sync completion signals */
+  connector?: SignalDeliveryRule;
+  /** IS agent-generated insights (via /proactive/post) */
+  ai_insight?: SignalDeliveryRule;
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
@@ -360,6 +392,16 @@ export interface WorkspaceSettings {
    * Controls when and how the AI proactively posts messages to the user's personal channel.
    */
   proactiveAi?: ProactiveAiPreferences;
+
+  // ─── Signal Delivery Preferences ─────────────────────────────────────────
+  /**
+   * Controls where AI signals are delivered for each domain.
+   * When absent, system defaults apply (see DEFAULT_DELIVERY_RULES in delivery-router.ts).
+   *
+   * Example: route proactive messages to both feed AND notification bell:
+   *   { proactive: { surfaces: ['feed', 'notification'] } }
+   */
+  deliveryPreferences?: DeliveryPreferences;
 
   // AI Governance Settings
   aiGovernance?: {

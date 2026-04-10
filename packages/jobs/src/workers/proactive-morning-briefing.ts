@@ -24,7 +24,7 @@ import type { WorkspaceSettings } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { count } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
-import { postProactiveMessage } from "../utils/proactive-post.js";
+import { routeProactiveMessage } from "../utils/proactive-post.js";
 
 const logger = createLogger({ module: "proactive-morning-briefing" });
 
@@ -289,7 +289,7 @@ export async function handleProactiveMorningBriefing(): Promise<void> {
       // 6. Send to each member
       for (const member of members) {
         try {
-          const result = await postProactiveMessage({
+          const result = await routeProactiveMessage({
             userId: member.userId,
             workspaceId: ws.id,
             content,

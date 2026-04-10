@@ -34,7 +34,7 @@ import { or } from "drizzle-orm";
 import { count } from "drizzle-orm";
 import { drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { postProactiveMessage } from "../utils/proactive-post.js";
+import { routeProactiveMessage } from "../utils/proactive-post.js";
 
 const logger = createLogger({ module: "proactive-health-check" });
 
@@ -107,7 +107,7 @@ export async function handleProactiveHealthCheck(): Promise<void> {
       // Send to each member
       for (const member of members) {
         try {
-          const result = await postProactiveMessage({
+          const result = await routeProactiveMessage({
             userId: member.userId,
             workspaceId: ws.id,
             content,

@@ -1,11 +1,18 @@
 /**
  * Proactive Post Utility (Jobs Package)
  *
- * Lightweight version of @synap/api's postProactiveMessage for use in cron workers.
- * The jobs package cannot import @synap/api (circular dep), so we replicate the
- * core posting logic here: preference check, dedup, insert, realtime emit.
+ * Routing-aware proactive message delivery for cron workers.
+ * The jobs package cannot import @synap/api (circular dep), so routing logic
+ * lives here, reading workspace.settings.deliveryPreferences directly from DB.
  *
- * Posts to the PROACTIVE FEED channel (channelPurpose='feed') — NOT the personal chat channel.
+ * Surfaces:
+ *   feed         → proactive feed channel (isProactiveFeed: true)
+ *   chat         → personal chat channel (isPersonal: true)
+ *   notification → direct insert to notifications table
+ *   suppress     → no-op
+ *
+ * Usage (cron workers):
+ *   const result = await routeProactiveMessage({ userId, workspaceId, content, proactiveType });
  */
 
 import { randomUUID, createHash } from "crypto";
@@ -22,6 +29,7 @@ import {
   messages,
   workspaces,
   channels,
+  notifications,
   ChannelType,
   ChannelStatus,
   ChannelAgentType,
@@ -29,11 +37,14 @@ import {
   MessageRole,
   MessageAuthorType,
   MessageCategory,
+  NotificationCategory,
+  NotificationPriority,
 } from "@synap/database/schema";
 import type {
   WorkspaceSettings,
   ProactiveAiPreferences,
   Channel,
+  DeliveryPreferences,
 } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -66,6 +77,16 @@ export interface PostProactiveResult {
   reason?: string;
 }
 
+const PROACTIVE_TITLES: Record<ProactiveMessageType, string> = {
+  morning_briefing: "Morning Briefing",
+  weekly_digest: "Weekly Digest",
+  health_check: "Health Check",
+  nudge: "AI Nudge",
+  insight: "AI Insight",
+  suggestion: "AI Suggestion",
+  alert: "AI Alert",
+};
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Read proactive AI preferences for a workspace, returning defaults if unset. */
@@ -76,17 +97,27 @@ export async function getProactivePrefsForWorkspace(
     where: eq(workspaces.id, workspaceId),
     columns: { settings: true },
   });
-
   const settings = (ws?.settings ?? {}) as WorkspaceSettings;
   return settings.proactiveAi ?? getDefaultProactiveAiPreferences();
 }
 
-/** Get or create the user's proactive FEED channel (pod-wide). */
+/** Read delivery preferences for a workspace. */
+async function getDeliveryPreferences(
+  workspaceId: string
+): Promise<DeliveryPreferences> {
+  const ws = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { settings: true },
+  });
+  const settings = (ws?.settings ?? {}) as WorkspaceSettings;
+  return settings.deliveryPreferences ?? {};
+}
+
+/** Get or create the user's proactive FEED channel. */
 async function ensureProactiveFeedChannel(
   userId: string,
   workspaceId?: string
 ): Promise<Channel> {
-  // Query by channelPurpose column (new) OR legacy JSONB flag (migration fallback)
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
@@ -98,7 +129,6 @@ async function ensureProactiveFeedChannel(
       )
     ),
   });
-
   if (existing) return existing;
 
   const [channel] = await db
@@ -114,7 +144,40 @@ async function ensureProactiveFeedChannel(
       metadata: { isPersonal: false, isProactiveFeed: true },
     })
     .returning();
+  return channel;
+}
 
+/** Get or create the user's personal CHAT channel. */
+async function ensurePersonalChatChannel(
+  userId: string,
+  workspaceId?: string
+): Promise<Channel> {
+  const existing = await db.query.channels.findFirst({
+    where: and(
+      eq(channels.userId, userId),
+      eq(channels.channelType, ChannelType.AI_THREAD),
+      eq(channels.status, ChannelStatus.ACTIVE),
+      or(
+        eq(channels.channelPurpose, ChannelPurpose.CHAT),
+        drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
+      )
+    ),
+  });
+  if (existing) return existing;
+
+  const [channel] = await db
+    .insert(channels)
+    .values({
+      userId,
+      workspaceId: workspaceId ?? null,
+      channelType: ChannelType.AI_THREAD,
+      status: ChannelStatus.ACTIVE,
+      agentId: "personal",
+      agentType: ChannelAgentType.PERSONAL,
+      channelPurpose: ChannelPurpose.CHAT,
+      metadata: { isPersonal: true, isProactiveFeed: false },
+    })
+    .returning();
   return channel;
 }
 
@@ -134,10 +197,7 @@ function emitRealtimeEvent(payload: {
   userId: string;
 }): void {
   const realtimeUrl = process.env.REALTIME_URL || "http://localhost:4001";
-  const url = `${realtimeUrl}/bridge/emit`;
-  const body = JSON.stringify(payload);
-
-  fetch(url, {
+  fetch(`${realtimeUrl}/bridge/emit`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -145,34 +205,191 @@ function emitRealtimeEvent(payload: {
         ? { "X-Bridge-Secret": process.env.BRIDGE_SECRET }
         : {}),
     },
-    body,
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(5_000),
-  }).catch(() => {
-    // Fire-and-forget — failure is non-critical for cron workers
-  });
+  }).catch(() => {});
 }
 
-// ── Main Function ────────────────────────────────────────────────────────────
+// ── Surface Implementations ──────────────────────────────────────────────────
 
 /**
- * Post a proactive AI message to the user's proactive feed channel.
- *
- * Checks workspace preferences, deduplicates (one per type per day),
- * inserts the message, emits a realtime event, and fires the event chain.
- *
- * Never throws — returns { posted: false, reason } on any error.
+ * Post to the proactive FEED channel.
+ * Deduplicates: one message per proactiveType per day.
  */
-export async function postProactiveMessage(
+async function postToProactiveFeed(
   options: PostProactiveOptions
 ): Promise<PostProactiveResult> {
   const { userId, workspaceId, content, proactiveType, metadata } = options;
+
+  const channel = await ensureProactiveFeedChannel(userId, workspaceId);
+  const todayStart = startOfTodayUTC();
+
+  const todayMessages = await db.query.messages.findMany({
+    where: and(
+      eq(messages.channelId, channel.id),
+      eq(messages.role, MessageRole.SYSTEM),
+      gte(messages.timestamp, todayStart)
+    ),
+    columns: { metadata: true },
+  });
+
+  const alreadySent = todayMessages.some((m) => {
+    const meta = m.metadata as Record<string, unknown> | null;
+    return meta?.proactiveType === proactiveType;
+  });
+
+  if (alreadySent) {
+    return { posted: false, reason: "already_sent_today" };
+  }
+
+  const messageId = randomUUID();
+  const messageHash = createHash("sha256")
+    .update(`${messageId}${content}`)
+    .digest("hex");
+
+  const messageMetadata = { ...metadata, proactiveType, proactiveAi: true };
+
+  await db.insert(messages).values({
+    id: messageId,
+    channelId: channel.id,
+    role: MessageRole.SYSTEM,
+    authorType: MessageAuthorType.BOT,
+    messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
+    content: content.trim(),
+    userId,
+    previousHash: "",
+    hash: messageHash,
+    metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
+  });
+
+  emitRealtimeEvent({
+    event: "chat:message",
+    data: {
+      threadId: channel.id,
+      message: {
+        id: messageId,
+        threadId: channel.id,
+        role: MessageRole.SYSTEM,
+        authorType: MessageAuthorType.BOT,
+        content: content.trim(),
+        userId,
+        timestamp: new Date(),
+        previousHash: "",
+        hash: messageHash,
+        metadata: messageMetadata,
+      },
+      userId,
+    },
+    channelId: channel.id,
+    userId,
+  });
+
+  return { posted: true, messageId };
+}
+
+/**
+ * Post to the personal CHAT channel.
+ * No per-day dedup — chat is a conversation surface, not a feed.
+ */
+async function postToPersonalChat(
+  options: PostProactiveOptions
+): Promise<PostProactiveResult> {
+  const { userId, workspaceId, content, proactiveType, metadata } = options;
+
+  const channel = await ensurePersonalChatChannel(userId, workspaceId);
+  const messageId = randomUUID();
+  const messageHash = createHash("sha256")
+    .update(`${messageId}${content}`)
+    .digest("hex");
+
+  const messageMetadata = { ...metadata, proactiveType, proactiveAi: true };
+
+  await db.insert(messages).values({
+    id: messageId,
+    channelId: channel.id,
+    role: MessageRole.ASSISTANT,
+    authorType: MessageAuthorType.BOT,
+    messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
+    content: content.trim(),
+    userId,
+    previousHash: "",
+    hash: messageHash,
+    metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
+  });
+
+  emitRealtimeEvent({
+    event: "chat:message",
+    data: {
+      threadId: channel.id,
+      message: {
+        id: messageId,
+        threadId: channel.id,
+        role: MessageRole.ASSISTANT,
+        authorType: MessageAuthorType.BOT,
+        content: content.trim(),
+        userId,
+        timestamp: new Date(),
+        previousHash: "",
+        hash: messageHash,
+        metadata: messageMetadata,
+      },
+      userId,
+    },
+    channelId: channel.id,
+    userId,
+  });
+
+  return { posted: true, messageId };
+}
+
+/**
+ * Create a notification row for a proactive message.
+ * Direct DB insert — no socket emit from the jobs path.
+ * The bell updates on next user refresh or via the next socket connection.
+ */
+async function postProactiveNotification(
+  options: PostProactiveOptions
+): Promise<PostProactiveResult> {
+  const { userId, workspaceId, content, proactiveType } = options;
+
+  const [row] = await db
+    .insert(notifications)
+    .values({
+      workspaceId,
+      userId,
+      type: `ai.proactive.${proactiveType}`,
+      category: NotificationCategory.AI,
+      priority: NotificationPriority.LOW,
+      title: PROACTIVE_TITLES[proactiveType],
+      body: content.substring(0, 300),
+      sourceType: "proactive_message",
+    })
+    .returning({ id: notifications.id });
+
+  return { posted: !!row, messageId: row?.id };
+}
+
+// ── Main Router ───────────────────────────────────────────────────────────────
+
+/**
+ * Route a proactive message to one or more surfaces based on workspace delivery preferences.
+ *
+ * Reads workspace.settings.deliveryPreferences.proactive — defaults to feed.
+ * Fires proactive.post.completed event on success (enables automation triggers).
+ *
+ * Never throws.
+ */
+export async function routeProactiveMessage(
+  options: PostProactiveOptions
+): Promise<PostProactiveResult> {
+  const { userId, workspaceId, content, proactiveType } = options;
 
   try {
     if (!content || content.trim().length === 0) {
       return { posted: false, reason: "empty_content" };
     }
 
-    // Check preferences
+    // ── Check global proactive AI preferences ─────────────────────────────
     const prefs = await getProactivePrefsForWorkspace(workspaceId);
 
     if (!prefs.enabled) {
@@ -186,93 +403,75 @@ export async function postProactiveMessage(
       }
     }
 
-    // Deduplication: skip if same proactiveType already sent today
-    const channel = await ensureProactiveFeedChannel(userId, workspaceId);
-    const todayStart = startOfTodayUTC();
+    // ── Resolve delivery surfaces ─────────────────────────────────────────
+    const deliveryPrefs = await getDeliveryPreferences(workspaceId);
+    const rule = deliveryPrefs.proactive ?? { surfaces: ["feed"] };
 
-    const todayMessages = await db.query.messages.findMany({
-      where: and(
-        eq(messages.channelId, channel.id),
-        eq(messages.role, MessageRole.SYSTEM),
-        gte(messages.timestamp, todayStart)
-      ),
-      columns: { metadata: true },
-    });
-
-    const alreadySent = todayMessages.some((m) => {
-      const meta = m.metadata as Record<string, unknown> | null;
-      return meta?.proactiveType === proactiveType;
-    });
-
-    if (alreadySent) {
-      return { posted: false, reason: "already_sent_today" };
+    if (rule.surfaces.includes("suppress")) {
+      logger.debug(
+        { userId, workspaceId, proactiveType },
+        "Proactive message suppressed by delivery preferences"
+      );
+      return { posted: false, reason: "suppressed" };
     }
 
-    // Insert message
-    const messageId = randomUUID();
-    const messageHash = createHash("sha256")
-      .update(`${messageId}${content}`)
-      .digest("hex");
+    const activeSurfaces = rule.surfaces.filter((s) => s !== "suppress");
 
-    const messageMetadata = {
-      ...metadata,
-      proactiveType,
-      proactiveAi: true,
-    };
-
-    await db.insert(messages).values({
-      id: messageId,
-      channelId: channel.id,
-      role: MessageRole.SYSTEM,
-      authorType: MessageAuthorType.BOT,
-      messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
-      content: content.trim(),
-      userId,
-      previousHash: "",
-      hash: messageHash,
-      metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
-    });
-
-    // Emit realtime event (fire-and-forget)
-    emitRealtimeEvent({
-      event: "chat:message",
-      data: {
-        threadId: channel.id,
-        message: {
-          id: messageId,
-          threadId: channel.id,
-          role: MessageRole.SYSTEM,
-          authorType: MessageAuthorType.BOT,
-          content: content.trim(),
-          userId,
-          timestamp: new Date(),
-          previousHash: "",
-          hash: messageHash,
-          metadata: messageMetadata,
-        },
-        userId,
-      },
-      channelId: channel.id,
-      userId,
-    });
-
-    logger.info(
-      { userId, workspaceId, proactiveType, messageId },
-      "Proactive message posted"
+    // ── Deliver to each surface concurrently ──────────────────────────────
+    const results = await Promise.allSettled(
+      activeSurfaces.map((surface) => {
+        switch (surface) {
+          case "feed":
+            return postToProactiveFeed(options);
+          case "chat":
+            return postToPersonalChat(options);
+          case "notification":
+            return postProactiveNotification(options);
+        }
+      })
     );
 
-    // Emit event chain — enables automation triggers + audit log
-    const proactiveEventData = {
-      proactiveType,
-      workspaceId,
-      channelId: channel.id,
-      messageId,
-    };
+    const firstSuccess = results.find(
+      (r): r is PromiseFulfilledResult<PostProactiveResult> =>
+        r.status === "fulfilled" && r.value.posted
+    );
+
+    if (!firstSuccess) {
+      const firstRejection = results.find((r) => r.status === "rejected");
+      const firstSkipped = results.find(
+        (r): r is PromiseFulfilledResult<PostProactiveResult> =>
+          r.status === "fulfilled" && !r.value.posted
+      );
+      return {
+        posted: false,
+        reason:
+          firstRejection instanceof Object && "reason" in firstRejection
+            ? String((firstRejection as PromiseRejectedResult).reason)
+            : (firstSkipped?.value.reason ?? "not_posted"),
+      };
+    }
+
+    const messageId = firstSuccess.value.messageId;
+
+    logger.info(
+      {
+        userId,
+        workspaceId,
+        proactiveType,
+        messageId,
+        surfaces: activeSurfaces,
+      },
+      "Proactive message routed"
+    );
+
+    // ── Fire event chain ──────────────────────────────────────────────────
+    // Enables automation triggers on proactive.post.completed + audit log
+    const proactiveEventData = { proactiveType, workspaceId, messageId };
 
     emitSideEffects({
       subjectType: "proactive",
       action: "post",
-      subjectId: messageId,
+      subjectId: messageId ?? randomUUID(),
       userId,
       workspaceId,
       data: proactiveEventData,
@@ -280,11 +479,11 @@ export async function postProactiveMessage(
 
     eventRepository
       .append({
-        id: messageId,
+        id: messageId ?? randomUUID(),
         version: "v1",
         type: "proactive.post.completed",
         subjectType: "proactive",
-        subjectId: messageId,
+        subjectId: messageId ?? "unknown",
         data: proactiveEventData,
         userId,
         source: "system",
@@ -296,11 +495,21 @@ export async function postProactiveMessage(
   } catch (err) {
     logger.error(
       { err, userId, workspaceId, proactiveType },
-      "Failed to post proactive message"
+      "Failed to route proactive message"
     );
     return {
       posted: false,
       reason: err instanceof Error ? err.message : "unknown_error",
     };
   }
+}
+
+/**
+ * @deprecated Use routeProactiveMessage() — this always posts to the feed
+ * without respecting workspace delivery preferences.
+ */
+export async function postProactiveMessage(
+  options: PostProactiveOptions
+): Promise<PostProactiveResult> {
+  return routeProactiveMessage(options);
 }
