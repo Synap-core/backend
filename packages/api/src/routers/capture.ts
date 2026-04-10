@@ -24,6 +24,8 @@ import {
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
+import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
+import { recordCaptureMessages } from "../utils/personal-channel.js";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -116,6 +118,7 @@ export const captureRouter = router({
           { err, userId },
           "IS classification failed, falling back to note"
         );
+        markServiceCredentialError();
       }
 
       // Merge optional URL into properties for bookmark-family profiles
@@ -249,7 +252,23 @@ export const captureRouter = router({
       });
 
       if (!structureResult) {
-        // IS unavailable — return single note proposal as fallback
+        // IS unavailable — mark credentials and return fallback
+        // Frontend will detect this via /api/provision/status and trigger re-provisioning via CP
+        logger.warn(
+          { userId },
+          "IS structure returned null — marking service as credential_error"
+        );
+        markServiceCredentialError();
+
+        // Record fallback in capture channel
+        recordCaptureMessages(
+          userId,
+          workspaceId,
+          input.text,
+          "AI unavailable — saved as raw note (IS may need provisioning)",
+          { fallback: true }
+        );
+
         return {
           proposals: [
             {
@@ -349,6 +368,22 @@ export const captureRouter = router({
           relationCount: structureResult.relations.length,
         },
         "Structure capture: proposals ready"
+      );
+
+      // Record in capture channel for transparency (non-blocking)
+      const entitySummary = structureResult.entities
+        .map((e) => `${e.profileSlug}: ${e.title}`)
+        .join(", ");
+      recordCaptureMessages(
+        userId,
+        workspaceId,
+        input.text,
+        `Extracted ${structureResult.entities.length} entit${structureResult.entities.length === 1 ? "y" : "ies"}: ${entitySummary}`,
+        {
+          proposals: structureResult.entities,
+          relations: structureResult.relations,
+          dedupCandidates,
+        }
       );
 
       return {

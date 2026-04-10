@@ -8,7 +8,12 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, webhookSubscriptions, eq } from "@synap/database";
+import {
+  db,
+  webhookSubscriptions,
+  eq,
+  ensureSystemProfiles,
+} from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
 import { setDynamicCorsOrigins } from "@synap/api";
@@ -259,6 +264,19 @@ export async function runStartupHooks(): Promise<void> {
   await loadCorsOrigins();
   await configureN8NWebhook();
   await configureLangFlow();
+
+  // Seed system profiles and property definitions on every startup.
+  // This is idempotent — it only creates what's missing.
+  // Ensures existing installations pick up new property defs added in code updates.
+  try {
+    const result = await ensureSystemProfiles();
+    logger.info({ ...result }, "System profiles seeded on startup");
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to seed system profiles on startup (non-fatal)"
+    );
+  }
 
   logger.info("✅ Startup hooks complete");
 }

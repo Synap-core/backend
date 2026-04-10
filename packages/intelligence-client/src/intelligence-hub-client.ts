@@ -542,14 +542,22 @@ export class IntelligenceHubClient {
           body: JSON.stringify(input),
           signal: controller.signal,
         });
-        if (!response.ok) return null;
+        if (!response.ok) {
+          console.warn(
+            `[IntelligenceHubClient] structure failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey})`
+          );
+          return null;
+        }
         return (await response.json()) as Awaited<
           ReturnType<typeof this.structure>
         > & {};
       } finally {
         clearTimeout(timer);
       }
-    } catch {
+    } catch (err) {
+      console.warn(
+        `[IntelligenceHubClient] structure error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
+      );
       return null;
     }
   }

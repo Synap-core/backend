@@ -146,6 +146,67 @@ http
       return respond(res, 200, { ok: true, agent: "pod-agent", uptime: Math.floor(process.uptime()) });
     }
 
+    // Addon health check — used by CP to poll container readiness after provisioning
+    // Matches both /addon-health/:addon and /api/pod-agent/addon-health/:addon
+    const addonHealthMatch =
+      req.method === "GET" &&
+      (req.url || "").match(/^(?:\/api\/pod-agent)?\/addon-health\/([a-zA-Z0-9_-]+)$/);
+    if (addonHealthMatch) {
+      const addonName = addonHealthMatch[1];
+      // Try exact container name first, then synap-{addon} prefix (Docker Compose convention)
+      const candidates = [addonName, `synap-${addonName}`];
+
+      function checkCandidate(names, cb) {
+        if (names.length === 0) return cb(null, null); // not found
+        const name = names[0];
+        execFile(
+          "docker",
+          ["inspect", `--format={{.State.Status}} {{.State.Health.Status}}`, name],
+          { timeout: 10_000 },
+          (err, stdout) => {
+            if (err) return checkCandidate(names.slice(1), cb);
+            cb(null, { name, output: (stdout || "").trim() });
+          }
+        );
+      }
+
+      checkCandidate(candidates, (err, result) => {
+        if (err || !result) {
+          // docker not available or unexpected error path
+          const msg = err ? err.message : "container not found";
+          log(`addon-health ${addonName}: ${msg}`);
+          return respond(res, 200, { healthy: false, status: "stopped", addon: addonName });
+        }
+
+        // output format: "<state> <healthStatus>" e.g. "running healthy", "running ", "exited "
+        const parts = result.output.split(" ");
+        const containerState = parts[0] || "";
+        const healthStatus = parts[1] || "";
+
+        let status;
+        let healthy;
+
+        if (containerState !== "running") {
+          status = "stopped";
+          healthy = false;
+        } else if (healthStatus === "healthy") {
+          status = "healthy";
+          healthy = true;
+        } else if (healthStatus === "starting") {
+          status = "starting";
+          healthy = false;
+        } else {
+          // running but no health check configured (healthStatus is empty or "")
+          status = "running";
+          healthy = true;
+        }
+
+        log(`addon-health ${addonName} (${result.name}): ${status}`);
+        return respond(res, 200, { healthy, status, addon: addonName });
+      });
+      return; // response sent asynchronously
+    }
+
     if (req.method !== "POST" || (req.url !== "/command" && req.url !== "/api/pod-agent/command")) {
       return respond(res, 404, { error: "not found" });
     }

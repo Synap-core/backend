@@ -1230,9 +1230,9 @@ export const channelsRouter = router({
         // Trigger auto-repair on auth errors so the next request succeeds
         if (isStreamAuthError) {
           try {
-            const { triggerCredentialRepair } =
+            const { markServiceCredentialError } =
               await import("../utils/credential-auto-repair.js");
-            triggerCredentialRepair();
+            markServiceCredentialError();
           } catch {
             /* best-effort */
           }
@@ -1292,9 +1292,9 @@ export const channelsRouter = router({
             // Auto-repair: request fresh credentials from CP in the background.
             // The current request fails gracefully, but the next one should succeed.
             try {
-              const { triggerCredentialRepair } =
+              const { markServiceCredentialError } =
                 await import("../utils/credential-auto-repair.js");
-              triggerCredentialRepair();
+              markServiceCredentialError();
             } catch {
               // Non-critical — auto-repair is best-effort
             }
@@ -1770,6 +1770,14 @@ export const channelsRouter = router({
         );
       }
 
+      // Exclude capture thread channels — they're audit-only, not user-facing
+      conditions.push(
+        or(
+          drizzleSql`${channels.metadata}->>'isCaptureThread' IS NULL`,
+          drizzleSql`${channels.metadata}->>'isCaptureThread' != 'true'`
+        )!
+      );
+
       const allChannels = await db.query.channels.findMany({
         where: and(...conditions),
         orderBy: [desc(channels.updatedAt)],
@@ -1851,6 +1859,14 @@ export const channelsRouter = router({
           eq(channels.contextObjectType, input.contextObjectType)
         );
       }
+
+      // Exclude capture thread channels — they're audit-only, not user-facing
+      conditions.push(
+        or(
+          drizzleSql`${channels.metadata}->>'isCaptureThread' IS NULL`,
+          drizzleSql`${channels.metadata}->>'isCaptureThread' != 'true'`
+        )!
+      );
 
       const allChannels = await db.query.channels.findMany({
         where: and(...conditions),

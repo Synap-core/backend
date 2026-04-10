@@ -134,7 +134,11 @@ export async function resolveIntelligenceService(
   }
 
   // 3. Fallback to default service from environment
-  return { ...createDefaultClient(), agentUserId };
+  const defaultService = createDefaultClient();
+  console.warn(
+    `[IS Routing] No registered service found — falling back to env default (url=${defaultService.endpoint}, hasKey=${!!defaultService.serviceApiKey})`
+  );
+  return { ...defaultService, agentUserId };
 }
 
 /**
