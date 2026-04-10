@@ -3997,26 +3997,56 @@ app.post("/setup/agent", async (c) => {
         columns: { id: true, name: true },
       });
 
-      // No human user on pod yet — create one from the CP JWT identity.
-      // This handles fresh dedicated pods where the Kratos webhook hasn't fired.
-      // kratosIdentityId is null; it will be linked when the user logs in via Browser/Relay.
-      if (!ownerCandidate && jwtEmail) {
-        const newUserId = randomUUID();
-        await db.insert(users).values({
-          id: newUserId,
-          email: jwtEmail,
-          name: jwtName ?? null,
-          userType: "human",
-          emailVerified: true,
-          kratosIdentityId: null,
-          timezone: "UTC",
-          locale: "en",
-        });
-        ownerCandidate = { id: newUserId, name: jwtName ?? null };
-        logger.info(
-          { userId: newUserId, email: jwtEmail },
-          "setup/agent: created human user from CP JWT (Kratos webhook not yet fired)"
-        );
+      // No human user on pod yet — create one so we can seed the workspace.
+      //
+      // Two sources for the owner identity (tried in order):
+      //   1. CP JWT payload (managed pods — email + name from CP account)
+      //   2. ADMIN_EMAIL env var (self-hosted pods using PROVISIONING_TOKEN)
+      //
+      // kratosIdentityId is null in both cases; it will be linked later when the
+      // user first logs in via Browser or Relay (Kratos webhook fires → user updated).
+      if (!ownerCandidate) {
+        const ownerEmail = jwtEmail ?? process.env.ADMIN_EMAIL ?? null;
+        const ownerName =
+          jwtName ?? (ownerEmail ? ownerEmail.split("@")[0] : null);
+
+        if (ownerEmail) {
+          // Check if a user with this email already exists (e.g. created by Kratos but
+          // userType was set to something unexpected).
+          const existingByEmail = await db.query.users.findFirst({
+            where: (u, { eq }) => eq(u.email, ownerEmail),
+            columns: { id: true, name: true },
+          });
+
+          if (existingByEmail) {
+            ownerCandidate = existingByEmail;
+            logger.info(
+              { userId: existingByEmail.id, email: ownerEmail },
+              "setup/agent: found existing user by email"
+            );
+          } else {
+            const newUserId = randomUUID();
+            await db.insert(users).values({
+              id: newUserId,
+              email: ownerEmail,
+              name: ownerName,
+              userType: "human",
+              emailVerified: true,
+              kratosIdentityId: null,
+              timezone: "UTC",
+              locale: "en",
+            });
+            ownerCandidate = { id: newUserId, name: ownerName };
+            logger.info(
+              {
+                userId: newUserId,
+                email: ownerEmail,
+                source: jwtEmail ? "cp-jwt" : "admin-email-env",
+              },
+              "setup/agent: created human user (Kratos webhook not yet fired)"
+            );
+          }
+        }
       }
 
       if (ownerCandidate) {
@@ -4104,7 +4134,7 @@ app.post("/setup/agent", async (c) => {
         {
           error: requestedWorkspaceId
             ? `Workspace ${requestedWorkspaceId} not found`
-            : "No workspace found on this pod. Please log in to your pod and complete setup first.",
+            : "No workspace found and could not auto-create one. Set ADMIN_EMAIL in your pod .env and retry.",
         },
         404
       );
