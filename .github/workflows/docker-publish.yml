@@ -113,6 +113,15 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      - name: Run migrations against smoke-test DB
+        run: |
+          docker run --rm \
+            --network host \
+            -e DATABASE_URL=postgresql://synap:testpass@localhost:5432/synap \
+            --entrypoint sh \
+            synap-backend:smoke-test \
+            -c "node node_modules/@synap/database/dist/scripts/migrate.js"
+
       - name: Smoke test — verify container starts
         run: |
           docker run -d --name smoke-test \
