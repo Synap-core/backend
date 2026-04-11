@@ -38,9 +38,10 @@ const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
 /**
  * Initialize the _migrations tracking table.
  *
- * Breaking change: if the old two-column schema (type + filename) is detected
- * the table is dropped and recreated. All migrations re-run — they are all
- * idempotent (IF NOT EXISTS / IF EXISTS throughout).
+ * Upgrade path: if the old two-column schema (type + filename) is detected,
+ * the table is migrated in-place — existing rows are preserved so already-applied
+ * migrations are not re-run. Only the schema changes (drop type column, update
+ * unique constraint from (type, filename) to (filename)).
  */
 async function initMigrationsTable(): Promise<void> {
   const tableExists = await sql`
@@ -48,34 +49,65 @@ async function initMigrationsTable(): Promise<void> {
     WHERE table_schema = 'public' AND table_name = '_migrations'
   `;
 
-  if (tableExists.length > 0) {
-    // Check for old schema (has 'type' column = pre-consolidation)
-    const hasTypeCol = await sql`
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name   = '_migrations'
-        AND column_name  = 'type'
+  if (tableExists.length === 0) {
+    await sql`
+      CREATE TABLE _migrations (
+        id         SERIAL PRIMARY KEY,
+        filename   TEXT        NOT NULL UNIQUE,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
     `;
-
-    if (hasTypeCol.length > 0) {
-      console.log(
-        "⚠️  Old two-directory _migrations schema detected — resetting for clean single-directory run..."
-      );
-      await sql`DROP TABLE _migrations CASCADE`;
-    } else {
-      console.log("✅ Migrations tracking table ready\n");
-      return;
-    }
+    console.log("✅ Migrations tracking table created\n");
+    return;
   }
 
-  await sql`
-    CREATE TABLE _migrations (
-      id         SERIAL PRIMARY KEY,
-      filename   TEXT        NOT NULL UNIQUE,
-      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
+  // Check for old schema (has 'type' column = pre-consolidation)
+  const hasTypeCol = await sql`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name   = '_migrations'
+      AND column_name  = 'type'
   `;
-  console.log("✅ Migrations tracking table created\n");
+
+  if (hasTypeCol.length > 0) {
+    console.log(
+      "⚠️  Old two-directory _migrations schema detected — upgrading in place (history preserved)..."
+    );
+
+    // Deduplicate: if the same filename was recorded under both types, keep one
+    await sql`
+      DELETE FROM _migrations a USING _migrations b
+      WHERE a.id > b.id AND a.filename = b.filename
+    `;
+
+    // Drop the old (type, filename) unique constraint
+    await sql`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '_migrations_type_filename_key' AND conrelid = '_migrations'::regclass) THEN
+          ALTER TABLE _migrations DROP CONSTRAINT _migrations_type_filename_key;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '_migrations_type_check' AND conrelid = '_migrations'::regclass) THEN
+          ALTER TABLE _migrations DROP CONSTRAINT _migrations_type_check;
+        END IF;
+      END; $$
+    `;
+
+    // Add filename unique constraint if not already there
+    await sql`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '_migrations_filename_key' AND conrelid = '_migrations'::regclass) THEN
+          ALTER TABLE _migrations ADD CONSTRAINT _migrations_filename_key UNIQUE (filename);
+        END IF;
+      END; $$
+    `;
+
+    // Drop the type column
+    await sql`ALTER TABLE _migrations DROP COLUMN IF EXISTS type`;
+
+    console.log("✅ _migrations upgraded (history preserved, no re-runs)\n");
+  } else {
+    console.log("✅ Migrations tracking table ready\n");
+  }
 }
 
 async function applyMigration(
@@ -131,11 +163,15 @@ async function runMigrations() {
       console.warn("⚠️  Extension setup failed (may need superuser):", err);
     }
 
-    // Resolve migrations directory
+    // Resolve migrations directory.
+    // Note: __dirname-relative path is last — when running from an installed
+    // node_modules package, ../../migrations resolves into the package bundle
+    // inside node_modules, not the Dockerfile-copied directory we want.
     const candidates = [
-      "/app/migrations", // Docker
-      path.join(__dirname, "../../migrations"), // Dev + Prod (src/scripts/ or dist/scripts/)
-      path.join(process.cwd(), "migrations"), // CWD fallback
+      "/app/migrations", // Dockerfile.api (WORKDIR /app)
+      "/app/api/migrations", // deploy/Dockerfile (api sub-dir layout)
+      path.join(process.cwd(), "migrations"), // CWD fallback (dev)
+      path.join(__dirname, "../../migrations"), // Last resort: src/scripts/ or dist/scripts/
     ];
     const migrationsDir = candidates.find(existsSync) ?? candidates[0];
     console.log(`📂 Migrations directory: ${migrationsDir}\n`);
