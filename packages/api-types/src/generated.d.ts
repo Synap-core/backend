@@ -711,6 +711,24 @@ export type MessageLink = typeof messageLinks.$inferSelect;
  */
 export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
+/**
+ * Property Definitions Schema
+ *
+ * Defines reusable property definitions that can be attached to profiles.
+ * Properties are the building blocks of entity metadata schemas.
+ */
+export interface PropertyUIHints {
+	displayName?: string;
+	placeholder?: string;
+	inputType?: "email" | "phone" | "url" | "person" | "richtext" | "datetime" | "datetime-local" | "select";
+	displayAs?: "status" | "priority" | "progress" | "person";
+	format?: "locale" | "currency" | "percent" | "compact";
+	includeTime?: boolean;
+	linkedProfileSlug?: string;
+	linkedTable?: "workspace_members" | "free_text";
+	itemValueType?: "string" | "number" | "boolean" | "date" | "entity_id" | "url";
+	pluginHints?: Record<string, unknown>;
+}
 declare enum PropertyValueType {
 	STRING = "string",
 	NUMBER = "number",
@@ -861,7 +879,7 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "property_defs";
 			dataType: "json";
 			columnType: "PgJsonb";
-			data: unknown;
+			data: PropertyUIHints;
 			driverParam: unknown;
 			notNull: true;
 			hasDefault: true;
@@ -872,7 +890,9 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			baseColumn: never;
 			identity: undefined;
 			generated: undefined;
-		}, {}, {}>;
+		}, {}, {
+			$type: PropertyUIHints;
+		}>;
 		relationDefId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "relation_def_id";
 			tableName: "property_defs";
@@ -2081,7 +2101,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "system" | "assistant";
+					role: "user" | "assistant" | "system";
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
@@ -7712,7 +7732,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
-					uiHints: unknown;
+					uiHints: PropertyUIHints;
 					relationDefId: string | null;
 					targetProfileId: string | null;
 				}[];
@@ -7735,7 +7755,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
-					uiHints: unknown;
+					uiHints: PropertyUIHints;
 					relationDefId: string | null;
 					targetProfileId: string | null;
 				};
@@ -7761,7 +7781,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
-					uiHints: unknown;
+					uiHints: PropertyUIHints;
 					relationDefId: string | null;
 					targetProfileId: string | null;
 				};
@@ -7776,7 +7796,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
-					uiHints: unknown;
+					uiHints: PropertyUIHints;
 					relationDefId: string | null;
 					targetProfileId: string | null;
 				};
@@ -7802,7 +7822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string;
 					valueType: PropertyValueType;
 					constraints: unknown;
-					uiHints: unknown;
+					uiHints: PropertyUIHints;
 					relationDefId: string | null;
 					targetProfileId: string | null;
 				};
