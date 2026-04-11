@@ -58,12 +58,6 @@ RUN --mount=type=cache,id=vite-admin,target=/app/apps/admin-ui/.vite \
 RUN pnpm deploy --filter=api --prod --legacy /app/deploy/api
 RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy/realtime
 
-# Prepare custom migrations
-RUN mkdir -p /app/migrations-custom-temp && \
-  if [ -d "/app/packages/database/migrations-custom" ] && \
-     [ -n "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ]; then \
-    cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/; \
-  fi
 
 # ============================================================================
 # Runner: Single image, both entry points included
@@ -88,9 +82,8 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy/realtime ./realtime/
 COPY --chown=nodejs:nodejs kratos ./api/kratos
 COPY --chown=nodejs:nodejs hydra ./api/hydra
 
-# Drizzle + custom migrations (used by backend-migrate service)
-COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./api/migrations-drizzle/
-COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./api/migrations-custom/
+# Migrations (used by backend-migrate service)
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sql ./api/migrations/
 
 # Provision-agent script
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./api/dist/scripts/

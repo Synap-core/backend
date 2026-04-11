@@ -51,11 +51,6 @@ RUN --mount=type=cache,id=vite-admin,target=/app/apps/admin-ui/.vite \
 RUN rm -rf /app/deploy && \
   pnpm deploy --filter=api --prod --legacy /app/deploy
 
-# Prepare custom migrations directory
-RUN mkdir -p /app/migrations-custom-temp && \
-  if [ -d "/app/packages/database/migrations-custom" ] && [ -n "$(ls -A /app/packages/database/migrations-custom/*.sql 2>/dev/null)" ]; then \
-  cp /app/packages/database/migrations-custom/*.sql /app/migrations-custom-temp/; \
-  fi
 
 # ============================================================================
 # Runner: Minimal production image
@@ -80,8 +75,7 @@ COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 
 # Copy migrations (SQL files not included in pnpm deploy)
-COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations-drizzle/*.sql ./migrations-drizzle/
-COPY --from=builder --chown=nodejs:nodejs /app/migrations-custom-temp/ ./migrations-custom/
+COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sql ./migrations/
 
 # pnpm deploy doesn't include apps/api/dist (gitignored, no "files" field)
 # Copy the built server dist from the builder stage

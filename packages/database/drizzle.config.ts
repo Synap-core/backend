@@ -16,7 +16,7 @@ dotenv.config({ path: "../../.env" });
 const config: Config = {
   // PostgreSQL with pgvector
   schema: "./dist/schema/index.js", // Use compiled JS to avoid TSX import resolution issues with .js extensions
-  out: "./migrations-drizzle", // Auto-generated migrations
+  out: "./migrations", // Migration files
   dialect: "postgresql",
   dbCredentials: {
     url: process.env.DATABASE_URL || "",

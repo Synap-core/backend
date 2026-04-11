@@ -6,8 +6,8 @@
  * Why this exists
  * ---------------
  * The repo abandoned drizzle-kit after migration 0003. Every schema change
- * since has been a hand-written .sql file in migrations-drizzle/ or
- * migrations-custom/. Some columns/tables declared in the Drizzle schema
+ * since has been a hand-written .sql file in migrations/ or
+ * migrations/. Some columns/tables declared in the Drizzle schema
  * drifted — they were only added defensively in later migrations (ADD COLUMN
  * IF NOT EXISTS), and a pod that stopped at an earlier version would be
  * missing columns the runtime code expects.
@@ -70,22 +70,28 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0057_unified_relations.sql",
   },
 
-  // channels — audit flagged scope + feed_scope (0066), plus 0047 additions
-  { table: "channels", column: "scope", addedBy: "0066_channel_system_v2.sql" },
+  // channels — V2 columns (0066 drizzle + 0099 custom catch-up)
+  {
+    table: "channels",
+    column: "scope",
+    addedBy:
+      "0066_channel_system_v2.sql / 0099_schema_reconciliation.sql (custom)",
+  },
   {
     table: "channels",
     column: "feed_scope",
-    addedBy: "0066_channel_system_v2.sql",
+    addedBy:
+      "0066_channel_system_v2.sql / 0099_schema_reconciliation.sql (custom)",
   },
   {
     table: "channels",
     column: "result_summary",
-    addedBy: "0047_session_scoped_memory.sql (custom)",
+    addedBy: "0099_schema_reconciliation.sql (custom)",
   },
   {
     table: "channels",
-    column: "merged_into_state_id",
-    addedBy: "0047_session_scoped_memory.sql (custom)",
+    column: "merged_at",
+    addedBy: "0099_schema_reconciliation.sql (custom)",
   },
 
   // messages — renamed from conversation_messages in 0038 (custom)
@@ -203,19 +209,19 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   {
     table: "agent_configs",
     column: "agent_type",
-    addedBy: "0099_schema_reconciliation.sql",
+    addedBy: "0099_schema_reconciliation.sql (custom)",
   },
 
   // entity_identity_signals — declared in schema, never in any earlier migration
   {
     table: "entity_identity_signals",
     column: "signal_type",
-    addedBy: "0099_schema_reconciliation.sql",
+    addedBy: "0099_schema_reconciliation.sql (custom)",
   },
   {
     table: "entity_identity_signals",
     column: "signal_value",
-    addedBy: "0099_schema_reconciliation.sql",
+    addedBy: "0099_schema_reconciliation.sql (custom)",
   },
 ];
 
