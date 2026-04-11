@@ -25,7 +25,6 @@ import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
-import { recordCaptureMessages } from "../utils/personal-channel.js";
 import { emitSideEffects } from "@synap/jobs";
 import { eventRepository } from "@synap/database";
 import { randomUUID as _captureUUID } from "crypto";
@@ -263,15 +262,6 @@ export const captureRouter = router({
         );
         markServiceCredentialError();
 
-        // Record fallback in capture channel
-        recordCaptureMessages(
-          userId,
-          workspaceId,
-          input.text,
-          "AI unavailable — saved as raw note (IS may need provisioning)",
-          { fallback: true }
-        );
-
         return {
           proposals: [
             {
@@ -371,22 +361,6 @@ export const captureRouter = router({
           relationCount: structureResult.relations.length,
         },
         "Structure capture: proposals ready"
-      );
-
-      // Record in capture channel for transparency (non-blocking)
-      const entitySummary = structureResult.entities
-        .map((e) => `${e.profileSlug}: ${e.title}`)
-        .join(", ");
-      recordCaptureMessages(
-        userId,
-        workspaceId,
-        input.text,
-        `Extracted ${structureResult.entities.length} entit${structureResult.entities.length === 1 ? "y" : "ies"}: ${entitySummary}`,
-        {
-          proposals: structureResult.entities,
-          relations: structureResult.relations,
-          dedupCandidates,
-        }
       );
 
       return {

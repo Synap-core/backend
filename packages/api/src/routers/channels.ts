@@ -2068,7 +2068,7 @@ export const channelsRouter = router({
         where: eq(channels.id, input.branchId),
       });
 
-      if (!branch || branch.channelType !== "branch") {
+      if (!branch || branch.channelType !== "sub_thread") {
         throw new TRPCError({ code: "NOT_FOUND", message: "Branch not found" });
       }
 
@@ -2422,15 +2422,15 @@ export const channelsRouter = router({
       const tree = buildBranchTree(allChannels, input.rootChannelId);
 
       const activeBranches = allChannels.filter(
-        (c) => c.status === "active" && c.channelType === "branch"
+        (c) => c.status === "active" && c.channelType === "sub_thread"
       );
       const mergedBranches = allChannels.filter(
-        (c) => c.status === "merged" && c.channelType === "branch"
+        (c) => c.status === "merged" && c.channelType === "sub_thread"
       );
 
       return {
         tree,
-        flatBranches: allChannels.filter((c) => c.channelType === "branch"),
+        flatBranches: allChannels.filter((c) => c.channelType === "sub_thread"),
         activeBranches,
         mergedBranches,
       };
