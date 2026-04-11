@@ -1,59 +1,51 @@
 /**
  * Personal Channel Utilities
  *
- * Three distinct pod-wide AI channels per user:
+ * Two distinct pod-wide AI channels per user:
  *
- * 1. Personal CHAT channel  (isPersonal: true)
+ * 1. Personal channel  (channelType='personal')
  *    — Pure user↔AI conversation. User types, AI responds in context.
  *    — NOTHING automated goes here. Context stays clean.
  *    — Used by: Chat tab in Browser/Relay, IS agent responses.
+ *    — Pod-wide (one per user, not per workspace).
  *
- * 2. Proactive FEED channel  (isProactiveFeed: true)
+ * 2. Proactive FEED channel  (channelType='feed', feedScope='user')
  *    — AI posts, user reads. Morning briefings, event prep, summaries.
  *    — Automation outputs (channel_message with channelType:'proactive') go here.
  *    — Hub Protocol /proactive/post goes here.
  *    — Rate-limited: 3/hour, 10/day.
- *    — User can tap an item to "continue in chat" (opens a new ai_thread).
+ *    — User can tap an item to "continue in chat" (opens a thread).
  *
- * 3. Capture THREAD channel  (isCaptureThread: true)
- *    — Records every quick capture interaction (user text + AI extraction).
- *    — Hidden from the main channel list (filtered by metadata).
- *    — Full transparency: every AI decision traceable.
- *    — User can browse their capture history.
+ * Capture history is NOT a channel — it's a query against the event log:
+ *   GET /api/hub/events?types[]=capture.complete.completed&userId=X
  *
- * All are ai_thread type channels, pod-wide, SELECT-or-INSERT (idempotent).
+ * All are pod-wide, SELECT-or-INSERT (idempotent).
  */
 
-import { db, eq, and, drizzleSql } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import {
   channels,
-  messages,
   ChannelType,
-  ChannelPurpose,
+  ChannelScope,
+  FeedScope,
   ChannelStatus,
   ChannelAgentType,
-  MessageRole,
-  MessageAuthorType,
 } from "@synap/database/schema";
 import type { Channel } from "@synap/database/schema";
-import { createHash } from "crypto";
-import { randomUUID } from "crypto";
 
 /**
- * Get or create the user's personal CHAT channel (pod-wide).
+ * Get or create the user's personal channel (pod-wide).
  * Pure user↔AI conversation — no automation outputs here.
  */
 export async function ensurePersonalChannel(
   userId: string,
-  workspaceId?: string
+  _workspaceId?: string
 ): Promise<Channel> {
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.AI_THREAD),
-      eq(channels.status, ChannelStatus.ACTIVE),
-      // Check new column first, fallback to legacy JSONB flag for pre-migration rows
-      drizzleSql`(${channels.channelPurpose} = 'chat' OR ${channels.metadata}->>'isPersonal' = 'true')`
+      eq(channels.channelType, ChannelType.PERSONAL),
+      eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
 
@@ -63,13 +55,12 @@ export async function ensurePersonalChannel(
     .insert(channels)
     .values({
       userId,
-      workspaceId: workspaceId ?? null,
-      channelType: ChannelType.AI_THREAD,
+      workspaceId: null, // pod-wide
+      channelType: ChannelType.PERSONAL,
+      scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
       agentId: "personal",
       agentType: ChannelAgentType.PERSONAL,
-      channelPurpose: ChannelPurpose.CHAT,
-      metadata: { isPersonal: true, isProactiveFeed: false },
     })
     .returning();
 
@@ -77,21 +68,20 @@ export async function ensurePersonalChannel(
 }
 
 /**
- * Get or create the user's proactive FEED channel (pod-wide).
+ * Get or create the user's proactive FEED channel (pod-wide, user-scoped).
  * AI-initiated posts: morning briefings, event prep, automation summaries.
  * Rate-limited via /api/hub/proactive/post (3/hr, 10/day).
  * User reads, taps to open a conversation — does not type directly here.
  */
 export async function ensureProactiveFeedChannel(
   userId: string,
-  workspaceId?: string
+  _workspaceId?: string
 ): Promise<Channel> {
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.AI_THREAD),
-      eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`(${channels.channelPurpose} = 'feed' OR ${channels.metadata}->>'isProactiveFeed' = 'true')`
+      eq(channels.channelType, ChannelType.FEED),
+      eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
 
@@ -101,121 +91,15 @@ export async function ensureProactiveFeedChannel(
     .insert(channels)
     .values({
       userId,
-      workspaceId: workspaceId ?? null,
-      channelType: ChannelType.AI_THREAD,
+      workspaceId: null, // pod-wide
+      channelType: ChannelType.FEED,
+      scope: ChannelScope.POD,
+      feedScope: FeedScope.USER,
       status: ChannelStatus.ACTIVE,
       agentId: "proactive",
       agentType: ChannelAgentType.PERSONAL,
-      channelPurpose: ChannelPurpose.FEED,
-      metadata: { isPersonal: false, isProactiveFeed: true },
     })
     .returning();
 
   return channel;
-}
-
-/**
- * Get or create the user's capture THREAD channel (pod-wide).
- * Records AI capture interactions for transparency/audit.
- * Hidden from the main channel list (channelPurpose='audit').
- */
-export async function ensureCaptureChannel(
-  userId: string,
-  workspaceId?: string
-): Promise<Channel> {
-  const existing = await db.query.channels.findFirst({
-    where: and(
-      eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.AI_THREAD),
-      eq(channels.status, ChannelStatus.ACTIVE),
-      drizzleSql`(${channels.channelPurpose} = 'audit' OR ${channels.metadata}->>'isCaptureThread' = 'true')`
-    ),
-  });
-
-  if (existing) return existing;
-
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId,
-      workspaceId: workspaceId ?? null,
-      title: "Capture History",
-      channelType: ChannelType.AI_THREAD,
-      status: ChannelStatus.ACTIVE,
-      agentId: "capture",
-      agentType: ChannelAgentType.DEFAULT,
-      channelPurpose: ChannelPurpose.AUDIT,
-      metadata: {
-        isCaptureThread: true,
-        isPersonal: false,
-        isProactiveFeed: false,
-      },
-    })
-    .returning();
-
-  return channel;
-}
-
-/**
- * Record a capture interaction as a message pair in the capture channel.
- * Non-blocking — errors are logged but never thrown.
- *
- * @param userText — the raw text the user captured
- * @param aiSummary — human-readable summary of what the AI extracted
- * @param proposals — full structured proposals (stored in message metadata for audit)
- */
-export async function recordCaptureMessages(
-  userId: string,
-  workspaceId: string,
-  userText: string,
-  aiSummary: string,
-  proposals: unknown
-): Promise<void> {
-  try {
-    const channel = await ensureCaptureChannel(userId, workspaceId);
-
-    // User message: the raw capture text
-    const userMsgId = randomUUID();
-    const userMsgHash = createHash("sha256")
-      .update(`${userMsgId}${userText}`)
-      .digest("hex");
-    await db.insert(messages).values({
-      id: userMsgId,
-      channelId: channel.id,
-      userId,
-      role: MessageRole.USER,
-      authorType: MessageAuthorType.HUMAN,
-      content: userText,
-      hash: userMsgHash,
-      previousHash: "",
-      metadata: {
-        captureSource: "quick_capture",
-      } as (typeof messages.$inferInsert)["metadata"],
-    });
-
-    // AI message: summary of extracted entities + full proposals in metadata
-    const aiMsgId = randomUUID();
-    const aiMsgHash = createHash("sha256")
-      .update(`${aiMsgId}${aiSummary}`)
-      .digest("hex");
-    await db.insert(messages).values({
-      id: aiMsgId,
-      channelId: channel.id,
-      userId,
-      role: MessageRole.ASSISTANT,
-      authorType: MessageAuthorType.AI_AGENT,
-      content: aiSummary,
-      hash: aiMsgHash,
-      previousHash: userMsgHash,
-      metadata: {
-        captureProposals: proposals,
-      } as (typeof messages.$inferInsert)["metadata"],
-    });
-  } catch (err) {
-    // Non-blocking — capture recording is best-effort
-    console.warn(
-      "[personal-channel] Failed to record capture messages:",
-      err instanceof Error ? err.message : err
-    );
-  }
 }

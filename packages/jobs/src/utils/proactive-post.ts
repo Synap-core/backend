@@ -6,8 +6,8 @@
  * lives here, reading workspace.settings.deliveryPreferences directly from DB.
  *
  * Surfaces:
- *   feed         → proactive feed channel (isProactiveFeed: true)
- *   chat         → personal chat channel (isPersonal: true)
+ *   feed         → proactive feed channel (channelType='feed', feedScope='user')
+ *   chat         → personal chat channel (channelType='personal')
  *   notification → direct insert to notifications table
  *   suppress     → no-op
  *
@@ -16,24 +16,17 @@
  */
 
 import { randomUUID, createHash } from "crypto";
-import {
-  db,
-  eq,
-  and,
-  or,
-  gte,
-  drizzleSql,
-  eventRepository,
-} from "@synap/database";
+import { db, eq, and, gte, eventRepository } from "@synap/database";
 import {
   messages,
   workspaces,
   channels,
   notifications,
   ChannelType,
+  ChannelScope,
+  FeedScope,
   ChannelStatus,
   ChannelAgentType,
-  ChannelPurpose,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -113,20 +106,16 @@ async function getDeliveryPreferences(
   return settings.deliveryPreferences ?? {};
 }
 
-/** Get or create the user's proactive FEED channel. */
+/** Get or create the user's proactive FEED channel (type='feed', feedScope='user'). */
 async function ensureProactiveFeedChannel(
   userId: string,
-  workspaceId?: string
+  _workspaceId?: string
 ): Promise<Channel> {
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.AI_THREAD),
-      eq(channels.status, ChannelStatus.ACTIVE),
-      or(
-        eq(channels.channelPurpose, ChannelPurpose.FEED),
-        drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
-      )
+      eq(channels.channelType, ChannelType.FEED),
+      eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
   if (existing) return existing;
@@ -135,32 +124,28 @@ async function ensureProactiveFeedChannel(
     .insert(channels)
     .values({
       userId,
-      workspaceId: workspaceId ?? null,
-      channelType: ChannelType.AI_THREAD,
+      workspaceId: null, // pod-wide
+      channelType: ChannelType.FEED,
+      scope: ChannelScope.POD,
+      feedScope: FeedScope.USER,
       status: ChannelStatus.ACTIVE,
       agentId: "proactive",
       agentType: ChannelAgentType.PERSONAL,
-      channelPurpose: ChannelPurpose.FEED,
-      metadata: { isPersonal: false, isProactiveFeed: true },
     })
     .returning();
   return channel;
 }
 
-/** Get or create the user's personal CHAT channel. */
+/** Get or create the user's personal channel (type='personal'). */
 async function ensurePersonalChatChannel(
   userId: string,
-  workspaceId?: string
+  _workspaceId?: string
 ): Promise<Channel> {
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.AI_THREAD),
-      eq(channels.status, ChannelStatus.ACTIVE),
-      or(
-        eq(channels.channelPurpose, ChannelPurpose.CHAT),
-        drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
-      )
+      eq(channels.channelType, ChannelType.PERSONAL),
+      eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
   if (existing) return existing;
@@ -169,13 +154,12 @@ async function ensurePersonalChatChannel(
     .insert(channels)
     .values({
       userId,
-      workspaceId: workspaceId ?? null,
-      channelType: ChannelType.AI_THREAD,
+      workspaceId: null, // pod-wide
+      channelType: ChannelType.PERSONAL,
+      scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
       agentId: "personal",
       agentType: ChannelAgentType.PERSONAL,
-      channelPurpose: ChannelPurpose.CHAT,
-      metadata: { isPersonal: true, isProactiveFeed: false },
     })
     .returning();
   return channel;

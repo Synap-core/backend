@@ -1347,6 +1347,32 @@ app.onError((err, c) => {
   );
 });
 
+// Schema coherence tripwire — blocks startup if the live DB is missing any
+// critical column the Drizzle schema requires. Runs AFTER migrations have
+// been applied (the migration runner is a separate process) and BEFORE the
+// HTTP server starts listening, so a drifted pod never serves traffic.
+//
+// We run this inside an async IIFE so it blocks the rest of bootstrap —
+// serve() is only called if the check (and the check alone) resolves.
+await (async () => {
+  try {
+    const { validateSchemaCoherence } = await import("@synap/database");
+    await validateSchemaCoherence();
+    apiLogger.info("Schema coherence check passed");
+  } catch (err) {
+    apiLogger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      "Schema coherence check failed — refusing to start"
+    );
+    // Print the structured error so ops sees the full list of missing columns
+    // in plain text (not JSON-wrapped by the logger).
+    if (err instanceof Error) {
+      console.error(err.message);
+    }
+    process.exit(1);
+  }
+})();
+
 // Start server
 try {
   serve(

@@ -412,7 +412,7 @@ export const intelligenceRouter = router({
         .values({
           userId,
           workspaceId,
-          channelType: ChannelType.AI_THREAD,
+          channelType: ChannelType.THREAD,
           status: ChannelStatus.ACTIVE,
           agentId: "orchestrator",
           agentType: ChannelAgentType.META,

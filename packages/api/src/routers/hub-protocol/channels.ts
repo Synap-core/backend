@@ -94,7 +94,7 @@ export const channelsRouter = router({
    * Requires: hub-protocol.write scope
    *
    * This wraps an external conversation (WhatsApp chat, Slack DM, email thread, etc.)
-   * as a Synap channel of type EXTERNAL_IMPORT, giving the AI and user a unified
+   * as a Synap channel of type EXTERNAL, giving the AI and user a unified
    * view of the conversation inside the workspace.
    *
    * Always creates a pending proposal — user approves in inbox.
@@ -218,7 +218,7 @@ export const channelsRouter = router({
         where: and(
           eq(channels.externalSource, input.externalSource),
           eq(channels.externalChannelId, input.externalChannelId),
-          eq(channels.channelType, ChannelType.EXTERNAL_IMPORT)
+          eq(channels.channelType, ChannelType.EXTERNAL)
         ),
       });
 
@@ -321,7 +321,7 @@ export const channelsRouter = router({
       const channel = await db.query.channels.findFirst({
         where: and(
           eq(channels.id, input.channelId),
-          eq(channels.channelType, ChannelType.A2AI)
+          eq(channels.channelType, ChannelType.AGENT_COLLAB)
         ),
       });
 
@@ -509,7 +509,7 @@ export const channelsRouter = router({
       const channel = await db.query.channels.findFirst({
         where: and(
           eq(channels.id, input.channelId),
-          eq(channels.channelType, ChannelType.A2AI)
+          eq(channels.channelType, ChannelType.AGENT_COLLAB)
         ),
       });
 
@@ -729,7 +729,7 @@ export const channelsRouter = router({
       const rows = await db.query.channels.findMany({
         where: and(
           eq(channels.workspaceId, input.workspaceId),
-          eq(channels.channelType, ChannelType.A2AI)
+          eq(channels.channelType, ChannelType.AGENT_COLLAB)
         ),
         orderBy: (t, { desc }) => desc(t.updatedAt),
         limit: input.limit,

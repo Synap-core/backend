@@ -17,6 +17,23 @@
 --
 -- Safe to re-run: uses IF EXISTS / IF NOT EXISTS throughout.
 
+-- 0. Ensure `profile_id` exists on `property_defs`.
+--
+-- The column is declared in the Drizzle schema and every repository call
+-- sets it, but on pods that missed an earlier drizzle-kit push (the column
+-- was never added by a numbered .sql migration in this repo) the table
+-- can still be living with the original 0003 shape. Add it defensively
+-- before any statement below references it in a WHERE clause. ON DELETE
+-- CASCADE matches the TypeScript declaration exactly.
+ALTER TABLE "property_defs"
+  ADD COLUMN IF NOT EXISTS "profile_id" uuid
+    REFERENCES "profiles"("id") ON DELETE CASCADE;
+
+-- Index that the Drizzle schema declares via `profileIdIdx`. Also safe to
+-- create here in case the push never ran.
+CREATE INDEX IF NOT EXISTS "property_defs_profile_id_idx"
+  ON "property_defs" ("profile_id");
+
 -- 1. Drop the legacy global unique constraint/index.
 ALTER TABLE "property_defs"
   DROP CONSTRAINT IF EXISTS "property_defs_slug_unique_idx";

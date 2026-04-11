@@ -6,6 +6,32 @@
  * Order:
  * 1. Drizzle migrations (migrations-drizzle/)
  * 2. Custom migrations (migrations-custom/)
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ *  MIGRATIONS ARE STRICT. FAILURES BLOCK THE RUNNER.
+ * ──────────────────────────────────────────────────────────────────────────
+ *
+ * The previous implementation had a "RECOVERABLE_CODES" set that silently
+ * skipped migrations failing with certain Postgres error codes (42P01,
+ * 42701, 42P07, 42P10, 3F000) and marked them as applied anyway. That
+ * behavior has been REMOVED. It swept real failures under the rug and left
+ * databases in half-applied states that kept haunting every future deploy.
+ *
+ * New contract:
+ *   - Any error during migration application is logged loudly (file, SQL
+ *     error code, position) and the runner exits non-zero.
+ *   - A failing migration is NEVER recorded as applied.
+ *   - Subsequent migrations do NOT run after a failure.
+ *   - Each migration is wrapped in its own transaction — partial application
+ *     is impossible.
+ *
+ * Write your migrations defensively:
+ *   ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...
+ *   CREATE INDEX IF NOT EXISTS ...
+ *   DROP ... IF EXISTS ...
+ *   CREATE TABLE IF NOT EXISTS ...
+ *
+ * If a migration fails, FIX IT. Do not expect the runner to absorb it.
  */
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -93,6 +119,13 @@ async function getAppliedMigrations(): Promise<Map<string, Set<string>>> {
 
 /**
  * Apply a migration file
+ *
+ * Strict contract:
+ *   - Each migration runs inside a BEGIN/COMMIT transaction. Any error
+ *     rolls back the entire migration — no half-applied state.
+ *   - On failure, the error is logged loudly (file, pg code, position,
+ *     message) and re-thrown. The migration is NOT recorded as applied.
+ *   - Callers must stop running subsequent migrations after a failure.
  */
 async function applyMigration(
   type: "drizzle" | "custom",
@@ -104,60 +137,55 @@ async function applyMigration(
   const migrationSQL = readFileSync(filePath, "utf-8");
 
   try {
-    // Execute migration using unsafe() for dynamic SQL
-    await sql.unsafe(migrationSQL);
-
-    // Record in tracking table
-    await sql`
-      INSERT INTO _migrations (type, filename)
-      VALUES (${type}, ${filename})
-    `;
+    // Wrap in an explicit transaction so partial failures roll back.
+    // Recording the row is part of the same transaction — a failure to
+    // record means the migration is never marked applied.
+    await sql.begin(async (tx) => {
+      await tx.unsafe(migrationSQL);
+      await tx`
+        INSERT INTO _migrations (type, filename)
+        VALUES (${type}, ${filename})
+      `;
+    });
 
     console.log(`✅ Applied [${type}]: ${filename}\n`);
   } catch (error: any) {
-    const pgCode = error?.code;
+    // Loud, structured failure. No silent skip. No "marking as applied".
+    const pgCode = error?.code ?? "(no code)";
+    const pgPosition = error?.position ?? "(no position)";
+    const pgDetail = error?.detail ?? "";
+    const pgHint = error?.hint ?? "";
 
-    // Recoverable errors — skip the migration and mark as applied so it
-    // doesn't block future runs. These typically happen when:
-    // - 42P01: ALTER TABLE on a table that doesn't exist (stale initial migration)
-    // - 42701: Column already exists (duplicate migration)
-    // - 42P07: Table already exists (re-run of CREATE TABLE)
-    // - 42P10: ON CONFLICT references a constraint that doesn't exist (stale schema)
-    // - 3F000: Schema doesn't exist
-    const RECOVERABLE_CODES = new Set([
-      "42P01",
-      "42701",
-      "42P07",
-      "42P10",
-      "3F000",
-    ]);
-
-    if (pgCode && RECOVERABLE_CODES.has(pgCode)) {
-      console.warn(
-        `⚠️  Skipped [${type}]: ${filename} (PG error ${pgCode}: ${error.message})`
-      );
-      console.warn(
-        `   Marking as applied to avoid blocking future migrations.\n`
-      );
-
-      // Record as applied so we don't retry on next run
-      try {
-        await sql`
-          INSERT INTO _migrations (type, filename)
-          VALUES (${type}, ${filename})
-          ON CONFLICT DO NOTHING
-        `;
-      } catch {
-        // Non-fatal — worst case we retry this migration next time
-      }
-      return;
-    }
-
-    console.error(`❌ ERROR applying [${type}] ${filename}:`);
-    console.error(error);
+    console.error("");
     console.error(
-      "\n⚠️  Migration failed. Manual intervention may be required.\n"
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     );
+    console.error(`❌ MIGRATION FAILED — ${type}/${filename}`);
+    console.error(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    console.error(`  File:     ${filePath}`);
+    console.error(`  PG code:  ${pgCode}`);
+    console.error(`  Position: ${pgPosition}`);
+    if (pgDetail) console.error(`  Detail:   ${pgDetail}`);
+    if (pgHint) console.error(`  Hint:     ${pgHint}`);
+    console.error(`  Message:  ${error?.message ?? error}`);
+    console.error(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    console.error("  This migration was NOT recorded as applied. Subsequent");
+    console.error("  migrations will NOT run. The runner will exit non-zero.");
+    console.error(
+      "  Fix the migration (use ADD COLUMN IF NOT EXISTS / CREATE INDEX"
+    );
+    console.error(
+      "  IF NOT EXISTS / DROP ... IF EXISTS defensively) and redeploy."
+    );
+    console.error(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    console.error("");
+
     throw error;
   }
 }

@@ -34,6 +34,13 @@ export * from "./errors/index.js";
 
 // Utilities
 export * from "./utils/preferences.js";
+
+// Schema coherence tripwire — pod-startup guard against schema drift
+export {
+  validateSchemaCoherence,
+  checkSchemaCoherence,
+  type SchemaCoherenceResult,
+} from "./utils/schema-coherence.js";
 export {
   encryptServiceKey,
   decryptServiceKey,

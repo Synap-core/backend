@@ -66,8 +66,9 @@ externalChatApp.get(
       where: and(
         inArray(channels.workspaceId, workspaceIds),
         inArray(channels.channelType, [
-          ChannelType.AI_THREAD,
-          ChannelType.BRANCH,
+          ChannelType.PERSONAL,
+          ChannelType.THREAD,
+          ChannelType.SUB_THREAD,
         ]),
         eq(channels.status, ChannelStatus.ACTIVE)
       ),

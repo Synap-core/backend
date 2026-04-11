@@ -5,15 +5,16 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, or, desc, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
   channels,
   type Channel,
   ChannelType,
+  ChannelScope,
+  FeedScope,
   ChannelStatus,
   ChannelAgentType,
-  ChannelPurpose,
 } from "../schema/channels.js";
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
@@ -34,7 +35,8 @@ export interface CreateChannelData {
   agentConfig?: Record<string, unknown>;
   externalSource?: string;
   externalChannelId?: string;
-  channelPurpose?: ChannelPurpose;
+  scope?: ChannelScope;
+  feedScope?: FeedScope;
   metadata?: Record<string, unknown>;
 }
 
@@ -69,18 +71,19 @@ export class ChannelRepository {
         userId: data.userId,
         workspaceId: data.workspaceId,
         title: data.title,
-        channelType: data.channelType || ChannelType.AI_THREAD,
+        channelType: data.channelType || ChannelType.THREAD,
+        scope: data.scope || ChannelScope.WORKSPACE,
+        feedScope: data.feedScope,
         contextObjectType: data.contextObjectType,
         contextObjectId: data.contextObjectId,
         parentChannelId: data.parentChannelId,
         branchedFromMessageId: data.branchedFromMessageId,
         branchPurpose: data.branchPurpose,
         agentId: data.agentId || "orchestrator",
-        agentType: data.agentType || ChannelAgentType.DEFAULT,
+        agentType: data.agentType || ChannelAgentType.NONE,
         agentConfig: data.agentConfig,
         externalSource: data.externalSource,
         externalChannelId: data.externalChannelId,
-        channelPurpose: data.channelPurpose,
         metadata: data.metadata,
         status: ChannelStatus.ACTIVE,
       })
@@ -211,13 +214,13 @@ export class ChannelRepository {
   }
 
   /**
-   * Get or create the user's personal CHAT channel (pod-wide).
+   * Get or create the user's personal channel (pod-wide).
    * Pure user↔AI conversation — nothing automated goes here.
    * Pod-wide: one per user across all workspaces (workspaceId NOT in WHERE clause).
    */
   async ensurePersonalChannel(
     userId: string,
-    workspaceId?: string
+    _workspaceId?: string
   ): Promise<Channel> {
     const [existing] = await this.db
       .select()
@@ -225,12 +228,8 @@ export class ChannelRepository {
       .where(
         and(
           eq(channels.userId, userId),
-          eq(channels.channelType, ChannelType.AI_THREAD),
-          eq(channels.status, ChannelStatus.ACTIVE),
-          or(
-            eq(channels.channelPurpose, ChannelPurpose.CHAT),
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
-          )
+          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.status, ChannelStatus.ACTIVE)
         )
       )
       .limit(1);
@@ -239,22 +238,21 @@ export class ChannelRepository {
 
     return this.create({
       userId,
-      workspaceId,
-      channelType: ChannelType.AI_THREAD,
+      workspaceId: undefined, // pod-wide
+      channelType: ChannelType.PERSONAL,
+      scope: ChannelScope.POD,
       agentType: ChannelAgentType.PERSONAL,
-      channelPurpose: ChannelPurpose.CHAT,
-      metadata: { isPersonal: true, isProactiveFeed: false },
     });
   }
 
   /**
-   * Get or create the user's proactive FEED channel (pod-wide).
+   * Get or create the user's proactive FEED channel (pod-wide, user-scoped).
    * AI-initiated posts: morning briefings, event prep, automation summaries.
    * Pod-wide: one per user across all workspaces.
    */
   async ensureProactiveFeedChannel(
     userId: string,
-    workspaceId?: string
+    _workspaceId?: string
   ): Promise<Channel> {
     const [existing] = await this.db
       .select()
@@ -262,12 +260,8 @@ export class ChannelRepository {
       .where(
         and(
           eq(channels.userId, userId),
-          eq(channels.channelType, ChannelType.AI_THREAD),
-          eq(channels.status, ChannelStatus.ACTIVE),
-          or(
-            eq(channels.channelPurpose, ChannelPurpose.FEED),
-            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
-          )
+          eq(channels.channelType, ChannelType.FEED),
+          eq(channels.status, ChannelStatus.ACTIVE)
         )
       )
       .limit(1);
@@ -276,11 +270,11 @@ export class ChannelRepository {
 
     return this.create({
       userId,
-      workspaceId,
-      channelType: ChannelType.AI_THREAD,
+      workspaceId: undefined, // pod-wide
+      channelType: ChannelType.FEED,
+      scope: ChannelScope.POD,
+      feedScope: FeedScope.USER,
       agentType: ChannelAgentType.PERSONAL,
-      channelPurpose: ChannelPurpose.FEED,
-      metadata: { isPersonal: false, isProactiveFeed: true },
     });
   }
 

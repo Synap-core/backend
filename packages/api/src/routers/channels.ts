@@ -350,7 +350,7 @@ export const channelsRouter = router({
             agentId: input.agentId || "orchestrator",
             agentType: input.agentType ?? ChannelAgentType.META,
             agentConfig: input.agentConfig,
-            channelType: ChannelType.BRANCH,
+            channelType: ChannelType.SUB_THREAD,
             status: ChannelStatus.ACTIVE,
           })
           .returning();
@@ -375,7 +375,7 @@ export const channelsRouter = router({
         .values({
           userId: ctx.userId,
           workspaceId: workspaceId ?? null,
-          channelType: ChannelType.AI_THREAD,
+          channelType: ChannelType.THREAD,
           status: ChannelStatus.ACTIVE,
           agentId: input.agentId || "orchestrator",
           agentType: input.agentType ?? ChannelAgentType.META,
@@ -442,7 +442,7 @@ export const channelsRouter = router({
         id: channelId,
         userId: ctx.userId,
         workspaceId,
-        channelType: ChannelType.EXTERNAL_IMPORT,
+        channelType: ChannelType.EXTERNAL,
         status: ChannelStatus.ACTIVE,
         title: input.title,
         externalSource: input.externalSource,
@@ -468,11 +468,10 @@ export const channelsRouter = router({
     }),
 
   /**
-   * Create an A2AI (agent-to-agent) channel.
+   * Create an agent_collab channel (internal multi-agent collaboration).
    *
-   * A2AI channels enable async peer communication between AI agents without
-   * requiring a human author. Both Synap IS and external agents (OpenClaw, etc.)
-   * can post to and read from these channels.
+   * A persistent async channel where multiple AI agents (and optionally human
+   * observers) communicate. Distinct from Google A2A (ephemeral, cross-system).
    *
    * Visibility:
    *   "closed" — only named participants (agent user IDs) can post
@@ -481,7 +480,7 @@ export const channelsRouter = router({
    *
    * Humans can observe and inject messages at any time.
    */
-  createA2AIChannel: workspaceProcedure
+  createAgentCollabChannel: workspaceProcedure
     .input(
       z.object({
         topic: z.string().min(1).max(500),
@@ -506,11 +505,12 @@ export const channelsRouter = router({
         });
       }
 
-      // Editor role or higher required to create A2AI channels (L-2)
+      // Editor role or higher required to create agent_collab channels (L-2)
       if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Editor role or higher required to create A2AI channels",
+          message:
+            "Editor role or higher required to create agent_collab channels",
         });
       }
 
@@ -519,11 +519,11 @@ export const channelsRouter = router({
         id: channelId,
         userId: ctx.userId,
         workspaceId,
-        channelType: ChannelType.A2AI,
+        channelType: ChannelType.AGENT_COLLAB,
         status: ChannelStatus.ACTIVE,
         title: input.title ?? input.topic.slice(0, 80),
         agentId: "orchestrator",
-        agentType: input.agentType ?? ChannelAgentType.DEFAULT,
+        agentType: input.agentType ?? ChannelAgentType.META,
         metadata: {
           topic: input.topic,
           visibility: input.visibility,
@@ -534,7 +534,11 @@ export const channelsRouter = router({
 
       emitChatEvent({
         event: "channel:created",
-        data: { channelId, userId: ctx.userId, channelType: ChannelType.A2AI },
+        data: {
+          channelId,
+          userId: ctx.userId,
+          channelType: ChannelType.AGENT_COLLAB,
+        },
         workspaceId,
         userId: ctx.userId,
       });
@@ -576,12 +580,12 @@ export const channelsRouter = router({
         id: channelId,
         userId: ctx.userId,
         workspaceId,
-        channelType: ChannelType.DOCUMENT_REVIEW,
+        channelType: ChannelType.THREAD,
         contextObjectType: "document",
         contextObjectId: input.documentId,
         status: ChannelStatus.ACTIVE,
         agentId: "orchestrator",
-        agentType: ChannelAgentType.DEFAULT,
+        agentType: ChannelAgentType.NONE,
         metadata: { origin: "comment" },
       });
 
@@ -646,12 +650,12 @@ export const channelsRouter = router({
         id: channelId,
         userId: ctx.userId,
         workspaceId,
-        channelType: ChannelType.ENTITY_COMMENTS,
+        channelType: ChannelType.THREAD,
         contextObjectType: "entity",
         contextObjectId: input.entityId,
         status: ChannelStatus.ACTIVE,
         agentId: "orchestrator",
-        agentType: ChannelAgentType.DEFAULT,
+        agentType: ChannelAgentType.NONE,
         metadata: { origin: "comment" },
       });
 
@@ -705,7 +709,7 @@ export const channelsRouter = router({
           .optional(),
         /** @mention handle, e.g. "cto" or "ai" — resolved to agentType for this call only */
         agentHandle: z.string().optional(),
-        /** Originating channel ID when spawning a new AI_THREAD from a non-AI channel */
+        /** Originating channel ID when spawning a new THREAD from a non-AI channel */
         parentChannelId: z.string().uuid().optional(),
         /** Entity IDs of uploaded files to attach to this message */
         attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
@@ -743,7 +747,7 @@ export const channelsRouter = router({
             .values({
               userId: userId,
               workspaceId: workspaceId ?? null,
-              channelType: ChannelType.AI_THREAD,
+              channelType: ChannelType.THREAD,
               status: ChannelStatus.ACTIVE,
               agentId: "orchestrator",
               agentType: ChannelAgentType.ONBOARDING,
@@ -817,9 +821,9 @@ export const channelsRouter = router({
       // This is idempotent — the IS also calls getOrCreate, they'll both resolve to the same session.
       let activeSessionId: string | undefined;
       if (
-        channel.channelType === ChannelType.AI_THREAD ||
-        channel.channelType === ChannelType.BRANCH ||
-        channel.channelType === ChannelType.THREAD
+        channel.channelType === ChannelType.PERSONAL ||
+        channel.channelType === ChannelType.THREAD ||
+        channel.channelType === ChannelType.SUB_THREAD
       ) {
         try {
           const existingSession = await db.query.sessions.findFirst({
@@ -944,18 +948,23 @@ export const channelsRouter = router({
         capability: "chat",
       });
 
-      // AI routing gate:
-      //   AI_THREAD + BRANCH: always call IS.
-      //   THREAD / ENTITY_COMMENTS: only call IS when the channel has an explicit
-      //     agentType set (human-only by default; AI is opt-in via @mention).
-      //   All other types: never call IS — return after saving the user message.
+      // AI routing gate (V2):
+      //   personal + sub_thread + agent_collab: always call IS.
+      //   thread: call IS when agentType is set (AI off by default for entity/doc threads;
+      //     on by default for workspace/project threads; always on via @mention override).
+      //   external: call IS when message is from user (not an imported historical message).
+      //   feed: system posts only — never call IS from user message.
+      //   All other types: never call IS.
       const isAiChannel =
-        channel.channelType === ChannelType.AI_THREAD ||
-        channel.channelType === ChannelType.BRANCH ||
-        ((channel.channelType === ChannelType.THREAD ||
-          channel.channelType === ChannelType.ENTITY_COMMENTS) &&
+        channel.channelType === ChannelType.PERSONAL ||
+        channel.channelType === ChannelType.SUB_THREAD ||
+        channel.channelType === ChannelType.AGENT_COLLAB ||
+        (channel.channelType === ChannelType.THREAD &&
           !!channel.agentType &&
-          channel.agentType !== "default");
+          channel.agentType !== ChannelAgentType.NONE) ||
+        (channel.channelType === ChannelType.EXTERNAL &&
+          !!channel.agentType &&
+          channel.agentType !== ChannelAgentType.NONE);
 
       // Automation side-effects: channel.message.created.completed for channel_message triggers
       emitSideEffects({
@@ -1558,11 +1567,11 @@ export const channelsRouter = router({
         userId: userId,
       });
 
-      // Outbound relay: for EXTERNAL_IMPORT channels, forward the AI response back to
+      // Outbound relay: for EXTERNAL channels, forward the AI response back to
       // the external platform via OpenClaw's OpenAI-compatible endpoint.
       // Non-blocking — failure here must never affect the response to the frontend.
       if (
-        channel.channelType === ChannelType.EXTERNAL_IMPORT &&
+        channel.channelType === ChannelType.EXTERNAL &&
         channel.externalSource &&
         channel.externalChannelId &&
         fullContent
@@ -1594,7 +1603,7 @@ export const channelsRouter = router({
             branchPurpose:
               branchDecision.suggestedPurpose || branchDecision.reason,
             agentId: branchDecision.suggestedAgentType || "research-agent",
-            channelType: ChannelType.BRANCH,
+            channelType: ChannelType.SUB_THREAD,
             status: ChannelStatus.ACTIVE,
           })
           .returning();
@@ -1606,8 +1615,9 @@ export const channelsRouter = router({
       // Fires fire-and-forget so it never blocks the response.
       if (
         !channel.title &&
-        (channel.channelType === ChannelType.AI_THREAD ||
-          channel.channelType === ChannelType.BRANCH) &&
+        (channel.channelType === ChannelType.PERSONAL ||
+          channel.channelType === ChannelType.THREAD ||
+          channel.channelType === ChannelType.SUB_THREAD) &&
         content
       ) {
         (async () => {
@@ -1691,10 +1701,8 @@ export const channelsRouter = router({
       }
       // Personal/feed channels are pod-wide — accessible from any workspace.
       const isPersonalMsg =
-        channel.channelPurpose === "chat" ||
-        channel.channelPurpose === "feed" ||
-        (channel.metadata as { isPersonal?: boolean } | null)?.isPersonal ===
-          true;
+        channel.channelType === ChannelType.PERSONAL ||
+        channel.channelType === ChannelType.FEED;
       if (
         !isPersonalMsg &&
         ctx.workspaceId &&
@@ -1744,15 +1752,12 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide purpose channels (chat + feed)
+        // Include workspace channels + pod-wide channels (personal + feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
-            eq(channels.channelPurpose, "chat"),
-            eq(channels.channelPurpose, "feed"),
-            // Legacy fallback for pre-migration rows
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
-            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+            eq(channels.channelType, ChannelType.PERSONAL),
+            eq(channels.channelType, ChannelType.FEED)
           )!
         );
       }
@@ -1760,8 +1765,8 @@ export const channelsRouter = router({
       if (input.channelType) {
         const ct =
           input.channelType === "branch"
-            ? ChannelType.BRANCH
-            : ChannelType.AI_THREAD;
+            ? ChannelType.SUB_THREAD
+            : ChannelType.THREAD;
         conditions.push(eq(channels.channelType, ct));
       }
 
@@ -1774,11 +1779,6 @@ export const channelsRouter = router({
           eq(channels.contextObjectType, input.contextObjectType)
         );
       }
-
-      // Exclude audit (capture thread) channels — hidden, not user-facing
-      conditions.push(
-        drizzleSql`(${channels.channelPurpose} IS NULL OR ${channels.channelPurpose} != 'audit') AND (${channels.metadata}->>'isCaptureThread' IS NULL OR ${channels.metadata}->>'isCaptureThread' != 'true')`
-      );
 
       const allChannels = await db.query.channels.findMany({
         where: and(...conditions),
@@ -1834,15 +1834,12 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide purpose channels (chat + feed)
+        // Include workspace channels + pod-wide channels (personal + feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
-            eq(channels.channelPurpose, "chat"),
-            eq(channels.channelPurpose, "feed"),
-            // Legacy fallback for pre-migration rows
-            drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
-            drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+            eq(channels.channelType, ChannelType.PERSONAL),
+            eq(channels.channelType, ChannelType.FEED)
           )!
         );
       }
@@ -1850,8 +1847,8 @@ export const channelsRouter = router({
       if (input.channelType) {
         const ct =
           input.channelType === "branch"
-            ? ChannelType.BRANCH
-            : ChannelType.AI_THREAD;
+            ? ChannelType.SUB_THREAD
+            : ChannelType.THREAD;
         conditions.push(eq(channels.channelType, ct));
       }
 
@@ -1864,11 +1861,6 @@ export const channelsRouter = router({
           eq(channels.contextObjectType, input.contextObjectType)
         );
       }
-
-      // Exclude audit (capture thread) channels — hidden, not user-facing
-      conditions.push(
-        drizzleSql`(${channels.channelPurpose} IS NULL OR ${channels.channelPurpose} != 'audit') AND (${channels.metadata}->>'isCaptureThread' IS NULL OR ${channels.metadata}->>'isCaptureThread' != 'true')`
-      );
 
       const allChannels = await db.query.channels.findMany({
         where: and(...conditions),
@@ -2140,10 +2132,8 @@ export const channelsRouter = router({
       }
       // Personal/feed channels are pod-wide — accessible from any workspace.
       const isPersonal =
-        channel.channelPurpose === "chat" ||
-        channel.channelPurpose === "feed" ||
-        (channel.metadata as { isPersonal?: boolean } | null)?.isPersonal ===
-          true;
+        channel.channelType === ChannelType.PERSONAL ||
+        channel.channelType === ChannelType.FEED;
       if (
         !isPersonal &&
         ctx.workspaceId &&
@@ -2343,7 +2333,7 @@ export const channelsRouter = router({
         where: and(
           eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId),
-          eq(channels.channelType, ChannelType.BRANCH)
+          eq(channels.channelType, ChannelType.SUB_THREAD)
         ),
       });
       if (!channel) return { pruned: false };

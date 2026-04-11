@@ -17,7 +17,7 @@ import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
-import { ChannelPurpose } from "@synap/database/schema";
+import { ChannelType } from "@synap/database/schema";
 import type { ProactiveMessageType } from "../utils/proactive-channel-post.js";
 import { routeSignal } from "../utils/delivery-router.js";
 import { randomUUID, randomBytes } from "crypto";
@@ -240,13 +240,10 @@ app.get("/threads", async (c) => {
     // When workspaceId is explicit, return that workspace + personal.
     // When omitted, return ALL accessible workspaces + personal.
     let whereClause;
-    // Pod-wide channels: personal chat (purpose='chat') and proactive feed (purpose='feed')
-    // OR-fallback includes legacy JSONB flags for channels created before migration
+    // Pod-wide channels: personal (type='personal') and proactive feed (type='feed')
     const podWideFilter = or(
-      eq(channels.channelPurpose, ChannelPurpose.CHAT),
-      eq(channels.channelPurpose, ChannelPurpose.FEED),
-      drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`,
-      drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
+      eq(channels.channelType, ChannelType.PERSONAL),
+      eq(channels.channelType, ChannelType.FEED)
     );
 
     if (workspaceId) {
@@ -1294,7 +1291,7 @@ app.get("/threads/:threadId/messages", async (c) => {
  * Inject a message into a thread (used by sub-agents to report back or post user messages).
  * Body: { role: "system" | "assistant" | "user", content: string, userId: string, autoRespond?: boolean }
  *
- * autoRespond=true: queues an IS response trigger for AI_THREAD and BRANCH channels.
+ * autoRespond=true: queues an IS response trigger for THREAD, SUB_THREAD, and AGENT_COLLAB channels.
  * Used for async inter-branch messaging — branch A posts "user" message to branch B,
  * branch B's IS responds automatically via the a2ai-response-trigger worker.
  */
@@ -1335,16 +1332,16 @@ app.post("/threads/:threadId/messages", async (c) => {
     });
 
     // autoRespond: trigger IS to respond when an external agent posts a user-role message
-    // to an AI channel (ai_thread or branch). Enables async inter-branch messaging.
+    // to an AI channel (thread, sub_thread, or agent_collab). Enables async inter-agent messaging.
     if (body.autoRespond === true && body.role === "user") {
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, threadId),
       });
-      const { ChannelType } = await import("@synap/database/schema");
       if (
         channel?.workspaceId &&
-        (channel.channelType === ChannelType.AI_THREAD ||
-          channel.channelType === ChannelType.BRANCH)
+        (channel.channelType === ChannelType.THREAD ||
+          channel.channelType === ChannelType.SUB_THREAD ||
+          channel.channelType === ChannelType.AGENT_COLLAB)
       ) {
         try {
           const { resolveIntelligenceService } =

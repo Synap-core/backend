@@ -5,7 +5,7 @@
  * Used by delivery-router.ts for the "feed" surface — other surfaces are handled separately.
  *
  * Key behaviors:
- * - Targets the proactive feed channel (channelPurpose='feed')
+ * - Targets the proactive feed channel (channelType='feed', feedScope='user')
  * - Checks proactiveAi.enabled + mutedUntil before posting
  * - Deduplicates: at most one message per proactiveType per user+workspace per day
  * - Emits chat:message via Socket.IO so the frontend updates live

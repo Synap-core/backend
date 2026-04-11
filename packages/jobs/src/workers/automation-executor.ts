@@ -30,7 +30,6 @@ import {
   db,
   eq,
   and,
-  or,
   automations,
   automationRuns,
   automationStepRuns,
@@ -44,9 +43,10 @@ import {
 } from "@synap/database";
 import {
   ChannelType,
+  ChannelScope,
+  FeedScope,
   ChannelStatus,
   ChannelAgentType,
-  ChannelPurpose,
 } from "@synap/database/schema";
 import type {
   FlowDefinition,
@@ -513,8 +513,8 @@ async function executeOutputStep(
 
     case "channel_message": {
       // Accepts explicit channelId OR channelType:'personal'|'proactive'
-      // 'personal'  → user's chat channel (isPersonal: true) — user↔AI conversation
-      // 'proactive' → user's feed channel (isProactiveFeed: true) — automation outputs
+      // 'personal'  → user's personal channel (channelType='personal') — user↔AI conversation
+      // 'proactive' → user's feed channel (channelType='feed', feedScope='user') — automation outputs
       let channelId = config.channelId as string | undefined;
       const content = config.content as string;
       const metadata = (config.metadata ?? {}) as Record<string, unknown>;
@@ -523,17 +523,13 @@ async function executeOutputStep(
         throw new Error("channel_message requires content");
       }
 
-      // Resolve chat channel (channelPurpose='chat')
+      // Resolve personal channel (channelType='personal')
       if (!channelId && config.channelType === "personal") {
         const personalChannel = await db.query.channels.findFirst({
           where: and(
             eq(channels.userId, ownerId),
-            eq(channels.channelType, ChannelType.AI_THREAD),
-            eq(channels.status, ChannelStatus.ACTIVE),
-            or(
-              eq(channels.channelPurpose, ChannelPurpose.CHAT),
-              drizzleSql`${channels.metadata}->>'isPersonal' = 'true'`
-            )
+            eq(channels.channelType, ChannelType.PERSONAL),
+            eq(channels.status, ChannelStatus.ACTIVE)
           ),
           columns: { id: true },
         });
@@ -545,30 +541,25 @@ async function executeOutputStep(
             .values({
               id: randomUUID(),
               userId: ownerId,
-              workspaceId,
-              channelType: ChannelType.AI_THREAD,
+              workspaceId: null, // pod-wide
+              channelType: ChannelType.PERSONAL,
+              scope: ChannelScope.POD,
               status: ChannelStatus.ACTIVE,
               agentId: "personal",
               agentType: ChannelAgentType.PERSONAL,
-              channelPurpose: ChannelPurpose.CHAT,
-              metadata: { isPersonal: true, isProactiveFeed: false },
             })
             .returning({ id: channels.id });
           channelId = newChannel.id;
         }
       }
 
-      // Resolve proactive feed channel (channelPurpose='feed')
+      // Resolve proactive feed channel (channelType='feed', feedScope='user')
       if (!channelId && config.channelType === "proactive") {
         const proactiveChannel = await db.query.channels.findFirst({
           where: and(
             eq(channels.userId, ownerId),
-            eq(channels.channelType, ChannelType.AI_THREAD),
-            eq(channels.status, ChannelStatus.ACTIVE),
-            or(
-              eq(channels.channelPurpose, ChannelPurpose.FEED),
-              drizzleSql`${channels.metadata}->>'isProactiveFeed' = 'true'`
-            )
+            eq(channels.channelType, ChannelType.FEED),
+            eq(channels.status, ChannelStatus.ACTIVE)
           ),
           columns: { id: true },
         });
@@ -580,13 +571,13 @@ async function executeOutputStep(
             .values({
               id: randomUUID(),
               userId: ownerId,
-              workspaceId,
-              channelType: ChannelType.AI_THREAD,
+              workspaceId: null, // pod-wide
+              channelType: ChannelType.FEED,
+              scope: ChannelScope.POD,
+              feedScope: FeedScope.USER,
               status: ChannelStatus.ACTIVE,
               agentId: "proactive",
               agentType: ChannelAgentType.PERSONAL,
-              channelPurpose: ChannelPurpose.FEED,
-              metadata: { isPersonal: false, isProactiveFeed: true },
             })
             .returning({ id: channels.id });
           channelId = newChannel.id;
