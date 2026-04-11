@@ -18,6 +18,33 @@ import { relationDefs } from "./relation-defs.js";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
+export interface PropertyUIHints {
+  displayName?: string;
+  placeholder?: string;
+  inputType?:
+    | "email"
+    | "phone"
+    | "url"
+    | "person"
+    | "richtext"
+    | "datetime"
+    | "datetime-local"
+    | "select";
+  displayAs?: "status" | "priority" | "progress" | "person";
+  format?: "locale" | "currency" | "percent" | "compact";
+  includeTime?: boolean;
+  linkedProfileSlug?: string;
+  linkedTable?: "workspace_members" | "free_text";
+  itemValueType?:
+    | "string"
+    | "number"
+    | "boolean"
+    | "date"
+    | "entity_id"
+    | "url";
+  pluginHints?: Record<string, unknown>;
+}
+
 /**
  * Property Value Types
  */
@@ -103,12 +130,10 @@ export const propertyDefs = pgTable(
     // - { pattern: "^[a-z]+$" } for regex patterns
     constraints: jsonb("constraints").default("{}").notNull(),
 
-    // UI hints (JSONB)
-    // Examples:
-    // - { label: "Due Date", icon: "calendar", placeholder: "Select date" }
-    // - { helpText: "Priority level for this task" }
-    // - { inputType: "date" | "select" | "textarea" }
-    uiHints: jsonb("ui_hints").default("{}").notNull(),
+    uiHints: jsonb("ui_hints")
+      .$type<PropertyUIHints>()
+      .default({})
+      .notNull(),
 
     // Unified relations: when valueType is "entity_id" and this is set,
     // writing the property auto-creates a relation row of this type.
