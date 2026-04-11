@@ -21,12 +21,12 @@ ALTER TABLE property_defs DROP CONSTRAINT IF EXISTS property_defs_slug_unique_id
 DROP INDEX IF EXISTS property_defs_slug_unique_idx;
 
 -- 3. Global property defs (profile_id IS NULL): still unique by slug
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS property_defs_slug_global_unique_idx
+CREATE UNIQUE INDEX IF NOT EXISTS property_defs_slug_global_unique_idx
   ON property_defs(slug)
   WHERE profile_id IS NULL;
 
 -- 4. Profile-scoped property defs: unique per (slug, profile_id)
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS property_defs_slug_profile_unique_idx
+CREATE UNIQUE INDEX IF NOT EXISTS property_defs_slug_profile_unique_idx
   ON property_defs(slug, profile_id)
   WHERE profile_id IS NOT NULL;
 

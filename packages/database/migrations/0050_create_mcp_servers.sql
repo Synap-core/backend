@@ -20,6 +20,6 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS mcp_servers_workspace_slug_unique ON mcp_servers (workspace_id, slug);
+CREATE UNIQUE INDEX IF NOT EXISTS mcp_servers_workspace_slug_unique ON mcp_servers (workspace_id, slug);
 CREATE INDEX IF NOT EXISTS mcp_servers_workspace_id_idx ON mcp_servers (workspace_id);
 CREATE INDEX IF NOT EXISTS mcp_servers_status_idx ON mcp_servers (status);

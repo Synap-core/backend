@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS entity_external_links (
 );
 
 -- Core dedup: one link per external record per provider
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS entity_external_links_provider_external_id_idx
+CREATE UNIQUE INDEX IF NOT EXISTS entity_external_links_provider_external_id_idx
   ON entity_external_links (provider, external_id);
 
 -- Find all external links for an entity

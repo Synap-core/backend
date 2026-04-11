@@ -47,13 +47,13 @@ DROP INDEX IF EXISTS "property_defs_profile_slug_uniq";
 
 -- 3a. Global/system defs — no profile, no workspace. Each slug is unique.
 --     Example: a top-level `email` def not attached to any profile.
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "property_defs_global_slug_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "property_defs_global_slug_uniq"
   ON "property_defs" ("slug")
   WHERE "profile_id" IS NULL AND "workspace_id" IS NULL;
 
 -- 3b. Profile-base defs — belong to a profile, visible to every workspace.
 --     Example: `name`, `email` on the pod-wide `person` profile.
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "property_defs_profile_base_slug_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "property_defs_profile_base_slug_uniq"
   ON "property_defs" ("slug", "profile_id")
   WHERE "profile_id" IS NOT NULL AND "workspace_id" IS NULL;
 
@@ -61,7 +61,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "property_defs_profile_base_slug
 --     own. Each (slug, profile, workspace) triple is unique.
 --     Example: Relay adds `investmentThesis` to pod-wide `person`; another
 --     workspace adds its own `notesCount` to the same `person`.
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "property_defs_workspace_overlay_slug_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "property_defs_workspace_overlay_slug_uniq"
   ON "property_defs" ("slug", "profile_id", "workspace_id")
   WHERE "profile_id" IS NOT NULL AND "workspace_id" IS NOT NULL;
 

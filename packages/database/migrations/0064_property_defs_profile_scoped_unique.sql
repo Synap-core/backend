@@ -44,11 +44,11 @@ DROP INDEX IF EXISTS "property_defs_slug_unique_idx";
 DROP INDEX IF EXISTS "property_defs_slug_key";
 
 -- 2. Partial unique index for global defs (profile_id IS NULL).
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "property_defs_global_slug_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "property_defs_global_slug_uniq"
   ON "property_defs" ("slug")
   WHERE "profile_id" IS NULL;
 
 -- 3. Partial unique index for profile-scoped defs.
-CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "property_defs_profile_slug_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "property_defs_profile_slug_uniq"
   ON "property_defs" ("slug", "profile_id")
   WHERE "profile_id" IS NOT NULL;
