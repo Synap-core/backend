@@ -80,9 +80,9 @@ CREATE TABLE IF NOT EXISTS "events" (
 -- We do this before creating indices for better efficiency
 SELECT create_hypertable('events', 'timestamp', if_not_exists => TRUE);
 
-CREATE INDEX "idx_events_subject" ON "events" ("subject_type", "subject_id", "timestamp");
-CREATE INDEX "idx_events_user_type" ON "events" ("user_id", "type");
-CREATE INDEX "idx_events_timestamp" ON "events" ("timestamp");
+CREATE INDEX IF NOT EXISTS "idx_events_subject" ON "events" ("subject_type", "subject_id", "timestamp");
+CREATE INDEX IF NOT EXISTS "idx_events_user_type" ON "events" ("user_id", "type");
+CREATE INDEX IF NOT EXISTS "idx_events_timestamp" ON "events" ("timestamp");
 
 -- ============================================================================
 -- 4. JOB QUEUE & BACKGROUND TASKS

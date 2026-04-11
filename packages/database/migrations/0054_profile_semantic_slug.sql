@@ -13,6 +13,6 @@
 
 ALTER TABLE profiles ADD COLUMN semantic_slug text;
 
-CREATE INDEX profiles_semantic_slug_idx
+CREATE INDEX IF NOT EXISTS rofiles_semantic_slug_idx
   ON profiles (semantic_slug)
   WHERE semantic_slug IS NOT NULL;

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS widget_definitions (
 );
 
 -- NULLS NOT DISTINCT: treats (type_key, NULL) as equal so built-in seed is idempotent
-CREATE UNIQUE INDEX IF NOT EXISTS widget_def_type_key_workspace_uniq
+CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS widget_def_type_key_workspace_uniq
   ON widget_definitions(type_key, workspace_id) NULLS NOT DISTINCT;
 
 CREATE INDEX IF NOT EXISTS widget_def_workspace_id_idx ON widget_definitions(workspace_id);

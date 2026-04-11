@@ -90,8 +90,8 @@ CREATE TABLE IF NOT EXISTS "proposals" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 
-CREATE INDEX "idx_proposals_status" ON "proposals" ("workspace_id", "status");
-CREATE INDEX "idx_proposals_target" ON "proposals" ("target_type", "target_id");
+CREATE INDEX IF NOT EXISTS "idx_proposals_status" ON "proposals" ("workspace_id", "status");
+CREATE INDEX IF NOT EXISTS "idx_proposals_target" ON "proposals" ("target_type", "target_id");
 
 -- ============================================================================
 -- 3. NOTIFICATIONS (Inbox)
@@ -114,4 +114,4 @@ CREATE TABLE IF NOT EXISTS "inbox_items" (
     "expire_at" timestamp with time zone
 );
 
-CREATE INDEX "idx_inbox_user" ON "inbox_items" ("user_id", "read_at");
+CREATE INDEX IF NOT EXISTS "idx_inbox_user" ON "inbox_items" ("user_id", "read_at");

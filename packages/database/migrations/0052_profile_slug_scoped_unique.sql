@@ -12,16 +12,16 @@
 ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_slug_unique;
 
 -- 2. Unique slug for system and shared scoped profiles (pod-wide)
-CREATE UNIQUE INDEX profiles_global_slug_unique
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_global_slug_unique
   ON profiles (slug)
   WHERE scope IN ('system', 'shared');
 
 -- 3. Unique slug per workspace for workspace-scoped profiles
-CREATE UNIQUE INDEX profiles_workspace_slug_unique
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_workspace_slug_unique
   ON profiles (slug, workspace_id)
   WHERE scope = 'workspace';
 
 -- 4. Unique slug per user for user-scoped profiles
-CREATE UNIQUE INDEX profiles_user_slug_unique
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_user_slug_unique
   ON profiles (slug, user_id)
   WHERE scope = 'user';

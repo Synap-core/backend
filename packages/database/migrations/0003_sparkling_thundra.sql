@@ -53,15 +53,15 @@ ALTER TABLE "profile_properties" ADD CONSTRAINT "profile_properties_profile_id_p
 ALTER TABLE "profile_properties" ADD CONSTRAINT "profile_properties_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "entity_property_index" ADD CONSTRAINT "entity_property_index_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "entity_property_index" ADD CONSTRAINT "entity_property_index_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "property_defs_value_type_idx" ON "property_defs" USING btree ("value_type");--> statement-breakpoint
-CREATE INDEX "profiles_parent_profile_id_idx" ON "profiles" USING btree ("parent_profile_id");--> statement-breakpoint
-CREATE INDEX "profiles_scope_idx" ON "profiles" USING btree ("scope","workspace_id","user_id");--> statement-breakpoint
-CREATE INDEX "profile_properties_profile_id_idx" ON "profile_properties" USING btree ("profile_id");--> statement-breakpoint
-CREATE INDEX "profile_properties_property_def_id_idx" ON "profile_properties" USING btree ("property_def_id");--> statement-breakpoint
-CREATE INDEX "entity_property_index_property_value_text_idx" ON "entity_property_index" USING btree ("property_def_id","value_text");--> statement-breakpoint
-CREATE INDEX "entity_property_index_property_value_num_idx" ON "entity_property_index" USING btree ("property_def_id","value_num");--> statement-breakpoint
-CREATE INDEX "entity_property_index_property_value_bool_idx" ON "entity_property_index" USING btree ("property_def_id","value_bool");--> statement-breakpoint
-CREATE INDEX "entity_property_index_property_value_ts_idx" ON "entity_property_index" USING btree ("property_def_id","value_ts");--> statement-breakpoint
-CREATE INDEX "entity_property_index_property_value_entity_idx" ON "entity_property_index" USING btree ("property_def_id","value_entity_id");--> statement-breakpoint
-CREATE INDEX "entity_property_index_entity_id_idx" ON "entity_property_index" USING btree ("entity_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "property_defs_value_type_idx" ON "property_defs" USING btree ("value_type");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "profiles_parent_profile_id_idx" ON "profiles" USING btree ("parent_profile_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "profiles_scope_idx" ON "profiles" USING btree ("scope","workspace_id","user_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "profile_properties_profile_id_idx" ON "profile_properties" USING btree ("profile_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "profile_properties_property_def_id_idx" ON "profile_properties" USING btree ("property_def_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_text_idx" ON "entity_property_index" USING btree ("property_def_id","value_text");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_num_idx" ON "entity_property_index" USING btree ("property_def_id","value_num");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_bool_idx" ON "entity_property_index" USING btree ("property_def_id","value_bool");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_ts_idx" ON "entity_property_index" USING btree ("property_def_id","value_ts");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_entity_idx" ON "entity_property_index" USING btree ("property_def_id","value_entity_id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "entity_property_index_entity_id_idx" ON "entity_property_index" USING btree ("entity_id");--> statement-breakpoint
 ALTER TABLE "entities" ADD CONSTRAINT "entities_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE set null ON UPDATE no action;

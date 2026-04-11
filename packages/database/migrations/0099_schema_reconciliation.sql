@@ -292,7 +292,7 @@ CREATE TABLE IF NOT EXISTS "entity_identity_signals" (
   "created_at"   timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "entity_identity_signals_type_value_idx"
+CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS "entity_identity_signals_type_value_idx"
   ON "entity_identity_signals" ("signal_type", "signal_value");
 
 CREATE INDEX IF NOT EXISTS "entity_identity_signals_entity_id_idx"

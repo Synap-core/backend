@@ -10,7 +10,7 @@ GENERATED ALWAYS AS (
 ) STORED;
 
 -- Create GIN index for fast full-text search
-CREATE INDEX entities_search_vector_idx ON entities USING GIN(search_vector);
+CREATE INDEX IF NOT EXISTS ntities_search_vector_idx ON entities USING GIN(search_vector);
 
 -- Add comment
 COMMENT ON COLUMN entities.search_vector IS 'Full-text search vector combining title (weight A) and preview (weight B)';

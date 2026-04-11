@@ -81,5 +81,5 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
 );
 
 -- One prefs row per user per workspace
-CREATE UNIQUE INDEX IF NOT EXISTS notif_prefs_user_workspace_idx
+CREATE UNIQUE INDEX IF NOT EXISTS IF NOT EXISTS notif_prefs_user_workspace_idx
   ON notification_preferences (user_id, workspace_id);

@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS "skills" (
     "created_at" timestamp with time zone DEFAULT now() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
-CREATE INDEX "skills_workspace_id_idx" ON "skills" ("workspace_id");
+CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
 
 -- ============================================================================
 -- 2. SEMANTIC SEARCH (Vectors)
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS "entity_enrichments" (
     "user_id" text NOT NULL,
     "created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
-CREATE INDEX "entity_enrichments_entity_id_idx" ON "entity_enrichments" ("entity_id");
+CREATE INDEX IF NOT EXISTS "entity_enrichments_entity_id_idx" ON "entity_enrichments" ("entity_id");
 
 CREATE TABLE IF NOT EXISTS "entity_relationships" (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

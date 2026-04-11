@@ -130,10 +130,7 @@ export const propertyDefs = pgTable(
     // - { pattern: "^[a-z]+$" } for regex patterns
     constraints: jsonb("constraints").default("{}").notNull(),
 
-    uiHints: jsonb("ui_hints")
-      .$type<PropertyUIHints>()
-      .default({})
-      .notNull(),
+    uiHints: jsonb("ui_hints").$type<PropertyUIHints>().default({}).notNull(),
 
     // Unified relations: when valueType is "entity_id" and this is set,
     // writing the property auto-creates a relation row of this type.
