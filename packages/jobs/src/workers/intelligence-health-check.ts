@@ -22,7 +22,12 @@ type ServiceHealthStatus = "healthy" | "degraded" | "unhealthy";
 
 async function pingService(
   webhookUrl: string
-): Promise<{ status: ServiceHealthStatus; latencyMs: number }> {
+): Promise<{
+  status: ServiceHealthStatus;
+  latencyMs: number;
+  keyExpiresSoon: boolean;
+  keyExpiresAt: string | null;
+}> {
   const start = Date.now();
   try {
     const res = await fetch(`${webhookUrl.replace(/\/+$/, "")}/health`, {
@@ -31,19 +36,30 @@ async function pingService(
       headers: { Accept: "application/json" },
     });
     const latencyMs = Date.now() - start;
-    if (!res.ok) return { status: "unhealthy", latencyMs };
+
+    // Check for key expiry warning headers from IS auth middleware
+    const keyExpiresSoon = res.headers.get("X-Key-Expires-Soon") === "true";
+    const keyExpiresAt = res.headers.get("X-Key-Expires-At");
+
+    if (!res.ok)
+      return { status: "unhealthy", latencyMs, keyExpiresSoon, keyExpiresAt };
     // Check for degraded status in JSON body (optional)
     try {
       const body = (await res.json()) as { status?: string };
       if (body?.status && body.status !== "ok" && body.status !== "healthy") {
-        return { status: "degraded", latencyMs };
+        return { status: "degraded", latencyMs, keyExpiresSoon, keyExpiresAt };
       }
     } catch {
       // Non-JSON body — still OK if HTTP 2xx
     }
-    return { status: "healthy", latencyMs };
+    return { status: "healthy", latencyMs, keyExpiresSoon, keyExpiresAt };
   } catch {
-    return { status: "unhealthy", latencyMs: Date.now() - start };
+    return {
+      status: "unhealthy",
+      latencyMs: Date.now() - start,
+      keyExpiresSoon: false,
+      keyExpiresAt: null,
+    };
   }
 }
 
@@ -81,17 +97,32 @@ export async function handleIntelligenceHealthCheck(): Promise<void> {
 
   const results = await Promise.allSettled(
     external.map(async (svc) => {
-      const { status, latencyMs } = await pingService(svc.webhookUrl);
+      const { status, latencyMs, keyExpiresSoon, keyExpiresAt } =
+        await pingService(svc.webhookUrl);
+
+      // If key is expiring soon, set status to "expiring" so the frontend can warn
+      const effectiveStatus: ServiceHealthStatus | "expiring" =
+        keyExpiresSoon && status === "healthy" ? "expiring" : status;
+
+      if (keyExpiresSoon) {
+        logger.warn(
+          { serviceId: svc.serviceId, keyExpiresAt },
+          "Intelligence service API key expires soon — re-provision to refresh"
+        );
+      }
+
       const checkedAt = new Date();
       await db
         .update(intelligenceServices)
         .set({
           lastHealthCheck: checkedAt,
-          lastHealthStatus: status,
+          lastHealthStatus: effectiveStatus,
           updatedAt: checkedAt,
+          // Update main status to "expiring" if key is nearing expiry
+          ...(effectiveStatus === "expiring" ? { status: "expiring" } : {}),
         })
         .where(eq(intelligenceServices.id, svc.id));
-      return { serviceId: svc.serviceId, status, latencyMs };
+      return { serviceId: svc.serviceId, status: effectiveStatus, latencyMs };
     })
   );
 

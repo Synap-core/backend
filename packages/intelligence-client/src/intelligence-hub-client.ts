@@ -218,14 +218,25 @@ export class IntelligenceHubClient {
         );
 
         if (!response.ok) {
+          const responseBody = await response
+            .text()
+            .catch(() => "<unreadable>");
           // 401 = credential error — don't retry, surface immediately for auto-repair
           if (response.status === 401) {
             recordFailure(this.baseUrl);
+            console.error(
+              `[IntelligenceHubClient] IS authentication failed at ${this.baseUrl}/api/expertise/request — check API key in intelligence_services table (status=${response.status}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1})`
+            );
             throw new Error(
-              `Intelligence Hub credential error: 401 Unauthorized`
+              `Intelligence Hub credential error: 401 Unauthorized at ${this.baseUrl}`
             );
           }
-          throw new Error(`Intelligence Hub error: ${response.statusText}`);
+          console.error(
+            `[IntelligenceHubClient] Request failed: url=${this.baseUrl}/api/expertise/request, status=${response.status}, statusText=${response.statusText}, body=${responseBody.slice(0, 500)}, attempt=${attempt + 1}/${MAX_RETRIES + 1}`
+          );
+          throw new Error(
+            `Intelligence Hub error: ${response.status} ${response.statusText} at ${this.baseUrl}`
+          );
         }
 
         const data = (await response.json()) as IntelligenceHubResponse;
@@ -236,6 +247,12 @@ export class IntelligenceHubClient {
         // Don't retry 401s — break immediately so auto-repair can kick in
         if (lastError.message.includes("401 Unauthorized")) {
           break;
+        }
+        // Log network-level errors (connection refused, DNS failure, timeout)
+        if (!lastError.message.includes("Intelligence Hub error:")) {
+          console.error(
+            `[IntelligenceHubClient] IS unreachable at ${this.baseUrl} — check INTELLIGENCE_HUB_URL or intelligence_services.webhookUrl (error=${lastError.message}, attempt=${attempt + 1}/${MAX_RETRIES + 1})`
+          );
         }
         if (attempt === MAX_RETRIES) {
           recordFailure(this.baseUrl);
@@ -325,15 +342,30 @@ export class IntelligenceHubClient {
       );
     } catch (error) {
       recordFailure(this.baseUrl);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[IntelligenceHubClient] IS unreachable at ${this.baseUrl} for streaming — check INTELLIGENCE_HUB_URL or intelligence_services.webhookUrl (error=${errMsg})`
+      );
       throw error;
     }
 
     if (!response.ok) {
       recordFailure(this.baseUrl);
+      const responseBody = await response.text().catch(() => "<unreadable>");
       if (response.status === 401) {
-        throw new Error(`Intelligence Hub credential error: 401 Unauthorized`);
+        console.error(
+          `[IntelligenceHubClient] IS authentication failed at ${this.baseUrl}/api/chat/stream — check API key in intelligence_services table (status=401, body=${responseBody.slice(0, 500)})`
+        );
+        throw new Error(
+          `Intelligence Hub credential error: 401 Unauthorized at ${this.baseUrl}`
+        );
       }
-      throw new Error(`Intelligence Hub error: ${response.statusText}`);
+      console.error(
+        `[IntelligenceHubClient] Stream request failed: url=${this.baseUrl}/api/chat/stream, status=${response.status}, body=${responseBody.slice(0, 500)}`
+      );
+      throw new Error(
+        `Intelligence Hub error: ${response.status} ${response.statusText} at ${this.baseUrl}`
+      );
     }
 
     // Parse SSE stream
@@ -373,6 +405,8 @@ export class IntelligenceHubClient {
                 yield { type: "entities", entities: data.entities };
               } else if (data.type === "branch_decision" && data.decision) {
                 yield { type: "branch_decision", decision: data.decision };
+              } else if (data.type === "route_to_channel" && data.routing) {
+                yield { type: "route_to_channel", routing: data.routing };
               } else if (data.type === "error") {
                 yield { type: "error", error: data.error };
               } else if (data.type === "complete") {

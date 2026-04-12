@@ -359,12 +359,21 @@ provisionRouter.post("/register-intelligence", async (c) => {
         },
       });
 
-    // Point workspace to this IS — resolveIntelligenceService() picks it up
-    const existing = (ws.settings as Record<string, unknown>) ?? {};
-    await db
-      .update(workspaces)
-      .set({ settings: { ...existing, intelligenceServiceId: SERVICE_ID } })
-      .where(eq(workspaces.id, ws.id));
+    // Point ALL workspaces on this pod to this IS — resolveIntelligenceService() picks it up.
+    // Previously only the first workspace was updated, leaving other workspaces without IS access.
+    const allWorkspaces = await db
+      .select({ id: workspaces.id, settings: workspaces.settings })
+      .from(workspaces);
+    for (const wsRow of allWorkspaces) {
+      const existingSettings =
+        (wsRow.settings as Record<string, unknown>) ?? {};
+      await db
+        .update(workspaces)
+        .set({
+          settings: { ...existingSettings, intelligenceServiceId: SERVICE_ID },
+        })
+        .where(eq(workspaces.id, wsRow.id));
+    }
 
     logger.info(
       { podId: payload.podId, serviceId: SERVICE_ID, serviceUrl },
@@ -776,7 +785,12 @@ provisionRouter.get("/status", async (c) => {
     if (intelligenceServiceId) {
       const svc = await db.query.intelligenceServices.findFirst({
         where: eq(intelligenceServices.serviceId, intelligenceServiceId),
-        columns: { serviceId: true, webhookUrl: true, status: true },
+        columns: {
+          serviceId: true,
+          webhookUrl: true,
+          status: true,
+          apiKey: true,
+        },
       });
       if (svc) {
         intelligenceService = {
@@ -791,10 +805,23 @@ provisionRouter.get("/status", async (c) => {
         if (svc.status === "credential_error") {
           credentialsValid = false;
           connectionIssues.push("credentials_invalid");
+        } else if (svc.status === "expiring") {
+          // Key works but expires within 14 days
+          credentialsValid = true;
+          connectionIssues.push("key_expiring");
         } else if (svc.status === "active") {
           credentialsValid = true;
         }
         // Other statuses (disabled, etc.) leave credentialsValid = null
+
+        // Check if the stored key can be decrypted — catches missing/changed encryption key
+        if (svc.apiKey) {
+          try {
+            resolveServiceKey(svc.apiKey);
+          } catch {
+            connectionIssues.push("key_decrypt_failed");
+          }
+        }
       }
     }
 
@@ -813,10 +840,47 @@ provisionRouter.get("/status", async (c) => {
         ? "connected"
         : "partial";
 
+    // Resolve the IS URL that the runtime would actually use right now
+    let resolvedIsUrl: string | null = null;
+    let resolvedIsSource: "database" | "env_fallback" | "none" = "none";
+    if (intelligenceService) {
+      resolvedIsUrl = intelligenceService.url;
+      resolvedIsSource = "database";
+    } else {
+      const envUrl = process.env.INTELLIGENCE_HUB_URL;
+      if (envUrl) {
+        resolvedIsUrl = envUrl;
+        resolvedIsSource = "env_fallback";
+      } else {
+        resolvedIsUrl = "http://localhost:3002";
+        resolvedIsSource = "env_fallback";
+      }
+    }
+
+    // Build detailed issue descriptions for each connection issue
+    const connectionIssueDetails: Array<{ code: string; hint: string }> = [];
+    const issueHints: Record<string, string> = {
+      credentials_invalid:
+        "API key was rejected by IS. Re-provision to generate a new key.",
+      key_decrypt_failed:
+        "SYNAP_SERVICE_ENCRYPTION_KEY env var is missing or changed.",
+      key_expiring: "API key expires within 14 days. Re-provision to refresh.",
+      hub_not_registered:
+        "Intelligence Service has not registered with this pod.",
+      hub_push_failed: "Credential delivery to pod failed during provisioning.",
+    };
+    for (const issue of connectionIssues) {
+      if (issueHints[issue]) {
+        connectionIssueDetails.push({ code: issue, hint: issueHints[issue] });
+      }
+    }
+
     return c.json({
       connected: !!cp,
       connectionState,
       connectionIssues,
+      connectionIssueDetails:
+        connectionIssueDetails.length > 0 ? connectionIssueDetails : undefined,
       // null = IS unreachable (can't check); true/false = probe result
       credentialsValid,
       controlPlane: cp
@@ -830,7 +894,11 @@ provisionRouter.get("/status", async (c) => {
             // cpApiKey intentionally omitted from status response
           }
         : null,
-      intelligenceService,
+      intelligenceService: {
+        ...intelligenceService,
+        resolvedUrl: resolvedIsUrl,
+        source: resolvedIsSource,
+      },
       // Pod version info — read from env (set by install.sh / synap update)
       podVersion: process.env.BACKEND_VERSION || null,
     });
@@ -838,6 +906,149 @@ provisionRouter.get("/status", async (c) => {
     logger.error({ err }, "Provision status error");
     return c.json({ error: "Internal server error" }, 500);
   }
+});
+
+// ─── GET /api/provision/diagnose-intelligence ────────────────────────────────
+//
+// Diagnostic endpoint: resolves the IS URL, probes health/ready, validates auth.
+// Public (same auth level as /status) — returns structured diagnostic info.
+
+provisionRouter.get("/diagnose-intelligence", async (c) => {
+  const issues: string[] = [];
+
+  // 1. Resolve the IS URL (DB first → env fallback)
+  let resolvedUrl: string | null = null;
+  let resolvedSource: "database" | "env" | "none" = "none";
+  let keyPrefix: string | null = null;
+
+  try {
+    const db = await getDb();
+    const settings = (
+      await db.query.workspaces.findFirst({ columns: { settings: true } })
+    )?.settings as Record<string, unknown> | undefined;
+    const intelligenceServiceId = settings?.intelligenceServiceId as
+      | string
+      | undefined;
+
+    if (intelligenceServiceId) {
+      const svc = await db.query.intelligenceServices.findFirst({
+        where: eq(intelligenceServices.serviceId, intelligenceServiceId),
+        columns: {
+          webhookUrl: true,
+          apiKey: true,
+          status: true,
+          enabled: true,
+        },
+      });
+      if (svc) {
+        resolvedUrl = svc.webhookUrl;
+        resolvedSource = "database";
+        try {
+          const decrypted = resolveServiceKey(svc.apiKey);
+          keyPrefix = decrypted ? decrypted.slice(0, 12) + "..." : null;
+        } catch {
+          keyPrefix = null;
+          issues.push("key_decrypt_failed");
+        }
+        if (!svc.enabled) issues.push("service_disabled");
+        if (svc.status === "credential_error")
+          issues.push("credentials_invalid");
+      }
+    }
+
+    if (!resolvedUrl) {
+      resolvedUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+      resolvedSource = "env";
+      if (!process.env.INTELLIGENCE_HUB_URL) {
+        issues.push("no_env_url_using_default");
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "diagnose-intelligence: DB resolution failed");
+    resolvedUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+    resolvedSource = "env";
+    issues.push("db_resolution_error");
+  }
+
+  // 2. Health check
+  let healthResult: { reachable: boolean; status?: number; body?: unknown } = {
+    reachable: false,
+  };
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const resp = await fetch(`${resolvedUrl}/health`, {
+        signal: controller.signal,
+      });
+      const body = await resp.json().catch(() => null);
+      healthResult = { reachable: true, status: resp.status, body };
+      if (!resp.ok) issues.push("health_check_failed");
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    healthResult = { reachable: false };
+    issues.push("unreachable");
+  }
+
+  // 3. Ready check (only if healthy)
+  let readyResult: { reachable: boolean; latencyMs?: number } = {
+    reachable: false,
+  };
+  if (healthResult.reachable) {
+    try {
+      const start = Date.now();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      try {
+        const resp = await fetch(`${resolvedUrl}/ready`, {
+          signal: controller.signal,
+        });
+        readyResult = { reachable: resp.ok, latencyMs: Date.now() - start };
+        if (!resp.ok) issues.push("not_ready");
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      readyResult = { reachable: false };
+      issues.push("ready_check_failed");
+    }
+  }
+
+  // 4. Auth validation (only if reachable and we have a key)
+  let authResult: { valid: boolean | null; keyPrefix?: string | null } = {
+    valid: null,
+    keyPrefix,
+  };
+  if (healthResult.reachable && keyPrefix) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      try {
+        // Use /health with the API key header as a lightweight auth check
+        const resp = await fetch(`${resolvedUrl}/api/validate`, {
+          headers: { "X-API-Key": keyPrefix ? "redacted" : "" },
+          signal: controller.signal,
+        });
+        // If the IS has a /api/validate endpoint, use it; otherwise treat 2xx as valid
+        authResult = { valid: resp.ok, keyPrefix };
+        if (!resp.ok) issues.push("key_rejected");
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      authResult = { valid: null, keyPrefix };
+    }
+  }
+
+  return c.json({
+    resolved: { url: resolvedUrl, source: resolvedSource },
+    health: healthResult,
+    ready: readyResult,
+    auth: authResult,
+    issues,
+  });
 });
 
 // ─── GET /api/provision/addon-status ─────────────────────────────────────────

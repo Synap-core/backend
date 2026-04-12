@@ -1171,6 +1171,21 @@ export const channelsRouter = router({
               userId: userId,
               channelId,
             });
+          } else if (
+            chunk.type === "route_to_channel" &&
+            (chunk as any).routing
+          ) {
+            emitChatEvent({
+              event: "route_to_channel",
+              data: {
+                threadId: channelId,
+                messageId: userMessageId,
+                routing: (chunk as any).routing,
+              },
+              workspaceId: workspaceId ?? null,
+              userId: userId,
+              channelId,
+            });
           } else if (chunk.type === "complete") {
             if (chunk.data) {
               const data = chunk.data as Partial<HubResponse>;
@@ -1207,9 +1222,20 @@ export const channelsRouter = router({
               });
             }
 
+            // Echo agentType to the client so the PersonaChip can slide-in animate
+            // the transition when a branch-dispatched specialist answered.
+            // Prefers IS-reported agentType, falls back to the type we dispatched with.
+            const completedAgentType =
+              (chunk.data as { agentType?: string } | undefined)?.agentType ??
+              effectiveAgentType;
             emitChatEvent({
               event: "chat:stream",
-              data: { threadId: channelId, type: "complete", isComplete: true },
+              data: {
+                threadId: channelId,
+                type: "complete",
+                isComplete: true,
+                agentType: completedAgentType,
+              },
               workspaceId: workspaceId ?? null,
               userId: userId,
               channelId,
@@ -1368,6 +1394,7 @@ export const channelsRouter = router({
               type: "complete",
               isComplete: true,
               timedOut: true,
+              agentType: effectiveAgentType,
             },
             workspaceId: workspaceId ?? null,
             userId: userId,

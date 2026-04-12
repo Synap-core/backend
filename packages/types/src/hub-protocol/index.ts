@@ -135,6 +135,7 @@ export enum StreamEventType {
   STEP = "step",
   ENTITIES = "entities",
   BRANCH_DECISION = "branch_decision",
+  ROUTE_TO_CHANNEL = "route_to_channel",
   COMPLETE = "complete",
   ERROR = "error",
 }
@@ -148,6 +149,11 @@ export interface HubStreamEvent {
   step?: AIStep;
   entities?: ExtractedEntity[];
   decision?: BranchDecision;
+  routing?: {
+    targetChannelId: string;
+    reason: string;
+    contextEntity?: { id: string; type?: string; title?: string };
+  };
   data?: unknown;
   error?: string;
 }

@@ -86,6 +86,7 @@ export async function resolveIntelligenceService(
     capability !== "chat" &&
     capability !== "analysis"
   ) {
+    logger.debug({ capability }, "Step 0: Checking capability-first routing");
     const capService = await db.query.intelligenceServices.findFirst({
       where: and(
         drizzleSql`${intelligenceServices.status} IN ('active', 'credential_error')`,
@@ -93,11 +94,29 @@ export async function resolveIntelligenceService(
         drizzleSql`${intelligenceServices.capabilities} @> ${JSON.stringify([capability])}::jsonb`
       ),
     });
-    if (capService) return { ...createClient(capService), agentUserId };
+    if (capService) {
+      logger.info(
+        {
+          capability,
+          serviceId: capService.serviceId,
+          url: capService.webhookUrl,
+        },
+        "IS resolved via capability-first routing"
+      );
+      return { ...createClient(capService), agentUserId };
+    }
+    logger.debug(
+      { capability },
+      "Step 0: No service found with requested capability"
+    );
   }
 
   // 1. Check workspace preference (if in workspace)
   if (ctx.workspaceId) {
+    logger.debug(
+      { workspaceId: ctx.workspaceId },
+      "Step 1: Checking workspace preference"
+    );
     const workspace = await db.query.workspaces.findFirst({
       where: eq(workspaces.id, ctx.workspaceId),
     });
@@ -112,11 +131,31 @@ export async function resolveIntelligenceService(
 
     if (wsServiceId) {
       const service = await getActiveService(wsServiceId);
-      if (service) return { ...createClient(service), agentUserId };
+      if (service) {
+        logger.info(
+          {
+            serviceId: wsServiceId,
+            url: (service as any).webhookUrl,
+            source: "workspace_preference",
+          },
+          "IS resolved via workspace preference"
+        );
+        return { ...createClient(service), agentUserId };
+      }
+      logger.debug(
+        { wsServiceId },
+        "Step 1: Workspace service not active/found"
+      );
+    } else {
+      logger.debug(
+        { workspaceId: ctx.workspaceId },
+        "Step 1: No workspace IS preference set"
+      );
     }
   }
 
   // 2. Check user preferences
+  logger.debug({ userId: ctx.userId }, "Step 2: Checking user preferences");
   const userPrefs = await db.query.userPreferences.findFirst({
     where: eq(userPreferences.userId, ctx.userId),
   });
@@ -130,13 +169,37 @@ export async function resolveIntelligenceService(
 
   if (userServiceId) {
     const service = await getActiveService(userServiceId);
-    if (service) return { ...createClient(service), agentUserId };
+    if (service) {
+      logger.info(
+        {
+          serviceId: userServiceId,
+          url: (service as any).webhookUrl,
+          source: "user_preference",
+        },
+        "IS resolved via user preference"
+      );
+      return { ...createClient(service), agentUserId };
+    }
+    logger.debug(
+      { userServiceId },
+      "Step 2: User-preferred service not active/found"
+    );
+  } else {
+    logger.debug({ userId: ctx.userId }, "Step 2: No user IS preference set");
   }
 
   // 3. Fallback to default service from environment
+  logger.debug(
+    "Step 3: No DB-registered service matched — falling back to env default"
+  );
   const defaultService = createDefaultClient();
-  console.warn(
-    `[IS Routing] No registered service found — falling back to env default (url=${defaultService.endpoint}, hasKey=${!!defaultService.serviceApiKey})`
+  logger.info(
+    {
+      url: defaultService.endpoint,
+      source: "env_fallback",
+      hasKey: !!defaultService.serviceApiKey,
+    },
+    "IS resolved via environment fallback"
   );
   return { ...defaultService, agentUserId };
 }
@@ -289,7 +352,7 @@ export async function getDefaultActiveService(): Promise<{
  * Create default client from environment.
  */
 function createDefaultClient(): ResolvedService {
-  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001";
+  const baseUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
   return {
     serviceId: "default",
     endpoint: baseUrl,

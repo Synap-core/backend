@@ -51,6 +51,10 @@ import {
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
+// Hestia imports
+import hearthRouter from "./hub-protocol/hearth.js";
+import intelligenceRouter from "./hub-protocol/intelligence.js";
+
 const logger = createLogger({ module: "hub-protocol-rest" });
 
 function extractBearerToken(authHeader: string | null): string | null {
@@ -1179,6 +1183,8 @@ app.post("/threads", async (c) => {
     parentChannelId?: string;
     agentType?: string;
     branchPurpose?: string;
+    contextObjectType?: string;
+    contextObjectId?: string;
   };
   const rawAgentType = body.agentType;
   const resolvedAgentType =
@@ -1201,6 +1207,8 @@ app.post("/threads", async (c) => {
         parentChannelId: body.parentChannelId ?? null,
         agentType: resolvedAgentType,
         branchPurpose: body.branchPurpose ?? null,
+        contextObjectType: body.contextObjectType ?? null,
+        contextObjectId: body.contextObjectId ?? null,
       })
       .returning();
     return c.json({ id: thread.id, title: thread.title });
@@ -3407,6 +3415,95 @@ app.post("/vault/request", async (c) => {
 });
 
 /**
+ * POST /channels/by-context
+ * Find or create a channel scoped to a specific entity (contextObjectId + contextObjectType).
+ * Used by route_to_channel tool to resolve the target channel for entity-scoped routing.
+ * Body: { userId, workspaceId?, contextObjectId, contextObjectType }
+ */
+app.post("/channels/by-context", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+  const body = (await c.req.json()) as {
+    userId: string;
+    workspaceId?: string;
+    contextObjectId: string;
+    contextObjectType: string;
+  };
+  if (!body.userId || !body.contextObjectId || !body.contextObjectType) {
+    return c.json(
+      { error: "userId, contextObjectId, and contextObjectType are required" },
+      400
+    );
+  }
+  try {
+    // Try to find an existing channel with this context
+    const existing = await db
+      .select({ id: channels.id, title: channels.title })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, body.userId),
+          eq(channels.contextObjectId, body.contextObjectId),
+          eq(channels.contextObjectType, body.contextObjectType),
+          eq(channels.status, "active")
+        )
+      )
+      .orderBy(desc(channels.updatedAt))
+      .limit(1);
+
+    if (existing.length > 0) {
+      return c.json({
+        channelId: existing[0].id,
+        title: existing[0].title,
+        created: false,
+      });
+    }
+
+    // Create a new channel scoped to this entity
+    const { randomUUID } = await import("crypto");
+    const channelId = randomUUID();
+
+    // Try to get the entity title for a nice channel name
+    let title = `${body.contextObjectType} discussion`;
+    try {
+      const entity = await db.query.entities.findFirst({
+        where: eq(entities.id, body.contextObjectId),
+        columns: { title: true },
+      });
+      if (entity?.title) {
+        title = entity.title;
+      }
+    } catch {
+      // Non-fatal — use default title
+    }
+
+    await db.insert(channels).values({
+      id: channelId,
+      userId: body.userId,
+      workspaceId: body.workspaceId ?? null,
+      channelType: ChannelType.THREAD,
+      contextObjectType: body.contextObjectType,
+      contextObjectId: body.contextObjectId,
+      status: "active",
+      title,
+      agentType: "meta",
+    });
+
+    return c.json({ channelId, title, created: true });
+  } catch (err) {
+    logger.error({ err, body }, "channels/by-context failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
  * GET /channels/personal?userId=...&workspaceId=...
  * Get or create the user's personal AI channel.
  * Used by skill triggers to resolve a channelId before posting.
@@ -4368,5 +4465,9 @@ app.post("/setup/agent", async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 });
+
+// Hestia Hearth Protocol routes
+app.route("/hearth", hearthRouter);
+app.route("/intelligence", intelligenceRouter);
 
 export const hubProtocolRestApp = app;

@@ -47,7 +47,7 @@ export async function resolveDefaultIntelligenceEndpoint(): Promise<Intelligence
   }
 
   return {
-    endpoint: process.env.INTELLIGENCE_HUB_URL || "http://localhost:3001",
+    endpoint: process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002",
     apiKey: process.env.INTELLIGENCE_HUB_API_KEY || "",
   };
 }
