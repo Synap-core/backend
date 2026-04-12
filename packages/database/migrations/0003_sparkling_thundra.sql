@@ -1,4 +1,8 @@
-CREATE TABLE "property_defs" (
+-- Defensive rewrite of original drizzle-generated migration.
+-- All DDL uses IF NOT EXISTS / DROP IF EXISTS so this file is safe to re-run
+-- on pods where the _migrations table was reset but the schema already exists.
+
+CREATE TABLE IF NOT EXISTS "property_defs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"slug" text NOT NULL,
 	"value_type" text NOT NULL,
@@ -9,7 +13,7 @@ CREATE TABLE "property_defs" (
 	CONSTRAINT "property_defs_slug_unique_idx" UNIQUE("slug")
 );
 --> statement-breakpoint
-CREATE TABLE "profiles" (
+CREATE TABLE IF NOT EXISTS "profiles" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"slug" text NOT NULL,
 	"display_name" text NOT NULL,
@@ -25,7 +29,7 @@ CREATE TABLE "profiles" (
 	CONSTRAINT "profiles_slug_unique_idx" UNIQUE("slug")
 );
 --> statement-breakpoint
-CREATE TABLE "profile_properties" (
+CREATE TABLE IF NOT EXISTS "profile_properties" (
 	"profile_id" uuid NOT NULL,
 	"property_def_id" uuid NOT NULL,
 	"required" boolean DEFAULT false NOT NULL,
@@ -34,7 +38,7 @@ CREATE TABLE "profile_properties" (
 	CONSTRAINT "profile_properties_profile_id_property_def_id_pk" PRIMARY KEY("profile_id","property_def_id")
 );
 --> statement-breakpoint
-CREATE TABLE "entity_property_index" (
+CREATE TABLE IF NOT EXISTS "entity_property_index" (
 	"entity_id" uuid NOT NULL,
 	"property_def_id" uuid NOT NULL,
 	"value_text" text,
@@ -46,13 +50,23 @@ CREATE TABLE "entity_property_index" (
 	CONSTRAINT "entity_property_index_entity_id_property_def_id_pk" PRIMARY KEY("entity_id","property_def_id")
 );
 --> statement-breakpoint
-ALTER TABLE "entities" ADD COLUMN "profile_id" uuid;--> statement-breakpoint
-ALTER TABLE "entities" ADD COLUMN "properties" jsonb DEFAULT '{}' NOT NULL;--> statement-breakpoint
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "profile_id" uuid;--> statement-breakpoint
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "properties" jsonb DEFAULT '{}' NOT NULL;--> statement-breakpoint
+
+-- FK constraints: drop-if-exists then re-add so re-runs are safe
+ALTER TABLE "profiles" DROP CONSTRAINT IF EXISTS "profiles_workspace_id_workspaces_id_fk";
 ALTER TABLE "profiles" ADD CONSTRAINT "profiles_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_properties" DROP CONSTRAINT IF EXISTS "profile_properties_profile_id_profiles_id_fk";
 ALTER TABLE "profile_properties" ADD CONSTRAINT "profile_properties_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_properties" DROP CONSTRAINT IF EXISTS "profile_properties_property_def_id_property_defs_id_fk";
 ALTER TABLE "profile_properties" ADD CONSTRAINT "profile_properties_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_property_index" DROP CONSTRAINT IF EXISTS "entity_property_index_entity_id_entities_id_fk";
 ALTER TABLE "entity_property_index" ADD CONSTRAINT "entity_property_index_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_property_index" DROP CONSTRAINT IF EXISTS "entity_property_index_property_def_id_property_defs_id_fk";
 ALTER TABLE "entity_property_index" ADD CONSTRAINT "entity_property_index_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entities" DROP CONSTRAINT IF EXISTS "entities_profile_id_profiles_id_fk";
+ALTER TABLE "entities" ADD CONSTRAINT "entities_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+
 CREATE INDEX IF NOT EXISTS "property_defs_value_type_idx" ON "property_defs" USING btree ("value_type");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "profiles_parent_profile_id_idx" ON "profiles" USING btree ("parent_profile_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "profiles_scope_idx" ON "profiles" USING btree ("scope","workspace_id","user_id");--> statement-breakpoint
@@ -63,5 +77,4 @@ CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_num_idx" ON "en
 CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_bool_idx" ON "entity_property_index" USING btree ("property_def_id","value_bool");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_ts_idx" ON "entity_property_index" USING btree ("property_def_id","value_ts");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_entity_idx" ON "entity_property_index" USING btree ("property_def_id","value_entity_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "entity_property_index_entity_id_idx" ON "entity_property_index" USING btree ("entity_id");--> statement-breakpoint
-ALTER TABLE "entities" ADD CONSTRAINT "entities_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE set null ON UPDATE no action;
+CREATE INDEX IF NOT EXISTS "entity_property_index_entity_id_idx" ON "entity_property_index" USING btree ("entity_id");

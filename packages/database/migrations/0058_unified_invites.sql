@@ -5,7 +5,7 @@
 DROP TABLE IF EXISTS "workspace_invites";
 DROP TABLE IF EXISTS "pod_invites";
 
-CREATE TABLE "invites" (
+CREATE TABLE IF NOT EXISTS "invites" (
   "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "type"         text NOT NULL,
   "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,

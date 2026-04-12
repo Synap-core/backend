@@ -129,3 +129,6 @@ export * from "./sync.js";
 
 // NEW: Sync Generation (split-brain prevention)
 export * from "./sync-generation.js";
+
+// NEW: Signal Feed (external content subscriptions, AI classifications, auto-links)
+export * from "./signals.js";

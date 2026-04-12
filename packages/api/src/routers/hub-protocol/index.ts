@@ -11,6 +11,7 @@
  * - documents: Document operations
  * - branches: Branch operations
  * - linking: Context linking operations
+ * - signals: Signal feed operations (RSSHub fetch, classify, capture, feed, subscriptions)
  */
 
 import { router, publicProcedure } from "../../trpc.js";
@@ -34,6 +35,7 @@ import { hubWidgetDefinitionsRouter } from "./widget-definitions.js";
 import { migrationRouter } from "./migration.js";
 import { hubAutomationsRouter } from "./automations.js";
 import { hubCommandsRouter } from "./commands.js";
+import { signalsRouter } from "./signals.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -64,4 +66,5 @@ export const hubProtocolRouter = router({
   migration: migrationRouter,
   automations: hubAutomationsRouter,
   commands: hubCommandsRouter,
+  signals: signalsRouter,
 });

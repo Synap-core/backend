@@ -68,15 +68,16 @@ export async function ensureDefaultViews(
 
     const hasAllTasks = existingViews.some((v) => v.name === "All Tasks");
     const hasTaskBoard = existingViews.some((v) => v.name === "Task Board");
+    const hasSignalFeed = existingViews.some((v) => v.name === "Signal Feed");
     const hasHome = allWorkspaceViews.some(
       (v) =>
         v.type === "bento" &&
         (v.metadata as Record<string, unknown>)?.homeScope === "workspace"
     );
 
-    // Skip only if Home is done AND (task views done OR task profile not available)
+    // Skip only if Home is done AND (task views done OR task profile not available) AND signal feed exists
     const taskViewsDone = !taskProfile || (hasAllTasks && hasTaskBoard);
-    if (hasHome && taskViewsDone) {
+    if (hasHome && taskViewsDone && hasSignalFeed) {
       return {
         status: "skipped",
         message: "Default views already exist",
@@ -177,7 +178,53 @@ export async function ensureDefaultViews(
       createdViewIds.push(taskBoardView.id);
     }
 
-    // 3. Create "Home" bento view (workspace dashboard)
+    // 3. Create "Signal Feed" view (only when signal_item profile exists)
+    const signalProfile = await profileRepo.getBySlug(
+      "signal_item",
+      workspaceId
+    );
+    if (signalProfile && !hasSignalFeed) {
+      const signalFeedView = await viewRepo.create(
+        {
+          type: "table",
+          name: "Signal Feed",
+          description: "External content from signal feeds",
+          workspaceId,
+          userId,
+          scopeProfileIds: [signalProfile.id],
+          scopeMode: "explicit",
+          query: {
+            filters: [],
+            sorts: [{ field: "publishedAt", direction: "desc" }],
+            search: "",
+            limit: 50,
+            offset: 0,
+          },
+          config: {
+            visibleColumns: [
+              "title",
+              "sourcePlatform",
+              "authorDisplayName",
+              "topics",
+              "publishedAt",
+              "relevanceScore",
+            ],
+            columnOrder: [
+              "title",
+              "sourcePlatform",
+              "authorDisplayName",
+              "topics",
+              "publishedAt",
+              "relevanceScore",
+            ],
+          },
+        },
+        userId
+      );
+      createdViewIds.push(signalFeedView.id);
+    }
+
+    // 4. Create "Home" bento view (workspace dashboard)
     if (!hasHome) {
       const DEFAULT_HOME_CONFIG = {
         layout: "bento",

@@ -401,6 +401,120 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "AI Summary", inputType: "textarea" },
       },
+      // Signal item properties
+      {
+        slug: "sourcePlatform",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: [
+            "twitter",
+            "reddit",
+            "youtube",
+            "github",
+            "hackernews",
+            "producthunt",
+            "linkedin",
+            "threads",
+            "telegram",
+            "rss",
+          ],
+        },
+        uiHints: { label: "Platform", inputType: "select" },
+      },
+      {
+        slug: "sourceRoute",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Source Route", inputType: "text" },
+      },
+      {
+        slug: "authorUsername",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Author Username", inputType: "text" },
+      },
+      {
+        slug: "authorDisplayName",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Author Name", inputType: "text" },
+      },
+      {
+        slug: "authorUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Author Profile", inputType: "url" },
+      },
+      {
+        slug: "fetchedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Fetched", inputType: "datetime-local" },
+      },
+      {
+        slug: "topics",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Topics", inputType: "tags" },
+      },
+      {
+        slug: "relevanceScore",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0, max: 1 },
+        uiHints: { label: "Relevance", inputType: "number" },
+      },
+      {
+        slug: "sentiment",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["positive", "neutral", "negative", "mixed"],
+        },
+        uiHints: { label: "Sentiment", inputType: "select" },
+      },
+      {
+        slug: "importance",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0, max: 1 },
+        uiHints: { label: "Importance", inputType: "number" },
+      },
+      {
+        slug: "rawData",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Raw Data", inputType: "textarea" },
+      },
+      {
+        slug: "capturedFromFeed",
+        valueType: PropertyValueType.BOOLEAN,
+        constraints: {},
+        uiHints: { label: "Captured from Feed", inputType: "checkbox" },
+      },
+      {
+        slug: "captureMethod",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["manual", "automation", "ai_suggestion"],
+        },
+        uiHints: { label: "Capture Method", inputType: "select" },
+      },
+      {
+        slug: "autoLinkedEntities",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Linked Entities", inputType: "tags" },
+      },
+      {
+        slug: "viewCount",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: { label: "Views", inputType: "number" },
+      },
+      {
+        slug: "captureCount",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: { label: "Captures", inputType: "number" },
+      },
       {
         slug: "focusAreas",
         valueType: PropertyValueType.ARRAY,
@@ -569,6 +683,18 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           description: "Pinned conversation moment",
           hideFromCreate: true, // created programmatically when pinning messages
         },
+      },
+      // Signal Item — external content from signal feeds
+      {
+        slug: "signal_item",
+        displayName: "Signal Item",
+        uiHints: {
+          icon: "signal",
+          color: "#06B6D4",
+          description:
+            "External content captured from signal feeds (Twitter, Reddit, Hacker News, etc.)",
+        },
+        parentSlug: "bookmark",
       },
     ];
 
@@ -854,6 +980,65 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "threadTitle", required: false, displayOrder: 4 },
           { slug: "content", required: false, displayOrder: 5 },
           { slug: "tags", required: false, displayOrder: 6 },
+        ],
+      },
+      // Signal Item — external content from signal feeds
+      {
+        profileSlug: "signal_item",
+        propertySlugs: [
+          { slug: "title", required: false, displayOrder: 0 },
+          { slug: "url", required: true, displayOrder: 1 },
+          { slug: "domain", required: false, displayOrder: 2 },
+          { slug: "sourcePlatform", required: true, displayOrder: 3 },
+          { slug: "sourceRoute", required: true, displayOrder: 4 },
+          { slug: "authorUsername", required: false, displayOrder: 5 },
+          { slug: "authorDisplayName", required: false, displayOrder: 6 },
+          { slug: "authorUrl", required: false, displayOrder: 7 },
+          { slug: "publishedAt", required: true, displayOrder: 8 },
+          { slug: "fetchedAt", required: false, displayOrder: 9 },
+          { slug: "aiSummary", required: false, displayOrder: 10 },
+          {
+            slug: "topics",
+            required: true,
+            defaultValue: [],
+            displayOrder: 11,
+          },
+          {
+            slug: "relevanceScore",
+            required: false,
+            defaultValue: 0.5,
+            displayOrder: 12,
+          },
+          { slug: "sentiment", required: false, displayOrder: 13 },
+          { slug: "importance", required: false, displayOrder: 14 },
+          { slug: "rawData", required: false, displayOrder: 15 },
+          {
+            slug: "capturedFromFeed",
+            required: false,
+            defaultValue: false,
+            displayOrder: 16,
+          },
+          { slug: "captureMethod", required: false, displayOrder: 17 },
+          {
+            slug: "autoLinkedEntities",
+            required: false,
+            defaultValue: [],
+            displayOrder: 18,
+          },
+          {
+            slug: "viewCount",
+            required: false,
+            defaultValue: 0,
+            displayOrder: 19,
+          },
+          {
+            slug: "captureCount",
+            required: false,
+            defaultValue: 0,
+            displayOrder: 20,
+          },
+          { slug: "tags", required: false, displayOrder: 21 },
+          { slug: "description", required: false, displayOrder: 22 },
         ],
       },
     ];
