@@ -38,12 +38,10 @@ import { intelligenceServices } from "@synap/database/schema";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import { invalidateSyncPeerCache } from "../utils/sync-realtime-hook.js";
 import {
-  incrementGeneration,
   recordPeerGeneration,
   getSyncGenerationState,
   getSyncGenerationRow,
   promoteToPrimary,
-  invalidateSyncGenerationCache,
 } from "../utils/split-brain-service.js";
 
 const logger = createLogger({ module: "sync-receive" });

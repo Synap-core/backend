@@ -138,6 +138,7 @@ export interface WorkspaceDefinitionInput {
       icon?: string;
       color?: string;
       description?: string;
+      hideFromCreate?: boolean;
     };
     // CP registry format (alternative to `properties`)
     propertyDefs?: Array<{
