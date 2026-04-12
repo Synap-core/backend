@@ -103,6 +103,9 @@ export {
   type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
 
+// Export workspace definitions (built-in presets for createWorkspaceFromDefinition)
+export { DEVOPS_DEFINITION } from "./definitions/devops-definition.js";
+
 // Export document types for type safety
 export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
 export {

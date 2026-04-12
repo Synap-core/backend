@@ -9,6 +9,7 @@ overrides:
   drizzle-zod: 0.8.3
   zod: 4.3.6
   zod-to-json-schema: 3.23.2
+  axios: '>=1.15.0'
   fast-xml-parser: '>=5.5.6'
   socket.io-parser: '>=4.2.6'
   path-to-regexp: '>=8.4.0'
@@ -891,8 +892,8 @@ importers:
         specifier: ^11.8.1
         version: 11.8.1(typescript@5.9.3)
       axios:
-        specifier: ^1.14.0
-        version: 1.14.0
+        specifier: '>=1.15.0'
+        version: 1.15.0
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -4165,8 +4166,8 @@ packages:
     resolution: {integrity: sha512-wvUjBtSGN7+7SjNpq/9M2Tg350UZD3q62IFZLbRAR1bSMlCo1ZaeW+BJ+D090e4hIIZLBcTDWe4Mh4jvUDajzQ==}
     engines: {node: '>= 0.4'}
 
-  axios@1.14.0:
-    resolution: {integrity: sha512-3Y8yrqLSwjuzpXuZ0oIYZ/XGgLwUIBU3uLvbcpb0pidD9ctpShJd43KSlEEkVQg6DS0G9NKyzOvBfUtDKEyHvQ==}
+  axios@1.15.0:
+    resolution: {integrity: sha512-wWyJDlAatxk30ZJer+GeCWS209sA42X+N5jU2jy6oHTp7ufw8uzUTVFBX9+wTfAlhiJXGS0Bq7X6efruWjuK9Q==}
 
   balanced-match@1.0.2:
     resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
@@ -9914,13 +9915,13 @@ snapshots:
 
   '@ory/hydra-client@2.2.1':
     dependencies:
-      axios: 1.14.0
+      axios: 1.15.0
     transitivePeerDependencies:
       - debug
 
   '@ory/kratos-client@1.3.8':
     dependencies:
-      axios: 1.14.0
+      axios: 1.15.0
     transitivePeerDependencies:
       - debug
 
@@ -11452,7 +11453,7 @@ snapshots:
     dependencies:
       possible-typed-array-names: 1.1.0
 
-  axios@1.14.0:
+  axios@1.15.0:
     dependencies:
       follow-redirects: 1.15.11
       form-data: 4.0.5
@@ -14602,7 +14603,7 @@ snapshots:
   typesense@1.8.2(@babel/runtime@7.28.6):
     dependencies:
       '@babel/runtime': 7.28.6
-      axios: 1.14.0
+      axios: 1.15.0
       loglevel: 1.9.2
     transitivePeerDependencies:
       - debug
