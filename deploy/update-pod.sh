@@ -1,14 +1,22 @@
 #!/bin/sh
 #
-# Pod Self-Update Script — Near-Zero Downtime
+# Pod Self-Update Script — Canary-First, Near-Zero Downtime on Failure
 #
-# Called by the pod-agent. The old backend keeps serving while:
-# 1. New image is pulled (no downtime)
-# 2. Migrations run (backward-compatible, old backend still serves)
-# 3. New containers start alongside old ones
-# 4. Health check on new containers
-# 5. Old containers stopped (Caddy auto-detects via Docker network)
-# 6. Old images cleaned up (keep last 3)
+# Key improvement over naive force-recreate:
+#   The new image is validated in a sidecar (canary) container BEFORE the
+#   production container is ever touched. If the image fails to start,
+#   fails schema coherence, or fails health checks → the canary is removed
+#   and the old backend keeps serving. No downtime on bad deploys.
+#
+# Flow:
+#   1. Pull new image          (old backend still serving)
+#   2. Run migrations          (backward-compat; old backend still serves)
+#   3. Start backend-canary    (old backend still serving, canary on same net)
+#   4. Health check canary     (up to 3 min; if fails → abort, old untouched)
+#   5. Stop canary             (image is guaranteed good)
+#   6. Force-recreate backend  (~2-3s gap; image already verified)
+#   7. Verify production       (fast, ~2 min budget; image pre-verified)
+#   8. Clean up old images
 #
 # Usage: update-pod.sh <version-tag>
 #
@@ -17,20 +25,18 @@ set -e
 VERSION="$1"
 CD="$(dirname "$0")"
 COMPOSE="docker compose -p synap -f $CD/docker-compose.yml"
+CANARY_NAME="synap-backend-canary"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
+die() { log "ERROR: $*"; exit 1; }
 
-[ -z "$VERSION" ] && { log "ERROR: version required"; exit 1; }
+[ -z "$VERSION" ] && die "version required"
 log "=== Updating to ${VERSION} ==="
 
-# Save current version for rollback
+# Save current version for rollback (in case production swap still fails)
 PREV_VERSION=$(grep "^BACKEND_VERSION=" "$CD/.env" 2>/dev/null | cut -d= -f2 || echo "")
 
-# ─── Step 1: Set version and pull (old backend still serving) ──────────────
-# Map version tag to Docker image tag:
-#   main-<sha>  → "main" (SHA-specific tags are for audit; :main is the pull target)
-#   v1.2.3      → "v1.2.3" (exact release tag)
-#   latest/main → "main" (safe default)
+# ─── Step 1: Set version and pull (old backend still serving) ─────────────────
 case "$VERSION" in
   main-*|main) DOCKER_TAG="main" ;;
   v*)          DOCKER_TAG="$VERSION" ;;
@@ -43,86 +49,122 @@ grep -q "^BACKEND_VERSION=" "$CD/.env" \
   || echo "BACKEND_VERSION=${DOCKER_TAG}" >> "$CD/.env"
 
 log "Pulling new images (backend still serving)..."
-$COMPOSE pull backend realtime backend-migrate 2>&1 || {
-  log "ERROR: Image pull failed"
+if ! $COMPOSE pull backend realtime backend-migrate 2>&1; then
+  log "ERROR: Image pull failed — restoring previous version, old backend untouched"
+  [ -n "$PREV_VERSION" ] && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${PREV_VERSION}/" "$CD/.env"
   exit 1
-}
+fi
 
-# ─── Step 1b: Ensure Kratos/Hydra databases exist ─────────────────────────
-# The docker-entrypoint-initdb.d script only runs on first postgres init.
-# If postgres was recreated with an existing volume, these databases may be
-# missing. Idempotent — harmless if they already exist.
+# ─── Step 1b: Ensure Kratos/Hydra databases exist ─────────────────────────────
 log "Ensuring kratos and hydra databases exist..."
 $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" 2>/dev/null || true
 $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" 2>/dev/null || true
 
-# ─── Step 2: Run migrations (old backend still serving) ────────────────────
-# Migrations MUST be backward-compatible (additive only: new columns, new tables).
-# The old backend continues serving while migrations run.
+# ─── Step 2: Run migrations (old backend still serving) ───────────────────────
 log "Running migrations (old backend still serving)..."
-$COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration non-zero"
+$COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration exited non-zero"
 
-# ─── Step 3: Recreate containers with new image ───────────────────────────
-# --force-recreate ensures Docker replaces the container even if the compose
-# definition hasn't changed (only the image digest changed).
-# There's a brief ~2-3s gap while the container restarts. Caddy will return
-# 502 during this window. For true zero-downtime we'd need Docker Swarm or
-# a sidecar, but this is good enough for single-pod deployments.
-log "Restarting with new image (force-recreate)..."
+# ─── Step 3: Start canary with new image (old backend still serving) ──────────
+# Clean up any canary left over from a previous failed run
+log "Cleaning up any previous canary..."
+docker stop "$CANARY_NAME" 2>/dev/null || true
+docker rm   "$CANARY_NAME" 2>/dev/null || true
+
+log "Starting canary with new image (old backend still serving)..."
+if ! $COMPOSE --profile canary up -d backend-canary 2>&1; then
+  log "ERROR: Failed to start canary container — cleaning up, old backend untouched"
+  docker stop "$CANARY_NAME" 2>/dev/null || true
+  docker rm   "$CANARY_NAME" 2>/dev/null || true
+  [ -n "$PREV_VERSION" ] && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${PREV_VERSION}/" "$CD/.env"
+  exit 1
+fi
+
+# ─── Step 4: Health check canary — abort if it fails ─────────────────────────
+# We check the canary via docker exec → node HTTP (no wget/curl in alpine image).
+# Runs against localhost inside the canary container to avoid DNS collision with
+# the production `backend` alias. Up to 3 minutes (18 × 10s).
+log "Waiting for canary health check (up to 3 min)..."
+CANARY_OK=false
+for i in $(seq 1 18); do
+  sleep 10
+  if docker exec "$CANARY_NAME" \
+      node -e "const r=require('http').get('http://localhost:4000/health',(s)=>{process.exit(s.statusCode===200?0:1)});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))" \
+      2>/dev/null; then
+    CANARY_OK=true
+    log "Canary healthy after ${i}0s — image is good"
+    break
+  fi
+  log "Canary health attempt $i/18..."
+done
+
+if [ "$CANARY_OK" != "true" ]; then
+  log "ERROR: Canary failed health check after 3 minutes"
+  log "Removing canary — old backend was never touched and remains up"
+  docker stop "$CANARY_NAME" 2>/dev/null || true
+  docker rm   "$CANARY_NAME" 2>/dev/null || true
+  # Restore .env so the next attempt starts fresh
+  [ -n "$PREV_VERSION" ] && sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${PREV_VERSION}/" "$CD/.env"
+  exit 1
+fi
+
+# ─── Step 5: Canary verified — stop it, swap production ───────────────────────
+# We KNOW the image starts and passes health checks. The only remaining gap is
+# the ~2-3s while Docker recreates the production container. Caddy returns 502
+# during this window, which is unavoidable on a single-process pod.
+log "Canary passed — stopping canary, swapping production to new image..."
+docker stop "$CANARY_NAME" 2>/dev/null || true
+docker rm   "$CANARY_NAME" 2>/dev/null || true
+
+log "Recreating production backend + realtime with new image (~2-3s gap)..."
 $COMPOSE up -d --force-recreate --remove-orphans backend realtime 2>&1
 
-# ─── Step 4: Health check ─────────────────────────────────────────────────
-log "Waiting for health check..."
+# ─── Step 6: Verify production (fast — image already known-good) ──────────────
+# Budget: 2 min (12 × 10s). Should pass within the first 1-2 attempts since
+# the image was already validated by the canary. Rollback is a last resort here.
+log "Verifying production health (up to 2 min)..."
 OK=false
-for i in $(seq 1 30); do
+for i in $(seq 1 12); do
   sleep 10
   if wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null; then
     OK=true
-    log "Health check passed after ${i}0 seconds"
+    log "Production healthy after ${i}0s"
     break
   fi
-  log "Health check attempt $i/30..."
+  log "Production health attempt $i/12..."
 done
 
 if [ "$OK" != "true" ]; then
-  log "ERROR: Health check failed after 5 minutes"
+  log "ERROR: Production health check failed — this is unexpected after canary passed"
+  log "The image started in canary but not in production (race condition / env diff?)"
 
   if [ -n "$PREV_VERSION" ] && [ "$PREV_VERSION" != "$DOCKER_TAG" ]; then
-    log "Rolling back to previous version: $PREV_VERSION"
+    log "Rolling back to ${PREV_VERSION}..."
     sed -i "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${PREV_VERSION}/" "$CD/.env"
     $COMPOSE up -d --force-recreate --remove-orphans backend realtime 2>&1
 
-    # Wait for rollback health
     ROLLBACK_OK=false
     for j in $(seq 1 12); do
       sleep 10
       if wget -q -O /dev/null --timeout=5 "http://backend:4000/health" 2>/dev/null; then
         ROLLBACK_OK=true
-        log "Rollback health check passed"
+        log "Rollback to ${PREV_VERSION} successful"
         break
       fi
     done
 
-    if [ "$ROLLBACK_OK" = "true" ]; then
-      log "=== Rolled back to ${PREV_VERSION} ==="
-    else
-      log "ERROR: Rollback also failed — pod may be down"
-    fi
+    [ "$ROLLBACK_OK" != "true" ] && log "ERROR: Rollback also failed — pod may be down"
   fi
 
   exit 1
 fi
 
-# ─── Step 5: Clean up old images (keep last 3) ────────────────────────────
+# ─── Step 7: Clean up old images (keep last 3) ────────────────────────────────
 log "Cleaning up old images..."
-# List all backend images sorted by creation date, skip the 3 newest, remove the rest
 docker images "ghcr.io/synap-core/backend" --format "{{.ID}} {{.CreatedAt}}" \
   | sort -k2 -r \
   | tail -n +4 \
   | awk '{print $1}' \
   | xargs -r docker rmi 2>/dev/null || true
-
-# Also prune dangling images from the pull
 docker image prune -f 2>/dev/null || true
 
 FREED=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1)
@@ -130,4 +172,3 @@ log "Cleanup done (reclaimable: ${FREED:-unknown})"
 
 log "=== Update to ${VERSION} complete ==="
 exit 0
-
