@@ -95,5 +95,9 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("sync-pull", "* * * * *", {});
   logger.info("Registered cron: sync-pull (every 60s)");
 
+  // Feed scheduler (every minute — checks for due feeds and enqueues execution jobs)
+  await boss.schedule("feed-scheduler", "* * * * *", {});
+  logger.info("Registered cron: feed-scheduler (every 1min)");
+
   logger.info("All cron schedules registered");
 }

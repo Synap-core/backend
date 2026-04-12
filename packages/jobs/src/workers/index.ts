@@ -72,6 +72,9 @@ import {
   handleLinkedInBulkImport,
   LINKEDIN_BULK_IMPORT_QUEUE,
 } from "./linkedin-bulk-import.js";
+import { handleFeedScheduler } from "./feed-scheduler.js";
+import { handleFeedRSSExecute } from "./feed-rss-executor.js";
+import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -117,6 +120,9 @@ const ALL_QUEUES = [
   SYNC_PULL_QUEUE,
   TELEGRAM_BULK_IMPORT_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
+  "feed-scheduler",
+  "feed-rss-execute",
+  "feed-proactive-execute",
 ];
 
 /**
@@ -341,6 +347,22 @@ export async function registerAllWorkers(): Promise<void> {
     handleLinkedInBulkImport(job)
   );
   logger.info("Registered worker: linkedin-bulk-import");
+
+  // Feed scheduler (cron: every minute — schedules due feed executions)
+  await boss.work("feed-scheduler", async () => handleFeedScheduler());
+  logger.info("Registered worker: feed-scheduler");
+
+  // Feed RSS executor (on-demand — executes RSS feed fetch and post)
+  await boss.work("feed-rss-execute", async ([job]: any[]) =>
+    handleFeedRSSExecute(job)
+  );
+  logger.info("Registered worker: feed-rss-execute");
+
+  // Feed proactive executor (on-demand — executes proactive digest generation)
+  await boss.work("feed-proactive-execute", async ([job]: any[]) =>
+    handleFeedProactiveExecute(job)
+  );
+  logger.info("Registered worker: feed-proactive-execute");
 
   logger.info("All workers registered");
 }

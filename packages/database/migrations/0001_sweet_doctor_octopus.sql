@@ -63,14 +63,23 @@ CREATE TABLE IF NOT EXISTS "signal_subscriptions" (
 	CONSTRAINT "signal_subscriptions_user_id_workspace_id_topic_source_platform_source_route_pk" PRIMARY KEY("user_id","workspace_id","topic","source_platform","source_route")
 );
 --> statement-breakpoint
+ALTER TABLE "signal_auto_links" DROP CONSTRAINT IF EXISTS "signal_auto_links_signal_entity_id_entities_id_fk";
 ALTER TABLE "signal_auto_links" ADD CONSTRAINT "signal_auto_links_signal_entity_id_entities_id_fk" FOREIGN KEY ("signal_entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_auto_links" DROP CONSTRAINT IF EXISTS "signal_auto_links_linked_entity_id_entities_id_fk";
 ALTER TABLE "signal_auto_links" ADD CONSTRAINT "signal_auto_links_linked_entity_id_entities_id_fk" FOREIGN KEY ("linked_entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_classifications" DROP CONSTRAINT IF EXISTS "signal_classifications_user_id_users_id_fk";
 ALTER TABLE "signal_classifications" ADD CONSTRAINT "signal_classifications_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_classifications" DROP CONSTRAINT IF EXISTS "signal_classifications_workspace_id_workspaces_id_fk";
 ALTER TABLE "signal_classifications" ADD CONSTRAINT "signal_classifications_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_classifications" DROP CONSTRAINT IF EXISTS "signal_classifications_source_signal_id_entities_id_fk";
 ALTER TABLE "signal_classifications" ADD CONSTRAINT "signal_classifications_source_signal_id_entities_id_fk" FOREIGN KEY ("source_signal_id") REFERENCES "public"."entities"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_fetch_history" DROP CONSTRAINT IF EXISTS "signal_fetch_history_user_id_users_id_fk";
 ALTER TABLE "signal_fetch_history" ADD CONSTRAINT "signal_fetch_history_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_fetch_history" DROP CONSTRAINT IF EXISTS "signal_fetch_history_workspace_id_workspaces_id_fk";
 ALTER TABLE "signal_fetch_history" ADD CONSTRAINT "signal_fetch_history_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_subscriptions" DROP CONSTRAINT IF EXISTS "signal_subscriptions_user_id_users_id_fk";
 ALTER TABLE "signal_subscriptions" ADD CONSTRAINT "signal_subscriptions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "signal_subscriptions" DROP CONSTRAINT IF EXISTS "signal_subscriptions_workspace_id_workspaces_id_fk";
 ALTER TABLE "signal_subscriptions" ADD CONSTRAINT "signal_subscriptions_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "signal_auto_links_signal_idx" ON "signal_auto_links" USING btree ("signal_entity_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "signal_auto_links_linked_idx" ON "signal_auto_links" USING btree ("linked_entity_id");--> statement-breakpoint

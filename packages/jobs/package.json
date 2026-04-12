@@ -10,6 +10,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./migrations": {
+      "types": "./dist/migrations/index.d.ts",
+      "import": "./dist/migrations/index.js",
+      "default": "./dist/migrations/index.js"
+    },
     "./workers/*.js": {
       "types": "./dist/workers/*.d.ts",
       "import": "./dist/workers/*.js"
@@ -24,7 +29,10 @@
     "test": "vitest run",
     "test:unit": "vitest run -c vitest.unit.config.ts",
     "dev": "tsx src/dev.ts",
-    "index-entities": "tsx src/scripts/index-existing-entities.ts"
+    "index-entities": "tsx src/scripts/index-existing-entities.ts",
+    "migrate:feeds": "tsx src/migrations/run-feed-migrations.ts",
+    "migrate:feeds:dry-run": "tsx src/migrations/run-feed-migrations.ts --dry-run",
+    "migrate:feeds:rollback": "tsx src/migrations/run-feed-migrations.ts --rollback"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",

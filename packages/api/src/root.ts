@@ -46,6 +46,7 @@ import { connectorsRouter } from "./routers/connectors-trpc.js";
 import { notifCenterRouter } from "./routers/notif-center.js";
 import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
+import { feedsRouter } from "./routers/feeds.js";
 
 /**
  * Core API Router
@@ -99,6 +100,7 @@ export const coreRouter = router({
   notifCenter: notifCenterRouter,
   proactive: proactiveRouter,
   sync: syncManagementRouter,
+  feeds: feedsRouter,
 });
 
 export type AppRouter = typeof coreRouter;

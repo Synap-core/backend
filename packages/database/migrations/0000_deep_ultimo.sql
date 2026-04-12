@@ -1126,80 +1126,155 @@ CREATE TABLE IF NOT EXISTS "sync_generation" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "entities" DROP CONSTRAINT IF EXISTS "entities_profile_id_profiles_id_fk";
 ALTER TABLE "entities" ADD CONSTRAINT "entities_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entities" DROP CONSTRAINT IF EXISTS "entities_document_id_documents_id_fk";
 ALTER TABLE "entities" ADD CONSTRAINT "entities_document_id_documents_id_fk" FOREIGN KEY ("document_id") REFERENCES "public"."documents"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_vectors" DROP CONSTRAINT IF EXISTS "entity_vectors_entity_id_entities_id_fk";
 ALTER TABLE "entity_vectors" ADD CONSTRAINT "entity_vectors_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "document_sessions" DROP CONSTRAINT IF EXISTS "document_sessions_document_id_documents_id_fk";
 ALTER TABLE "document_sessions" ADD CONSTRAINT "document_sessions_document_id_documents_id_fk" FOREIGN KEY ("document_id") REFERENCES "public"."documents"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "document_versions" DROP CONSTRAINT IF EXISTS "document_versions_document_id_documents_id_fk";
 ALTER TABLE "document_versions" ADD CONSTRAINT "document_versions_document_id_documents_id_fk" FOREIGN KEY ("document_id") REFERENCES "public"."documents"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "relations" DROP CONSTRAINT IF EXISTS "relations_source_entity_id_entities_id_fk";
 ALTER TABLE "relations" ADD CONSTRAINT "relations_source_entity_id_entities_id_fk" FOREIGN KEY ("source_entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "relations" DROP CONSTRAINT IF EXISTS "relations_target_entity_id_entities_id_fk";
 ALTER TABLE "relations" ADD CONSTRAINT "relations_target_entity_id_entities_id_fk" FOREIGN KEY ("target_entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_channel_id_channels_id_fk";
 ALTER TABLE "messages" ADD CONSTRAINT "messages_channel_id_channels_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."channels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_inbox_item_id_inbox_items_id_fk";
 ALTER TABLE "messages" ADD CONSTRAINT "messages_inbox_item_id_inbox_items_id_fk" FOREIGN KEY ("inbox_item_id") REFERENCES "public"."inbox_items"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "messages" DROP CONSTRAINT IF EXISTS "messages_session_id_sessions_id_fk";
 ALTER TABLE "messages" ADD CONSTRAINT "messages_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "webhook_deliveries" DROP CONSTRAINT IF EXISTS "webhook_deliveries_subscription_id_webhook_subscriptions_id_fk";
 ALTER TABLE "webhook_deliveries" ADD CONSTRAINT "webhook_deliveries_subscription_id_webhook_subscriptions_id_fk" FOREIGN KEY ("subscription_id") REFERENCES "public"."webhook_subscriptions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "webhook_deliveries" DROP CONSTRAINT IF EXISTS "webhook_deliveries_event_id_events_id_fk";
 ALTER TABLE "webhook_deliveries" ADD CONSTRAINT "webhook_deliveries_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_context_items" DROP CONSTRAINT IF EXISTS "channel_context_items_channel_id_channels_id_fk";
 ALTER TABLE "channel_context_items" ADD CONSTRAINT "channel_context_items_channel_id_channels_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."channels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_context_items" DROP CONSTRAINT IF EXISTS "channel_context_items_source_message_id_messages_id_fk";
 ALTER TABLE "channel_context_items" ADD CONSTRAINT "channel_context_items_source_message_id_messages_id_fk" FOREIGN KEY ("source_message_id") REFERENCES "public"."messages"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_connections" DROP CONSTRAINT IF EXISTS "channel_connections_user_id_users_id_fk";
 ALTER TABLE "channel_connections" ADD CONSTRAINT "channel_connections_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_connections" DROP CONSTRAINT IF EXISTS "channel_connections_workspace_id_workspaces_id_fk";
 ALTER TABLE "channel_connections" ADD CONSTRAINT "channel_connections_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_connections" DROP CONSTRAINT IF EXISTS "channel_connections_default_channel_id_channels_id_fk";
 ALTER TABLE "channel_connections" ADD CONSTRAINT "channel_connections_default_channel_id_channels_id_fk" FOREIGN KEY ("default_channel_id") REFERENCES "public"."channels"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_link_tokens" DROP CONSTRAINT IF EXISTS "channel_link_tokens_user_id_users_id_fk";
 ALTER TABLE "channel_link_tokens" ADD CONSTRAINT "channel_link_tokens_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_link_tokens" DROP CONSTRAINT IF EXISTS "channel_link_tokens_workspace_id_workspaces_id_fk";
 ALTER TABLE "channel_link_tokens" ADD CONSTRAINT "channel_link_tokens_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "channel_link_tokens" DROP CONSTRAINT IF EXISTS "channel_link_tokens_default_channel_id_channels_id_fk";
 ALTER TABLE "channel_link_tokens" ADD CONSTRAINT "channel_link_tokens_default_channel_id_channels_id_fk" FOREIGN KEY ("default_channel_id") REFERENCES "public"."channels"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "roles" DROP CONSTRAINT IF EXISTS "roles_workspace_id_workspaces_id_fk";
 ALTER TABLE "roles" ADD CONSTRAINT "roles_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_enrichments" DROP CONSTRAINT IF EXISTS "entity_enrichments_entity_id_entities_id_fk";
 ALTER TABLE "entity_enrichments" ADD CONSTRAINT "entity_enrichments_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_relationships" DROP CONSTRAINT IF EXISTS "entity_relationships_source_entity_id_entities_id_fk";
 ALTER TABLE "entity_relationships" ADD CONSTRAINT "entity_relationships_source_entity_id_entities_id_fk" FOREIGN KEY ("source_entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_relationships" DROP CONSTRAINT IF EXISTS "entity_relationships_target_entity_id_entities_id_fk";
 ALTER TABLE "entity_relationships" ADD CONSTRAINT "entity_relationships_target_entity_id_entities_id_fk" FOREIGN KEY ("target_entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "intelligence_commands" DROP CONSTRAINT IF EXISTS "intelligence_commands_workspace_id_workspaces_id_fk";
 ALTER TABLE "intelligence_commands" ADD CONSTRAINT "intelligence_commands_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "command_runs" DROP CONSTRAINT IF EXISTS "command_runs_thread_id_channels_id_fk";
 ALTER TABLE "command_runs" ADD CONSTRAINT "command_runs_thread_id_channels_id_fk" FOREIGN KEY ("thread_id") REFERENCES "public"."channels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "command_runs" DROP CONSTRAINT IF EXISTS "command_runs_command_id_intelligence_commands_id_fk";
 ALTER TABLE "command_runs" ADD CONSTRAINT "command_runs_command_id_intelligence_commands_id_fk" FOREIGN KEY ("command_id") REFERENCES "public"."intelligence_commands"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "invites" DROP CONSTRAINT IF EXISTS "invites_workspace_id_workspaces_id_fk";
 ALTER TABLE "invites" ADD CONSTRAINT "invites_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workspace_members" DROP CONSTRAINT IF EXISTS "workspace_members_workspace_id_workspaces_id_fk";
 ALTER TABLE "workspace_members" ADD CONSTRAINT "workspace_members_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_members" DROP CONSTRAINT IF EXISTS "project_members_project_id_projects_id_fk";
 ALTER TABLE "project_members" ADD CONSTRAINT "project_members_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "views" DROP CONSTRAINT IF EXISTS "views_workspace_id_workspaces_id_fk";
 ALTER TABLE "views" ADD CONSTRAINT "views_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "views" DROP CONSTRAINT IF EXISTS "views_scope_profile_ids_profiles_id_fk";
 ALTER TABLE "views" ADD CONSTRAINT "views_scope_profile_ids_profiles_id_fk" FOREIGN KEY ("scope_profile_ids") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "views" DROP CONSTRAINT IF EXISTS "views_document_id_documents_id_fk";
 ALTER TABLE "views" ADD CONSTRAINT "views_document_id_documents_id_fk" FOREIGN KEY ("document_id") REFERENCES "public"."documents"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "proposals" DROP CONSTRAINT IF EXISTS "proposals_thread_id_channels_id_fk";
 ALTER TABLE "proposals" ADD CONSTRAINT "proposals_thread_id_channels_id_fk" FOREIGN KEY ("thread_id") REFERENCES "public"."channels"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "proposals" DROP CONSTRAINT IF EXISTS "proposals_command_run_id_command_runs_id_fk";
 ALTER TABLE "proposals" ADD CONSTRAINT "proposals_command_run_id_command_runs_id_fk" FOREIGN KEY ("command_run_id") REFERENCES "public"."command_runs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "proposals" DROP CONSTRAINT IF EXISTS "proposals_source_message_id_messages_id_fk";
 ALTER TABLE "proposals" ADD CONSTRAINT "proposals_source_message_id_messages_id_fk" FOREIGN KEY ("source_message_id") REFERENCES "public"."messages"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "proposals" DROP CONSTRAINT IF EXISTS "proposals_agent_user_id_users_id_fk";
 ALTER TABLE "proposals" ADD CONSTRAINT "proposals_agent_user_id_users_id_fk" FOREIGN KEY ("agent_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_templates" DROP CONSTRAINT IF EXISTS "entity_templates_workspace_id_workspaces_id_fk";
 ALTER TABLE "entity_templates" ADD CONSTRAINT "entity_templates_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "skills" DROP CONSTRAINT IF EXISTS "skills_workspace_id_workspaces_id_fk";
 ALTER TABLE "skills" ADD CONSTRAINT "skills_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "skill_triggers" DROP CONSTRAINT IF EXISTS "skill_triggers_skill_id_skills_id_fk";
 ALTER TABLE "skill_triggers" ADD CONSTRAINT "skill_triggers_skill_id_skills_id_fk" FOREIGN KEY ("skill_id") REFERENCES "public"."skills"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "skill_triggers" DROP CONSTRAINT IF EXISTS "skill_triggers_workspace_id_workspaces_id_fk";
 ALTER TABLE "skill_triggers" ADD CONSTRAINT "skill_triggers_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "background_tasks" DROP CONSTRAINT IF EXISTS "background_tasks_workspace_id_workspaces_id_fk";
 ALTER TABLE "background_tasks" ADD CONSTRAINT "background_tasks_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "automation_runs" DROP CONSTRAINT IF EXISTS "automation_runs_automation_id_automations_id_fk";
 ALTER TABLE "automation_runs" ADD CONSTRAINT "automation_runs_automation_id_automations_id_fk" FOREIGN KEY ("automation_id") REFERENCES "public"."automations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "automation_step_runs" DROP CONSTRAINT IF EXISTS "automation_step_runs_run_id_automation_runs_id_fk";
 ALTER TABLE "automation_step_runs" ADD CONSTRAINT "automation_step_runs_run_id_automation_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."automation_runs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "automations" DROP CONSTRAINT IF EXISTS "automations_workspace_id_workspaces_id_fk";
 ALTER TABLE "automations" ADD CONSTRAINT "automations_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "message_links" DROP CONSTRAINT IF EXISTS "message_links_message_id_messages_id_fk";
 ALTER TABLE "message_links" ADD CONSTRAINT "message_links_message_id_messages_id_fk" FOREIGN KEY ("message_id") REFERENCES "public"."messages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "agent_configs" DROP CONSTRAINT IF EXISTS "agent_configs_workspace_id_workspaces_id_fk";
 ALTER TABLE "agent_configs" ADD CONSTRAINT "agent_configs_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "mcp_servers" DROP CONSTRAINT IF EXISTS "mcp_servers_workspace_id_workspaces_id_fk";
 ALTER TABLE "mcp_servers" ADD CONSTRAINT "mcp_servers_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "property_defs" DROP CONSTRAINT IF EXISTS "property_defs_profile_id_profiles_id_fk";
 ALTER TABLE "property_defs" ADD CONSTRAINT "property_defs_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "property_defs" DROP CONSTRAINT IF EXISTS "property_defs_workspace_id_workspaces_id_fk";
 ALTER TABLE "property_defs" ADD CONSTRAINT "property_defs_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "property_defs" DROP CONSTRAINT IF EXISTS "property_defs_relation_def_id_relation_defs_id_fk";
 ALTER TABLE "property_defs" ADD CONSTRAINT "property_defs_relation_def_id_relation_defs_id_fk" FOREIGN KEY ("relation_def_id") REFERENCES "public"."relation_defs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "property_defs" DROP CONSTRAINT IF EXISTS "property_defs_target_profile_id_profiles_id_fk";
 ALTER TABLE "property_defs" ADD CONSTRAINT "property_defs_target_profile_id_profiles_id_fk" FOREIGN KEY ("target_profile_id") REFERENCES "public"."profiles"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_workspace_access" DROP CONSTRAINT IF EXISTS "profile_workspace_access_profile_id_profiles_id_fk";
 ALTER TABLE "profile_workspace_access" ADD CONSTRAINT "profile_workspace_access_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_workspace_access" DROP CONSTRAINT IF EXISTS "profile_workspace_access_workspace_id_workspaces_id_fk";
 ALTER TABLE "profile_workspace_access" ADD CONSTRAINT "profile_workspace_access_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profiles" DROP CONSTRAINT IF EXISTS "profiles_workspace_id_workspaces_id_fk";
 ALTER TABLE "profiles" ADD CONSTRAINT "profiles_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_properties" DROP CONSTRAINT IF EXISTS "profile_properties_profile_id_profiles_id_fk";
 ALTER TABLE "profile_properties" ADD CONSTRAINT "profile_properties_profile_id_profiles_id_fk" FOREIGN KEY ("profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_properties" DROP CONSTRAINT IF EXISTS "profile_properties_property_def_id_property_defs_id_fk";
 ALTER TABLE "profile_properties" ADD CONSTRAINT "profile_properties_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_property_index" DROP CONSTRAINT IF EXISTS "entity_property_index_entity_id_entities_id_fk";
 ALTER TABLE "entity_property_index" ADD CONSTRAINT "entity_property_index_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_property_index" DROP CONSTRAINT IF EXISTS "entity_property_index_property_def_id_property_defs_id_fk";
 ALTER TABLE "entity_property_index" ADD CONSTRAINT "entity_property_index_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "relation_defs" DROP CONSTRAINT IF EXISTS "relation_defs_workspace_id_workspaces_id_fk";
 ALTER TABLE "relation_defs" ADD CONSTRAINT "relation_defs_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_relations" DROP CONSTRAINT IF EXISTS "profile_relations_source_profile_id_profiles_id_fk";
 ALTER TABLE "profile_relations" ADD CONSTRAINT "profile_relations_source_profile_id_profiles_id_fk" FOREIGN KEY ("source_profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_relations" DROP CONSTRAINT IF EXISTS "profile_relations_target_profile_id_profiles_id_fk";
 ALTER TABLE "profile_relations" ADD CONSTRAINT "profile_relations_target_profile_id_profiles_id_fk" FOREIGN KEY ("target_profile_id") REFERENCES "public"."profiles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_relations" DROP CONSTRAINT IF EXISTS "profile_relations_relation_def_id_relation_defs_id_fk";
 ALTER TABLE "profile_relations" ADD CONSTRAINT "profile_relations_relation_def_id_relation_defs_id_fk" FOREIGN KEY ("relation_def_id") REFERENCES "public"."relation_defs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "profile_relations" DROP CONSTRAINT IF EXISTS "profile_relations_property_def_id_property_defs_id_fk";
 ALTER TABLE "profile_relations" ADD CONSTRAINT "profile_relations_property_def_id_property_defs_id_fk" FOREIGN KEY ("property_def_id") REFERENCES "public"."property_defs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "secret_audit_log" DROP CONSTRAINT IF EXISTS "secret_audit_log_secret_id_secrets_id_fk";
 ALTER TABLE "secret_audit_log" ADD CONSTRAINT "secret_audit_log_secret_id_secrets_id_fk" FOREIGN KEY ("secret_id") REFERENCES "public"."secrets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "secret_shares" DROP CONSTRAINT IF EXISTS "secret_shares_secret_id_secrets_id_fk";
 ALTER TABLE "secret_shares" ADD CONSTRAINT "secret_shares_secret_id_secrets_id_fk" FOREIGN KEY ("secret_id") REFERENCES "public"."secrets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "secret_tags" DROP CONSTRAINT IF EXISTS "secret_tags_secret_id_secrets_id_fk";
 ALTER TABLE "secret_tags" ADD CONSTRAINT "secret_tags_secret_id_secrets_id_fk" FOREIGN KEY ("secret_id") REFERENCES "public"."secrets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sessions" DROP CONSTRAINT IF EXISTS "sessions_channel_id_channels_id_fk";
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_channel_id_channels_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."channels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "compacted_states" DROP CONSTRAINT IF EXISTS "compacted_states_channel_id_channels_id_fk";
 ALTER TABLE "compacted_states" ADD CONSTRAINT "compacted_states_channel_id_channels_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."channels"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "compacted_states" DROP CONSTRAINT IF EXISTS "compacted_states_session_id_sessions_id_fk";
 ALTER TABLE "compacted_states" ADD CONSTRAINT "compacted_states_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "widget_definitions" DROP CONSTRAINT IF EXISTS "widget_definitions_workspace_id_workspaces_id_fk";
 ALTER TABLE "widget_definitions" ADD CONSTRAINT "widget_definitions_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_external_links" DROP CONSTRAINT IF EXISTS "entity_external_links_entity_id_entities_id_fk";
 ALTER TABLE "entity_external_links" ADD CONSTRAINT "entity_external_links_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "entity_identity_signals" DROP CONSTRAINT IF EXISTS "entity_identity_signals_entity_id_entities_id_fk";
 ALTER TABLE "entity_identity_signals" ADD CONSTRAINT "entity_identity_signals_entity_id_entities_id_fk" FOREIGN KEY ("entity_id") REFERENCES "public"."entities"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sync_conflicts" DROP CONSTRAINT IF EXISTS "sync_conflicts_sync_peer_id_sync_peers_id_fk";
 ALTER TABLE "sync_conflicts" ADD CONSTRAINT "sync_conflicts_sync_peer_id_sync_peers_id_fk" FOREIGN KEY ("sync_peer_id") REFERENCES "public"."sync_peers"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "sync_state" DROP CONSTRAINT IF EXISTS "sync_state_sync_peer_id_sync_peers_id_fk";
 ALTER TABLE "sync_state" ADD CONSTRAINT "sync_state_sync_peer_id_sync_peers_id_fk" FOREIGN KEY ("sync_peer_id") REFERENCES "public"."sync_peers"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_events_subject" ON "events" USING btree ("subject_type","subject_id","timestamp");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_events_user_type" ON "events" USING btree ("user_id","type");--> statement-breakpoint

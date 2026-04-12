@@ -88,3 +88,6 @@ export * from "./notifications/index.js";
 
 // Proactive AI Preferences
 export * from "./proactive/index.js";
+
+// Feed Types (RSS and Proactive)
+export * from "./feeds/index.js";
