@@ -17,6 +17,11 @@
 import { db, syncPeers, eq, or, and } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import {
+  incrementGeneration,
+  getSyncGenerationState,
+  recordPeerGeneration,
+} from "./split-brain-service.js";
 
 const logger = createLogger({ module: "sync-realtime-hook" });
 
@@ -139,6 +144,10 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
   const peers = await getEnabledPushPeers();
   if (peers.length === 0) return;
 
+  // Increment generation on each push cycle (tracks write epochs)
+  await incrementGeneration();
+  const localState = await getSyncGenerationState();
+
   // Serialize events once (shared across peers)
   const serializedEvents = batch.map((e) => ({
     id: e.id,
@@ -183,6 +192,8 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
               ? { Authorization: `Bearer ${peer.authToken}` }
               : {}),
             "X-Sync-Mode": "realtime",
+            "X-Sync-Generation": String(localState.generation),
+            "X-Sync-Role": localState.role,
           },
           body: JSON.stringify({
             events: eventsForPeer,
@@ -202,6 +213,15 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
               "Peer signalled backpressure — pausing real-time for 60s"
             );
             backpressureUntil.set(peer.id, Date.now() + BACKPRESSURE_PAUSE_MS);
+          }
+
+          // Process peer's generation from response
+          const peerGen =
+            typeof body.generation === "number" ? body.generation : 0;
+          const peerRole =
+            typeof body.role === "string" ? body.role : "unknown";
+          if (peerGen > 0) {
+            await recordPeerGeneration(peerGen, peerRole);
           }
         }
         // Non-200 is fine — polling will catch up

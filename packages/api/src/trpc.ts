@@ -23,6 +23,7 @@ import {
   statusCodeToTRPCCode,
 } from "./utils/error-mappers.js";
 import { auditLogMiddleware } from "./middleware/audit-log.js";
+import { readOnlyGuardMiddleware } from "./middleware/read-only-guard.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -108,6 +109,7 @@ export const protectedProcedure = publicProcedure
       },
     });
   })
+  .use(readOnlyGuardMiddleware)
   .use(auditLogMiddleware);
 
 /**

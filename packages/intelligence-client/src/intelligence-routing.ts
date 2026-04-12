@@ -188,9 +188,49 @@ export async function resolveIntelligenceService(
     logger.debug({ userId: ctx.userId }, "Step 2: No user IS preference set");
   }
 
-  // 3. Fallback to default service from environment
+  // 3. Failover: if no service matched so far, check if ANY active+enabled service
+  //    exists in the DB (e.g. synced from the primary pod via supplementary sync).
+  //    This covers replica pods that received IS metadata via sync but whose preferred
+  //    service lookup in steps 1-2 didn't match (no workspace/user preference set).
   logger.debug(
-    "Step 3: No DB-registered service matched — falling back to env default"
+    "Step 3: Checking for any active intelligence service (failover)"
+  );
+  const anyActiveService = await db.query.intelligenceServices.findFirst({
+    where: and(
+      drizzleSql`${intelligenceServices.status} IN ('active', 'credential_error')`,
+      eq(intelligenceServices.enabled, true)
+    ),
+    orderBy: (t, { desc }) => [desc(t.updatedAt)],
+  });
+
+  if (anyActiveService) {
+    // Verify credentials are real (not a sync placeholder)
+    const hasRealKey =
+      anyActiveService.apiKey &&
+      anyActiveService.apiKey !== "SYNC_PLACEHOLDER" &&
+      anyActiveService.apiKey.length > 0;
+
+    if (hasRealKey) {
+      logger.info(
+        {
+          serviceId: anyActiveService.serviceId,
+          url: anyActiveService.webhookUrl,
+          source: "failover_any_active",
+        },
+        "IS resolved via failover — using first active service"
+      );
+      return { ...createClient(anyActiveService), agentUserId };
+    }
+
+    logger.debug(
+      { serviceId: anyActiveService.serviceId },
+      "Step 3: Found synced service but credentials are placeholder — falling through to env"
+    );
+  }
+
+  // 4. Fallback to default service from environment
+  logger.debug(
+    "Step 4: No DB-registered service matched — falling back to env default"
   );
   const defaultService = createDefaultClient();
   logger.info(

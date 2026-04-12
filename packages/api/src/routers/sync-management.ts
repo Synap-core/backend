@@ -18,6 +18,10 @@ import {
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { invalidateSyncPeerCache } from "../utils/sync-realtime-hook.js";
+import {
+  getSyncGenerationRow,
+  promoteToPrimary,
+} from "../utils/split-brain-service.js";
 
 const logger = createLogger({ module: "sync-management" });
 
@@ -255,4 +259,39 @@ export const syncManagementRouter = router({
 
       return { success: true };
     }),
+
+  /**
+   * Get split-brain / generation status
+   */
+  getGenerationStatus: podAdminProcedure.query(async () => {
+    const row = await getSyncGenerationRow();
+    return {
+      generation: row.generation,
+      role: row.role,
+      splitBrainDetected: row.splitBrainDetected,
+      splitBrainDetectedAt: row.splitBrainDetectedAt?.toISOString() ?? null,
+      splitBrainLocalGen: row.splitBrainLocalGen,
+      splitBrainRemoteGen: row.splitBrainRemoteGen,
+      lastPeerGeneration: row.lastPeerGeneration,
+      lastPeerContact: row.lastPeerContact?.toISOString() ?? null,
+      promotedAt: row.promotedAt?.toISOString() ?? null,
+      promotedFrom: row.promotedFrom,
+    };
+  }),
+
+  /**
+   * Promote this pod to primary (clears split-brain flag).
+   * Pod admin action — for cases where CP JWT is not available.
+   */
+  promote: podAdminProcedure.mutation(async () => {
+    await promoteToPrimary();
+    logger.info("Pod promoted to primary via tRPC admin action");
+    const row = await getSyncGenerationRow();
+    return {
+      promoted: true,
+      generation: row.generation,
+      role: row.role,
+      splitBrainDetected: row.splitBrainDetected,
+    };
+  }),
 });

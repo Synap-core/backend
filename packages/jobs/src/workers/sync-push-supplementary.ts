@@ -2,7 +2,8 @@
  * Sync Push Supplementary Worker
  *
  * Cron job (every 5 minutes) that pushes supplementary data to registered push peers.
- * Handles tables that don't emit events: messages, automations, intelligence_commands.
+ * Handles tables that don't emit events: messages, automations, intelligence_commands,
+ * intelligence_services (metadata only — API keys excluded).
  *
  * For each enabled push peer:
  * 1. Read per-table cursors from sync_state.supplementaryCursors
@@ -25,6 +26,7 @@ import {
   or,
   gt,
 } from "@synap/database";
+import { intelligenceServices } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "sync-push-supplementary" });
@@ -119,6 +121,50 @@ function getTableConfigs(): SupplementaryTableConfig[] {
           last.startedAt instanceof Date
             ? last.startedAt.toISOString()
             : String(last.startedAt);
+
+        return {
+          rows: rows as unknown as Record<string, unknown>[],
+          lastTimestamp,
+        };
+      },
+    },
+    {
+      name: "intelligence_services",
+      queryFn: async (cursor: Date) => {
+        // Sync metadata only — exclude apiKey (each pod has its own from CP)
+        const rows = await db
+          .select({
+            id: intelligenceServices.id,
+            serviceId: intelligenceServices.serviceId,
+            name: intelligenceServices.name,
+            description: intelligenceServices.description,
+            version: intelligenceServices.version,
+            webhookUrl: intelligenceServices.webhookUrl,
+            mcpEndpoint: intelligenceServices.mcpEndpoint,
+            // apiKey intentionally excluded — never synced between pods
+            capabilities: intelligenceServices.capabilities,
+            pricing: intelligenceServices.pricing,
+            status: intelligenceServices.status,
+            enabled: intelligenceServices.enabled,
+            mcpApproved: intelligenceServices.mcpApproved,
+            metadata: intelligenceServices.metadata,
+            createdAt: intelligenceServices.createdAt,
+            updatedAt: intelligenceServices.updatedAt,
+            lastHealthCheck: intelligenceServices.lastHealthCheck,
+            lastHealthStatus: intelligenceServices.lastHealthStatus,
+          })
+          .from(intelligenceServices)
+          .where(gt(intelligenceServices.updatedAt, cursor))
+          .orderBy(intelligenceServices.updatedAt)
+          .limit(BATCH_SIZE);
+
+        if (rows.length === 0) return { rows: [], lastTimestamp: null };
+
+        const last = rows[rows.length - 1];
+        const lastTimestamp =
+          last.updatedAt instanceof Date
+            ? last.updatedAt.toISOString()
+            : String(last.updatedAt);
 
         return {
           rows: rows as unknown as Record<string, unknown>[],

@@ -20,9 +20,7 @@ const HEALTH_TIMEOUT_MS = 5_000;
 
 type ServiceHealthStatus = "healthy" | "degraded" | "unhealthy";
 
-async function pingService(
-  webhookUrl: string
-): Promise<{
+async function pingService(webhookUrl: string): Promise<{
   status: ServiceHealthStatus;
   latencyMs: number;
   keyExpiresSoon: boolean;

@@ -2116,7 +2116,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
+					role: "user" | "system" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
@@ -5855,7 +5855,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				workspaceIds?: string[] | undefined;
-				type?: "calendar" | "list" | "table" | "whiteboard" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "table" | "list" | "whiteboard" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -6302,7 +6302,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		updateViewMode: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				context: "entities" | "documents" | "views";
-				mode: "list" | "table" | "grid";
+				mode: "table" | "list" | "grid";
 			};
 			output: {
 				success: boolean;
@@ -7758,7 +7758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				slug: string;
 				profileId?: string | undefined;
-				workspaceScope?: "any" | "base" | "current" | undefined;
+				workspaceScope?: "current" | "any" | "base" | undefined;
 			};
 			output: {
 				propertyDef: {
@@ -9068,6 +9068,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
+			};
+			meta: object;
+		}>;
+		getGenerationStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				generation: number;
+				role: string;
+				splitBrainDetected: boolean;
+				splitBrainDetectedAt: string | null;
+				splitBrainLocalGen: number | null;
+				splitBrainRemoteGen: number | null;
+				lastPeerGeneration: number;
+				lastPeerContact: string | null;
+				promotedAt: string | null;
+				promotedFrom: string | null;
+			};
+			meta: object;
+		}>;
+		promote: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				promoted: boolean;
+				generation: number;
+				role: string;
+				splitBrainDetected: boolean;
 			};
 			meta: object;
 		}>;

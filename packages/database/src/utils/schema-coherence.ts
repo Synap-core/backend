@@ -253,6 +253,23 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "signal_value",
     addedBy: "0099_schema_reconciliation.sql (custom)",
   },
+
+  // sync_generation — split-brain prevention (0101)
+  {
+    table: "sync_generation",
+    column: "generation",
+    addedBy: "0101_sync_generation_split_brain.sql",
+  },
+  {
+    table: "sync_generation",
+    column: "role",
+    addedBy: "0101_sync_generation_split_brain.sql",
+  },
+  {
+    table: "sync_generation",
+    column: "split_brain_detected",
+    addedBy: "0101_sync_generation_split_brain.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

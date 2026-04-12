@@ -39,6 +39,7 @@ import {
   apiKeys,
 } from "@synap/database/schema";
 import { encryptServiceKey, resolveServiceKey } from "@synap/api";
+import { getSyncGenerationState } from "@synap/api";
 
 const logger = createLogger({ module: "provision" });
 
@@ -901,6 +902,19 @@ provisionRouter.get("/status", async (c) => {
       },
       // Pod version info — read from env (set by install.sh / synap update)
       podVersion: process.env.BACKEND_VERSION || null,
+      // Split-brain status (for frontend banner + CP dashboard)
+      ...(await (async () => {
+        try {
+          const syncState = await getSyncGenerationState();
+          return {
+            splitBrain: syncState.splitBrainDetected,
+            podRole: syncState.role,
+          };
+        } catch {
+          // sync_generation table may not exist yet
+          return { splitBrain: false, podRole: "primary" };
+        }
+      })()),
     });
   } catch (err) {
     logger.error({ err }, "Provision status error");

@@ -126,3 +126,6 @@ export * from "./notifications.js";
 
 // NEW: Pod-to-Pod Sync (event log replication)
 export * from "./sync.js";
+
+// NEW: Sync Generation (split-brain prevention)
+export * from "./sync-generation.js";

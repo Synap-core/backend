@@ -383,3 +383,28 @@ CREATE INDEX IF NOT EXISTS "idx_inbox_priority"
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_inbox_external_unique"
   ON "inbox_items" ("user_id", "provider", "external_id")
   WHERE "provider" IS NOT NULL AND "external_id" IS NOT NULL;
+
+-- ─── sync_generation table (split-brain prevention) ─────────────────────────
+-- Added by 0101_sync_generation_split_brain.sql. Reconcile here for pods
+-- upgrading from any starting point.
+
+CREATE TABLE IF NOT EXISTS sync_generation (
+  id TEXT PRIMARY KEY DEFAULT 'current',
+  generation BIGINT NOT NULL DEFAULT 0,
+  role TEXT NOT NULL DEFAULT 'primary'
+    CHECK (role IN ('primary', 'replica', 'standalone', 'readonly')),
+  promoted_at TIMESTAMPTZ,
+  promoted_from TEXT,
+  last_peer_generation BIGINT DEFAULT 0,
+  last_peer_contact TIMESTAMPTZ,
+  split_brain_detected BOOLEAN NOT NULL DEFAULT false,
+  split_brain_detected_at TIMESTAMPTZ,
+  split_brain_local_gen BIGINT,
+  split_brain_remote_gen BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO sync_generation (id, generation, role)
+VALUES ('current', 0, 'primary')
+ON CONFLICT (id) DO NOTHING;

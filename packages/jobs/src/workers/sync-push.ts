@@ -16,6 +16,7 @@ import {
   db,
   syncPeers,
   syncState,
+  syncGeneration,
   events,
   eq,
   and,
@@ -42,18 +43,78 @@ interface SyncReceiveResponse {
   received: boolean;
   processed: number;
   backpressure?: boolean;
+  generation?: number;
+  role?: string;
+  splitBrain?: boolean;
+}
+
+// ─── Generation helpers (inline to avoid circular dep on @synap/api) ────────
+
+/**
+ * Increment local generation and return the current state.
+ * Mirrors split-brain-service logic but avoids importing from @synap/api.
+ */
+async function incrementGenerationAndGetState(): Promise<{
+  generation: number;
+  role: string;
+}> {
+  // Ensure the row exists
+  await db
+    .insert(syncGeneration)
+    .values({ id: "current", generation: 0, role: "primary" })
+    .onConflictDoNothing();
+
+  // Increment and return
+  const [updated] = await db
+    .update(syncGeneration)
+    .set({
+      generation: drizzleSql`${syncGeneration.generation} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(eq(syncGeneration.id, "current"))
+    .returning({
+      generation: syncGeneration.generation,
+      role: syncGeneration.role,
+    });
+
+  return updated ?? { generation: 0, role: "primary" };
+}
+
+/**
+ * Record peer generation received in sync response.
+ * Lightweight version — full split-brain detection runs in the API layer's
+ * recordPeerGeneration() when the peer pushes to us. This just updates
+ * the peer tracking fields so the API layer has fresh data.
+ */
+async function updatePeerGeneration(
+  peerGeneration: number,
+  _peerRole: string
+): Promise<void> {
+  if (peerGeneration <= 0) return;
+
+  await db
+    .update(syncGeneration)
+    .set({
+      lastPeerGeneration: peerGeneration,
+      lastPeerContact: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(syncGeneration.id, "current"));
 }
 
 /**
  * Push events to a single peer. Returns the number of events sent, or -1 on error.
  */
-async function pushToPeer(peer: {
-  id: string;
-  peerPodUrl: string;
-  authToken: string | null;
-  workspaceIds: string[] | null;
-  direction: string;
-}): Promise<void> {
+async function pushToPeer(
+  peer: {
+    id: string;
+    peerPodUrl: string;
+    authToken: string | null;
+    workspaceIds: string[] | null;
+    direction: string;
+  },
+  generationState: { generation: number; role: string }
+): Promise<void> {
   // Ensure sync_state row exists for this peer (upsert)
   let state = await db.query.syncState.findFirst({
     where: eq(syncState.syncPeerId, peer.id),
@@ -153,6 +214,8 @@ async function pushToPeer(peer: {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "X-Source-Pod-Id": SOURCE_POD_ID,
+      "X-Sync-Generation": String(generationState.generation),
+      "X-Sync-Role": generationState.role,
     };
     if (peer.authToken) {
       headers["Authorization"] = `Bearer ${peer.authToken}`;
@@ -185,6 +248,14 @@ async function pushToPeer(peer: {
         .set({ status: "idle", lastSyncAt: new Date(), updatedAt: new Date() })
         .where(eq(syncState.id, state.id));
       return;
+    }
+
+    // Record peer generation from response (enables bidirectional split-brain detection)
+    if (typeof result.generation === "number" && result.generation > 0) {
+      await updatePeerGeneration(
+        result.generation,
+        typeof result.role === "string" ? result.role : "unknown"
+      );
     }
 
     // Success — advance cursor (bidirectional peers use lastPushCursor)
@@ -251,10 +322,13 @@ export async function handleSyncPush(): Promise<void> {
 
     logger.debug({ peerCount: peers.length }, "Starting sync push cycle");
 
+    // Increment generation once per push cycle (not per-peer, not per-event)
+    const generationState = await incrementGenerationAndGetState();
+
     // Process each peer sequentially (avoid overwhelming outbound connections)
     for (const peer of peers) {
       try {
-        await pushToPeer(peer);
+        await pushToPeer(peer, generationState);
       } catch (err) {
         // Catch-all so one peer failing doesn't block others
         logger.error(

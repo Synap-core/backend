@@ -138,12 +138,6 @@ export const API_KEY_SCOPES = [
   // External API scopes (for external callers: Claude Code, custom agents, scripts)
   "skills.invoke", // List and invoke skills via /api/external/skills
   "chat.stream", // Stream AI chat completions via /api/external/chat (Option D)
-  // Hestia scopes (for sovereign infrastructure management)
-  "hearth.read", // Read hearth node status and information
-  "hearth.write", // Create/update hearth nodes and configure intelligence providers
-  "hearth.deploy", // Manage hearth deployments and artifact deployments
-  "intelligence.query", // Query intelligence providers for AI responses
-  "package.manage", // Register and manage package instances on hearth nodes
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];

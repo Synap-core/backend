@@ -51,10 +51,8 @@ import {
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
-// Hestia workspace definition (for manual workspace creation via CLI/UI)
-// Note: Hearth routes disabled - use workspace creation from definition instead
-// import hearthRouter from "./hub-protocol/hearth.js";
-// import intelligenceRouter from "./hub-protocol/intelligence.js";
+// Note: Hestia infrastructure management uses standard Hub Protocol entity endpoints
+// No custom routes needed - CLI uses entities.create, entities.update, etc.
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -4467,9 +4465,7 @@ app.post("/setup/agent", async (c) => {
   }
 });
 
-// Hestia Hearth Protocol routes - DISABLED
-// Use Hestia workspace definition via createFromDefinition instead
-// app.route("/hearth", hearthRouter);
-// app.route("/intelligence", intelligenceRouter);
+// Hestia infrastructure management uses standard Hub Protocol endpoints
+// Workspaces can be created with HESTIA_DEFINITION via createFromDefinition
 
 export const hubProtocolRestApp = app;

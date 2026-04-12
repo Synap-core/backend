@@ -42,8 +42,13 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and } from "@synap/database";
-import { channels, workspaceMembers } from "@synap/database/schema";
+import { db, eq, and, desc, isNull } from "@synap/database";
+import {
+  channels,
+  workspaceMembers,
+  messages,
+  MessageRole,
+} from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { ensurePersonalChannel } from "../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
@@ -247,4 +252,99 @@ chatStreamApp.post("/stream", async (c) => {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
+});
+
+/**
+ * GET /api/chat/history
+ *
+ * Returns recent chat messages for the caller's personal channel in the
+ * given workspace. Relay calls this on mount when AsyncStorage is empty
+ * (new device / fresh install) to restore conversation history from the pod.
+ *
+ * Query params:
+ *   workspaceId  (optional) — UUID of the workspace. Defaults to the
+ *                             user's first accessible workspace.
+ *   limit        (optional) — Max messages to return (default 50, max 100).
+ *
+ * Response: { messages: Array<{ id, role, content, timestamp }> }
+ * Messages are returned oldest-first so clients can render in order.
+ * role is "user" | "assistant" — system messages are excluded.
+ */
+chatStreamApp.get("/history", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  // ── Resolve workspaceId ────────────────────────────────────────────────────
+  const rawWorkspaceId = c.req.query("workspaceId");
+  let resolvedWorkspaceId: string;
+
+  if (rawWorkspaceId) {
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, rawWorkspaceId),
+        eq(workspaceMembers.userId, userId)
+      ),
+      columns: { workspaceId: true },
+    });
+    if (!membership) {
+      return c.json({ error: "Workspace not found or access denied" }, 404);
+    }
+    resolvedWorkspaceId = rawWorkspaceId;
+  } else {
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: eq(workspaceMembers.userId, userId),
+      columns: { workspaceId: true },
+    });
+    if (!membership) {
+      return c.json({ error: "No workspace found for this user" }, 404);
+    }
+    resolvedWorkspaceId = membership.workspaceId;
+  }
+
+  // ── Parse limit ────────────────────────────────────────────────────────────
+  const rawLimit = c.req.query("limit");
+  const limit = Math.min(
+    100,
+    Math.max(1, parseInt(rawLimit ?? "50", 10) || 50)
+  );
+
+  // ── Get personal channel (idempotent — creates if missing) ────────────────
+  let channelId: string;
+  try {
+    const personalChannel = await ensurePersonalChannel(
+      userId,
+      resolvedWorkspaceId
+    );
+    channelId = personalChannel.id;
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      "Failed to ensure personal channel for history fetch"
+    );
+    return c.json({ error: "Failed to resolve chat channel" }, 500);
+  }
+
+  // ── Fetch messages (user + assistant only, newest first, then reverse) ─────
+  const rows = await db.query.messages.findMany({
+    where: and(eq(messages.channelId, channelId), isNull(messages.deletedAt)),
+    orderBy: [desc(messages.timestamp)],
+    limit,
+    columns: {
+      id: true,
+      role: true,
+      content: true,
+      timestamp: true,
+    },
+  });
+
+  // Exclude system messages and return oldest-first for rendering order
+  const filtered = rows
+    .filter(
+      (m) => m.role === MessageRole.USER || m.role === MessageRole.ASSISTANT
+    )
+    .reverse();
+
+  return c.json({ messages: filtered });
 });

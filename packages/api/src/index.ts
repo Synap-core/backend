@@ -66,6 +66,17 @@ export {
 // Export JWKS client for CP JWT verification
 export { verifyCpJwt, clearJwksCache } from "./utils/jwks-client.js";
 
+// Export split-brain detection service
+export {
+  getSyncGenerationState,
+  getSyncGenerationRow,
+  isPodReadOnly,
+  promoteToPrimary,
+  incrementGeneration,
+  recordPeerGeneration,
+  invalidateSyncGenerationCache,
+} from "./utils/split-brain-service.js";
+
 // Export Telegram bot token resolver (3-tier: vault → workspace setting → env)
 export {
   resolveTelegramBotToken,

@@ -34,8 +34,17 @@ import {
   syncReceiveInputSchema,
   materializeBatch,
 } from "@synap/database";
+import { intelligenceServices } from "@synap/database/schema";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import { invalidateSyncPeerCache } from "../utils/sync-realtime-hook.js";
+import {
+  incrementGeneration,
+  recordPeerGeneration,
+  getSyncGenerationState,
+  getSyncGenerationRow,
+  promoteToPrimary,
+  invalidateSyncGenerationCache,
+} from "../utils/split-brain-service.js";
 
 const logger = createLogger({ module: "sync-receive" });
 
@@ -200,9 +209,24 @@ app.post("/receive", async (c) => {
     "Sync batch processed"
   );
 
+  // 4. Split-brain detection: check peer generation headers
+  const peerGen = parseInt(c.req.header("x-sync-generation") ?? "0", 10);
+  const peerRole = c.req.header("x-sync-role") ?? "unknown";
+
+  let splitBrainResult = { splitBrain: false };
+  if (peerGen > 0) {
+    splitBrainResult = await recordPeerGeneration(peerGen, peerRole);
+  }
+
+  // Return our own generation so the peer can detect split-brain too
+  const localState = await getSyncGenerationState();
+
   return c.json({
     received: true,
     processed: incomingEvents.length,
+    generation: localState.generation,
+    role: localState.role,
+    splitBrain: splitBrainResult.splitBrain || localState.splitBrainDetected,
   });
 });
 
@@ -285,6 +309,17 @@ app.get("/pull", async (c) => {
     "Serving pull batch"
   );
 
+  // Check for peer generation in pull request headers
+  const peerGen = parseInt(c.req.header("x-sync-generation") ?? "0", 10);
+  const peerRole = c.req.header("x-sync-role") ?? "unknown";
+
+  if (peerGen > 0) {
+    await recordPeerGeneration(peerGen, peerRole);
+  }
+
+  // Include our generation info in the pull response
+  const localState = await getSyncGenerationState();
+
   return c.json({
     events: resultBatch.map((evt) => ({
       id: evt.id,
@@ -303,6 +338,9 @@ app.get("/pull", async (c) => {
     })),
     cursor,
     hasMore,
+    generation: localState.generation,
+    role: localState.role,
+    splitBrain: localState.splitBrainDetected,
   });
 });
 
@@ -478,6 +516,82 @@ const SUPPLEMENTARY_TABLES: Record<
       } catch (err) {
         logger.warn(
           { table: "automation_runs", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
+  /**
+   * Intelligence service metadata sync (NOT credentials).
+   * API keys are excluded — each pod gets its own credentials from the CP.
+   * This ensures both pods know about the same IS registrations (capabilities,
+   * health status, endpoints) so failover routing works correctly.
+   */
+  intelligence_services: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof intelligenceServices.$inferInsert = {
+          id: row.id as string,
+          serviceId: row.serviceId as string,
+          name: (row.name as string) ?? "Synced Service",
+          description: (row.description as string) ?? null,
+          version: (row.version as string) ?? null,
+          webhookUrl: (row.webhookUrl as string) ?? "",
+          mcpEndpoint: (row.mcpEndpoint as string) ?? null,
+          // apiKey is NOT synced — each pod gets its own from the CP
+          apiKey: "SYNC_PLACEHOLDER",
+          capabilities:
+            (row.capabilities as typeof intelligenceServices.$inferInsert.capabilities) ??
+            [],
+          pricing: (row.pricing as string) ?? "free",
+          status: (row.status as string) ?? "active",
+          enabled: (row.enabled as boolean) ?? true,
+          mcpApproved: (row.mcpApproved as boolean) ?? false,
+          metadata:
+            (row.metadata as typeof intelligenceServices.$inferInsert.metadata) ??
+            {},
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+          lastHealthCheck: row.lastHealthCheck
+            ? new Date(row.lastHealthCheck as string)
+            : null,
+          lastHealthStatus: (row.lastHealthStatus as string) ?? null,
+        };
+        // Only update non-credential fields on conflict — never overwrite apiKey
+        const updateSet: Partial<typeof intelligenceServices.$inferInsert> = {
+          name: values.name,
+          description: values.description,
+          version: values.version,
+          webhookUrl: values.webhookUrl,
+          mcpEndpoint: values.mcpEndpoint,
+          capabilities: values.capabilities,
+          pricing: values.pricing,
+          status: values.status,
+          enabled: values.enabled,
+          mcpApproved: values.mcpApproved,
+          metadata: values.metadata,
+          updatedAt: values.updatedAt,
+          lastHealthCheck: values.lastHealthCheck,
+          lastHealthStatus: values.lastHealthStatus,
+        };
+        await db
+          .insert(intelligenceServices)
+          .values(values)
+          .onConflictDoUpdate({
+            target: intelligenceServices.id,
+            set: updateSet,
+          });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "intelligence_services", rowId: row.id, err },
           "Failed to upsert supplementary row"
         );
       }
@@ -1026,6 +1140,200 @@ app.get("/health", async (c) => {
   } catch {
     return c.json(base);
   }
+});
+
+// ============================================================================
+// GET /status — Comprehensive sync + intelligence status for CP monitoring
+// ============================================================================
+
+/**
+ * GET /status — Returns sync peer status plus intelligence service readiness.
+ *
+ * Auth: CP-signed JWT with type "sync-setup" (reuses the same JWT type CP already
+ * issues for pod-linking operations).
+ *
+ * Response:
+ * {
+ *   syncPeers: [{ peerId, direction, enabled, status, lastSyncAt, eventsProcessed }],
+ *   intelligenceService: {
+ *     configured: boolean,
+ *     serviceCount: number,
+ *     services: [{ serviceId, name, status, enabled, lastHealthStatus, credentialsValid }]
+ *   }
+ * }
+ */
+app.get("/status", async (c) => {
+  // Authenticate with CP JWT or peer token
+  const payload = await verifyCpAuth<{
+    type: string;
+    podId: string;
+  }>(c.req.header("authorization") ?? null);
+
+  if (!payload || payload.type !== "sync-setup") {
+    // Also allow peer token auth (same as /health authenticated path)
+    const authHeader = c.req.header("authorization") ?? "";
+    const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+    const callerToken = tokenMatch?.[1]?.trim();
+
+    if (!callerToken) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const peers = await db.query.syncPeers.findMany({
+      columns: { authToken: true },
+    });
+    const isAuthenticated = peers.some((p) => p.authToken === callerToken);
+    if (!isAuthenticated) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  }
+
+  // Sync peers status
+  const peers = await db.query.syncPeers.findMany({
+    columns: {
+      id: true,
+      peerPodUrl: true,
+      direction: true,
+      enabled: true,
+    },
+  });
+
+  const states = await db.query.syncState.findMany();
+  const stateMap = new Map(states.map((s) => [s.syncPeerId, s]));
+
+  const peerSummaries = peers.map((peer) => {
+    const state = stateMap.get(peer.id);
+    return {
+      peerId: peer.id,
+      direction: peer.direction,
+      enabled: peer.enabled,
+      status: state?.status ?? "unknown",
+      lastSyncAt: state?.lastSyncAt?.toISOString() ?? null,
+      eventsProcessed: state?.eventsProcessed ?? 0,
+    };
+  });
+
+  // Intelligence service status
+  const services = await db.query.intelligenceServices.findMany({
+    columns: {
+      serviceId: true,
+      name: true,
+      status: true,
+      enabled: true,
+      lastHealthCheck: true,
+      lastHealthStatus: true,
+      apiKey: true,
+    },
+  });
+
+  const serviceSummaries = services.map((svc) => ({
+    serviceId: svc.serviceId,
+    name: svc.name,
+    status: svc.status,
+    enabled: svc.enabled,
+    lastHealthStatus: svc.lastHealthStatus ?? "unknown",
+    lastHealthCheck: svc.lastHealthCheck?.toISOString() ?? null,
+    // A service has valid credentials if apiKey is not a placeholder
+    credentialsValid:
+      !!svc.apiKey &&
+      svc.apiKey !== "SYNC_PLACEHOLDER" &&
+      svc.apiKey.length > 0,
+  }));
+
+  const activeServices = services.filter(
+    (s) =>
+      s.enabled &&
+      s.status === "active" &&
+      s.apiKey &&
+      s.apiKey !== "SYNC_PLACEHOLDER"
+  );
+
+  // Split-brain / generation status
+  const generationInfo = await getSyncGenerationRow();
+
+  return c.json({
+    syncPeers: peerSummaries,
+    intelligenceService: {
+      configured: activeServices.length > 0,
+      serviceCount: services.length,
+      services: serviceSummaries,
+    },
+    syncGeneration: {
+      generation: generationInfo.generation,
+      role: generationInfo.role,
+      splitBrainDetected: generationInfo.splitBrainDetected,
+      splitBrainDetectedAt:
+        generationInfo.splitBrainDetectedAt?.toISOString() ?? null,
+      splitBrainLocalGen: generationInfo.splitBrainLocalGen,
+      splitBrainRemoteGen: generationInfo.splitBrainRemoteGen,
+      lastPeerGeneration: generationInfo.lastPeerGeneration,
+      lastPeerContact: generationInfo.lastPeerContact?.toISOString() ?? null,
+      promotedAt: generationInfo.promotedAt?.toISOString() ?? null,
+    },
+  });
+});
+
+// ============================================================================
+// POST /promote — Manually promote this pod to primary (admin action)
+// ============================================================================
+
+/**
+ * POST /promote — Promote this pod to primary after split-brain.
+ *
+ * Auth: CP-signed JWT with type "sync-setup" and action "promote".
+ *
+ * Clears the split-brain flag, sets role = 'primary'. The peer pod should
+ * automatically detect this on next sync and adjust accordingly.
+ */
+app.post("/promote", async (c) => {
+  const payload = await verifyCpAuth<{
+    type: string;
+    podId: string;
+    action: string;
+  }>(c.req.header("authorization") ?? null);
+
+  if (
+    !payload ||
+    payload.type !== "sync-setup" ||
+    payload.action !== "promote"
+  ) {
+    return c.json(
+      { error: "Unauthorized — requires CP JWT with action: promote" },
+      401
+    );
+  }
+
+  await promoteToPrimary();
+
+  const state = await getSyncGenerationRow();
+  logger.info(
+    { cpPodId: payload.podId, generation: state.generation },
+    "Pod promoted to primary via CP action"
+  );
+
+  return c.json({
+    promoted: true,
+    generation: state.generation,
+    role: state.role,
+    splitBrainDetected: state.splitBrainDetected,
+  });
+});
+
+// ============================================================================
+// GET /generation — Public generation info (for health checks)
+// ============================================================================
+
+/**
+ * GET /generation — Returns the pod's current generation and role.
+ * Unauthenticated — returns only non-sensitive generation data.
+ */
+app.get("/generation", async (c) => {
+  const state = await getSyncGenerationState();
+  return c.json({
+    generation: state.generation,
+    role: state.role,
+    splitBrainDetected: state.splitBrainDetected,
+  });
 });
 
 export const syncReceiveApp = app;
