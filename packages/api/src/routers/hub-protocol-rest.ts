@@ -51,9 +51,6 @@ import {
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
-// Note: Hestia infrastructure management uses standard Hub Protocol entity endpoints
-// No custom routes needed - CLI uses entities.create, entities.update, etc.
-
 const logger = createLogger({ module: "hub-protocol-rest" });
 
 function extractBearerToken(authHeader: string | null): string | null {
@@ -4464,8 +4461,5 @@ app.post("/setup/agent", async (c) => {
     return c.json({ error: "Internal server error" }, 500);
   }
 });
-
-// Hestia infrastructure management uses standard Hub Protocol endpoints
-// Workspaces can be created with HESTIA_DEFINITION via createFromDefinition
 
 export const hubProtocolRestApp = app;
