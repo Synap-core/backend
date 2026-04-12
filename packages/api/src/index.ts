@@ -34,6 +34,7 @@ export { mcpHttpApp } from "./routers/mcp/http-handler.js";
 export { fileUploadApp } from "./routers/file-upload.js";
 export { externalSkillsApp } from "./routers/external/skills.js";
 export { externalChatApp } from "./routers/external/chat.js";
+export { chatStreamApp } from "./routers/chat-stream.js";
 export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";

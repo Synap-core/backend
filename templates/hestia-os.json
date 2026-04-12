@@ -1,0 +1,309 @@
+{
+  "name": "Hestia OS",
+  "description": "The digital hearth — sovereign, self-hosted infrastructure workspace",
+  "icon": "flame",
+  "color": "orange",
+  "profiles": [
+    {
+      "slug": "hearth_node",
+      "name": "Hearth Node",
+      "icon": "flame",
+      "color": "orange",
+      "entityScope": "workspace",
+      "properties": [
+        {
+          "name": "hostname",
+          "type": "string",
+          "required": true,
+          "indexed": true,
+          "description": "Node hostname"
+        },
+        {
+          "name": "ip_address",
+          "type": "string",
+          "description": "IP address of the node"
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "enum": ["primary", "backup"],
+          "default": "primary",
+          "description": "Role in hearth constellation"
+        },
+        {
+          "name": "install_mode",
+          "type": "string",
+          "enum": ["usb", "script"],
+          "description": "How the node was installed"
+        },
+        {
+          "name": "packages",
+          "type": "array",
+          "itemType": "object",
+          "description": "Installed packages with versions"
+        },
+        {
+          "name": "intelligence_provider_id",
+          "type": "entity_id",
+          "targetProfile": "intelligence_provider",
+          "description": "Linked intelligence provider"
+        },
+        {
+          "name": "health_status",
+          "type": "string",
+          "enum": ["healthy", "degraded", "offline"],
+          "default": "unknown",
+          "indexed": true
+        },
+        {
+          "name": "last_heartbeat",
+          "type": "date",
+          "description": "Last health update"
+        },
+        {
+          "name": "api_key_id",
+          "type": "string",
+          "secret": true,
+          "description": "Hub API key for this node"
+        }
+      ]
+    },
+    {
+      "slug": "intelligence_provider",
+      "name": "Intelligence Provider",
+      "icon": "brain",
+      "color": "purple",
+      "entityScope": "workspace",
+      "properties": [
+        {
+          "name": "provider_type",
+          "type": "string",
+          "enum": ["ollama", "openrouter", "anthropic", "openai", "custom"],
+          "required": true,
+          "description": "Type of intelligence provider"
+        },
+        {
+          "name": "endpoint_url",
+          "type": "string",
+          "description": "Provider endpoint URL (for local/custom)"
+        },
+        {
+          "name": "api_key_env",
+          "type": "string",
+          "description": "Environment variable name for API key (for cloud)"
+        },
+        {
+          "name": "model",
+          "type": "string",
+          "description": "Default model"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "enum": ["active", "inactive", "error"],
+          "default": "active"
+        },
+        {
+          "name": "capabilities",
+          "type": "array",
+          "itemType": "string",
+          "description": "Supported capabilities (chat, embeddings, etc.)"
+        },
+        {
+          "name": "config",
+          "type": "object",
+          "description": "Provider-specific configuration"
+        }
+      ]
+    },
+    {
+      "slug": "package_instance",
+      "name": "Package Instance",
+      "icon": "package",
+      "color": "blue",
+      "entityScope": "workspace",
+      "properties": [
+        {
+          "name": "package_name",
+          "type": "string",
+          "required": true,
+          "indexed": true
+        },
+        {
+          "name": "version",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "enum": ["installed", "running", "stopped", "error", "updating"],
+          "default": "installed"
+        },
+        {
+          "name": "hearth_node_id",
+          "type": "entity_id",
+          "targetProfile": "hearth_node",
+          "description": "Node where package is installed"
+        },
+        {
+          "name": "config",
+          "type": "object",
+          "description": "Package configuration"
+        },
+        {
+          "name": "endpoints",
+          "type": "object",
+          "description": "Exposed endpoints (http, websocket, etc.)"
+        },
+        {
+          "name": "health",
+          "type": "object",
+          "description": "Last health check result"
+        },
+        {
+          "name": "installed_at",
+          "type": "date"
+        },
+        {
+          "name": "last_updated",
+          "type": "date"
+        }
+      ]
+    },
+    {
+      "slug": "hearth_deployment",
+      "name": "Hearth Deployment",
+      "icon": "rocket",
+      "color": "green",
+      "entityScope": "workspace",
+      "properties": [
+        {
+          "name": "hearth_node_id",
+          "type": "entity_id",
+          "targetProfile": "hearth_node",
+          "required": true
+        },
+        {
+          "name": "deploy_path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "artifact_type",
+          "type": "string",
+          "enum": ["static", "containerized"],
+          "required": true
+        },
+        {
+          "name": "source_type",
+          "type": "string",
+          "enum": ["git", "workspace", "upload"]
+        },
+        {
+          "name": "source_url",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "description": "Deployed URL"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "enum": ["pending", "approved", "building", "deployed", "failed"],
+          "default": "pending"
+        },
+        {
+          "name": "build_log",
+          "type": "text"
+        },
+        {
+          "name": "commands_executed",
+          "type": "array",
+          "itemType": "string"
+        },
+        {
+          "name": "approvals",
+          "type": "array",
+          "itemType": "object"
+        },
+        {
+          "name": "approval_request_id",
+          "type": "string",
+          "description": "Reference to proposal/approval system"
+        },
+        {
+          "name": "started_at",
+          "type": "date"
+        },
+        {
+          "name": "completed_at",
+          "type": "date"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "Hearth Status",
+      "type": "bento",
+      "icon": "layout-dashboard",
+      "blocks": [
+        { "cell": "hearth-health", "type": "stat-card" },
+        { "cell": "packages-status", "type": "entity-list" },
+        { "cell": "intelligence-status", "type": "stat-card" },
+        { "cell": "recent-deployments", "type": "feed" }
+      ]
+    },
+    {
+      "name": "Nodes",
+      "type": "table",
+      "profile": "hearth_node",
+      "columns": ["hostname", "role", "health_status", "last_heartbeat"],
+      "sort": [{ "field": "last_heartbeat", "direction": "desc" }]
+    },
+    {
+      "name": "Intelligence Providers",
+      "type": "table",
+      "profile": "intelligence_provider",
+      "columns": ["provider_type", "model", "status"]
+    },
+    {
+      "name": "Packages",
+      "type": "table",
+      "profile": "package_instance",
+      "columns": ["package_name", "version", "status", "last_updated"]
+    },
+    {
+      "name": "Deployments",
+      "type": "kanban",
+      "profile": "hearth_deployment",
+      "groupBy": "status",
+      "columns": ["pending", "approved", "building", "deployed", "failed"]
+    }
+  ],
+  "seedEntities": [
+    {
+      "profile": "intelligence_provider",
+      "title": "Local Ollama",
+      "properties": {
+        "provider_type": "ollama",
+        "endpoint_url": "http://localhost:11434",
+        "model": "llama3.1:8b",
+        "status": "active",
+        "capabilities": ["chat", "embeddings"]
+      }
+    },
+    {
+      "profile": "package_instance",
+      "title": "Core Package",
+      "properties": {
+        "package_name": "hestia-core",
+        "version": "1.0.0",
+        "status": "running"
+      }
+    }
+  ]
+}

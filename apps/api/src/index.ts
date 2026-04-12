@@ -39,6 +39,7 @@ import {
   fileUploadApp,
   externalSkillsApp,
   externalChatApp,
+  chatStreamApp,
   openaiCompatApp,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
@@ -1192,6 +1193,14 @@ app.route("/api/external/skills", externalSkillsApp);
 // GET  /api/external/chat/channels — list channels user can chat in
 // POST /api/external/chat/stream   — proxy to IS chat stream (SSE)
 app.route("/api/external/chat", externalChatApp);
+
+// Session-auth chat stream — mirrors /api/external/chat/stream but uses
+// the ory session middleware so clients like Relay mobile (which have a
+// Kratos session token, not an API key) can stream AI responses over
+// plain SSE. The upstream `orySessionMiddleware` is already applied to
+// all /api/* paths, so no extra auth wiring is needed here.
+// POST /api/chat/stream — session-authed IS chat proxy (SSE)
+app.route("/api/chat", chatStreamApp);
 
 // OpenAI-compatible chat completions API (API key auth, scope: chat.stream)
 // POST /v1/chat/completions — OpenAI format request/response with SSE streaming

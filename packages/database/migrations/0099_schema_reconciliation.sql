@@ -300,3 +300,86 @@ CREATE INDEX IF NOT EXISTS "entity_identity_signals_entity_id_idx"
 
 CREATE INDEX IF NOT EXISTS "entity_identity_signals_signal_type_idx"
   ON "entity_identity_signals" ("signal_type");
+
+-- ─── inbox_items ─────────────────────────────────────────────────────────────
+-- 0003 created an early variant of inbox_items with only id, workspace_id,
+-- user_id, type, title, summary, link, read_at, archived_at, created_at,
+-- expire_at. The current Drizzle schema (packages/database/src/schema/inbox-items.ts)
+-- evolved to carry a full Life Feed payload — provider, account, external_id,
+-- deep_link, preview, timestamp, status, snoozed_until, priority, tags,
+-- data, processed_at, updated_at — but no numbered migration added the
+-- new columns. Relay's useFeed crashes on every page load because it
+-- SELECTs columns the user's pod doesn't have.
+--
+-- We add every missing column as NULLABLE (no NOT NULL) so existing rows
+-- don't need backfill. New inserts from the Life Feed code path will
+-- populate them; old placeholder rows stay intact.
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "provider" varchar(50);
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "account" varchar(255);
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "external_id" varchar(500);
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "deep_link" text;
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "preview" text;
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "timestamp" timestamptz;
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "status" varchar(20) DEFAULT 'unread';
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "snoozed_until" timestamptz;
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "priority" varchar(20);
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "tags" text[];
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "data" jsonb NOT NULL DEFAULT '{}';
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "processed_at" timestamptz;
+
+ALTER TABLE "inbox_items"
+  ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
+
+-- Backfill `timestamp` from `created_at` for existing rows so the ORDER BY
+-- in useFeed returns rows instead of nulls. Safe to run repeatedly because
+-- we only set NULL values.
+UPDATE "inbox_items"
+  SET "timestamp" = "created_at"
+  WHERE "timestamp" IS NULL;
+
+-- Indexes from the current schema. All IF NOT EXISTS so they're idempotent.
+CREATE INDEX IF NOT EXISTS "idx_inbox_user_status"
+  ON "inbox_items" ("user_id", "status");
+
+CREATE INDEX IF NOT EXISTS "idx_inbox_provider"
+  ON "inbox_items" ("provider");
+
+CREATE INDEX IF NOT EXISTS "idx_inbox_timestamp"
+  ON "inbox_items" ("user_id", "timestamp");
+
+CREATE INDEX IF NOT EXISTS "idx_inbox_snoozed"
+  ON "inbox_items" ("user_id", "snoozed_until");
+
+CREATE INDEX IF NOT EXISTS "idx_inbox_priority"
+  ON "inbox_items" ("user_id", "priority");
+
+-- Unique index is conditional — only meaningful once provider + external_id
+-- are populated, which is true for new Life Feed rows but not for any
+-- legacy rows from the 0003-era schema.
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_inbox_external_unique"
+  ON "inbox_items" ("user_id", "provider", "external_id")
+  WHERE "provider" IS NOT NULL AND "external_id" IS NOT NULL;

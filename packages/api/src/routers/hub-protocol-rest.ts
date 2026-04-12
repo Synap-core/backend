@@ -51,9 +51,10 @@ import {
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
-// Hestia imports
-import hearthRouter from "./hub-protocol/hearth.js";
-import intelligenceRouter from "./hub-protocol/intelligence.js";
+// Hestia workspace definition (for manual workspace creation via CLI/UI)
+// Note: Hearth routes disabled - use workspace creation from definition instead
+// import hearthRouter from "./hub-protocol/hearth.js";
+// import intelligenceRouter from "./hub-protocol/intelligence.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -4466,8 +4467,9 @@ app.post("/setup/agent", async (c) => {
   }
 });
 
-// Hestia Hearth Protocol routes
-app.route("/hearth", hearthRouter);
-app.route("/intelligence", intelligenceRouter);
+// Hestia Hearth Protocol routes - DISABLED
+// Use Hestia workspace definition via createFromDefinition instead
+// app.route("/hearth", hearthRouter);
+// app.route("/intelligence", intelligenceRouter);
 
 export const hubProtocolRestApp = app;

@@ -103,6 +103,9 @@ export {
   type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
 
+// Export Hestia workspace definition (for sovereign infrastructure management)
+export { HESTIA_DEFINITION } from "./utils/hestia-definition.js";
+
 // Export document types for type safety
 export type { DocumentType, DocumentMetadata } from "./types/document-types.js";
 export {

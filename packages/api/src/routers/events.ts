@@ -117,6 +117,64 @@ export const eventsRouter = router({
     }),
 
   /**
+   * Events since a timestamp — the canonical polling endpoint for client
+   * caches that want to know "what has changed for me since I last synced".
+   *
+   * Scoping: USER-scoped. Returns every event where `userId = ctx.userId`
+   * across all of that user's workspaces. This matches the
+   * `feedback_workspace_as_lens` principle — a polling client wants
+   * "everything that affected me", not "everything that affected workspace
+   * X" (which would force the client to fire N queries for N workspaces).
+   *
+   * Shape: only the fields a client needs to decide which query keys to
+   * invalidate — id, timestamp, type, subjectType, subjectId. No `data`
+   * JSONB (keep the response small; clients refetch the affected entity
+   * separately if they need the full payload).
+   *
+   * Usage pattern (mobile client):
+   *   every 30s:
+   *     const events = await trpc.events.since.query({ since: lastSyncAt })
+   *     for each event:
+   *       queryClient.invalidateQueries({ queryKey: [...] })
+   *     lastSyncAt = now
+   *
+   * Intentionally lax: if `limit` is hit, the client just polls again
+   * sooner. No cursor — the polling cadence (30s) dominates any backfill
+   * need for a normal mobile session.
+   */
+  since: protectedProcedure
+    .input(
+      z.object({
+        since: z.date(),
+        limit: z.number().min(1).max(200).default(100),
+        subjectType: subjectTypeSchema.optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const eventRepo = getEventRepository();
+
+      const events = await eventRepo.searchEvents({
+        userId,
+        fromDate: input.since,
+        subjectType: input.subjectType,
+        limit: input.limit,
+      });
+
+      // Return the lean shape — drop `data`/`metadata` JSONB so the
+      // response stays small at polling frequency. Clients invalidate
+      // query keys based on subjectType + subjectId; they fetch the
+      // affected entity through the normal query path if they need it.
+      return events.map((e) => ({
+        id: e.id,
+        timestamp: e.timestamp,
+        type: e.eventType,
+        subjectType: e.subjectType,
+        subjectId: e.subjectId,
+      }));
+    }),
+
+  /**
    * Search events (Admin/Owner access)
    *
    * Allows searching events with filters:

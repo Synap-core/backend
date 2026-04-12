@@ -1431,6 +1431,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: EventRecord[];
 			meta: object;
 		}>;
+		since: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				since: Date;
+				limit?: number | undefined;
+				subjectType?: "user" | "message" | "apiKey" | "system" | "chat" | "workspace" | "entity" | "document" | "task" | "relation" | "project" | "member" | undefined;
+			};
+			output: {
+				id: string;
+				timestamp: Date;
+				type: string;
+				subjectType: string;
+				subjectId: string;
+			}[];
+			meta: object;
+		}>;
 		search: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				userId?: string | undefined;

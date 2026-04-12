@@ -94,6 +94,36 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0099_schema_reconciliation.sql (custom)",
   },
 
+  // inbox_items — 0003 created an early shape; the current Drizzle schema
+  // grew to carry a full Life Feed payload but no numbered migration ever
+  // added the new columns. The 0099 reconciliation adds them all; these
+  // entries trip pod boot if a pod is missing the critical ones.
+  {
+    table: "inbox_items",
+    column: "provider",
+    addedBy: "0099_schema_reconciliation.sql",
+  },
+  {
+    table: "inbox_items",
+    column: "external_id",
+    addedBy: "0099_schema_reconciliation.sql",
+  },
+  {
+    table: "inbox_items",
+    column: "timestamp",
+    addedBy: "0099_schema_reconciliation.sql",
+  },
+  {
+    table: "inbox_items",
+    column: "status",
+    addedBy: "0099_schema_reconciliation.sql",
+  },
+  {
+    table: "inbox_items",
+    column: "snoozed_until",
+    addedBy: "0099_schema_reconciliation.sql",
+  },
+
   // messages — renamed from conversation_messages in 0038 (custom)
   {
     table: "messages",
