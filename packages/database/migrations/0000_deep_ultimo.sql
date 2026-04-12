@@ -1,4 +1,7 @@
-CREATE TYPE IF NOT EXISTS "public"."secret_type" AS ENUM('password', 'api_key', 'credential', 'note', 'card', 'identity', 'ssh_key', 'certificate', 'env_variable', 'database', 'oauth');--> statement-breakpoint
+DO $$ BEGIN
+  CREATE TYPE "public"."secret_type" AS ENUM('password', 'api_key', 'credential', 'note', 'card', 'identity', 'ssh_key', 'certificate', 'env_variable', 'database', 'oauth');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END; $$;--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "user_preferences" (
 	"user_id" text PRIMARY KEY NOT NULL,
 	"theme" text DEFAULT 'system' NOT NULL,
