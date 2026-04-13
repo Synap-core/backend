@@ -166,10 +166,152 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+  build-and-push-pod-agent:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Resolve ref and sha
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "ref=refs/heads/${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Convert repository name to lowercase
+        id: repo
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          echo "full=${REPO_OWNER}/${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/pod-agent
+          tags: |
+            type=sha,prefix={{branch}}-
+            type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
+            type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push pod-agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./deploy/pod-agent
+          file: ./deploy/pod-agent/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  build-and-push-realtime:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Resolve ref and sha
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            echo "ref=refs/heads/${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=${{ github.ref }}" >> $GITHUB_OUTPUT
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Convert repository name to lowercase
+        id: repo
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          echo "full=${REPO_OWNER}/${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "owner=${REPO_OWNER}" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/backend-realtime
+          tags: |
+            type=sha,prefix={{branch}}-
+            type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
+            type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push realtime image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deploy/Dockerfile.realtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
   notify-control-plane:
     runs-on: ubuntu-latest
     needs:
       - build-and-push-backend-api
+      - build-and-push-pod-agent
+      - build-and-push-realtime
     # Only notify CP on main branch and version tags — not on develop
     if: >
       needs.build-and-push-backend-api.outputs.resolved_ref == 'refs/heads/main' ||

@@ -42,6 +42,19 @@ CREATE TABLE IF NOT EXISTS "users" (
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email" text;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email_verified" boolean DEFAULT false;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "avatar_url" text;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "timezone" text DEFAULT 'UTC';
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "locale" text DEFAULT 'en';
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "user_type" text DEFAULT 'human';
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_metadata" jsonb;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 -- ─── 2. workspaces + workspace_members + invites ─────────────────────────────
 
@@ -58,6 +71,17 @@ CREATE TABLE IF NOT EXISTS "workspaces" (
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "owner_id" text;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "type" text DEFAULT 'personal';
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "settings" jsonb DEFAULT '{}';
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "subscription_tier" text;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "subscription_status" text;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "stripe_customer_id" text;
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS "workspace_members" (
   "id"            uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -67,6 +91,12 @@ CREATE TABLE IF NOT EXISTS "workspace_members" (
   "joined_at"     timestamp with time zone NOT NULL DEFAULT now(),
   "invited_by"    text
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "role" text;
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "joined_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "invited_by" text;
 
 CREATE TABLE IF NOT EXISTS "invites" (
   "id"            uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -79,6 +109,15 @@ CREATE TABLE IF NOT EXISTS "invites" (
   "expires_at"    timestamp with time zone NOT NULL,
   "created_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "email" text;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "role" text;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token" text;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "invited_by" text;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 -- ─── 3. events ───────────────────────────────────────────────────────────────
 
@@ -95,6 +134,17 @@ CREATE TABLE IF NOT EXISTS "events" (
   "user_id"        text      NOT NULL,
   PRIMARY KEY ("id", "timestamp")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "id" uuid DEFAULT gen_random_uuid();
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "timestamp" timestamp with time zone DEFAULT now();
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "subject_id" text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "subject_type" text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "data" jsonb;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "source" text DEFAULT 'api';
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "user_id" text;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -124,6 +174,21 @@ CREATE TABLE IF NOT EXISTS "profiles" (
   "created_at"       timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"       timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "slug" text;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "display_name" text;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "parent_profile_id" uuid;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "ui_hints" jsonb DEFAULT '{}';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_values" jsonb DEFAULT '{}';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "semantic_slug" text;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'workspace';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "entity_scope" text DEFAULT 'workspace';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN
@@ -162,6 +227,10 @@ CREATE TABLE IF NOT EXISTS "profile_workspace_access" (
   "granted_at"    timestamp with time zone NOT NULL DEFAULT now(),
   PRIMARY KEY ("profile_id", "workspace_id")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "profile_id" uuid REFERENCES "profiles"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "granted_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "profile_workspace_access_workspace_idx"
   ON "profile_workspace_access" ("workspace_id");
@@ -182,6 +251,16 @@ CREATE TABLE IF NOT EXISTS "relation_defs" (
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "relation_defs_slug_workspace_unique" UNIQUE ("slug", "workspace_id")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "slug" text;
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "display_name" text;
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "ui_hints" jsonb DEFAULT '{}';
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "is_directional" boolean DEFAULT true;
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "relation_defs" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "relation_defs_workspace_id_idx"
   ON "relation_defs" ("workspace_id");
@@ -201,6 +280,17 @@ CREATE TABLE IF NOT EXISTS "property_defs" (
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "slug" text;
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "profile_id" uuid REFERENCES "profiles"("id") ON DELETE CASCADE;
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "value_type" text;
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "constraints" jsonb DEFAULT '{}';
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "ui_hints" jsonb DEFAULT '{}';
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "relation_def_id" uuid REFERENCES "relation_defs"("id") ON DELETE SET NULL;
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "target_profile_id" uuid REFERENCES "profiles"("id") ON DELETE SET NULL;
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "property_defs" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "property_defs_value_type_idx"
   ON "property_defs" ("value_type");
@@ -235,6 +325,12 @@ CREATE TABLE IF NOT EXISTS "profile_properties" (
   "display_order"   integer NOT NULL DEFAULT 0,
   PRIMARY KEY ("profile_id", "property_def_id")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "profile_properties" ADD COLUMN IF NOT EXISTS "profile_id" uuid REFERENCES "profiles"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_properties" ADD COLUMN IF NOT EXISTS "property_def_id" uuid REFERENCES "property_defs"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_properties" ADD COLUMN IF NOT EXISTS "required" boolean DEFAULT false;
+ALTER TABLE "profile_properties" ADD COLUMN IF NOT EXISTS "default_value" jsonb;
+ALTER TABLE "profile_properties" ADD COLUMN IF NOT EXISTS "display_order" integer DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS "profile_properties_profile_id_idx"
   ON "profile_properties" ("profile_id");
@@ -253,6 +349,13 @@ CREATE TABLE IF NOT EXISTS "profile_relations" (
   "metadata"          jsonb   NOT NULL DEFAULT '{}',
   PRIMARY KEY ("source_profile_id", "target_profile_id", "relation_def_id")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "profile_relations" ADD COLUMN IF NOT EXISTS "source_profile_id" uuid REFERENCES "profiles"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_relations" ADD COLUMN IF NOT EXISTS "target_profile_id" uuid REFERENCES "profiles"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_relations" ADD COLUMN IF NOT EXISTS "relation_def_id" uuid REFERENCES "relation_defs"("id") ON DELETE CASCADE;
+ALTER TABLE "profile_relations" ADD COLUMN IF NOT EXISTS "display_order" integer DEFAULT 0;
+ALTER TABLE "profile_relations" ADD COLUMN IF NOT EXISTS "property_def_id" uuid REFERENCES "property_defs"("id") ON DELETE SET NULL;
+ALTER TABLE "profile_relations" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS "profile_relations_source_profile_id_idx"
   ON "profile_relations" ("source_profile_id");
@@ -285,6 +388,24 @@ CREATE TABLE IF NOT EXISTS "documents" (
   "updated_at"               timestamp with time zone NOT NULL DEFAULT now(),
   "deleted_at"               timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "language" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "storage_url" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "storage_key" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "size" integer DEFAULT 0;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "mime_type" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "current_version" integer DEFAULT 1;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "last_saved_version" integer DEFAULT 0;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state" text;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_updated_at" timestamp with time zone;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "documents_user_id_idx" ON "documents" ("user_id");
 CREATE INDEX IF NOT EXISTS "documents_type_idx"    ON "documents" ("type");
@@ -299,6 +420,14 @@ CREATE TABLE IF NOT EXISTS "document_versions" (
   "message"     text,
   "created_at"  timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "document_id" uuid REFERENCES "documents"("id") ON DELETE CASCADE;
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "version" integer;
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "content" text;
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "author" text;
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "author_id" text;
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "message" text;
+ALTER TABLE "document_versions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "document_versions_document_id_idx"
   ON "document_versions" ("document_id");
@@ -316,6 +445,14 @@ CREATE TABLE IF NOT EXISTS "document_sessions" (
   "started_at"           timestamp with time zone NOT NULL DEFAULT now(),
   "ended_at"             timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "document_id" uuid REFERENCES "documents"("id") ON DELETE CASCADE;
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "channel_id" uuid;
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "active_collaborators" jsonb;
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "document_sessions" ADD COLUMN IF NOT EXISTS "ended_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "document_sessions_document_id_idx"
   ON "document_sessions" ("document_id");
@@ -344,6 +481,20 @@ CREATE TABLE IF NOT EXISTS "entities" (
   "updated_at"   timestamp with time zone NOT NULL DEFAULT now(),
   "deleted_at"   timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "profile_id" uuid REFERENCES "profiles"("id") ON DELETE SET NULL;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "preview" text;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "document_id" uuid REFERENCES "documents"("id") ON DELETE SET NULL;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "properties" jsonb DEFAULT '{}';
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "system_data" jsonb DEFAULT '{}';
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "entities_workspace_id_idx"
   ON "entities" ("workspace_id");
@@ -377,6 +528,15 @@ CREATE TABLE IF NOT EXISTS "entity_property_index" (
   "value_jsonb"     jsonb,
   PRIMARY KEY ("entity_id", "property_def_id")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "property_def_id" uuid REFERENCES "property_defs"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "value_text" text;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "value_num" numeric;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "value_bool" boolean;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "value_ts" timestamp with time zone;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "value_entity_id" uuid;
+ALTER TABLE "entity_property_index" ADD COLUMN IF NOT EXISTS "value_jsonb" jsonb;
 
 CREATE INDEX IF NOT EXISTS "entity_property_index_property_value_text_idx"
   ON "entity_property_index" ("property_def_id", "value_text");
@@ -410,6 +570,16 @@ CREATE TABLE IF NOT EXISTS "entity_vectors" (
   "indexed_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "embedding" vector(1536);
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "embedding_model" text DEFAULT 'text-embedding-3-small';
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "entity_type" text;
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "preview" text;
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "file_url" text;
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "indexed_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entity_vectors" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "entity_vectors_user_id_idx"
   ON "entity_vectors" ("user_id");
@@ -433,6 +603,16 @@ CREATE TABLE IF NOT EXISTS "entity_external_links" (
   "disconnected_at"       timestamp with time zone,
   "created_at"            timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "provider" text;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "external_id" text;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "nango_connection_id" text;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "sync_hash" text;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "disconnected_at" timestamp with time zone;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE UNIQUE INDEX IF NOT EXISTS "entity_external_links_provider_external_id_idx"
   ON "entity_external_links" ("provider", "external_id");
@@ -459,6 +639,12 @@ CREATE TABLE IF NOT EXISTS "entity_identity_signals" (
   "source"       text  NOT NULL,
   "created_at"   timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_identity_signals" ADD COLUMN IF NOT EXISTS "entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_identity_signals" ADD COLUMN IF NOT EXISTS "signal_type" text;
+ALTER TABLE "entity_identity_signals" ADD COLUMN IF NOT EXISTS "signal_value" text;
+ALTER TABLE "entity_identity_signals" ADD COLUMN IF NOT EXISTS "source" text;
+ALTER TABLE "entity_identity_signals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE UNIQUE INDEX IF NOT EXISTS "entity_identity_signals_type_value_idx"
   ON "entity_identity_signals" ("signal_type", "signal_value");
@@ -498,6 +684,21 @@ CREATE TABLE IF NOT EXISTS "entity_templates" (
     "user_id", "workspace_id", "target_type", "entity_type", "inbox_item_type", "is_default"
   )
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "target_type" text;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "entity_type" text;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "inbox_item_type" text;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "config" jsonb DEFAULT '{}';
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "schema" jsonb;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "is_default" boolean DEFAULT false;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "is_public" boolean DEFAULT false;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entity_templates" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_templates_user"
   ON "entity_templates" ("user_id");
@@ -526,6 +727,14 @@ CREATE TABLE IF NOT EXISTS "relations" (
   "metadata"         jsonb DEFAULT '{}',
   "created_at"       timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "source_entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "target_entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "relations_source_entity_id_idx"
   ON "relations" ("source_entity_id");
@@ -567,6 +776,30 @@ CREATE TABLE IF NOT EXISTS "views" (
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "category" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "scope_profile_ids" uuid[];
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "scope_mode" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "query" jsonb DEFAULT '{}';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "config" jsonb DEFAULT '{}';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "filter" jsonb DEFAULT '{}';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "sort" jsonb DEFAULT '{}';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "columns" jsonb DEFAULT '[]';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "layout_config" jsonb DEFAULT '{}';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "document_id" uuid REFERENCES "documents"("id") ON DELETE SET NULL;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "yjs_room_id" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "thumbnail_url" text;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "schema_snapshot" jsonb;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "snapshot_updated_at" timestamp with time zone;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "embedded_view_ids" uuid[];
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "views_workspace_id_idx"
   ON "views" ("workspace_id");
@@ -607,6 +840,32 @@ CREATE TABLE IF NOT EXISTS "channels" (
   "updated_at"            timestamp with time zone NOT NULL DEFAULT now(),
   "merged_at"             timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "channel_type" text DEFAULT 'thread';
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'workspace';
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "feed_scope" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "context_object_type" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "context_object_id" uuid;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "parent_channel_id" uuid;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "branched_from_message_id" uuid;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "branch_purpose" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "agent_id" text DEFAULT 'orchestrator';
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "agent_type" text DEFAULT 'none';
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "agent_config" jsonb;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "mcp_server_id" uuid[];
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "context_summary" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "result_summary" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "merged_into_state_id" uuid;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "external_source" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "external_channel_id" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "merged_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "channels_user_id_idx"
   ON "channels" ("user_id");
@@ -644,6 +903,15 @@ CREATE TABLE IF NOT EXISTS "channel_connections" (
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "channel_connections_channel_user_unique" UNIQUE ("channel", "channel_user_id")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "channel" text;
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "channel_user_id" text;
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "user_id" text REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE SET NULL;
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "default_channel_id" uuid REFERENCES "channels"("id") ON DELETE SET NULL;
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "external_username" text;
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "channel_connections" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "channel_connections_channel_user_idx"
   ON "channel_connections" ("channel", "channel_user_id");
@@ -662,6 +930,15 @@ CREATE TABLE IF NOT EXISTS "channel_link_tokens" (
   "used_at"             timestamp with time zone,
   "created_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "token" text;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "channel" text;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "user_id" text REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE SET NULL;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "default_channel_id" uuid REFERENCES "channels"("id") ON DELETE SET NULL;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "used_at" timestamp with time zone;
+ALTER TABLE "channel_link_tokens" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "channel_link_tokens_token_idx"
   ON "channel_link_tokens" ("token");
@@ -687,6 +964,17 @@ CREATE TABLE IF NOT EXISTS "channel_context_items" (
     "channel_id", "object_id", "object_type", "relationship_type"
   )
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "object_type" text;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "object_id" uuid;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "relationship_type" text;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "conflict_status" text DEFAULT 'none';
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "source_message_id" uuid;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "relevance_score" real;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "channel_context_items" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "channel_context_channel_idx"
   ON "channel_context_items" ("channel_id");
@@ -718,6 +1006,17 @@ CREATE TABLE IF NOT EXISTS "sessions" (
   "compaction_count"    integer DEFAULT 0,
   "status"              text    NOT NULL DEFAULT 'active'
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "ended_at" timestamp with time zone;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "last_activity_at" timestamp with time zone;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "bootstrap_state_id" uuid;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "produced_state_id" uuid;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "total_tokens_used" integer DEFAULT 0;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "message_count" integer DEFAULT 0;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "compaction_count" integer DEFAULT 0;
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
 
 CREATE INDEX IF NOT EXISTS "sessions_channel_id_idx"
   ON "sessions" ("channel_id");
@@ -747,6 +1046,20 @@ CREATE TABLE IF NOT EXISTS "compacted_states" (
   "created_at"              timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "compacted_states_channel_version_unique" UNIQUE ("channel_id", "version")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "sessions"("id") ON DELETE SET NULL;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "identity_block" text DEFAULT '';
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "user_model_block" text DEFAULT '';
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "continuity_block" text DEFAULT '';
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "active_goals_block" text DEFAULT '';
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "entity_context_block" text DEFAULT '';
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "raw_token_count" integer;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "compressed_token_count" integer;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "compaction_model" text;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "compacted_states" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "compacted_states_channel_version_idx"
   ON "compacted_states" ("channel_id", "version");
@@ -809,6 +1122,25 @@ CREATE TABLE IF NOT EXISTS "inbox_items" (
   "created_at"    timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "provider" varchar(50);
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "account" varchar(255);
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "external_id" varchar(500);
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "deep_link" text;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "type" varchar(50);
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "preview" text;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "timestamp" timestamp with time zone;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "status" varchar(20) DEFAULT 'unread';
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "snoozed_until" timestamp with time zone;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "priority" varchar(20);
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "tags" text[];
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "data" jsonb DEFAULT '{}';
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "processed_at" timestamp with time zone;
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "inbox_items" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_inbox_user_status"
   ON "inbox_items" ("user_id", "status");
@@ -849,6 +1181,22 @@ CREATE TABLE IF NOT EXISTS "messages" (
   "session_id"       uuid  REFERENCES "sessions"("id") ON DELETE SET NULL,
   "deleted_at"       timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "parent_id" uuid;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "role" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "author_type" text DEFAULT 'human';
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "message_category" text DEFAULT 'chat';
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "external_source" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "inbox_item_id" uuid REFERENCES "inbox_items"("id") ON DELETE SET NULL;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "content" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "timestamp" timestamp with time zone DEFAULT now();
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "previous_hash" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "hash" text;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "sessions"("id") ON DELETE SET NULL;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "messages_channel_id_idx"
   ON "messages" ("channel_id");
@@ -905,6 +1253,16 @@ CREATE TABLE IF NOT EXISTS "message_links" (
   "workspace_id"      uuid  NOT NULL,
   "created_at"        timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "message_id" uuid REFERENCES "messages"("id") ON DELETE CASCADE;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "target_type" text;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "target_id" uuid;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "relationship_type" text;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "position" jsonb;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "message_links" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "message_links_message_id_idx"
   ON "message_links" ("message_id");
@@ -942,6 +1300,23 @@ CREATE TABLE IF NOT EXISTS "intelligence_commands" (
   "created_at"                   timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"                   timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "prompt_template" text;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "compiled_template_ast" jsonb;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "derived_inputs" jsonb;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "input_overrides" jsonb;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "allowed_tools" jsonb;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "allowed_entity_types" jsonb;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "max_entities_created_per_run" integer;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "can_create_views" boolean DEFAULT false;
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "output_mode" text DEFAULT 'text';
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "permissions_profile" text DEFAULT 'propose_writes';
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "shared_scope" text DEFAULT 'workspace';
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "intelligence_commands" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "intelligence_commands_workspace_id_idx"
   ON "intelligence_commands" ("workspace_id");
@@ -968,6 +1343,21 @@ CREATE TABLE IF NOT EXISTS "command_runs" (
   "completed_at"               timestamp with time zone,
   "error_message"              text
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "thread_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "command_id" uuid REFERENCES "intelligence_commands"("id") ON DELETE CASCADE;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "permissions_snapshot" jsonb;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "inputs" jsonb;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "selection_context_snapshot" jsonb;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "output_summary" text;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "proposed_actions" jsonb;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "approved_actions" jsonb;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'running';
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
+ALTER TABLE "command_runs" ADD COLUMN IF NOT EXISTS "error_message" text;
 
 CREATE INDEX IF NOT EXISTS "command_runs_command_id_idx"
   ON "command_runs" ("command_id");
@@ -1007,6 +1397,25 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "workspace_id" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "target_type" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "target_id" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "proposal_type" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "data" jsonb;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'pending';
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "thread_id" uuid REFERENCES "channels"("id") ON DELETE SET NULL;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "command_run_id" uuid REFERENCES "command_runs"("id") ON DELETE SET NULL;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "source_message_id" uuid REFERENCES "messages"("id") ON DELETE SET NULL;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "agent_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_workspace_status"
   ON "proposals" ("workspace_id", "status");
@@ -1044,6 +1453,14 @@ CREATE TABLE IF NOT EXISTS "knowledge_facts" (
   "embedding"         vector(1536) NOT NULL,
   "created_at"        timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "fact" text;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "source_entity_id" uuid;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "source_message_id" uuid;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "confidence" real DEFAULT 0.5;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "embedding" vector(1536);
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 -- ─── 30. skills ──────────────────────────────────────────────────────────────
 
@@ -1067,6 +1484,24 @@ CREATE TABLE IF NOT EXISTS "skills" (
   "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "kind" text DEFAULT 'code';
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'pod';
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "agent_types" jsonb;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "code" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "parameters" jsonb;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "category" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "execution_mode" text DEFAULT 'sync';
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "timeout_seconds" integer DEFAULT 30;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "error_message" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
@@ -1091,6 +1526,19 @@ CREATE TABLE IF NOT EXISTS "skill_triggers" (
   "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "skill_id" uuid REFERENCES "skills"("id") ON DELETE CASCADE;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "event_pattern" text;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "filters" jsonb;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "cron_expression" text;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "channel_type" text DEFAULT 'personal';
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "automation_id" uuid;
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "skill_triggers_skill_id_idx"
   ON "skill_triggers" ("skill_id");
@@ -1123,6 +1571,24 @@ CREATE TABLE IF NOT EXISTS "agents" (
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "llm_provider" text DEFAULT 'claude';
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "llm_model" text;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "capabilities" text[];
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "system_prompt" text;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "tools_config" jsonb;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "execution_mode" text DEFAULT 'simple';
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "max_iterations" integer DEFAULT 5;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "timeout_seconds" integer DEFAULT 30;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "weight" decimal(5, 2) DEFAULT 1.0;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "performance_metrics" jsonb;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "active" boolean DEFAULT true;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "agents_created_by_idx" ON "agents" ("created_by");
 CREATE INDEX IF NOT EXISTS "agents_user_id_idx"    ON "agents" ("user_id");
@@ -1145,6 +1611,17 @@ CREATE TABLE IF NOT EXISTS "agent_configs" (
   CONSTRAINT "agent_configs_user_workspace_agent_unique"
     UNIQUE ("user_id", "workspace_id", "agent_type")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "agent_type" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "prompt_append" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "extra_tool_ids" jsonb DEFAULT '[]';
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "disabled_tool_ids" jsonb DEFAULT '[]';
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "max_steps_override" integer;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "model_override" text;
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "agent_configs" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "agent_configs_user_id_idx"
   ON "agent_configs" ("user_id");
@@ -1177,6 +1654,24 @@ CREATE TABLE IF NOT EXISTS "intelligence_services" (
   "last_health_check"   timestamp with time zone,
   "last_health_status"  text
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "service_id" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "version" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "webhook_url" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "mcp_endpoint" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "api_key" text;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "capabilities" jsonb DEFAULT '[]';
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "pricing" text DEFAULT 'free';
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "mcp_approved" boolean DEFAULT false;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "last_health_check" timestamp with time zone;
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "last_health_status" text;
 
 -- ─── 35. automations + automation_runs + automation_step_runs ────────────────
 
@@ -1200,6 +1695,24 @@ CREATE TABLE IF NOT EXISTS "automations" (
   "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "trigger_type" text;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "trigger_config" jsonb DEFAULT '{}';
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "flow_definition" jsonb DEFAULT '{"nodes":[],"edges":[]}';
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'draft';
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "error_message" text;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "last_run_at" timestamp with time zone;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "next_run_at" timestamp with time zone;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "run_count" integer DEFAULT 0;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "success_count" integer DEFAULT 0;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "failure_count" integer DEFAULT 0;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "automations_workspace_id_idx"
   ON "automations" ("workspace_id");
@@ -1230,6 +1743,18 @@ CREATE TABLE IF NOT EXISTS "automation_runs" (
   "started_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "completed_at"    timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "automation_id" uuid REFERENCES "automations"("id") ON DELETE CASCADE;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "triggered_by" text;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "trigger_payload" jsonb DEFAULT '{}';
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'running';
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "error_message" text;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "steps_completed" integer DEFAULT 0;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "steps_failed" integer DEFAULT 0;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "output_summary" jsonb;
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");
@@ -1252,6 +1777,16 @@ CREATE TABLE IF NOT EXISTS "automation_step_runs" (
   "started_at"       timestamp with time zone,
   "completed_at"     timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "run_id" uuid REFERENCES "automation_runs"("id") ON DELETE CASCADE;
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "node_id" text;
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "command_id" uuid;
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'pending';
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "resolved_inputs" jsonb DEFAULT '{}';
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "output" jsonb DEFAULT '{}';
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "error_message" text;
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "started_at" timestamp with time zone;
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "completed_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "automation_step_runs_run_id_idx"
   ON "automation_step_runs" ("run_id");
@@ -1278,6 +1813,24 @@ CREATE TABLE IF NOT EXISTS "notifications" (
   "expires_at"    timestamp with time zone,
   "created_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "workspace_id" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "category" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "priority" text DEFAULT 'normal';
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "title" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "body" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "icon" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "source_type" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "source_id" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "workspace_url" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "actions" jsonb DEFAULT '[]';
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "group_key" text;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'unread';
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" timestamp with time zone;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "notifs_user_workspace_status_idx"
   ON "notifications" ("user_id", "workspace_id", "status", "created_at");
@@ -1301,6 +1854,17 @@ CREATE TABLE IF NOT EXISTS "notification_preferences" (
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "workspace_id" text;
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true;
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "quiet_hours_enabled" boolean DEFAULT false;
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "quiet_hours_start" text DEFAULT '22:00';
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "quiet_hours_end" text DEFAULT '08:00';
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "routing_rules" jsonb DEFAULT '{}';
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "sound_enabled" boolean DEFAULT true;
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "notification_preferences" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "notif_prefs_user_workspace_idx"
   ON "notification_preferences" ("user_id", "workspace_id");
@@ -1336,6 +1900,26 @@ CREATE TABLE IF NOT EXISTS "api_keys" (
   CONSTRAINT "api_keys_key_prefix_check"
     CHECK ("key_prefix" IN ('synap_hub_live_', 'synap_hub_test_', 'synap_user_'))
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_name" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_prefix" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_hash" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_type" text DEFAULT 'hub_inbound';
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "hub_id" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "scope" text[] DEFAULT '{}';
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "last_used_at" timestamp with time zone;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "usage_count" bigint DEFAULT 0;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotated_from_id" uuid;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotation_scheduled_at" timestamp with time zone;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_by" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_reason" text;
 
 -- ─── 38. provisioning_tokens ─────────────────────────────────────────────────
 
@@ -1345,6 +1929,10 @@ CREATE TABLE IF NOT EXISTS "provisioning_tokens" (
   "used_at"     timestamp with time zone,
   "created_at"  timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "provisioning_tokens" ADD COLUMN IF NOT EXISTS "token_hash" text;
+ALTER TABLE "provisioning_tokens" ADD COLUMN IF NOT EXISTS "used_at" timestamp with time zone;
+ALTER TABLE "provisioning_tokens" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_provisioning_tokens_token_hash"
   ON "provisioning_tokens" ("token_hash");
@@ -1381,6 +1969,34 @@ CREATE TABLE IF NOT EXISTS "secrets" (
   "created_at"             timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"             timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "type" secret_type DEFAULT 'password';
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "url" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "category" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "icon_url" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "encrypted_data" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "encryption_version" integer DEFAULT 1;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "iv" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "auth_tag" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "encryption_mode" text DEFAULT 'client';
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "service_id" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_favorite" boolean DEFAULT false;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "sort_order" integer DEFAULT 0;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "last_accessed_at" timestamp with time zone;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "access_count" integer DEFAULT 0;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "password_strength" integer;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "password_last_changed" timestamp with time zone;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_compromised" boolean DEFAULT false;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "compromised_at" timestamp with time zone;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_shared" boolean DEFAULT false;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "deleted_by" text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_secrets_user_id"         ON "secrets" ("user_id");
 CREATE INDEX IF NOT EXISTS "idx_secrets_workspace_id"    ON "secrets" ("workspace_id");
@@ -1400,6 +2016,10 @@ CREATE TABLE IF NOT EXISTS "secret_tags" (
   "created_at" timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "secret_tags_unique" UNIQUE ("secret_id", "tag")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "secret_tags" ADD COLUMN IF NOT EXISTS "secret_id" uuid REFERENCES "secrets"("id") ON DELETE CASCADE;
+ALTER TABLE "secret_tags" ADD COLUMN IF NOT EXISTS "tag" text;
+ALTER TABLE "secret_tags" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_secret_tags_tag" ON "secret_tags" ("tag");
 
@@ -1415,6 +2035,16 @@ CREATE TABLE IF NOT EXISTS "secret_shares" (
   "revoked_by"               text,
   "created_at"               timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "secret_id" uuid REFERENCES "secrets"("id") ON DELETE CASCADE;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "shared_with_user_id" text;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "shared_with_workspace_id" uuid;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "permission" text DEFAULT 'read';
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "shared_by" text;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "revoked_by" text;
+ALTER TABLE "secret_shares" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_secret_shares_secret_id"
   ON "secret_shares" ("secret_id");
@@ -1435,6 +2065,14 @@ CREATE TABLE IF NOT EXISTS "secret_audit_log" (
   "metadata"    jsonb,
   "created_at"  timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "secret_id" uuid REFERENCES "secrets"("id") ON DELETE CASCADE;
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "action" text;
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "ip_address" text;
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "user_agent" text;
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+ALTER TABLE "secret_audit_log" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_secret_audit_log_secret_id"
   ON "secret_audit_log" ("secret_id");
@@ -1460,6 +2098,19 @@ CREATE TABLE IF NOT EXISTS "secret_vault_keys" (
   "updated_at"              timestamp with time zone NOT NULL DEFAULT now(),
   "last_unlocked_at"        timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "salt" text;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "key_derivation_algorithm" text DEFAULT 'argon2id';
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "key_derivation_params" jsonb;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "verification_cipher" text;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "verification_iv" text;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "verification_tag" text;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "recovery_key_hash" text;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "recovery_key_created_at" timestamp with time zone;
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "secret_vault_keys" ADD COLUMN IF NOT EXISTS "last_unlocked_at" timestamp with time zone;
 
 -- ─── 40. user_preferences ────────────────────────────────────────────────────
 
@@ -1477,6 +2128,18 @@ CREATE TABLE IF NOT EXISTS "user_preferences" (
   "onboarding_step"                   text,
   "updated_at"                        timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "theme" text DEFAULT 'system';
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "custom_theme" jsonb;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "default_templates" jsonb;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "custom_entity_types" jsonb;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "entity_metadata_schemas" jsonb;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "ui_preferences" jsonb DEFAULT '{}';
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "graph_preferences" jsonb DEFAULT '{}';
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "intelligence_service_preferences" jsonb DEFAULT '{}';
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "onboarding_completed" boolean DEFAULT false;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "onboarding_step" text;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 -- ─── 41. user_entity_state ───────────────────────────────────────────────────
 
@@ -1492,6 +2155,16 @@ CREATE TABLE IF NOT EXISTS "user_entity_state" (
   "updated_at"    timestamp with time zone NOT NULL DEFAULT now(),
   PRIMARY KEY ("user_id", "item_id", "item_type")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "item_id" uuid;
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "item_type" varchar(20);
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "starred" boolean DEFAULT false;
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "pinned" boolean DEFAULT false;
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "last_viewed_at" timestamp with time zone;
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "view_count" integer DEFAULT 0;
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "user_entity_state" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_user_state_starred"
   ON "user_entity_state" ("user_id", "starred");
@@ -1513,6 +2186,13 @@ CREATE TABLE IF NOT EXISTS "admin_invitations" (
   "backend_domain"  text  NOT NULL,
   "created_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "admin_invitations" ADD COLUMN IF NOT EXISTS "email" text;
+ALTER TABLE "admin_invitations" ADD COLUMN IF NOT EXISTS "token_hash" text;
+ALTER TABLE "admin_invitations" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "admin_invitations" ADD COLUMN IF NOT EXISTS "used_at" timestamp with time zone;
+ALTER TABLE "admin_invitations" ADD COLUMN IF NOT EXISTS "backend_domain" text;
+ALTER TABLE "admin_invitations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "idx_admin_invitations_email"
   ON "admin_invitations" ("email");
@@ -1533,6 +2213,15 @@ CREATE TABLE IF NOT EXISTS "entity_enrichments" (
   "user_id"          text      NOT NULL,
   "created_at"       timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "enrichment_type" text;
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "source_event_id" uuid;
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "agent_id" text;
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "confidence" decimal(3, 2);
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "data" jsonb;
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "entity_enrichments" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "entity_enrichments_entity_id_idx"
   ON "entity_enrichments" ("entity_id");
@@ -1561,6 +2250,16 @@ CREATE TABLE IF NOT EXISTS "entity_relationships" (
     "source_entity_id", "target_entity_id", "relationship_type"
   )
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "source_entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "target_entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "relationship_type" text;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "source_event_id" uuid;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "agent_id" text;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "confidence" decimal(3, 2);
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "context" text;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "entity_relationships" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "entity_relationships_source_idx"
   ON "entity_relationships" ("source_entity_id");
@@ -1583,6 +2282,16 @@ CREATE TABLE IF NOT EXISTS "reasoning_traces" (
   "user_id"         text  NOT NULL,
   "created_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "subject_type" text;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "subject_id" uuid;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "source_event_id" uuid;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "agent_id" text;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "steps" jsonb;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "outcome" jsonb;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "metrics" jsonb;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "reasoning_traces" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "reasoning_traces_subject_idx"
   ON "reasoning_traces" ("subject_type", "subject_id");
@@ -1616,6 +2325,25 @@ CREATE TABLE IF NOT EXISTS "background_tasks" (
   "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "type" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "schedule" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "action" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "context" jsonb DEFAULT '{}';
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "error_message" text;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "last_run_at" timestamp with time zone;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "next_run_at" timestamp with time zone;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "execution_count" integer DEFAULT 0;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "success_count" integer DEFAULT 0;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "failure_count" integer DEFAULT 0;
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "background_tasks_user_id_idx"
   ON "background_tasks" ("user_id");
@@ -1655,6 +2383,25 @@ CREATE TABLE IF NOT EXISTS "widget_definitions" (
   "created_at"       timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"       timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "type_key" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "icon" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "category" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "renderer_type" text DEFAULT 'builtin';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "renderer_source" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "source" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "bundle_source" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "config_schema" jsonb DEFAULT '{}';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "default_config" jsonb DEFAULT '{}';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "default_size" jsonb DEFAULT '{"w":6,"h":4}';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "min_size" jsonb;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "version" text DEFAULT '1.0.0';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");
@@ -1688,6 +2435,24 @@ CREATE TABLE IF NOT EXISTS "mcp_servers" (
   "updated_at"    timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "mcp_servers_workspace_slug_unique" UNIQUE ("workspace_id", "slug")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "slug" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "description" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "transport" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "command" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "args" jsonb DEFAULT '[]';
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "url" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "env" jsonb DEFAULT '{}';
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "approved" boolean DEFAULT false;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'unknown';
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "last_ping_at" timestamp with time zone;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "error_message" text;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "mcp_servers_workspace_id_idx"
   ON "mcp_servers" ("workspace_id");
@@ -1716,6 +2481,23 @@ CREATE TABLE IF NOT EXISTS "resource_shares" (
   "view_count"      integer DEFAULT 0,
   "last_accessed_at" timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "resource_type" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "resource_id" uuid;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "visibility" text DEFAULT 'private';
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "public_token" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "token_hash" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "password_hash" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "access" text DEFAULT 'anyone_with_link';
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "invited_users" text[] DEFAULT '{}';
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "permissions" jsonb DEFAULT '{"read":true}';
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "view_count" integer DEFAULT 0;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "last_accessed_at" timestamp with time zone;
 
 -- ─── 48. sync tables (sync_peers, sync_state, sync_conflicts) ────────────────
 
@@ -1730,6 +2512,15 @@ CREATE TABLE IF NOT EXISTS "sync_peers" (
   "created_at"    timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "peer_pod_url" text;
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "direction" text;
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true;
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "label" text;
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "auth_token" text;
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "workspace_ids" text[];
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS "sync_state" (
   "id"                    uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1746,6 +2537,19 @@ CREATE TABLE IF NOT EXISTS "sync_state" (
   "created_at"            timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"            timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "sync_peer_id" uuid REFERENCES "sync_peers"("id") ON DELETE CASCADE;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "last_cursor" timestamp with time zone;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "last_push_cursor" timestamp with time zone;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "last_pull_cursor" timestamp with time zone;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "last_sync_at" timestamp with time zone;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'idle';
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "error_count" integer DEFAULT 0;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "last_error" text;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "events_processed" integer DEFAULT 0;
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "supplementary_cursors" jsonb DEFAULT '{}';
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "sync_state" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS "sync_conflicts" (
   "id"                uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1758,6 +2562,15 @@ CREATE TABLE IF NOT EXISTS "sync_conflicts" (
   "event_data"        jsonb,
   "created_at"        timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "sync_peer_id" uuid REFERENCES "sync_peers"("id") ON DELETE SET NULL;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "subject_type" text;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "subject_id" text;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "local_timestamp" timestamp with time zone;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "remote_timestamp" timestamp with time zone;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "resolution" text;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "event_data" jsonb;
+ALTER TABLE "sync_conflicts" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 -- ─── 49. sync_generation ─────────────────────────────────────────────────────
 
@@ -1777,6 +2590,19 @@ CREATE TABLE IF NOT EXISTS "sync_generation" (
   "created_at"             timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"             timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "generation" bigint DEFAULT 0;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "role" text DEFAULT 'primary';
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "promoted_at" timestamp with time zone;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "promoted_from" text;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "last_peer_generation" bigint DEFAULT 0;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "last_peer_contact" timestamp with time zone;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "split_brain_detected" boolean DEFAULT false;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "split_brain_detected_at" timestamp with time zone;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "split_brain_local_gen" bigint;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "split_brain_remote_gen" bigint;
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "sync_generation" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 INSERT INTO "sync_generation" ("id", "generation", "role")
 VALUES ('current', 0, 'primary')
@@ -1799,6 +2625,18 @@ CREATE TABLE IF NOT EXISTS "signal_subscriptions" (
   "last_fetched_at"         timestamp with time zone,
   PRIMARY KEY ("user_id", "workspace_id", "topic", "source_platform", "source_route")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "user_id" uuid REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "topic" text;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "source_platform" text;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "source_route" text;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "confidence" numeric(3, 2) DEFAULT 0.50;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "notification_preference" text DEFAULT 'none';
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "last_fetched_at" timestamp with time zone;
 
 -- Drop the surrogate PK and re-add composite (Drizzle uses array primaryKey)
 -- The table is created with composite PK above; drop generated UUID PK if exists
@@ -1828,6 +2666,20 @@ CREATE TABLE IF NOT EXISTS "signal_classifications" (
   "decay_rate"       numeric(3, 2) NOT NULL DEFAULT 0.95,
   "last_decay_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "user_id" uuid REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "topic" text;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "confidence" numeric(3, 2) DEFAULT 0.00;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "source_type" text;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "source_entity_id" uuid;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "source_signal_id" uuid REFERENCES "entities"("id") ON DELETE SET NULL;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "occurrence_count" integer DEFAULT 1;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "total_weight" numeric(6, 3) DEFAULT 1.000;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "first_seen_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "last_seen_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "decay_rate" numeric(3, 2) DEFAULT 0.95;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "last_decay_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "signal_classifications_confidence_idx"
   ON "signal_classifications" ("confidence" DESC)
@@ -1852,6 +2704,20 @@ CREATE TABLE IF NOT EXISTS "signal_fetch_history" (
   "user_agent"          text,
   "client_ip"           text
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "user_id" uuid REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "source_route" text;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "source_platform" text;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "fetch_type" text;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "item_count" integer DEFAULT 0;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "error_count" integer DEFAULT 0;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "cache_hit" boolean DEFAULT false;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "duration_ms" integer;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "response_size_bytes" integer;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "fetched_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "user_agent" text;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "client_ip" text;
 
 CREATE INDEX IF NOT EXISTS "signal_fetch_history_user_time_idx"
   ON "signal_fetch_history" ("user_id", "fetched_at" DESC);
@@ -1872,6 +2738,16 @@ CREATE TABLE IF NOT EXISTS "signal_auto_links" (
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now(),
   PRIMARY KEY ("signal_entity_id", "linked_entity_id", "link_type")
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "signal_entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "linked_entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "link_type" text;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "link_strength" numeric(3, 2) DEFAULT 0.50;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "link_context" text;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "source" text;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "source_model" text;
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "signal_auto_links" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "signal_auto_links_signal_idx"
   ON "signal_auto_links" ("signal_entity_id");
@@ -1896,6 +2772,16 @@ CREATE TABLE IF NOT EXISTS "webhook_subscriptions" (
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "last_triggered_at" timestamp with time zone
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "name" text;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "url" text;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "event_types" text[];
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "secret" text;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "active" boolean DEFAULT true;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "retry_config" jsonb DEFAULT '{"maxRetries":3}';
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "last_triggered_at" timestamp with time zone;
 
 CREATE TABLE IF NOT EXISTS "webhook_deliveries" (
   "id"               uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1907,6 +2793,14 @@ CREATE TABLE IF NOT EXISTS "webhook_deliveries" (
   "delivered_at"     timestamp with time zone,
   "created_at"       timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "subscription_id" uuid REFERENCES "webhook_subscriptions"("id") ON DELETE CASCADE;
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "event_id" uuid;
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "status" text;
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "response_status" integer;
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "attempt" integer DEFAULT 1;
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "delivered_at" timestamp with time zone;
+ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 -- ─── Additional performance indexes (migration 0055) ─────────────────────────
 
@@ -1931,6 +2825,9 @@ CREATE TABLE IF NOT EXISTS "_migrations" (
   "filename"   text        NOT NULL UNIQUE,
   "applied_at" timestamp with time zone NOT NULL DEFAULT now()
 );
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "_migrations" ADD COLUMN IF NOT EXISTS "filename" text;
+ALTER TABLE "_migrations" ADD COLUMN IF NOT EXISTS "applied_at" timestamp with time zone DEFAULT now();
 
 -- ─── Mark all legacy migration files as applied ───────────────────────────────
 -- Prevents the runner from re-executing these on existing pods that already
