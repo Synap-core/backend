@@ -228,9 +228,6 @@ const deliveryMetrics = new DeliveryMetrics();
 
 // ── Dead Letter Queue ────────────────────────────────────────────────────────
 
-const _DEAD_LETTER_QUEUE = "delivery-dead-letter";
-const _DELIVERY_RETRY_QUEUE = "delivery-retry";
-
 interface FailedDelivery {
   request: DeliveryRequest;
   surface: DeliverySurface;
@@ -245,7 +242,7 @@ interface FailedDelivery {
  * NOTE: Retry queue functionality temporarily disabled to avoid circular dependency.
  * The caller should handle retries or use the delivery-retry-worker directly.
  */
-async function _queueForRetry(
+async function queueForRetry(
   _failedDelivery: FailedDelivery,
   _delayMinutes: number = 5
 ): Promise<void> {
@@ -257,7 +254,9 @@ async function _queueForRetry(
 /**
  * Send a failed delivery to the dead letter queue after max retries.
  * NOTE: Dead letter queue functionality temporarily disabled.
+ * @deprecated This function is a placeholder for future implementation.
  */
+// @ts-ignore - intentionally unused, reserved for future implementation
 async function _sendToDeadLetter(
   _failedDelivery: FailedDelivery
 ): Promise<void> {

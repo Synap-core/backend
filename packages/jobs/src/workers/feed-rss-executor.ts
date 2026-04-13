@@ -427,12 +427,23 @@ async function postRSSItems(
         .update(`${messageId}${content}`)
         .digest("hex");
 
+      const firstItem = items[0]?.item;
       const metadata: FeedMessageMetadata = {
+        feedItem: true,
         feedType: "rss",
+        source: {
+          platform: firstItem?.source?.name ?? "rss",
+          url: firstItem?.url ?? "",
+          author: firstItem?.author,
+          publishedAt: firstItem?.publishedAt?.toISOString(),
+        },
+        topics: [],
+        categories: [],
+        relevanceScore: 0.5,
+        aiClassified: true,
+        crossFeeds: [],
         batched: true,
         batchId,
-        aiClassified: true,
-        sourceUrl: items[0]?.item.source.url,
       };
 
       await db.insert(messages).values({

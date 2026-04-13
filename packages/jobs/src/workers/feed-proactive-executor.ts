@@ -404,9 +404,18 @@ async function postDigest(
       .digest("hex");
 
     const metadata: FeedMessageMetadata = {
+      feedItem: true,
       feedType: "proactive",
-      batched: true,
+      source: {
+        platform: "proactive",
+        url: "",
+      },
+      topics: [],
+      categories: [],
+      relevanceScore: 0.5,
       aiClassified: true,
+      crossFeeds: [],
+      batched: true,
     };
 
     await db.insert(messages).values({

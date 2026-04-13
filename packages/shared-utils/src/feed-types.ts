@@ -9,17 +9,10 @@
  */
 
 import { z } from "zod";
-import type {
-  FeedMessageMetadata,
-  RSSFeedConfig,
-  ProactiveFeedConfig,
-} from "@synap-core/types/feeds";
+import type { FeedMessageMetadata } from "@synap-core/types/feeds";
 
 // Re-export the canonical type from @synap-core/types
 export type { FeedMessageMetadata };
-
-// Re-export feed config types
-export type { RSSFeedConfig, ProactiveFeedConfig };
 
 // ============================================================================
 // Feed Types
@@ -222,6 +215,12 @@ export const UpdateFeedInputSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   nudgeDensity: z.enum(["low", "medium", "high"]).optional(),
   categories: z.array(z.string()).optional(),
+});
+
+export const FeedFetchOptionsSchema = z.object({
+  force: z.boolean().optional(),
+  maxItems: z.number().optional(),
+  timeout: z.number().optional(),
 });
 
 export const FetchFeedInputSchema = z.object({
