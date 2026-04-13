@@ -134,17 +134,10 @@ CREATE TABLE IF NOT EXISTS "events" (
   "user_id"        text      NOT NULL,
   PRIMARY KEY ("id", "timestamp")
 );
--- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "id" uuid DEFAULT gen_random_uuid();
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "timestamp" timestamp with time zone DEFAULT now();
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "type" text;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "subject_id" text;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "subject_type" text;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "data" jsonb;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "source" text DEFAULT 'api';
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
-ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "user_id" text;
+-- NOTE: No ALTER TABLE guard for "events" — it is a TimescaleDB hypertable
+-- with columnstore compression. ALTER TABLE ADD COLUMN with non-constant defaults
+-- is not supported on compressed hypertables. The CREATE TABLE IF NOT EXISTS above
+-- handles fresh installs; existing hypertables already have the correct schema.
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
