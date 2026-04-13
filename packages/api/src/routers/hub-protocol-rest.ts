@@ -42,6 +42,7 @@ import {
   workspaceMembers,
   workspaces,
   entities,
+  profiles,
   isNull,
   EventRepository,
   eventRepository,
@@ -76,40 +77,106 @@ const app = new Hono<{
 app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
 
 /**
- * Middleware: validate API key and set userId + scopes (skip for /health)
+ * GET /users/me — return the authenticated agent/user identity.
+ * Used by OpenClaw, CLI, and external agents to verify their API key.
+ */
+app.get("/users/me", async (c) => {
+  const userId = c.get("userId") as string | undefined;
+  const scopes = c.get("scopes") as string[] | undefined;
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  return c.json({ id: userId, scopes: scopes ?? [] });
+});
+
+/**
+ * GET /workspaces — list workspaces accessible to the authenticated user.
+ * Used by IS agents and external clients to discover workspace context.
+ */
+app.get("/workspaces", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.get("userId") as string;
+  try {
+    const wsIds = await getUserAccessibleWorkspaceIds(userId);
+    // Direct DB query — workspaces router is on the app router, not hub-protocol router
+    const list =
+      wsIds.length > 0
+        ? await db
+            .select({ id: workspaces.id, name: workspaces.name })
+            .from(workspaces)
+            .where(inArray(workspaces.id, wsIds))
+        : [];
+    return c.json({ workspaces: list });
+  } catch (err) {
+    logger.error({ err }, "GET /workspaces failed");
+    return c.json({ error: "Failed to list workspaces" }, 500);
+  }
+});
+
+/**
+ * Middleware: authenticate hub protocol requests.
+ *
+ * Accepts two credential types:
+ *   1. `Authorization: Bearer <api-key>` — IS agents, OpenClaw, CLI (API key auth)
+ *   2. `X-Session-Token: <kratos-token>` — browser extension, web clients (Kratos session auth)
+ *
+ * Session-token callers receive full hub-protocol.read + hub-protocol.write scopes.
+ * Skip auth for endpoints listed in skipAuthPaths.
  */
 app.use("/*", async (c, next) => {
-  // Skip auth for endpoints that handle their own authentication inline.
-  // c.req.path may include the mount prefix (/api/hub/...) depending on
-  // Hono version, so we check both forms.
   const reqPath = c.req.path;
   const skipAuthPaths = ["/health", "/entity-share/deliver", "/setup/agent"];
   if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
     return next();
   }
+
+  // ── 1. Try API key (agents / IS / OpenClaw) ─────────────────────────────
   const authHeader = c.req.header("authorization") ?? null;
   const token = extractBearerToken(authHeader);
 
-  if (!token) {
-    return c.json(
-      { error: "API key required. Use Authorization: Bearer <key>" },
-      401
-    );
+  if (token) {
+    const keyRecord = await apiKeyService.validateApiKey(token);
+    if (!keyRecord) {
+      return c.json({ error: "Invalid or expired API key" }, 401);
+    }
+    const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
+    if (!allowed) {
+      return c.json({ error: "Rate limit exceeded" }, 429);
+    }
+    c.set("userId", keyRecord.userId);
+    c.set("scopes", keyRecord.scope);
+    return next();
   }
 
-  const keyRecord = await apiKeyService.validateApiKey(token);
-  if (!keyRecord) {
-    return c.json({ error: "Invalid or expired API key" }, 401);
+  // ── 2. Try Kratos session token (browser extension / web clients) ────────
+  const sessionToken = c.req.header("x-session-token");
+  if (sessionToken) {
+    try {
+      const { getSession } = await import("@synap/auth");
+      const headers = new Headers({ "x-session-token": sessionToken });
+      const session = await getSession(headers);
+      if (session?.identity?.id) {
+        c.set("userId", session.identity.id as string);
+        // Authenticated pod users get full hub-protocol scopes
+        c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
+        return next();
+      }
+    } catch (err) {
+      logger.warn({ err }, "Session token validation failed");
+    }
+    return c.json({ error: "Invalid or expired session token" }, 401);
   }
 
-  const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
-  if (!allowed) {
-    return c.json({ error: "Rate limit exceeded" }, 429);
-  }
-
-  c.set("userId", keyRecord.userId);
-  c.set("scopes", keyRecord.scope);
-  await next();
+  return c.json(
+    {
+      error:
+        "Authentication required. Use Authorization: Bearer <key> or X-Session-Token: <token>",
+    },
+    401
+  );
 });
 
 /**
@@ -491,53 +558,90 @@ app.get("/entities/:id", async (c) => {
 
 /**
  * POST /entities
- * workspaceId is optional — pod-wide profiles (entityScope='pod') create entities
- * with null workspaceId. Falls back to user's first accessible workspace for caller context.
+ *
+ * Creates an entity on behalf of a user. Auth via API key or session token.
+ *
+ * `userId` is optional when authenticating via session token — falls back to the
+ * authenticated user. For API-key callers (IS/OpenClaw) `userId` must be provided.
+ *
+ * `workspaceId` is optional:
+ *   - Pod-wide profiles (entityScope='pod'): workspace always null, no resolution needed.
+ *   - Workspace-scoped profiles: falls back to the user's first accessible workspace.
  */
 app.post("/entities", async (c) => {
-  if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
+
   const body = (await c.req.json()) as {
-    userId: string;
+    userId?: string; // Optional when using session token auth
     agentUserId?: string;
     workspaceId?: string;
-    type: string;
+    type?: string;
     profileSlug?: string;
     title: string;
     description?: string;
     properties?: Record<string, unknown>;
+    source?: string;
     sourceMessageId?: string;
   };
 
-  // Resolve workspace context: explicit > human user's first accessible workspace
-  let effectiveWorkspaceId = body.workspaceId;
-  if (!effectiveWorkspaceId) {
-    const wsIds = await getUserAccessibleWorkspaceIds(body.userId);
-    effectiveWorkspaceId = wsIds[0];
-    if (!effectiveWorkspaceId) {
-      return c.json(
-        { error: "No accessible workspace found for this user" },
-        400
-      );
+  // userId: explicit body value takes precedence (IS/OpenClaw flow);
+  // falls back to session-authenticated user (extension flow).
+  const authUserId = c.get("userId") as string;
+  const userId = body.userId ?? authUserId;
+  if (!userId) {
+    return c.json({ error: "userId required" }, 400);
+  }
+
+  const profileSlug = body.profileSlug ?? body.type ?? "bookmark";
+
+  // ── Resolve workspace context ────────────────────────────────────────────
+  // Explicit workspaceId always wins. When omitted, check the profile's entityScope:
+  //   entityScope='pod'       → workspaceId=null (pod-wide entity, no workspace needed)
+  //   entityScope='workspace' → fall back to user's first accessible workspace
+  let effectiveWorkspaceId: string | null;
+
+  if (body.workspaceId) {
+    effectiveWorkspaceId = body.workspaceId;
+  } else {
+    // Look up the profile's entityScope
+    const profile = await db.query.profiles.findFirst({
+      where: eq(profiles.slug, profileSlug),
+      columns: { entityScope: true },
+    });
+
+    if (!profile || profile.entityScope === "pod") {
+      // Pod-wide profile (or unknown profile — default to pod-wide for safety)
+      effectiveWorkspaceId = null;
+    } else {
+      // Workspace-scoped: resolve user's first accessible workspace
+      const wsIds = await getUserAccessibleWorkspaceIds(userId);
+      effectiveWorkspaceId = wsIds[0] ?? null;
+      if (!effectiveWorkspaceId) {
+        return c.json(
+          { error: "No accessible workspace found for this user" },
+          400
+        );
+      }
     }
   }
 
   try {
-    // When agentUserId is provided, use the agent's identity for permission checks
-    const actorResolution = await resolveActorId(body.agentUserId, body.userId);
+    const actorResolution = await resolveActorId(body.agentUserId, userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
     const actorId = actorResolution.actorId;
+
     const caller = await getCaller(c, {
       workspaceId: effectiveWorkspaceId,
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
     const result = await caller.entities.createEntity({
-      userId: body.userId,
+      userId,
       ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
-      profileSlug: body.profileSlug ?? body.type,
+      profileSlug,
       title: body.title,
       description: body.description,
       properties: body.properties,
