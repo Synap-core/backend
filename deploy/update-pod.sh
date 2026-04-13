@@ -24,7 +24,7 @@ set -e
 
 VERSION="$1"
 CD="$(dirname "$0")"
-COMPOSE="docker compose -p synap -f $CD/docker-compose.yml"
+COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
 CANARY_NAME="synap-backend-canary"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
