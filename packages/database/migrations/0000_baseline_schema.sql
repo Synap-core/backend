@@ -2605,7 +2605,7 @@ ON CONFLICT ("id") DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS "signal_subscriptions" (
   "id"                      uuid      NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-  "user_id"                 uuid      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "user_id"                 text      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
   "workspace_id"            uuid      NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "topic"                   text      NOT NULL,
   "source_platform"         text,
@@ -2619,7 +2619,7 @@ CREATE TABLE IF NOT EXISTS "signal_subscriptions" (
   PRIMARY KEY ("user_id", "workspace_id", "topic", "source_platform", "source_route")
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "user_id" uuid REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "user_id" text REFERENCES "users"("id") ON DELETE CASCADE;
 ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
 ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "topic" text;
 ALTER TABLE "signal_subscriptions" ADD COLUMN IF NOT EXISTS "source_platform" text;
@@ -2645,7 +2645,7 @@ CREATE INDEX IF NOT EXISTS "signal_subscriptions_topic_idx"
 
 CREATE TABLE IF NOT EXISTS "signal_classifications" (
   "id"               uuid      PRIMARY KEY DEFAULT gen_random_uuid(),
-  "user_id"          uuid      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "user_id"          text      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
   "workspace_id"     uuid      NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "topic"            text      NOT NULL,
   "confidence"       numeric(3, 2) NOT NULL DEFAULT 0.00,
@@ -2660,7 +2660,7 @@ CREATE TABLE IF NOT EXISTS "signal_classifications" (
   "last_decay_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "user_id" uuid REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "user_id" text REFERENCES "users"("id") ON DELETE CASCADE;
 ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
 ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "topic" text;
 ALTER TABLE "signal_classifications" ADD COLUMN IF NOT EXISTS "confidence" numeric(3, 2) DEFAULT 0.00;
@@ -2683,7 +2683,7 @@ CREATE INDEX IF NOT EXISTS "signal_classifications_recency_idx"
 
 CREATE TABLE IF NOT EXISTS "signal_fetch_history" (
   "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-  "user_id"             uuid    NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "user_id"             text    NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
   "workspace_id"        uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "source_route"        text    NOT NULL,
   "source_platform"     text    NOT NULL,
@@ -2698,7 +2698,7 @@ CREATE TABLE IF NOT EXISTS "signal_fetch_history" (
   "client_ip"           text
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "user_id" uuid REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "user_id" text REFERENCES "users"("id") ON DELETE CASCADE;
 ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
 ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "source_route" text;
 ALTER TABLE "signal_fetch_history" ADD COLUMN IF NOT EXISTS "source_platform" text;
