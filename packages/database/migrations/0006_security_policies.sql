@@ -57,66 +57,72 @@ ALTER TABLE ai_suggestions ENABLE ROW LEVEL SECURITY;
 -- ============================================================================
 
 -- Workspaces: Access if Owner OR Member
+DROP POLICY IF EXISTS workspaces_select ON workspaces;
 CREATE POLICY workspaces_select ON workspaces
   FOR SELECT
   USING (
     owner_id = current_setting('app.user_id', TRUE) OR
     id IN (
-      SELECT workspace_id FROM workspace_members 
+      SELECT workspace_id FROM workspace_members
       WHERE user_id = current_setting('app.user_id', TRUE)
     )
   );
 
 -- Entities: Access if User is in Workspace
+DROP POLICY IF EXISTS entities_select ON entities;
 CREATE POLICY entities_select ON entities
   FOR SELECT
   USING (
     user_id = current_setting('app.user_id', TRUE) OR
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members 
+      SELECT workspace_id FROM workspace_members
       WHERE user_id = current_setting('app.user_id', TRUE)
     )
   );
 
 -- Documents: Access if User is in Workspace
+DROP POLICY IF EXISTS documents_select ON documents;
 CREATE POLICY documents_select ON documents
   FOR SELECT
   USING (
     user_id = current_setting('app.user_id', TRUE) OR
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members 
+      SELECT workspace_id FROM workspace_members
       WHERE user_id = current_setting('app.user_id', TRUE)
     )
   );
 
 -- Documents: Yjs Updates (Exception for real-time collab)
+DROP POLICY IF EXISTS documents_update ON documents;
 CREATE POLICY documents_update ON documents
   FOR UPDATE
   USING (
     user_id = current_setting('app.user_id', TRUE) OR
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members 
+      SELECT workspace_id FROM workspace_members
       WHERE user_id = current_setting('app.user_id', TRUE)
     )
   );
 
 -- Projects: Access if User is in Workspace
+DROP POLICY IF EXISTS projects_select ON projects;
 CREATE POLICY projects_select ON projects
   FOR SELECT
   USING (
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members 
+      SELECT workspace_id FROM workspace_members
       WHERE user_id = current_setting('app.user_id', TRUE)
     )
   );
 
 -- Views: Access if User is in Workspace
+DROP POLICY IF EXISTS views_select ON views;
 CREATE POLICY views_select ON views
   FOR SELECT
   USING (
     user_id = current_setting('app.user_id', TRUE) OR
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members 
+      SELECT workspace_id FROM workspace_members
       WHERE user_id = current_setting('app.user_id', TRUE)
     )
   );
