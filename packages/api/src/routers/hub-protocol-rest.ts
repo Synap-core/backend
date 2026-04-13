@@ -657,6 +657,86 @@ app.post("/entities", async (c) => {
 });
 
 /**
+ * POST /capture/cluster-tabs
+ *
+ * AI-powered tab clustering. Proxies the request to the Intelligence Service
+ * `/api/tools/cluster-tabs` and returns semantically grouped tab clusters.
+ *
+ * Falls back with 503 if the IS is unavailable — the extension uses local
+ * domain-based clustering as its fallback.
+ */
+app.post("/capture/cluster-tabs", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+
+  const body = (await c.req.json().catch(() => null)) as {
+    tabs?: Array<{
+      url: string;
+      title: string;
+      favIconUrl?: string;
+      tabId?: number;
+      windowId?: number;
+    }>;
+  } | null;
+
+  if (!body?.tabs?.length) {
+    return c.json({ error: "tabs array required" }, 400);
+  }
+
+  const isUrl = process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3002";
+  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+
+  try {
+    // Send url + title only to IS (LLM doesn't need tabId/windowId/favIconUrl)
+    const simplifiedTabs = body.tabs.map(({ url, title }) => ({ url, title }));
+
+    const res = await fetch(`${isUrl}/api/tools/cluster-tabs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": isApiKey,
+      },
+      body: JSON.stringify({ tabs: simplifiedTabs }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      logger.warn(
+        { status: res.status, err },
+        "IS cluster-tabs returned error"
+      );
+      return c.json({ error: err.error ?? "IS error" }, 502);
+    }
+
+    const { clusters } = (await res.json()) as {
+      clusters: Array<{
+        name: string;
+        icon: string;
+        tabs: Array<{ url: string; title: string }>;
+      }>;
+    };
+
+    // Map simple {url, title} tabs back to full tab objects using the original input
+    const urlToFullTab = new Map(body.tabs.map((t) => [t.url, t]));
+
+    const fullClusters = clusters.map((cluster) => ({
+      name: cluster.name,
+      icon: cluster.icon,
+      tabs: cluster.tabs
+        .map((t) => urlToFullTab.get(t.url))
+        .filter((t): t is NonNullable<typeof t> => t !== undefined),
+    }));
+
+    return c.json({ clusters: fullClusters });
+  } catch (err) {
+    logger.error({ err }, "POST /capture/cluster-tabs failed");
+    return c.json({ error: "Clustering service unavailable" }, 503);
+  }
+});
+
+/**
  * PATCH /entities/:entityId
  * Requires workspaceId in body for workspace-scoped update (same event chain).
  */

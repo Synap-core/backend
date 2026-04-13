@@ -4,7 +4,8 @@
  * Shared utility functions for feed workers.
  */
 
-import { parseExpression } from "cron-parser";
+import cronParser from "cron-parser";
+const { parseExpression } = cronParser;
 
 /**
  * Calculate next run time based on cron expression.

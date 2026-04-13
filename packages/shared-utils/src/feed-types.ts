@@ -298,7 +298,8 @@ export class FeedValidationError extends FeedError {
 // Feed Helper Functions (moved from @synap/api to break circular dependency)
 // ============================================================================
 
-import { parseExpression } from "cron-parser";
+import cronParser from "cron-parser";
+const { parseExpression } = cronParser;
 
 /**
  * Calculate next run time based on cron expression.
