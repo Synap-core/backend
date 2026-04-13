@@ -41,7 +41,7 @@ import type {
 } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "../emit-side-effects.js";
+import { emitSideEffects } from "@synap/events";
 
 const logger = createLogger({ module: "proactive-post" });
 

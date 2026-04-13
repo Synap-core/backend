@@ -11,7 +11,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, gte, count } from "@synap/database";
+import { db, eq, and, gte, count, type SQL } from "@synap/database";
 import {
   channels,
   messages,
@@ -25,6 +25,7 @@ import {
   type FeedConfig,
   type FeedStatus,
 } from "../types/feed-config.js";
+import { calculateNextRun } from "@synap/shared-utils";
 
 const logger = createLogger({ module: "feeds" });
 
@@ -259,7 +260,7 @@ export const feedsRouter = router({
     .query(async ({ input, ctx }) => {
       const { workspaceId, limit, offset } = input;
 
-      const conditions: any[] = [
+      const conditions: SQL[] = [
         eq(channels.userId, ctx.userId!),
         eq(channels.channelType, ChannelType.FEED),
         eq(channels.status, ChannelStatus.ACTIVE),
@@ -267,13 +268,14 @@ export const feedsRouter = router({
 
       // Filter by workspace if provided (include pod-wide feeds)
       if (workspaceId) {
-        conditions.push(
-          and(
-            eq(channels.workspaceId, workspaceId)
-            // Also include pod-wide feeds
-            // This is handled by the query logic below
-          )
+        const workspaceCondition = and(
+          eq(channels.workspaceId, workspaceId)
+          // Also include pod-wide feeds
+          // This is handled by the query logic below
         );
+        if (workspaceCondition) {
+          conditions.push(workspaceCondition);
+        }
       }
 
       const feedChannels = await db.query.channels.findMany({
@@ -403,62 +405,3 @@ export const feedsRouter = router({
 });
 
 // ── Helper Functions ─────────────────────────────────────────────────────────
-
-function calculateNextRun(cronExpr: string, _timezone: string): Date {
-  const now = new Date();
-
-  // Simple implementations for common patterns
-  const minuteMatch = cronExpr.match(/^\*\/([0-9]+) \* \* \* \*$/);
-  if (minuteMatch) {
-    const interval = parseInt(minuteMatch[1], 10);
-    const next = new Date(now);
-    const currentMinutes = next.getMinutes();
-    const nextMinutes = Math.ceil((currentMinutes + 1) / interval) * interval;
-    if (nextMinutes >= 60) {
-      next.setHours(next.getHours() + 1);
-      next.setMinutes(nextMinutes - 60);
-    } else {
-      next.setMinutes(nextMinutes);
-    }
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    return next;
-  }
-
-  const hourMatch = cronExpr.match(/^0 \*\/([0-9]+) \* \* \*$/);
-  if (hourMatch) {
-    const interval = parseInt(hourMatch[1], 10);
-    const next = new Date(now);
-    const currentHours = next.getHours();
-    const nextHours = Math.ceil((currentHours + 1) / interval) * interval;
-    if (nextHours >= 24) {
-      next.setDate(next.getDate() + 1);
-      next.setHours(0);
-    } else {
-      next.setHours(nextHours);
-    }
-    next.setMinutes(0);
-    next.setSeconds(0);
-    return next;
-  }
-
-  const dailyMatch = cronExpr.match(/^0 ([0-9]+) \* \* \*$/);
-  if (dailyMatch) {
-    const hour = parseInt(dailyMatch[1], 10);
-    const next = new Date(now);
-    next.setHours(hour);
-    next.setMinutes(0);
-    next.setSeconds(0);
-    if (next <= now) {
-      next.setDate(next.getDate() + 1);
-    }
-    return next;
-  }
-
-  // Default: 6 hours
-  const next = new Date(now);
-  next.setHours(next.getHours() + 6);
-  next.setMinutes(0);
-  next.setSeconds(0);
-  return next;
-}

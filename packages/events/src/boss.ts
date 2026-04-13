@@ -12,7 +12,7 @@ import { createLogger } from "@synap-core/core";
 const logger = createLogger({ module: "pg-boss" });
 
 // Use globalThis to share the singleton across pnpm module instances.
-// pnpm can create multiple copies of @synap/jobs when packages resolve
+// pnpm can create multiple copies of @synap/events when packages resolve
 // peer dependencies differently, giving each copy its own module-level
 // _boss variable. Storing on globalThis ensures all copies share one instance.
 const GLOBAL_KEY = "__synap_pg_boss__";
@@ -83,3 +83,6 @@ export async function stopBoss(): Promise<void> {
     setGlobal(null);
   }
 }
+
+// Default export for convenience
+export const boss = getBoss();

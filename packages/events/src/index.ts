@@ -54,5 +54,13 @@ export {
   type GeneratedEventType,
 } from "./generator.js";
 
+// ============================================================================
+// JOB QUEUE & SIDE EFFECTS (moved from @synap/jobs to break circular dependency)
+// ============================================================================
+
+export { getBoss, startBoss, stopBoss, boss } from "./boss.js";
+
+export { emitSideEffects, type SideEffectPayload } from "./side-effects.js";
+
 // Note: SynapEvent schema and event metadata types are in @synap-core/core
 // to break the circular dependency between the database and events packages.

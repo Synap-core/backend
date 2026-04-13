@@ -14,9 +14,10 @@
 import { db, eq, and } from "@synap/database";
 import { channels, ChannelType, ChannelStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { getBoss } from "../boss.js";
-import type { FeedConfig } from "@synap-core/types";
+import { getBoss } from "@synap/events";
+import type { FeedConfig } from "@synap/shared-utils";
 import { randomUUID } from "crypto";
+import { calculateNextRun } from "../utils/feed-helpers.js";
 
 const logger = createLogger({ module: "feed-scheduler" });
 
@@ -60,76 +61,7 @@ function parseFeedConfig(data: unknown): FeedConfig | null {
     return null;
   }
 
-  return config as FeedConfig;
-}
-
-/**
- * Calculate next run time based on cron expression.
- * Simple implementation - for complex expressions, consider cron-parser package.
- */
-function calculateNextRun(cronExpr: string, _timezone: string): Date {
-  const now = new Date();
-
-  // Handle common simple patterns
-  // Every X minutes: */X * * * *
-  const minuteMatch = cronExpr.match(/^\*\/([0-9]+) \* \* \* \*$/);
-  if (minuteMatch) {
-    const interval = parseInt(minuteMatch[1], 10);
-    const next = new Date(now);
-    const currentMinutes = next.getMinutes();
-    const nextMinutes = Math.ceil((currentMinutes + 1) / interval) * interval;
-    if (nextMinutes >= 60) {
-      next.setHours(next.getHours() + 1);
-      next.setMinutes(nextMinutes - 60);
-    } else {
-      next.setMinutes(nextMinutes);
-    }
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    return next;
-  }
-
-  // Every X hours: 0 */X * * *
-  const hourMatch = cronExpr.match(/^0 \*\/([0-9]+) \* \* \*$/);
-  if (hourMatch) {
-    const interval = parseInt(hourMatch[1], 10);
-    const next = new Date(now);
-    const currentHours = next.getHours();
-    const nextHours = Math.ceil((currentHours + 1) / interval) * interval;
-    if (nextHours >= 24) {
-      next.setDate(next.getDate() + 1);
-      next.setHours(0);
-    } else {
-      next.setHours(nextHours);
-    }
-    next.setMinutes(0);
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    return next;
-  }
-
-  // Daily at specific hour: 0 H * * *
-  const dailyMatch = cronExpr.match(/^0 ([0-9]+) \* \* \*$/);
-  if (dailyMatch) {
-    const hour = parseInt(dailyMatch[1], 10);
-    const next = new Date(now);
-    next.setHours(hour);
-    next.setMinutes(0);
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    if (next <= now) {
-      next.setDate(next.getDate() + 1);
-    }
-    return next;
-  }
-
-  // Default: every 6 hours
-  const next = new Date(now);
-  next.setHours(next.getHours() + 6);
-  next.setMinutes(0);
-  next.setSeconds(0);
-  next.setMilliseconds(0);
-  return next;
+  return config as unknown as FeedConfig;
 }
 
 /**

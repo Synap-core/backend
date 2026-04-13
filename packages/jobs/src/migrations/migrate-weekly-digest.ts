@@ -20,7 +20,6 @@
 import { db, eq, and } from "@synap/database";
 import {
   channels,
-  workspaces,
   workspaceMembers,
   ChannelType,
   ChannelScope,
@@ -132,7 +131,7 @@ async function hasExistingWeeklyFeed(userId: string): Promise<boolean> {
 async function createWeeklyDigestFeed(
   userId: string,
   config: WeeklyDigestConfig,
-  workspaceId: string
+  _workspaceId: string
 ): Promise<{ channelId: string; created: boolean }> {
   // Double-check idempotency
   const existing = await db.query.channels.findFirst({

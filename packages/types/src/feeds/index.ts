@@ -7,30 +7,13 @@
  * For Zod schemas (validation), see @synap/api/types/feed-config
  */
 
-// ── Feed Message Metadata ────────────────────────────────────────────────────
-
-export interface FeedMessageMetadata {
-  /** Source URL for RSS items */
-  sourceUrl?: string;
-  /** Original published date from source */
-  publishedAt?: string;
-  /** Author/publisher from source */
-  author?: string;
-  /** Relevance score from IS classification (0-100) */
-  relevanceScore?: number;
-  /** Categories/tags extracted from source */
-  categories?: string[];
-  /** Whether this was classified by AI */
-  aiClassified?: boolean;
-  /** Whether this was included in a batch digest */
-  batched?: boolean;
-  /** Batch ID if part of a digest */
-  batchId?: string;
-  /** Feed-specific metadata */
-  feedType?: "rss" | "proactive";
-  /** Original item ID from source */
-  sourceItemId?: string;
-}
+// Export message types
+export type { FeedMessageMetadata } from "./message.js";
+export {
+  normalizeRelevanceScore,
+  isFeedMessageMetadata,
+  createFeedMessageMetadata,
+} from "./message.js";
 
 // ── Base Feed Config ─────────────────────────────────────────────────────────
 
@@ -134,6 +117,15 @@ export interface ProactiveFeedConfig extends BaseFeedConfig {
 
 /** Union Feed Config type */
 export type FeedConfig = RSSFeedConfig | ProactiveFeedConfig;
+
+// ── Feed Channel Config ──────────────────────────────────────────────────────
+
+export interface FeedChannelConfig {
+  /** Feed configuration */
+  feed: FeedConfig;
+  /** Feed status tracking */
+  status?: FeedStatus;
+}
 
 // ── Feed Status ──────────────────────────────────────────────────────────────
 

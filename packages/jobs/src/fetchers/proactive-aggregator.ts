@@ -11,13 +11,9 @@ import {
   proposals,
   ProposalStatus,
   profiles,
-  captures,
-  channels,
-  ChannelType,
-  ChannelStatus,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import type { ProactiveFeedConfig } from "@synap/api/types/feed-config";
+import type { ProactiveFeedConfig } from "@synap/shared-utils";
 
 const logger = createLogger({ module: "proactive-aggregator" });
 
@@ -142,20 +138,25 @@ async function getPendingProposals(
     ),
     columns: {
       id: true,
-      title: true,
       proposalType: true,
       createdAt: true,
+      data: true,
     },
     orderBy: [desc(proposals.createdAt)],
     limit: 20,
   });
 
-  return pending.map((p) => ({
-    id: p.id,
-    title: p.title || "Untitled proposal",
-    type: p.proposalType,
-    createdAt: p.createdAt,
-  }));
+  return pending.map((p) => {
+    const data = (p.data || {}) as Record<string, unknown>;
+    const title =
+      (data.title as string) || (data.name as string) || "Untitled proposal";
+    return {
+      id: p.id,
+      title,
+      type: p.proposalType,
+      createdAt: p.createdAt,
+    };
+  });
 }
 
 // ── Entity Aggregation ───────────────────────────────────────────────────────

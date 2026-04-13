@@ -7,10 +7,11 @@
  *   list: protectedProcedure
  *     .input(paginatedInput.extend({ profileSlug: z.string().optional() }))
  *     .query(async ({ input, ctx }) => {
+ *       const { limit, offset } = buildPaginationParams(input);
  *       const results = await db.query.entities.findMany({
  *         where: eq(entities.userId, ctx.userId),
- *         limit: input.limit + 1,  // fetch one extra to detect hasMore
- *         offset: input.offset,
+ *         limit,
+ *         offset,
  *         orderBy: [desc(entities.createdAt)],
  *       });
  *       return buildPaginatedResponse(results, input);
@@ -19,6 +20,13 @@
  * The trick: query with `limit + 1` to detect `hasMore` without a COUNT query.
  * If we get back limit+1 rows, there are more results; we trim the extra row
  * before returning.
+ *
+ * Exports:
+ * - paginatedInput: Zod schema for pagination input
+ * - buildPaginatedResponse: Build response from query results
+ * - buildPaginationParams: Returns limit+1, offset for queries
+ * - normalizePaginationInput: Safe defaults for pagination
+ * - createListInputSchema: Create input schema with filters
  */
 
 import { z } from "zod";
@@ -72,4 +80,58 @@ export function buildPaginatedResponse<T>(
       ...(total !== undefined ? { total } : {}),
     },
   };
+}
+
+// ── Additional Helpers ───────────────────────────────────────────────────────
+
+/**
+ * Calculate next offset for pagination.
+ */
+export function calculateNextOffset(
+  currentOffset: number,
+  limit: number,
+  hasMore: boolean
+): number | undefined {
+  return hasMore ? currentOffset + limit : undefined;
+}
+
+/**
+ * Build SQL limit/offset parameters.
+ * Returns limit+1 to enable hasMore detection.
+ */
+export function buildPaginationParams(input: {
+  limit: number;
+  offset: number;
+}): {
+  limit: number;
+  offset: number;
+} {
+  return {
+    limit: input.limit + 1, // +1 to detect hasMore
+    offset: input.offset,
+  };
+}
+
+/**
+ * Normalize pagination input with safe defaults.
+ */
+export function normalizePaginationInput(input: {
+  limit?: number;
+  offset?: number;
+}): { limit: number; offset: number } {
+  return {
+    limit: Math.min(Math.max(1, input.limit ?? 50), 100),
+    offset: Math.max(0, input.offset ?? 0),
+  };
+}
+
+/**
+ * Standard filter input schema for list endpoints.
+ * Extend this with endpoint-specific filters.
+ */
+export function createListInputSchema<T extends z.ZodRawShape>(
+  filterSchema?: z.ZodObject<T>
+) {
+  const base = paginatedInput;
+  return filterSchema ? base.merge(filterSchema.partial()) : base;
 }

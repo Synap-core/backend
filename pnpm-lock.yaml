@@ -395,6 +395,9 @@ importers:
       '@synap/search':
         specifier: workspace:*
         version: link:../search
+      '@synap/shared-utils':
+        specifier: workspace:*
+        version: link:../shared-utils
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
@@ -459,6 +462,9 @@ importers:
       '@types/react':
         specifier: ^19.2.8
         version: 19.2.8
+      '@vitest/coverage-v8':
+        specifier: ^4.0.15
+        version: 4.0.17(vitest@4.0.17)
       dts-bundle-generator:
         specifier: ^9.5.1
         version: 9.5.1
@@ -471,6 +477,12 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vite:
+        specifier: ^7.2.2
+        version: 7.3.1(@types/node@20.19.28)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+      vitest:
+        specifier: ^4.0.15
+        version: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
 
   packages/api-types:
     dependencies:
@@ -640,6 +652,9 @@ importers:
       drizzle-zod:
         specifier: 0.8.3
         version: 0.8.3(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8))(zod@4.3.6)
+      pg-boss:
+        specifier: ^10.1.5
+        version: 10.4.2
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -733,12 +748,18 @@ importers:
       '@synap/search':
         specifier: workspace:*
         version: link:../search
+      '@synap/shared-utils':
+        specifier: workspace:*
+        version: link:../shared-utils
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
       ai:
         specifier: ^4.0.0
         version: 4.3.19(react@19.2.3)(zod@4.3.6)
+      cron-parser:
+        specifier: ^4.9.0
+        version: 4.9.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260113.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
@@ -838,6 +859,25 @@ importers:
         version: 20.19.28
       typescript:
         specifier: ^5.0.0
+        version: 5.9.3
+
+  packages/shared-utils:
+    dependencies:
+      '@synap-core/core':
+        specifier: workspace:*
+        version: link:../core
+      '@synap-core/types':
+        specifier: workspace:*
+        version: link:../types
+      cron-parser:
+        specifier: ^4.9.0
+        version: 4.9.0
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
         version: 5.9.3
 
   packages/storage:
@@ -11157,7 +11197,7 @@ snapshots:
       obug: 2.1.1
       std-env: 3.10.0
       tinyrainbow: 3.0.3
-      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@24.10.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
+      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/expect@1.6.1':
     dependencies:

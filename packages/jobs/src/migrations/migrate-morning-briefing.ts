@@ -17,10 +17,9 @@
  * ```
  */
 
-import { db, eq, and, isNull } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import {
   channels,
-  workspaces,
   workspaceMembers,
   ChannelType,
   ChannelScope,
@@ -123,7 +122,7 @@ async function hasExistingMorningFeed(userId: string): Promise<boolean> {
 async function createMorningBriefingFeed(
   userId: string,
   config: MorningBriefingConfig,
-  workspaceId: string
+  _workspaceId: string
 ): Promise<{ channelId: string; created: boolean }> {
   // Double-check idempotency
   const existing = await db.query.channels.findFirst({

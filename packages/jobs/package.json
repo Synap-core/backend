@@ -18,6 +18,10 @@
     "./workers/*.js": {
       "types": "./dist/workers/*.d.ts",
       "import": "./dist/workers/*.js"
+    },
+    "./utils/*.js": {
+      "types": "./dist/utils/*.d.ts",
+      "import": "./dist/utils/*.js"
     }
   },
   "files": [
@@ -36,16 +40,18 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
+    "@synap/events": "workspace:*",
+    "@synap/shared-utils": "workspace:*",
     "@synap/intelligence-client": "workspace:*",
     "@synap-core/core": "workspace:*",
     "@synap-core/types": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/database": "workspace:*",
-    "@synap/events": "workspace:*",
     "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
     "ai": "^4.0.0",
     "drizzle-orm": "^0.45.1",
+    "cron-parser": "^4.9.0",
     "drizzle-zod": "0.8.3",
     "pg-boss": "^10.1.5",
     "zod": "^4.3.6"

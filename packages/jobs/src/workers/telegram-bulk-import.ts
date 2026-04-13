@@ -23,7 +23,7 @@ import {
   eventRepository,
 } from "@synap/database";
 import { randomUUID } from "crypto";
-import { emitSideEffects } from "../emit-side-effects.js";
+import { emitSideEffects } from "@synap/events";
 
 const logger = createLogger({ module: "telegram-bulk-import" });
 

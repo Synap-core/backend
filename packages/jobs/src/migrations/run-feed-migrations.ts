@@ -26,16 +26,12 @@
  * ```
  */
 
-import { db, eq, and } from "@synap/database";
+// Note: db import removed - migrations use direct database access via drizzle-orm
 import { createLogger } from "@synap-core/core";
 import {
   migrateMorningBriefing,
   rollbackMorningBriefing,
 } from "./migrate-morning-briefing.js";
-import {
-  migrateSignalFeeds,
-  rollbackSignalFeeds,
-} from "./migrate-signal-feeds.js";
 import {
   migrateWeeklyDigest,
   rollbackWeeklyDigest,
@@ -59,7 +55,7 @@ export interface RunMigrationsOptions {
   /** Dry run - don't actually modify anything */
   dryRun?: boolean;
   /** Specific migrations to run (defaults to all) */
-  migrations?: Array<"morning_briefing" | "signal_feeds" | "weekly_digest">;
+  migrations?: Array<"morning_briefing" | "weekly_digest">;
   /** Specific user IDs to migrate */
   userIds?: string[];
   /** Specific workspace IDs to migrate */
@@ -79,7 +75,7 @@ export interface RunMigrationsResult {
 
 export interface RollbackOptions {
   /** Specific migrations to rollback (defaults to all) */
-  migrations?: Array<"morning_briefing" | "signal_feeds" | "weekly_digest">;
+  migrations?: Array<"morning_briefing" | "weekly_digest">;
   /** Remove feed channels (default: false) */
   removeFeeds?: boolean;
   /** Specific user IDs to rollback */
@@ -151,19 +147,6 @@ const MIGRATIONS: Record<
     },
     rollback: async (opts) => rollbackMorningBriefing(opts),
   },
-  signal_feeds: {
-    migrate: async (opts) => {
-      const result = await migrateSignalFeeds(opts);
-      return {
-        created: result.created,
-        skipped: result.skipped,
-        errors: result.errors,
-        subscriptionsMigrated: result.subscriptionsMigrated,
-        topicsMigrated: result.topicsMigrated,
-      };
-    },
-    rollback: async (opts) => rollbackSignalFeeds(opts),
-  },
   weekly_digest: {
     migrate: async (opts) => {
       const result = await migrateWeeklyDigest(opts);
@@ -185,7 +168,6 @@ const MIGRATIONS: Record<
  * Execution order:
  * 1. Morning Briefing Migration
  * 2. Weekly Digest Migration
- * 3. Signal Feeds Migration
  *
  * Each migration is idempotent and can be safely re-run.
  *
@@ -197,7 +179,7 @@ export async function runFeedMigrations(
 ): Promise<RunMigrationsResult> {
   const {
     dryRun = false,
-    migrations = ["morning_briefing", "weekly_digest", "signal_feeds"],
+    migrations = ["morning_briefing", "weekly_digest"],
     userIds,
     workspaceIds,
     skipCompleted = true,
@@ -314,9 +296,8 @@ export async function runFeedMigrations(
  * Rollback unified feed migrations.
  *
  * Rollback order (reverse of migration):
- * 1. Signal Feeds Rollback
- * 2. Weekly Digest Rollback
- * 3. Morning Briefing Rollback
+ * 1. Weekly Digest Rollback
+ * 2. Morning Briefing Rollback
  *
  * @param options Rollback options
  * @returns Result with success status
@@ -330,7 +311,7 @@ export async function rollbackFeedMigrations(
   results: Record<string, unknown>;
 }> {
   const {
-    migrations = ["signal_feeds", "weekly_digest", "morning_briefing"],
+    migrations = ["weekly_digest", "morning_briefing"],
     removeFeeds = false,
     userIds,
     workspaceIds,
@@ -427,8 +408,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const rollback = args.includes("--rollback");
   const removeFeeds = args.includes("--remove-feeds");
   const specificMigration = args.find((arg) =>
-    ["morning_briefing", "signal_feeds", "weekly_digest"].includes(arg)
-  );
+    ["morning_briefing", "weekly_digest"].includes(arg)
+  ) as "morning_briefing" | "weekly_digest" | undefined;
 
   const migrations = specificMigration ? [specificMigration] : undefined;
 

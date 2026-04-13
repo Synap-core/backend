@@ -39,7 +39,7 @@ import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { notifications } from "@synap/database/schema";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 

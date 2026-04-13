@@ -8,7 +8,7 @@
  * We destructure to get a single job since we process one at a time.
  */
 
-import { getBoss } from "../boss.js";
+import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { collectionService } from "@synap/search";
 import {
@@ -47,31 +47,10 @@ import {
   VAULT_GRANT_EXPIRY_QUEUE,
 } from "./vault-grant-expiry-worker.js";
 import { handleAutomationPatternDetect } from "./automation-pattern-detector.js";
-import { handleProactiveMorningBriefing } from "./proactive-morning-briefing.js";
-import { handleProactiveWeeklyDigest } from "./proactive-weekly-digest.js";
-import { handleProactiveHealthCheck } from "./proactive-health-check.js";
 import {
   handleNotificationCleanup,
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
-import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
-import {
-  handleSyncPushSupplementary,
-  SYNC_PUSH_SUPPLEMENTARY_QUEUE,
-} from "./sync-push-supplementary.js";
-import {
-  handleSyncPushFiles,
-  SYNC_PUSH_FILES_QUEUE,
-} from "./sync-push-files.js";
-import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
-import {
-  handleTelegramBulkImport,
-  TELEGRAM_BULK_IMPORT_QUEUE,
-} from "./telegram-bulk-import.js";
-import {
-  handleLinkedInBulkImport,
-  LINKEDIN_BULK_IMPORT_QUEUE,
-} from "./linkedin-bulk-import.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
 import { handleFeedRSSExecute } from "./feed-rss-executor.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
@@ -110,16 +89,7 @@ const ALL_QUEUES = [
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
-  "proactive-morning-briefing",
-  "proactive-weekly-digest",
-  "proactive-health-check",
   NOTIFICATION_CLEANUP_QUEUE,
-  SYNC_PUSH_QUEUE,
-  SYNC_PUSH_SUPPLEMENTARY_QUEUE,
-  SYNC_PUSH_FILES_QUEUE,
-  SYNC_PULL_QUEUE,
-  TELEGRAM_BULK_IMPORT_QUEUE,
-  LINKEDIN_BULK_IMPORT_QUEUE,
   "feed-scheduler",
   "feed-rss-execute",
   "feed-proactive-execute",
@@ -294,59 +264,11 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: automation-pattern-detect");
 
-  // Proactive morning briefing (cron: every 15 minutes)
-  await boss.work("proactive-morning-briefing", async () =>
-    handleProactiveMorningBriefing()
-  );
-  logger.info("Registered worker: proactive-morning-briefing");
-
-  // Proactive weekly digest (cron: every hour)
-  await boss.work("proactive-weekly-digest", async () =>
-    handleProactiveWeeklyDigest()
-  );
-  logger.info("Registered worker: proactive-weekly-digest");
-
-  // Proactive health check (cron: daily at 4:00 AM UTC)
-  await boss.work("proactive-health-check", async () =>
-    handleProactiveHealthCheck()
-  );
-  logger.info("Registered worker: proactive-health-check");
-
   // Notification cleanup (cron: daily at 2:00 AM UTC)
   await boss.work(NOTIFICATION_CLEANUP_QUEUE, async () =>
     handleNotificationCleanup()
   );
   logger.info("Registered worker: notification-cleanup");
-
-  // Sync push (cron: every 60 seconds — pushes completed events to registered peers)
-  await boss.work(SYNC_PUSH_QUEUE, async () => handleSyncPush());
-  logger.info("Registered worker: sync-push");
-
-  // Sync push supplementary (cron: every 5 minutes — pushes non-event tables to peers)
-  await boss.work(SYNC_PUSH_SUPPLEMENTARY_QUEUE, async () =>
-    handleSyncPushSupplementary()
-  );
-  logger.info("Registered worker: sync-push-supplementary");
-
-  // Sync push files (cron: every 10 minutes — pushes document content + file blobs to peers)
-  await boss.work(SYNC_PUSH_FILES_QUEUE, async () => handleSyncPushFiles());
-  logger.info("Registered worker: sync-push-files");
-
-  // Sync pull (cron: every 60 seconds — pulls events from pull/bidirectional peers)
-  await boss.work(SYNC_PULL_QUEUE, async () => handleSyncPull());
-  logger.info("Registered worker: sync-pull");
-
-  // Telegram bulk import (on-demand — triggered by relay-app / browser after parsing export)
-  await boss.work(TELEGRAM_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
-    handleTelegramBulkImport(job)
-  );
-  logger.info("Registered worker: telegram-bulk-import");
-
-  // LinkedIn bulk import (on-demand — triggered by relay-app after parsing Connections.csv)
-  await boss.work(LINKEDIN_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
-    handleLinkedInBulkImport(job)
-  );
-  logger.info("Registered worker: linkedin-bulk-import");
 
   // Feed scheduler (cron: every minute — schedules due feed executions)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
@@ -363,6 +285,9 @@ export async function registerAllWorkers(): Promise<void> {
     handleFeedProactiveExecute(job)
   );
   logger.info("Registered worker: feed-proactive-execute");
+
+  // Note: Delivery retry and dead letter workers removed to avoid circular dependency
+  // (jobs → api → jobs). Retry functionality is handled inline in DeliveryService.
 
   logger.info("All workers registered");
 }

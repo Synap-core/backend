@@ -30,12 +30,6 @@ export {
 } from "./migrate-morning-briefing.js";
 
 export {
-  migrateSignalFeeds,
-  rollbackSignalFeeds,
-  type SignalFeedMigrationResult,
-} from "./migrate-signal-feeds.js";
-
-export {
   migrateWeeklyDigest,
   rollbackWeeklyDigest,
   type WeeklyDigestMigrationResult,

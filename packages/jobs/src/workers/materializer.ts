@@ -46,7 +46,7 @@ import {
 } from "../types/unified-events.js";
 import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "../emit-side-effects.js";
+import { emitSideEffects } from "@synap/events";
 
 const logger = createLogger({ module: "materializer" });
 

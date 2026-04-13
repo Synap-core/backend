@@ -64,7 +64,7 @@ import { createHash } from "crypto";
 import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects, getBoss } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 const logger = createLogger({ module: "channels" });
@@ -1547,8 +1547,6 @@ export const channelsRouter = router({
 
       if (entities.length > 0) {
         try {
-          const { getBoss } = await import("@synap/jobs");
-
           for (const entity of entities) {
             await getBoss().send("entity-embedding", {
               type: entity.type,

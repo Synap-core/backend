@@ -14,7 +14,7 @@
 import { db, eq, and, automations, automationRuns } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { getBoss } from "../boss.js";
+import { getBoss } from "@synap/events";
 
 const logger = createLogger({ module: "automation-trigger-matcher" });
 

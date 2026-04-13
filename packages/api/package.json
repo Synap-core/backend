@@ -13,6 +13,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./types/feed-config": {
+      "types": "./dist/types/feed-config.d.ts",
+      "import": "./dist/types/feed-config.js",
+      "default": "./dist/types/feed-config.js"
+    },
+    "./services/DeliveryService": {
+      "types": "./dist/services/DeliveryService.d.ts",
+      "import": "./dist/services/DeliveryService.js",
+      "default": "./dist/services/DeliveryService.js"
     }
   },
   "files": [
@@ -26,6 +36,9 @@
     "gen-types": "node scripts/gen-types.mjs",
     "gen-docs": "node scripts/gen-sdk-docs.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
     "provision": "export $(grep -v '^#' ../../.env | xargs) && tsx src/scripts/provision.ts",
     "provision-agent": "export $(grep -v '^#' ../../.env | xargs) && tsx src/scripts/provision-agent.ts"
   },
@@ -44,6 +57,7 @@
     "@synap/events": "workspace:*",
     "@synap/intelligence-client": "workspace:*",
     "@synap/jobs": "workspace:*",
+    "@synap/shared-utils": "workspace:*",
     "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
     "@trpc/server": "^11.8.1",
@@ -68,10 +82,13 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.0.0",
     "@types/react": "^19.2.8",
+    "@vitest/coverage-v8": "^4.0.15",
     "dts-bundle-generator": "^9.5.1",
     "react": "^19.2.3",
     "tsup": "^8.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vitest": "^4.0.15"
   },
   "repository": {
     "type": "git",

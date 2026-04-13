@@ -56,8 +56,7 @@ import type {
   CommandNodeDef,
   OutputNodeDef,
 } from "@synap/database";
-import { emitSideEffects } from "../emit-side-effects.js";
-import { getBoss } from "../boss.js";
+import { getBoss, emitSideEffects } from "@synap/events";
 import {
   resolveVaultReferences,
   isVaultReference,

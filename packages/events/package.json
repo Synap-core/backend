@@ -20,6 +20,7 @@
     "@synap/database": "workspace:*",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
+    "pg-boss": "^10.1.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

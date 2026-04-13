@@ -11,7 +11,7 @@
 
 import { db, eq, and, lte, automations, automationRuns } from "@synap/database";
 import { drizzleSql } from "@synap/database";
-import { getBoss } from "../boss.js";
+import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "automation-cron-scheduler" });

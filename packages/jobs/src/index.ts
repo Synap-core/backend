@@ -4,18 +4,15 @@
  * V3.0: pg-boss based job queue (replaced Inngest)
  *
  * This package exports:
- * - pg-boss client (start/stop/getBoss)
- * - Side-effect emitter (emitSideEffects)
+ * - pg-boss client (start/stop/getBoss) - re-exported from @synap/events
+ * - Side-effect emitter (emitSideEffects) - re-exported from @synap/events
  * - Worker registry for admin UI
  * - Unified event types (re-exports from @synap-core/types)
  * - Realtime broadcast utilities
  */
 
-// pg-boss client and lifecycle
-export { getBoss, startBoss, stopBoss } from "./boss.js";
-
-// Side-effect emitter (fire-and-forget after synchronous CRUD)
-export { emitSideEffects } from "./emit-side-effects.js";
+// pg-boss client and lifecycle - re-exported from @synap/events
+export { getBoss, startBoss, stopBoss, emitSideEffects } from "@synap/events";
 
 // Cron scheduler
 export { registerCronSchedules } from "./cron.js";

@@ -95,6 +95,10 @@
     "./proactive": {
       "types": "./dist/proactive/index.d.ts",
       "import": "./dist/proactive/index.js"
+    },
+    "./feeds": {
+      "types": "./dist/feeds/index.d.ts",
+      "import": "./dist/feeds/index.js"
     }
   },
   "scripts": {

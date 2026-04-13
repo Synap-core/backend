@@ -14,6 +14,8 @@ import type {
   ProactiveFeedConfig,
   RSSFeedSource,
   FeedMessageMetadata,
+  FeedStatus,
+  FeedExecutionPayload,
 } from "@synap-core/types";
 
 // Re-export types from @synap-core/types
@@ -34,26 +36,63 @@ export type {
 
 export const FeedMessageMetadataSchema: z.ZodType<FeedMessageMetadata> =
   z.object({
-    /** Source URL for RSS items */
-    sourceUrl: z.string().url().optional(),
-    /** Original published date from source */
-    publishedAt: z.string().datetime().optional(),
-    /** Author/publisher from source */
-    author: z.string().optional(),
-    /** Relevance score from IS classification (0-100) */
-    relevanceScore: z.number().min(0).max(100).optional(),
-    /** Categories/tags extracted from source */
-    categories: z.array(z.string()).optional(),
+    /** Marker to identify feed items */
+    feedItem: z.literal(true),
+    /** Feed type discriminator */
+    feedType: z.enum(["rss", "proactive", "automation"]),
+    /** Source information */
+    source: z.object({
+      /** Platform name: "hackernews", "reddit", "github" */
+      platform: z.string(),
+      /** Original source URL */
+      url: z.string(),
+      /** RSSHub route: "/hackernews/frontpage" */
+      route: z.string().optional(),
+      /** Original author */
+      author: z.string().optional(),
+      /** ISO timestamp when published */
+      publishedAt: z.string().optional(),
+    }),
+    /** Topics/tags extracted from content */
+    topics: z.array(z.string()),
+    /** Alias for topics (for compatibility) */
+    categories: z.array(z.string()),
+    /** Relevance score 0-1 (normalized) */
+    relevanceScore: z.number().min(0).max(1),
     /** Whether this was classified by AI */
-    aiClassified: z.boolean().optional(),
-    /** Whether this was included in a batch digest */
+    aiClassified: z.boolean(),
+    /** AI-generated summary of the content */
+    aiSummary: z.string().optional(),
+    /** Cross-feed references */
+    crossFeeds: z.array(
+      z.object({
+        feedId: z.string(),
+        feedTitle: z.string(),
+        postedAt: z.string(),
+      })
+    ),
+    /** Batch/digest info */
     batched: z.boolean().optional(),
-    /** Batch ID if part of a digest */
     batchId: z.string().uuid().optional(),
-    /** Feed-specific metadata */
-    feedType: z.enum(["rss", "proactive"]).optional(),
-    /** Original item ID from source */
-    sourceItemId: z.string().optional(),
+    batchIndex: z.number().optional(),
+    batchTotal: z.number().optional(),
+    /** User interaction state */
+    interaction: z
+      .object({
+        isCaptured: z.boolean(),
+        isDismissed: z.boolean(),
+        capturedAt: z.string().optional(),
+        dismissedAt: z.string().optional(),
+      })
+      .optional(),
+    /** Engagement metrics from source */
+    engagement: z
+      .object({
+        upvotes: z.number().optional(),
+        comments: z.number().optional(),
+        views: z.number().optional(),
+      })
+      .optional(),
   });
 
 // ── Base Feed Config ─────────────────────────────────────────────────────────
@@ -166,10 +205,21 @@ export const ProactiveFeedConfigSchema: z.ZodType<ProactiveFeedConfig> =
 
 // ── Union Feed Config ────────────────────────────────────────────────────────
 
-export const FeedConfigSchema: z.ZodType<FeedConfig> = z.discriminatedUnion(
-  "feedType",
-  [RSSFeedConfigSchema, ProactiveFeedConfigSchema]
-);
+export const FeedConfigSchema = z.union([
+  RSSFeedConfigSchema,
+  ProactiveFeedConfigSchema,
+]);
+
+// Type guard helpers
+export function isRSSFeedConfig(config: FeedConfig): config is RSSFeedConfig {
+  return config.feedType === "rss";
+}
+
+export function isProactiveFeedConfig(
+  config: FeedConfig
+): config is ProactiveFeedConfig {
+  return config.feedType === "proactive";
+}
 
 // ── Feed Status ──────────────────────────────────────────────────────────────
 

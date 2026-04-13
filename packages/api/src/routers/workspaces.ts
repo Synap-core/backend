@@ -41,7 +41,7 @@ import { randomBytes } from "crypto";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
-import { emitSideEffects, getBoss } from "@synap/jobs";
+import { emitSideEffects, getBoss } from "@synap/events";
 import { config, createLogger } from "@synap-core/core";
 import {
   ensurePersonalChannel,

@@ -1221,6 +1221,94 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+export interface BaseFeedConfig {
+	/** Feed type discriminator */
+	feedType: "rss" | "proactive";
+	/** Whether feed is enabled */
+	enabled: boolean;
+	/** Schedule expression (cron or natural language) */
+	schedule: string;
+	/** Timezone for schedule evaluation */
+	timezone: string;
+	/** Maximum items per run */
+	maxItemsPerRun: number;
+	/** How long to track seen URLs (days) */
+	dedupWindowDays: number;
+	/** Minimum relevance score to include (0-100, 0 = include all) */
+	minRelevanceScore: number;
+	/** Whether to post items individually or as digest */
+	postMode: "individual" | "batch";
+	/** AI classification prompt override */
+	classificationPrompt?: string;
+}
+export interface RSSFeedSource {
+	/** RSS/Atom feed URL */
+	url: string;
+	/** Optional RSSHub route for CP proxy */
+	rsshubRoute?: string;
+	/** Custom headers for fetch */
+	headers?: Record<string, string>;
+	/** Source name override */
+	name?: string;
+	/** Source icon URL */
+	iconUrl?: string;
+}
+export interface RSSFeedConfig extends BaseFeedConfig {
+	feedType: "rss";
+	/** RSS feed sources (primary + fallbacks) */
+	sources: RSSFeedSource[];
+	/** RSSHub configuration for CP proxy */
+	rsshubConfig?: {
+		/** Use CP RSSHub proxy instead of direct fetch */
+		useCpProxy?: boolean;
+		/** RSSHub instance URL (if not using CP) */
+		instanceUrl?: string;
+		/** Access key for RSSHub */
+		accessKey?: string;
+	};
+	/** Content extraction options */
+	extraction?: {
+		/** Extract full article content */
+		fetchFullContent?: boolean;
+		/** Max content length */
+		maxContentLength?: number;
+		/** Include media attachments */
+		includeMedia?: boolean;
+	};
+}
+export interface ProactiveFeedIncludeConfig {
+	/** Include tasks due soon */
+	tasksDue?: boolean;
+	/** Days ahead to look for due tasks */
+	tasksDueDays?: number;
+	/** Include pending proposals */
+	pendingProposals?: boolean;
+	/** Include recently created entities */
+	recentEntities?: boolean;
+	/** Hours back to look for recent entities */
+	recentEntitiesHours?: number;
+	/** Include recent captures */
+	recentCaptures?: boolean;
+	/** Hours back to look for captures */
+	recentCapturesHours?: number;
+	/** Include workspace activity summary */
+	activitySummary?: boolean;
+}
+export interface ProactiveFeedSummarizationConfig {
+	/** Summarization style */
+	style?: "brief" | "detailed" | "bullet_points";
+	/** Max items to summarize */
+	maxItems?: number;
+	/** Include insights/suggestions */
+	includeInsights?: boolean;
+}
+export interface ProactiveFeedConfig extends BaseFeedConfig {
+	feedType: "proactive";
+	/** What to include in the digest */
+	include?: ProactiveFeedIncludeConfig;
+	/** AI summarization options */
+	summarization?: ProactiveFeedSummarizationConfig;
+}
 /**
  * Node shape for the workspace branch tree response.
  * Defined at module scope so tsc can include it in declaration output.
@@ -9094,6 +9182,102 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				generation: number;
 				role: string;
 				splitBrainDetected: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
+	feeds: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		triggerFeed: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: {
+				success: boolean;
+				message: string;
+			};
+			meta: object;
+		}>;
+		getFeedStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: {
+				channelId: string;
+				feedType: "proactive" | "rss" | null;
+				enabled: boolean;
+				status: {
+					lastRunAt: string | null;
+					nextRunAt: string | null;
+					lastRunStatus: "error" | "success" | "running" | null;
+					lastError: string | null;
+					lastRunItemCount: number;
+					totalItemsPosted: number;
+					triggerRequestedAt: string | null;
+					isRunning: boolean;
+				};
+				counts: {
+					total: number;
+					last24Hours: number;
+				};
+				config: {
+					include?: ProactiveFeedIncludeConfig | undefined;
+					summarization?: ProactiveFeedSummarizationConfig | undefined;
+					sourceCount?: number | undefined;
+					minRelevanceScore?: number | undefined;
+					schedule: string;
+					timezone: string;
+					maxItemsPerRun: number;
+					postMode: "individual" | "batch";
+				} | null;
+			};
+			meta: object;
+		}>;
+		listFeeds: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				items: {
+					id: string;
+					title: string | null;
+					feedType: "proactive" | "rss" | null;
+					enabled: boolean;
+					status: {
+						lastRunAt: string | null;
+						nextRunAt: string | null;
+						lastRunStatus: "error" | "success" | "running" | null;
+					};
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+				pagination: {
+					hasMore: boolean;
+					limit: number;
+					offset: number;
+				};
+			};
+			meta: object;
+		}>;
+		updateFeedConfig: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				config: unknown;
+			};
+			output: {
+				success: boolean;
+				config: RSSFeedConfig | ProactiveFeedConfig;
+				nextRunAt: string;
 			};
 			meta: object;
 		}>;

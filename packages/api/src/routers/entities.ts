@@ -31,7 +31,7 @@ import { type Entity, EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -442,7 +442,6 @@ export const entitiesRouter = router({
 
       // Dispatch entity embedding job (non-blocking — failure never blocks creation)
       try {
-        const { getBoss } = await import("@synap/jobs");
         await getBoss().send("entity-embedding", {
           entityId: createdEntity.id,
           title: createdEntity.title || input.title,
@@ -458,7 +457,6 @@ export const entitiesRouter = router({
       // Upgrades profileSlug from "capture" → typed profile (note, bookmark, task…)
       if (profileSlug === "capture") {
         try {
-          const { getBoss } = await import("@synap/jobs");
           await getBoss().send("ai-analysis", {
             entityId: createdEntity.id,
             workspaceId: ctx.workspaceId,
@@ -1003,7 +1001,6 @@ export const entitiesRouter = router({
       // Dispatch entity embedding job (non-blocking — only if searchable fields changed)
       if (input.title !== undefined || input.description !== undefined) {
         try {
-          const { getBoss } = await import("@synap/jobs");
           await getBoss().send("entity-embedding", {
             entityId: input.id,
             title: input.title,
