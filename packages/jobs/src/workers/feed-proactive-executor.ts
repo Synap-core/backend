@@ -186,15 +186,19 @@ async function generateDigestWithIS(
       }
     );
 
-    const result = await response.json();
+    const result = (await response.json()) as {
+      digest?: string;
+      insights?: unknown;
+    };
 
     // Validate response
-    if (!result.digest || typeof result.digest !== "string") {
+    const digest = result.digest;
+    if (!digest || typeof digest !== "string") {
       logger.warn("IS returned invalid digest structure, using fallback");
       throw new Error("Invalid IS response: missing digest");
     }
 
-    return result.digest;
+    return digest;
   } catch (error) {
     logger.error(
       {
@@ -391,7 +395,7 @@ async function postDigest(
   channelId: string,
   userId: string,
   digest: DigestSummary,
-  runId: string
+  _runId: string
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
     const messageId = randomUUID();
@@ -406,7 +410,6 @@ async function postDigest(
     };
 
     await db.insert(messages).values({
-      id: messageId,
       channelId,
       userId,
       role: MessageRole.SYSTEM,
@@ -414,12 +417,7 @@ async function postDigest(
       content: digest.content,
       hash,
       previousHash: "",
-      metadata: {
-        ...metadata,
-        feedRunId: runId,
-        priority: digest.priority,
-        insights: digest.insights,
-      },
+      metadata: metadata as unknown as null,
     });
 
     logger.info(
@@ -731,7 +729,9 @@ async function updateFeedStatus(
       (metadata.feedStatus as Record<string, unknown>) ?? {};
 
     // Calculate next run
-    const nextRunAt = calculateNextRun(config.schedule, config.timezone);
+    const schedule = config.schedule ?? "0 9 * * *";
+    const timezone = config.timezone ?? "UTC";
+    const nextRunAt = calculateNextRun(schedule, timezone);
 
     await db
       .update(channels)

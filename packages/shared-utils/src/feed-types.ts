@@ -3,9 +3,23 @@
  *
  * Type definitions and Zod schemas for RSS/Atom feed integrations
  * and proactive AI feed configurations.
+ *
+ * NOTE: FeedMessageMetadata is now defined in @synap-core/types/feeds.
+ * This file re-exports it for backward compatibility.
  */
 
 import { z } from "zod";
+import type {
+  FeedMessageMetadata,
+  RSSFeedConfig,
+  ProactiveFeedConfig,
+} from "@synap-core/types/feeds";
+
+// Re-export the canonical type from @synap-core/types
+export type { FeedMessageMetadata };
+
+// Re-export feed config types
+export type { RSSFeedConfig, ProactiveFeedConfig };
 
 // ============================================================================
 // Feed Types
@@ -105,32 +119,6 @@ export interface FeedExecutionPayload {
 // Feed Message Types
 // ============================================================================
 
-export interface FeedMessageMetadata {
-  feedId?: string;
-  feedName?: string;
-  feedType?: FeedType;
-  originalUrl?: string;
-  publishedAt?: Date;
-  author?: string;
-  categories?: string[];
-  guid?: string;
-  isRead?: boolean;
-  isStarred?: boolean;
-  // Additional fields for feed workers
-  sourceItemId?: string;
-  sourceUrl?: string;
-  topics?: string[];
-  relevanceScore?: number;
-  aiClassified?: boolean;
-  crossFeeds?: string[];
-  batched?: boolean;
-  batchId?: string;
-  batchIndex?: number;
-  totalInBatch?: number;
-  feedRunId?: string;
-  itemCount?: number;
-}
-
 export interface FeedMessage {
   id: string;
   feedId: string;
@@ -203,47 +191,7 @@ export const ProactiveFeedConfigSchema = FeedConfigSchema.extend({
   categories: z.array(z.string()).optional(),
 });
 
-export const FeedMessageMetadataSchema = z.object({
-  feedId: z.string(),
-  feedName: z.string(),
-  feedType: FeedTypeSchema,
-  originalUrl: z.string().url().optional(),
-  publishedAt: z.date().optional(),
-  author: z.string().optional(),
-  categories: z.array(z.string()).optional(),
-  guid: z.string().optional(),
-  isRead: z.boolean().default(false),
-  isStarred: z.boolean().default(false),
-});
-
-export const FeedMessageSchema = z.object({
-  id: z.string(),
-  feedId: z.string(),
-  workspaceId: z.string(),
-  title: z.string(),
-  content: z.string().optional(),
-  summary: z.string().optional(),
-  url: z.string().url().optional(),
-  metadata: FeedMessageMetadataSchema,
-  createdAt: z.date(),
-  updatedAt: z.date(),
-});
-
-export const FeedFetchResultSchema = z.object({
-  success: z.boolean(),
-  feedId: z.string(),
-  itemsFetched: z.number().int().min(0),
-  itemsNew: z.number().int().min(0),
-  error: z.string().optional(),
-  fetchDurationMs: z.number().int().min(0),
-  timestamp: z.date(),
-});
-
-export const FeedFetchOptionsSchema = z.object({
-  force: z.boolean().optional(),
-  timeoutMs: z.number().int().min(1000).optional(),
-  maxItems: z.number().int().min(1).max(1000).optional(),
-});
+// Note: FeedMessageMetadataSchema removed - use type guards from @synap-core/types/feeds
 
 // ============================================================================
 // Input Schemas (for API operations)

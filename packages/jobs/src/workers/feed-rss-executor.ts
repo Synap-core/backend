@@ -233,19 +233,25 @@ async function classifyItemsWithIS(
       }
     );
 
-    const result = await response.json();
+    const result = (await response.json()) as {
+      classifiedItems?: Array<{
+        topics?: string[];
+        relevanceScore?: number;
+      }>;
+    };
 
     // Validate response structure
-    if (!result.classifiedItems || !Array.isArray(result.classifiedItems)) {
+    const classifiedItems = result.classifiedItems ?? [];
+    if (!Array.isArray(classifiedItems)) {
       logger.warn("IS returned invalid response structure, using fallback");
       throw new Error("Invalid IS response structure");
     }
 
     return items.map((item, index) => ({
       ...item,
-      topics: result.classifiedItems[index]?.topics || [],
+      topics: classifiedItems[index]?.topics || [],
       relevanceScore: normalizeRelevanceScore(
-        result.classifiedItems[index]?.relevanceScore ?? 0.5
+        classifiedItems[index]?.relevanceScore ?? 0.5
       ),
       aiClassified: true,
     }));
@@ -406,7 +412,7 @@ async function postRSSItems(
     classification: ClassificationResult;
   }>,
   postMode: "individual" | "batch",
-  runId: string
+  _runId: string
 ): Promise<{ posted: number; messageIds: string[]; errors: string[] }> {
   const messageIds: string[] = [];
   const errors: string[] = [];
@@ -430,7 +436,6 @@ async function postRSSItems(
       };
 
       await db.insert(messages).values({
-        id: messageId,
         channelId,
         userId,
         role: MessageRole.SYSTEM,
@@ -438,11 +443,7 @@ async function postRSSItems(
         content,
         hash,
         previousHash: "",
-        metadata: {
-          ...metadata,
-          feedRunId: runId,
-          itemCount: items.length,
-        },
+        metadata: metadata as unknown as null,
       });
 
       messageIds.push(messageId);
@@ -487,7 +488,6 @@ async function postRSSItems(
         };
 
         await db.insert(messages).values({
-          id: messageId,
           channelId,
           userId,
           role: MessageRole.SYSTEM,
@@ -495,10 +495,7 @@ async function postRSSItems(
           content,
           hash,
           previousHash: "",
-          metadata: {
-            ...metadata,
-            feedRunId: runId,
-          },
+          metadata: metadata as unknown as null,
         });
 
         messageIds.push(messageId);
@@ -513,7 +510,7 @@ async function postRSSItems(
           },
           "Failed to post individual RSS item"
         );
-        errors.push(`Item "${item.title}" failed: ${errorMsg}`);
+        errors.push(`Item "${item.title ?? "unknown"}" failed: ${errorMsg}`);
       }
     }
 
@@ -552,7 +549,7 @@ export async function handleFeedRSSExecute(job: {
   }
 
   logger.info(
-    { channelId, runId, sourceCount: config.sources.length },
+    { channelId, runId, sourceCount: config.sources?.length ?? 0 },
     "Starting RSS feed execution"
   );
 
@@ -565,7 +562,7 @@ export async function handleFeedRSSExecute(job: {
     // 1. Get seen URLs
     let seenUrls: Set<string>;
     try {
-      seenUrls = await getSeenURLs(channelId, config.dedupWindowDays);
+      seenUrls = await getSeenURLs(channelId, config.dedupWindowDays ?? 7);
       logger.debug({ seenCount: seenUrls.size }, "Loaded seen URLs");
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -585,11 +582,19 @@ export async function handleFeedRSSExecute(job: {
     };
 
     try {
+      // Type guard ensures config.sources exists for RSS feeds
+      if (!config.sources?.length) {
+        throw new Error("RSS feed config missing sources");
+      }
+
+      const sources = config.sources;
+      const maxItems = config.maxItemsPerRun ?? 10;
+
       fetchResult = await withRetry(
         async () => {
-          return await fetchRSSItems(config.sources, {
+          return await fetchRSSItems(sources, {
             useCpProxy: config.rsshubConfig?.useCpProxy ?? true,
-            maxItems: config.maxItemsPerRun * 2, // Fetch more for filtering
+            maxItems: maxItems * 2, // Fetch more for filtering
           });
         },
         {
@@ -712,12 +717,13 @@ export async function handleFeedRSSExecute(job: {
       }))
       .filter(({ classification }) => {
         if (!classification.shouldInclude) return false;
-        if (config.minRelevanceScore > 0) {
-          return classification.relevanceScore >= config.minRelevanceScore;
+        const minScore = config.minRelevanceScore ?? 0;
+        if (minScore > 0) {
+          return classification.relevanceScore >= minScore;
         }
         return true;
       })
-      .slice(0, config.maxItemsPerRun);
+      .slice(0, config.maxItemsPerRun ?? 10);
 
     itemCount = filteredItems.length;
     logger.info(
@@ -748,11 +754,12 @@ export async function handleFeedRSSExecute(job: {
     }
 
     // 6. Post messages with partial success handling
+    const postMode = config.postMode ?? "individual";
     const postResult = await postRSSItems(
       channelId,
       userId,
       filteredItems,
-      config.postMode,
+      postMode,
       runId
     );
     postedCount = postResult.posted;
@@ -910,7 +917,9 @@ async function updateFeedStatus(
       (metadata.feedStatus as Record<string, unknown>) ?? {};
 
     // Calculate next run
-    const nextRunAt = calculateNextRun(config.schedule, config.timezone);
+    const schedule = (config as RSSFeedConfig).schedule ?? "0 */6 * * *";
+    const timezone = (config as RSSFeedConfig).timezone ?? "UTC";
+    const nextRunAt = calculateNextRun(schedule, timezone);
 
     await db
       .update(channels)

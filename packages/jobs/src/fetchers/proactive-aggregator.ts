@@ -336,7 +336,7 @@ export async function aggregateWorkspaceData(
 ): Promise<AggregatedData> {
   logger.info({ workspaceId }, "Aggregating workspace data");
 
-  const include = config.include || {};
+  const include = config.include ?? {};
 
   const [
     tasksDue,
@@ -346,19 +346,19 @@ export async function aggregateWorkspaceData(
     activitySummary,
   ] = await Promise.all([
     include.tasksDue !== false
-      ? getTasksDue(workspaceId, include.tasksDueDays || 3)
+      ? getTasksDue(workspaceId, include.tasksDueDays ?? 3)
       : Promise.resolve([]),
     include.pendingProposals !== false
       ? getPendingProposals(workspaceId)
       : Promise.resolve([]),
     include.recentEntities !== false
-      ? getRecentEntities(workspaceId, include.recentEntitiesHours || 24)
+      ? getRecentEntities(workspaceId, include.recentEntitiesHours ?? 24)
       : Promise.resolve([]),
     include.recentCaptures !== false
-      ? getRecentCaptures(workspaceId, include.recentCapturesHours || 24)
+      ? getRecentCaptures(workspaceId, include.recentCapturesHours ?? 24)
       : Promise.resolve([]),
     include.activitySummary !== false
-      ? getActivitySummary(workspaceId, include.recentEntitiesHours || 24)
+      ? getActivitySummary(workspaceId, include.recentEntitiesHours ?? 24)
       : Promise.resolve({
           entitiesCreated: 0,
           entitiesUpdated: 0,

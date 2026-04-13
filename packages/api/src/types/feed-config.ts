@@ -13,10 +13,10 @@ import type {
   RSSFeedConfig,
   ProactiveFeedConfig,
   RSSFeedSource,
-  FeedMessageMetadata,
   FeedStatus,
   FeedExecutionPayload,
 } from "@synap-core/types";
+import type { FeedMessageMetadata } from "@synap-core/types/feeds";
 
 // Re-export types from @synap-core/types
 export type {
@@ -24,13 +24,15 @@ export type {
   RSSFeedConfig,
   ProactiveFeedConfig,
   RSSFeedSource,
-  FeedMessageMetadata,
   FeedExecutionPayload,
   FeedStatus,
   NormalizedRSSItem,
   RSSFetchResult,
   AggregatedData,
 } from "@synap-core/types";
+
+// Re-export FeedMessageMetadata from feeds submodule
+export type { FeedMessageMetadata } from "@synap-core/types/feeds";
 
 // ── Feed Message Metadata ────────────────────────────────────────────────────
 

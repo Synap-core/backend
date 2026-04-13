@@ -15,7 +15,7 @@ import { db, eq, and } from "@synap/database";
 import { channels, ChannelType, ChannelStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
-import type { FeedConfig } from "@synap/shared-utils";
+import type { RSSFeedConfig, ProactiveFeedConfig } from "@synap/shared-utils";
 import { randomUUID } from "crypto";
 import { calculateNextRun } from "../utils/feed-helpers.js";
 
@@ -53,7 +53,9 @@ interface FeedChannelRow {
  * Simple feed config parser without zod (types only).
  * Full validation happens at the API layer.
  */
-function parseFeedConfig(data: unknown): FeedConfig | null {
+function parseFeedConfig(
+  data: unknown
+): RSSFeedConfig | ProactiveFeedConfig | null {
   if (!data || typeof data !== "object") return null;
   const config = data as Record<string, unknown>;
 
@@ -61,13 +63,16 @@ function parseFeedConfig(data: unknown): FeedConfig | null {
     return null;
   }
 
-  return config as unknown as FeedConfig;
+  return config as unknown as RSSFeedConfig | ProactiveFeedConfig;
 }
 
 /**
  * Check if a channel is due for execution.
  */
-function isChannelDue(row: FeedChannelRow, config: FeedConfig): boolean {
+function isChannelDue(
+  row: FeedChannelRow,
+  config: RSSFeedConfig | ProactiveFeedConfig
+): boolean {
   const metadata = row.metadata as Record<string, unknown> | null;
   const feedStatus = metadata?.feedStatus as Record<string, unknown> | null;
 
@@ -87,10 +92,10 @@ function isChannelDue(row: FeedChannelRow, config: FeedConfig): boolean {
   }
 
   // If no nextRunAt set, calculate from config
-  if (!nextRunAt && config.schedule) {
+  if (!nextRunAt && (config as RSSFeedConfig | ProactiveFeedConfig).schedule) {
     const calculated = calculateNextRun(
-      config.schedule,
-      config.timezone || "UTC"
+      (config as RSSFeedConfig | ProactiveFeedConfig).schedule!,
+      (config as RSSFeedConfig | ProactiveFeedConfig).timezone ?? "UTC"
     );
     return calculated <= new Date();
   }
@@ -147,7 +152,7 @@ export async function handleFeedScheduler(): Promise<void> {
         }
 
         // Skip disabled feeds
-        if (!config.enabled) {
+        if ((config as RSSFeedConfig | ProactiveFeedConfig).enabled === false) {
           skippedCount++;
           continue;
         }
