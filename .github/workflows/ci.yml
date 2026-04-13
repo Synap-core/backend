@@ -95,6 +95,11 @@ jobs:
         # Typecheck all packages (admin-ui already excluded from tsconfig.json references)
         run: pnpm typecheck
 
+      - name: Validate migrations
+        run: pnpm --filter @synap/database migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+
       - name: Test
         # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
         # Other package tests should still run

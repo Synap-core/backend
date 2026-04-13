@@ -2604,7 +2604,7 @@ ON CONFLICT ("id") DO NOTHING;
 -- ─── 50. signals (subscriptions, classifications, fetch_history, auto_links) ──
 
 CREATE TABLE IF NOT EXISTS "signal_subscriptions" (
-  "id"                      uuid      PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id"                      uuid      NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   "user_id"                 uuid      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
   "workspace_id"            uuid      NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "topic"                   text      NOT NULL,
@@ -2719,7 +2719,7 @@ CREATE INDEX IF NOT EXISTS "signal_fetch_history_platform_idx"
   ON "signal_fetch_history" ("source_platform", "fetched_at" DESC);
 
 CREATE TABLE IF NOT EXISTS "signal_auto_links" (
-  "id"                uuid      PRIMARY KEY DEFAULT gen_random_uuid(),
+  "id"                uuid      NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   "signal_entity_id"  uuid      NOT NULL REFERENCES "entities"("id") ON DELETE CASCADE,
   "linked_entity_id"  uuid      NOT NULL REFERENCES "entities"("id") ON DELETE CASCADE,
   "link_type"         text      NOT NULL,
