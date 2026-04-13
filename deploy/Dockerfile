@@ -30,6 +30,7 @@ COPY packages/jobs/package.json          ./packages/jobs/
 COPY packages/realtime/package.json      ./packages/realtime/
 COPY packages/scripts/package.json       ./packages/scripts/
 COPY packages/search/package.json        ./packages/search/
+COPY packages/shared-utils/package.json  ./packages/shared-utils/
 COPY packages/storage/package.json       ./packages/storage/
 COPY packages/test-e2e/package.json      ./packages/test-e2e/
 COPY packages/types/package.json         ./packages/types/
