@@ -45,7 +45,7 @@ function parseRSSXML(xml: string, feedUrl: string): ParsedFeed {
     /<channel>.*?<title>(.*?)<\/title>.*?<\/channel>/s
   );
   const feedTitle =
-    channelTitleMatch?.[1]?.replace(/<!\[CDATA\[(.*?)\]\]>/s, "$1") ||
+    channelTitleMatch?.[1]?.replace(/<![CDATA[(.*?)]]>/s, "$1") ||
     new URL(feedUrl).hostname;
 
   // Extract items - support both RSS <item> and Atom <entry>
@@ -58,7 +58,7 @@ function parseRSSXML(xml: string, feedUrl: string): ParsedFeed {
     // Extract fields with CDATA support
     const getField = (tag: string): string | undefined => {
       const regex = new RegExp(
-        `<${tag}[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/${tag}>`,
+        `<${tag}[^>]*>(?:<![CDATA[)?(.*?)(?:]]>)?</${tag}>`,
         "s"
       );
       const m = itemXml.match(regex);
@@ -87,12 +87,12 @@ function parseRSSXML(xml: string, feedUrl: string): ParsedFeed {
     if (guid || finalLink) {
       items.push({
         id: guid || finalLink!,
-        title: title.replace(/<!\[CDATA\[(.*?)\]\]>/s, "$1"),
+        title: title.replace(/<![CDATA[(.*?)]]>/s, "$1"),
         link: finalLink,
-        description: description?.replace(/<!\[CDATA\[(.*?)\]\]>/s, "$1"),
-        content: description?.replace(/<!\[CDATA\[(.*?)\]\]>/s, "$1"),
+        description: description?.replace(/<![CDATA[(.*?)]]>/s, "$1"),
+        content: description?.replace(/<![CDATA[(.*?)]]>/s, "$1"),
         pubDate,
-        author: author?.replace(/<!\[CDATA\[(.*?)\]\]>/s, "$1"),
+        author: author?.replace(/<![CDATA[(.*?)]]>/s, "$1"),
         category: category ? [category] : undefined,
       });
     }

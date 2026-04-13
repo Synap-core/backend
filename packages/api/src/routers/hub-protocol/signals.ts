@@ -1726,7 +1726,7 @@ function extractEntitiesFromItem(
   const content = `${item.title ?? ""} ${item.description ?? ""}`;
 
   const twitterHandleRegex = /@([a-zA-Z0-9_]+)/g;
-  const urlRegex = /https?:\/\/([^\/]+)/g;
+  const urlRegex = /https?:\/\/([^/]+)/g;
 
   let match;
   while ((match = twitterHandleRegex.exec(content)) !== null) {

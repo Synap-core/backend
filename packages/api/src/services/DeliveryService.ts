@@ -256,7 +256,7 @@ async function queueForRetry(
  * NOTE: Dead letter queue functionality temporarily disabled.
  * @deprecated This function is a placeholder for future implementation.
  */
-// @ts-ignore - intentionally unused, reserved for future implementation
+// @ts-expect-error - intentionally unused, reserved for future implementation
 async function _sendToDeadLetter(
   _failedDelivery: FailedDelivery
 ): Promise<void> {
