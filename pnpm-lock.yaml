@@ -869,6 +869,9 @@ importers:
       '@synap-core/types':
         specifier: workspace:*
         version: link:../types
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.28
       cron-parser:
         specifier: ^4.9.0
         version: 4.9.0
@@ -876,9 +879,6 @@ importers:
         specifier: 4.3.6
         version: 4.3.6
     devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.28
       typescript:
         specifier: ^5.3.3
         version: 5.9.3

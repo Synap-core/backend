@@ -15,11 +15,11 @@
   "dependencies": {
     "@synap-core/core": "workspace:*",
     "@synap-core/types": "workspace:*",
+    "@types/node": "^20.0.0",
     "cron-parser": "^4.9.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
     "typescript": "^5.3.3"
   }
 }
