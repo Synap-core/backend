@@ -82,7 +82,7 @@ function createMockResponse(body: string, status = 200): Response {
   return new Response(body, {
     status,
     headers: { "Content-Type": "application/xml" },
-  });
+  }) as Response;
 }
 
 // ============================================================================
