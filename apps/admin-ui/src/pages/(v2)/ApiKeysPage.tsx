@@ -21,10 +21,13 @@ const HUB_SCOPES = [
   { value: "hub-protocol.admin", label: "Hub: Admin", group: "Hub" },
   { value: "data.read", label: "Data: Read", group: "Data" },
   { value: "data.write", label: "Data: Write", group: "Data" },
+  { value: "mcp.read", label: "MCP: Read", group: "MCP" },
+  { value: "mcp.write", label: "MCP: Write", group: "MCP" },
   { value: "mcp.connect", label: "MCP: Connect", group: "MCP" },
+  { value: "setup.agent", label: "Setup: Agent provisioning", group: "Admin" },
 ];
 
-/** Option A: session-created user keys — presets map to scopes external tools need. */
+/** Presets for common integrations — map to the exact scopes each needs. */
 const INTEGRATION_PRESETS: {
   id: string;
   label: string;
@@ -61,6 +64,19 @@ const INTEGRATION_PRESETS: {
       "hub-protocol.write",
       "mcp.connect",
       "data.read",
+    ],
+  },
+  {
+    id: "automation",
+    label: "Automation provider",
+    description:
+      "For n8n, Zapier, custom scripts — can provision agents on this pod without PROVISIONING_TOKEN or Synap CP",
+    keyName: "Automation provider",
+    scopes: [
+      "hub-protocol.read",
+      "hub-protocol.write",
+      "data.read",
+      "setup.agent",
     ],
   },
 ];

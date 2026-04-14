@@ -132,9 +132,19 @@ export const API_KEY_SCOPES = [
   // Hub Protocol scopes (for Intelligence Hub)
   "hub-protocol.read", // Read context from Data Pod
   "hub-protocol.write", // Write results back to Data Pod
+  "hub-protocol.admin", // Elevated Hub Protocol access (full entity/workspace control)
+  // Data scopes (generic read/write used by integration presets)
+  "data.read", // Read entities, documents, relations
+  "data.write", // Write entities, documents, relations
   // MCP scopes (for external AI tools)
   "mcp.read", // Read resources via MCP
   "mcp.write", // Execute tools via MCP
+  "mcp.connect", // Establish an MCP session
+  // Agent provisioning scope
+  "setup.agent", // Call POST /setup/agent to provision agents on this pod.
+  // Grant this to automation services (n8n, scripts, third-party
+  // providers) that need to create agent users without going
+  // through Synap CP or exposing the PROVISIONING_TOKEN.
   // External API scopes (for external callers: Claude Code, custom agents, scripts)
   "skills.invoke", // List and invoke skills via /api/external/skills
   "chat.stream", // Stream AI chat completions via /api/external/chat (Option D)

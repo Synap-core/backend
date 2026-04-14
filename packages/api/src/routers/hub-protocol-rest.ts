@@ -4237,7 +4237,8 @@ app.post("/setup/agent", async (c) => {
   }
 
   let authenticated = false;
-  let authMethod: "jwt" | "provisioning_token" = "provisioning_token";
+  let authMethod: "jwt" | "provisioning_token" | "api_key" =
+    "provisioning_token";
   let jwtEmail: string | null = null;
   let jwtName: string | null = null;
 
@@ -4259,10 +4260,10 @@ app.post("/setup/agent", async (c) => {
       jwtName = typeof payload.name === "string" ? payload.name : null;
     }
   } catch {
-    // Not a valid JWT — fall through to PROVISIONING_TOKEN check
+    // Not a valid JWT — fall through
   }
 
-  // Try 2: PROVISIONING_TOKEN (for self-hosted pods)
+  // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
   if (!authenticated) {
     const provisioningToken = process.env.PROVISIONING_TOKEN;
     if (provisioningToken && token === provisioningToken) {
@@ -4271,11 +4272,37 @@ app.post("/setup/agent", async (c) => {
     }
   }
 
+  // Try 3: Hub Protocol API key with `setup.agent` scope.
+  //
+  // This allows any trusted service — automation providers (n8n, Zapier,
+  // custom scripts), third-party orchestrators — to provision agents on this
+  // pod WITHOUT going through Synap CP or exposing PROVISIONING_TOKEN.
+  //
+  // Usage: pod admin creates a key with `setup.agent` scope from the admin UI
+  // (pod-url/admin → API Keys → create with setup.agent scope), then hands
+  // the key to the external service. The service calls POST /setup/agent with
+  // that key as Bearer token like any other Hub Protocol call.
+  if (!authenticated) {
+    const keyRecord = await apiKeyService.validateApiKey(token);
+    if (keyRecord?.isActive && keyRecord.scope.includes("setup.agent")) {
+      authenticated = true;
+      authMethod = "api_key";
+      // Resolve key owner identity so the owner-creation logic below can
+      // find/create the human user correctly (same as JWT email/name path).
+      const keyOwner = await db.query.users.findFirst({
+        where: (u, { eq }) => eq(u.id, keyRecord.userId),
+        columns: { email: true, name: true },
+      });
+      jwtEmail = keyOwner?.email ?? null;
+      jwtName = keyOwner?.name ?? null;
+    }
+  }
+
   if (!authenticated) {
     return c.json(
       {
         error:
-          "Invalid credentials. Use a CP-signed JWT or PROVISIONING_TOKEN.",
+          "Invalid credentials. Accepted: CP-signed JWT, PROVISIONING_TOKEN, or a Hub API key with `setup.agent` scope.",
       },
       401
     );

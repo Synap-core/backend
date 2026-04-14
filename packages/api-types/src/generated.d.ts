@@ -3370,6 +3370,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				integration: "custom" | "cli" | "raycast" | "openclaw";
+				workspaceId?: string | undefined;
+			};
+			output: {
+				apiKey: string;
+				keyId: any;
+				podUrl: string;
+				workspaceId: string | null;
+				integration: "custom" | "cli" | "raycast" | "openclaw";
+			};
+			meta: object;
+		}>;
 		listWorkspaceKeys: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId: string;
@@ -4477,7 +4491,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					status: "completed" | "running" | "failed";
+					status: "completed" | "failed" | "running";
 					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
@@ -4503,7 +4517,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				status: "completed" | "running" | "failed";
+				status: "completed" | "failed" | "running";
 				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
