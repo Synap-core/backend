@@ -67,6 +67,108 @@ body {
   }
 }
 
+/* Command palette (cmdk) — align with HeroUI semantic surfaces */
+@layer components {
+  .command-palette-group [cmdk-group-heading] {
+    @apply px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider;
+    color: var(--color-default-400);
+  }
+
+  .command-palette-list {
+    scrollbar-width: thin;
+  }
+}
+
+/* Markdown preview in admin documents page */
+@layer components {
+  .prose-docs {
+    @apply text-sm leading-relaxed;
+    color: var(--color-foreground);
+  }
+
+  .prose-docs h1 {
+    @apply mb-2 mt-4 text-xl font-semibold tracking-tight;
+    color: var(--color-foreground);
+  }
+
+  .prose-docs h2 {
+    @apply mb-2 mt-4 text-lg font-semibold;
+    color: var(--color-foreground);
+  }
+
+  .prose-docs h3 {
+    @apply mb-1.5 mt-3 text-base font-semibold;
+    color: var(--color-foreground);
+  }
+
+  .prose-docs p {
+    @apply mb-3;
+    color: var(--color-default-700);
+  }
+
+  .prose-docs ul,
+  .prose-docs ol {
+    @apply mb-3 ml-5 list-outside;
+    color: var(--color-default-700);
+  }
+
+  .prose-docs ul {
+    @apply list-disc;
+  }
+
+  .prose-docs ol {
+    @apply list-decimal;
+  }
+
+  .prose-docs li {
+    @apply mb-1;
+  }
+
+  .prose-docs blockquote {
+    @apply mb-3 border-l-2 pl-3 italic;
+    border-left-color: var(--color-default-300);
+    color: var(--color-default-600);
+  }
+
+  .prose-docs hr {
+    @apply my-4;
+    border-color: var(--color-divider);
+  }
+
+  .prose-docs code {
+    @apply rounded px-1 py-0.5 font-mono text-xs;
+    background-color: var(--color-default-100);
+    color: var(--color-foreground);
+  }
+
+  .prose-docs pre {
+    @apply mb-3 overflow-x-auto rounded-lg border p-3 font-mono text-xs;
+    border-color: var(--color-divider);
+    background-color: var(--color-default-50);
+    color: var(--color-foreground);
+  }
+
+  .prose-docs pre code {
+    @apply border-0 bg-transparent p-0;
+  }
+
+  .prose-docs table {
+    @apply mb-3 w-full border-collapse text-xs;
+  }
+
+  .prose-docs th,
+  .prose-docs td {
+    @apply border px-2 py-1 text-left;
+    border-color: var(--color-divider);
+  }
+
+  .prose-docs th {
+    @apply font-medium;
+    background-color: var(--color-default-100);
+    color: var(--color-foreground);
+  }
+}
+
 /* Mobile menu button visibility (match prior behavior) */
 @media (max-width: 768px) {
   .mobile-menu-btn {

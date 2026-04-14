@@ -16,7 +16,11 @@ import {
   db,
   eq,
   and,
+  or,
   desc,
+  ilike,
+  isNotNull,
+  isNull,
   documents,
   documentVersions,
   documentSessions,
@@ -597,10 +601,9 @@ export const documentsRouter = router({
       const userId = requireUserId(ctx.userId);
 
       const conditions = [eq(documents.userId, userId)];
-      if (input.projectId)
-        if (input.type)
-          // Projects: Removed projectIds filtering (use relations table if needed)
-          conditions.push(eq(documents.type, input.type));
+      if (input.type) {
+        conditions.push(eq(documents.type, input.type));
+      }
 
       const docs = await db
         .select()
@@ -610,5 +613,137 @@ export const documentsRouter = router({
         .limit(input.limit);
 
       return { documents: docs, total: docs.length };
+    }),
+
+  /**
+   * List documents in the active workspace (any member).
+   * When `markdownOnly` is true (default), returns markdown/text and titles ending in .md / .markdown, file-backed only.
+   */
+  listInWorkspace: workspaceProcedure
+    .input(
+      z.object({
+        markdownOnly: z.boolean().default(true),
+        limit: z.number().min(1).max(200).default(100),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace ID required (X-Workspace-Id).",
+        });
+      }
+
+      const base = and(
+        eq(documents.workspaceId, workspaceId),
+        isNull(documents.deletedAt),
+        isNotNull(documents.storageKey)
+      );
+
+      const markdownish = or(
+        eq(documents.type, "markdown"),
+        eq(documents.type, "text"),
+        ilike(documents.title, "%.md"),
+        ilike(documents.title, "%.markdown")
+      );
+
+      const docs = await db
+        .select({
+          id: documents.id,
+          title: documents.title,
+          type: documents.type,
+          mimeType: documents.mimeType,
+          updatedAt: documents.updatedAt,
+          createdAt: documents.createdAt,
+          size: documents.size,
+          userId: documents.userId,
+        })
+        .from(documents)
+        .where(input.markdownOnly ? and(base, markdownish) : base)
+        .orderBy(desc(documents.updatedAt))
+        .limit(input.limit);
+
+      return { documents: docs, total: docs.length };
+    }),
+
+  /**
+   * Read document body for admin preview. Workspace members; UTF-8 text / markdown only (no PDF/DOCX).
+   */
+  getInWorkspace: workspaceProcedure
+    .input(z.object({ documentId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace ID required (X-Workspace-Id).",
+        });
+      }
+
+      const [document] = await db
+        .select()
+        .from(documents)
+        .where(
+          and(
+            eq(documents.id, input.documentId),
+            eq(documents.workspaceId, workspaceId),
+            isNull(documents.deletedAt)
+          )
+        )
+        .limit(1);
+
+      if (!document) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found in this workspace.",
+        });
+      }
+
+      if (!document.storageKey) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This document has no file storage (e.g. whiteboard). Open it in Synap Browser.",
+        });
+      }
+
+      if (document.type === "pdf" || document.type === "docx") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Admin preview does not support PDF or Word files.",
+        });
+      }
+
+      const title = document.title ?? "";
+      const allowedType =
+        document.type === "markdown" ||
+        document.type === "text" ||
+        document.type === "code" ||
+        /\.md$/i.test(title) ||
+        /\.markdown$/i.test(title);
+
+      if (!allowedType) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Admin preview supports markdown, plain text, and code files only.",
+        });
+      }
+
+      const contentBuffer = await storage.downloadBuffer(document.storageKey);
+      const content = contentBuffer.toString("utf-8");
+
+      return {
+        document: {
+          id: document.id,
+          title: document.title,
+          type: document.type,
+          language: document.language,
+          mimeType: document.mimeType,
+          updatedAt: document.updatedAt,
+        },
+        content,
+      };
     }),
 });

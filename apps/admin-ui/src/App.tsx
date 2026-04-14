@@ -14,6 +14,7 @@ import IntelligencePage from "./pages/(v2)/IntelligencePage";
 import ServicesPage from "./pages/(v2)/ServicesPage";
 import ConnectionsPage from "./pages/(v2)/ConnectionsPage";
 import SecretsPage from "./pages/(v2)/SecretsPage";
+import DocumentsPage from "./pages/(v2)/DocumentsPage";
 
 import ConnectPage from "./pages/ConnectPage";
 
@@ -33,6 +34,7 @@ function App() {
         <Route path="api-keys" element={<ApiKeysPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
         <Route path="secrets" element={<SecretsPage />} />
+        <Route path="documents/:documentId?" element={<DocumentsPage />} />
 
         <Route path="workspace" element={<WorkspaceDashboardPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />

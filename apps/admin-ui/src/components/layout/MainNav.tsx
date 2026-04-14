@@ -13,6 +13,7 @@ import {
   IconShieldLock,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconFileText,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
 import BrandMark from "./BrandMark";
@@ -55,6 +56,7 @@ const podSections: NavSection[] = [
         icon: IconBuildingCommunity,
       },
       { path: "/events", label: "Events", icon: IconSearch },
+      { path: "/documents", label: "Documents", icon: IconFileText },
     ],
   },
 ];
@@ -191,7 +193,7 @@ export default function MainNav({
         )}
       >
         <div className={cn(!collapsed ? "" : "flex justify-center")}>
-          <BrandMark compact />
+          {/* <BrandMark compact /> */}
         </div>
         <SearchCommandButton
           onPress={onCommandPaletteOpen}

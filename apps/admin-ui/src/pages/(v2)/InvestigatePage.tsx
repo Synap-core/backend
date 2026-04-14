@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Chip,
+  cn,
   Drawer,
   Input,
   Label,
@@ -39,7 +40,6 @@ import {
   IconChevronRight,
   IconX,
 } from "@tabler/icons-react";
-import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 import { SearchResultsSkeleton } from "../../components/loading/LoadingSkeletons";
 import { trpc } from "../../lib/trpc";
 import EventTypeExplorer from "../../components/events/EventTypeExplorer";
@@ -258,15 +258,10 @@ export default function InvestigatePage() {
     })) ?? [];
 
   return (
-    <div className="w-full" style={{ padding: spacing[8] }}>
-      <div className="flex flex-col gap-6" style={{ gap: spacing[6] }}>
+    <div className="w-full p-6 md:p-8">
+      <div className="flex flex-col gap-6">
         <div>
-          <h1
-            className="m-0 text-2xl font-bold text-foreground"
-            style={{ fontFamily: typography.fontFamily.sans }}
-          >
-            Events
-          </h1>
+          <h1 className="m-0 text-2xl font-bold text-foreground">Events</h1>
           <Text className="mt-1 text-sm text-default-500">
             Search, explore, and publish events
           </Text>
@@ -312,10 +307,7 @@ export default function InvestigatePage() {
 
           <Tabs.Panel id="search" className="pt-4">
             <div className="flex flex-col gap-4">
-              <Card
-                className="border border-divider p-4"
-                style={{ borderRadius: borderRadius.lg }}
-              >
+              <Card className="rounded-xl border border-divider p-4">
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="min-w-[200px] flex-1">
                     <div className="relative">
@@ -344,8 +336,7 @@ export default function InvestigatePage() {
                     </div>
                   </div>
                   <select
-                    className={inputClass}
-                    style={{ width: 220 }}
+                    className={cn(inputClass, "w-[min(220px,100%)]")}
                     value={eventTypeFilter ?? ""}
                     onChange={(e) => setEventTypeFilter(e.target.value || null)}
                   >
@@ -396,10 +387,7 @@ export default function InvestigatePage() {
                 ) : null}
               </Card>
 
-              <Card
-                className="border border-divider p-4"
-                style={{ borderRadius: borderRadius.lg }}
-              >
+              <Card className="rounded-xl border border-divider p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Text className="text-lg font-semibold">
@@ -450,26 +438,18 @@ export default function InvestigatePage() {
                       </div>
                     ) : (
                       events.map((event) => (
-                        <button
-                          type="button"
+                        <Button
                           key={event.id}
-                          className="w-full cursor-pointer rounded-md border p-2 text-left transition-colors"
-                          style={{
-                            padding: `${spacing[2]} ${spacing[3]}`,
-                            borderRadius: borderRadius.base,
-                            border: `1px solid ${
-                              selectedEventId === event.id
-                                ? colors.border.interactive
-                                : colors.border.light
-                            }`,
-                            backgroundColor:
-                              selectedEventId === event.id
-                                ? "#EFF6FF"
-                                : colors.background.secondary,
-                          }}
-                          onClick={() => handleEventClick(event.id)}
+                          variant="ghost"
+                          className={cn(
+                            "h-auto min-h-0 w-full justify-start rounded-lg border border-divider px-3 py-2 text-left transition-colors",
+                            selectedEventId === event.id
+                              ? "border-primary bg-primary/10"
+                              : "bg-default-50 hover:bg-default-100"
+                          )}
+                          onPress={() => handleEventClick(event.id)}
                         >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex w-full flex-wrap items-center justify-between gap-2">
                             <div className="flex min-w-0 flex-1 items-center gap-2">
                               <Chip
                                 size="sm"
@@ -484,12 +464,7 @@ export default function InvestigatePage() {
                               >
                                 {event.type}
                               </Chip>
-                              <span
-                                className="truncate text-xs text-default-500"
-                                style={{
-                                  fontFamily: typography.fontFamily.mono,
-                                }}
-                              >
+                              <span className="truncate font-mono text-xs text-default-500">
                                 {event.id}
                               </span>
                             </div>
@@ -506,7 +481,7 @@ export default function InvestigatePage() {
                               </span>
                             </div>
                           </div>
-                        </button>
+                        </Button>
                       ))
                     )}
                   </div>
@@ -523,10 +498,7 @@ export default function InvestigatePage() {
               />
             ) : (
               <div className="flex flex-col gap-4">
-                <Card
-                  className="border border-divider p-4"
-                  style={{ borderRadius: borderRadius.lg }}
-                >
+                <Card className="rounded-xl border border-divider p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="relative min-w-[200px] flex-1">
                       <IconSearch
@@ -579,8 +551,7 @@ export default function InvestigatePage() {
                   return (
                     <Card
                       key={table}
-                      className="border border-divider p-4"
-                      style={{ borderRadius: borderRadius.lg }}
+                      className="rounded-xl border border-divider p-4"
                     >
                       <div
                         role="button"
@@ -621,10 +592,7 @@ export default function InvestigatePage() {
                       </div>
 
                       {isOpen ? (
-                        <div
-                          className="mt-4 grid gap-2 sm:grid-cols-2 md:grid-cols-3"
-                          style={{ marginTop: spacing[3] }}
-                        >
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 md:grid-cols-3">
                           {Object.entries(byAction)
                             .sort((a, b) => a[0].localeCompare(b[0]))
                             .map(([action, actionEvents]) => {
@@ -636,11 +604,7 @@ export default function InvestigatePage() {
                               return (
                                 <Card
                                   key={`${table}.${action}`}
-                                  className="border border-divider p-3"
-                                  style={{
-                                    background: colors.background.secondary,
-                                    borderRadius: borderRadius.md,
-                                  }}
+                                  className="rounded-lg border border-divider bg-default-50 p-3"
                                 >
                                   <div
                                     className={`mb-2 flex items-center gap-2 rounded-md p-1 ${actionTone(action)}`}
@@ -727,10 +691,7 @@ export default function InvestigatePage() {
           </Tabs.Panel>
 
           <Tabs.Panel id="publish" className="pt-4">
-            <Card
-              className="border border-divider p-4"
-              style={{ borderRadius: borderRadius.lg }}
-            >
+            <Card className="rounded-xl border border-divider p-4">
               <Text className="mb-1 text-lg font-semibold">
                 Publish Test Event
               </Text>
@@ -809,7 +770,7 @@ export default function InvestigatePage() {
             <Drawer.Handle />
             <Drawer.Header className="border-b border-divider px-4 py-3">
               <div className="flex items-center gap-2 pr-8">
-                <IconTimeline size={20} color={colors.semantic.info} />
+                <IconTimeline size={20} className="text-accent" />
                 <Drawer.Heading className="text-lg font-semibold">
                   Event Details & Trace
                 </Drawer.Heading>
@@ -848,13 +809,10 @@ export default function InvestigatePage() {
                     <Text className="mb-2 text-sm font-semibold">
                       Main Event
                     </Text>
-                    <Card
-                      className="border border-divider p-3"
-                      style={{ backgroundColor: colors.background.secondary }}
-                    >
+                    <Card className="border border-divider bg-default-50 p-3">
                       <div className="flex flex-col gap-2">
                         <div className="flex items-center gap-2">
-                          <IconTag size={15} color={colors.text.secondary} />
+                          <IconTag size={15} className="text-default-400" />
                           <Chip
                             size="sm"
                             variant="soft"
@@ -865,7 +823,7 @@ export default function InvestigatePage() {
                           </Chip>
                         </div>
                         <div className="flex items-center gap-2">
-                          <IconClock size={15} color={colors.text.secondary} />
+                          <IconClock size={15} className="text-default-400" />
                           <Text className="text-xs text-default-500">
                             {new Date(
                               traceData.event.timestamp
@@ -874,18 +832,15 @@ export default function InvestigatePage() {
                         </div>
                         {traceData.event.userId ? (
                           <div className="flex items-center gap-2">
-                            <IconUser size={15} color={colors.text.secondary} />
+                            <IconUser size={15} className="text-default-400" />
                             <Text className="text-xs text-default-500">
                               {traceData.event.userId}
                             </Text>
                           </div>
                         ) : null}
                         <div className="flex items-center gap-2">
-                          <IconCode size={15} color={colors.text.secondary} />
-                          <Text
-                            className="text-xs text-default-500"
-                            style={{ fontFamily: typography.fontFamily.mono }}
-                          >
+                          <IconCode size={15} className="text-default-400" />
+                          <Text className="font-mono text-xs text-default-500">
                             {traceData.event.eventId}
                           </Text>
                         </div>
@@ -893,12 +848,9 @@ export default function InvestigatePage() {
                           <div className="flex items-center gap-2">
                             <IconTimeline
                               size={15}
-                              color={colors.text.secondary}
+                              className="text-default-400"
                             />
-                            <Text
-                              className="text-xs text-default-500"
-                              style={{ fontFamily: typography.fontFamily.mono }}
-                            >
+                            <Text className="font-mono text-xs text-default-500">
                               corr: {traceData.event.correlationId}
                             </Text>
                           </div>
@@ -913,10 +865,7 @@ export default function InvestigatePage() {
                     <Text className="mb-2 text-sm font-semibold">
                       Event Data
                     </Text>
-                    <pre
-                      className="max-h-[220px] overflow-y-auto rounded-md border border-divider bg-default-50 p-3 text-xs"
-                      style={{ fontFamily: typography.fontFamily.mono }}
-                    >
+                    <pre className="max-h-[220px] overflow-y-auto rounded-md border border-divider bg-default-50 p-3 font-mono text-xs">
                       {JSON.stringify(traceData.event.data, null, 2)}
                     </pre>
                   </div>
@@ -951,12 +900,7 @@ export default function InvestigatePage() {
                               <Text className="mt-1 text-xs text-default-500">
                                 {new Date(relEvent.timestamp).toLocaleString()}
                               </Text>
-                              <Text
-                                className="mt-1 text-xs text-default-500"
-                                style={{
-                                  fontFamily: typography.fontFamily.mono,
-                                }}
-                              >
+                              <Text className="mt-1 font-mono text-xs text-default-500">
                                 {relEvent.eventId}
                               </Text>
                               <Button

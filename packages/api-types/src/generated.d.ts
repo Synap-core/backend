@@ -3766,6 +3766,43 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listInWorkspace: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				markdownOnly?: boolean | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				documents: {
+					id: string;
+					title: string;
+					type: string;
+					mimeType: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					size: number;
+					userId: string;
+				}[];
+				total: number;
+			};
+			meta: object;
+		}>;
+		getInWorkspace: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				documentId: string;
+			};
+			output: {
+				document: {
+					id: string;
+					title: string;
+					type: string;
+					language: string | null;
+					mimeType: string | null;
+					updatedAt: Date;
+				};
+				content: string;
+			};
+			meta: object;
+		}>;
 	}>>;
 	content: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
