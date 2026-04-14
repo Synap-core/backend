@@ -253,40 +253,33 @@ export default function WorkspaceDetailPage() {
         </div>
       </div>
 
-      <Tabs.Root defaultSelectedKey="members">
+      <Tabs.Root defaultSelectedKey="members" orientation="horizontal">
         <Tabs.ListContainer>
-          <Tabs.List
-            className="mb-4 flex flex-wrap gap-1 border-b border-divider pb-1"
-            style={{ marginBottom: spacing[4] }}
-          >
-            <Tabs.Tab id="members" className="rounded-md px-3 py-2 text-sm">
+          <Tabs.List className="mb-4 gap-1 overflow-x-auto">
+            <Tabs.Tab id="members" className="px-3 py-2 text-sm">
               Members
             </Tabs.Tab>
-            <Tabs.Tab id="agents" className="rounded-md px-3 py-2 text-sm">
+            <Tabs.Tab id="agents" className="px-3 py-2 text-sm">
               <span className="inline-flex items-center gap-1">
                 <IconRobot size={14} />
                 AI Agents
               </span>
             </Tabs.Tab>
-            <Tabs.Tab id="invitations" className="rounded-md px-3 py-2 text-sm">
+            <Tabs.Tab id="invitations" className="px-3 py-2 text-sm">
               Invitations
             </Tabs.Tab>
-            <Tabs.Tab id="settings" className="rounded-md px-3 py-2 text-sm">
+            <Tabs.Tab id="settings" className="px-3 py-2 text-sm">
               Settings
             </Tabs.Tab>
-            <Tabs.Tab
-              id="intelligence"
-              className="rounded-md px-3 py-2 text-sm"
-            >
+            <Tabs.Tab id="intelligence" className="px-3 py-2 text-sm">
               Intelligence
             </Tabs.Tab>
-            <Tabs.Tab id="services" className="rounded-md px-3 py-2 text-sm">
+            <Tabs.Tab id="services" className="px-3 py-2 text-sm">
               <span className="inline-flex items-center gap-1">
                 <IconPlug size={14} />
                 Services
               </span>
             </Tabs.Tab>
-            <Tabs.Indicator />
           </Tabs.List>
         </Tabs.ListContainer>
 

@@ -14,6 +14,8 @@ import {
   IconCheckbox,
   IconTerminal2,
   IconPlug,
+  IconPlugConnected,
+  IconShieldLock,
 } from "@tabler/icons-react";
 import {
   colors,
@@ -142,7 +144,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           >
             <CommandItem
               icon={<IconHome size={18} />}
-              label="Overview"
+              label="Pod overview"
               description="Pod health & activity"
               keywords={[
                 "home",
@@ -153,6 +155,27 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 "dashboard",
               ]}
               onSelect={() => handleNavigate("/")}
+            />
+            <CommandItem
+              icon={<IconPlugConnected size={18} />}
+              label="Connections & services"
+              description="Integrations, feeds, intelligence, infra checks"
+              keywords={[
+                "connections",
+                "integrations",
+                "rss",
+                "telegram",
+                "services",
+                "health",
+              ]}
+              onSelect={() => handleNavigate("/connections")}
+            />
+            <CommandItem
+              icon={<IconShieldLock size={18} />}
+              label="Secrets & keys"
+              description="API keys overview and vault metadata"
+              keywords={["secrets", "vault", "keys", "security"]}
+              onSelect={() => handleNavigate("/secrets")}
             />
             <CommandItem
               icon={<IconUsers size={18} />}
@@ -184,9 +207,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             />
             <CommandItem
               icon={<IconHome size={18} />}
-              label="Workspace overview"
-              description="Settings for the selected workspace"
-              keywords={["workspace", "settings", "scope"]}
+              label="Workspace home"
+              description="Workspace dashboard for the selected workspace"
+              keywords={["workspace", "settings", "scope", "home"]}
               onSelect={() => handleNavigate("/workspace")}
             />
             <CommandItem
@@ -205,9 +228,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             />
             <CommandItem
               icon={<IconPlug size={18} />}
-              label="Services"
-              description="Connected services and workers"
-              keywords={["services", "workers", "jobs"]}
+              label="External agents"
+              description="Provision OpenClaw / ZeroClaw for this workspace"
+              keywords={["services", "openclaw", "zeroclaw", "agents"]}
               onSelect={() => handleNavigate("/services")}
             />
           </Command.Group>

@@ -12,18 +12,27 @@ import WorkspaceDetailPage from "./pages/(v2)/WorkspaceDetailPage";
 import ProposalsPage from "./pages/(v2)/ProposalsPage";
 import IntelligencePage from "./pages/(v2)/IntelligencePage";
 import ServicesPage from "./pages/(v2)/ServicesPage";
+import ConnectionsPage from "./pages/(v2)/ConnectionsPage";
+import SecretsPage from "./pages/(v2)/SecretsPage";
+
+import ConnectPage from "./pages/ConnectPage";
 
 import "./App.css";
 
 function App() {
   return (
     <Routes>
+      {/* Standalone — no nav/sidebar, used for OAuth-style deeplink callbacks */}
+      <Route path="connect" element={<ConnectPage />} />
+
       <Route path="/" element={<MainLayout />}>
         {/* Data Pod Routes */}
         <Route index element={<DashboardPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="events" element={<InvestigatePage />} />
         <Route path="api-keys" element={<ApiKeysPage />} />
+        <Route path="connections" element={<ConnectionsPage />} />
+        <Route path="secrets" element={<SecretsPage />} />
 
         <Route path="workspace" element={<WorkspaceDashboardPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />

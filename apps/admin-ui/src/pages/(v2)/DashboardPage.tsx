@@ -1,15 +1,12 @@
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { Button } from "@heroui/react";
 import { Card } from "@heroui/react";
 import { Chip } from "@heroui/react";
-import SearchModal from "../../components/search/SearchModal";
 import {
   IconActivity,
   IconBolt,
   IconUsers,
-  IconSearch,
-  IconTimeline,
   IconPlayerPause,
   IconPlayerPlay,
   IconRefresh,
@@ -25,12 +22,14 @@ import {
 } from "../../components/loading/LoadingSkeletons";
 import VirtualizedEventList from "../../components/events/VirtualizedEventList";
 import { showInfoNotification } from "../../lib/notifications";
+import SearchCommandButton from "../../components/layout/SearchCommandButton";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { openCommandPalette } = useOutletContext<{
+    openCommandPalette: () => void;
+  }>();
   const [isAutoRefreshEnabled, setIsAutoRefreshEnabled] = useState(true);
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [searchType, setSearchType] = useState<"user" | "event">("user");
 
   const { data: podStats, isLoading: isLoadingPodStats } =
     trpc.system.getDataPodStats.useQuery(undefined, {
@@ -260,30 +259,7 @@ export default function DashboardPage() {
           </Card.Header>
           <Card.Content>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
-              <Button
-                variant="outline"
-                onPress={() => {
-                  setSearchType("user");
-                  setSearchModalOpen(true);
-                }}
-              >
-                <span className="inline-flex items-center gap-2">
-                  <IconSearch size={18} />
-                  Find user
-                </span>
-              </Button>
-              <Button
-                variant="outline"
-                onPress={() => {
-                  setSearchType("event");
-                  setSearchModalOpen(true);
-                }}
-              >
-                <span className="inline-flex items-center gap-2">
-                  <IconTimeline size={18} />
-                  Trace event
-                </span>
-              </Button>
+              <SearchCommandButton onPress={openCommandPalette} />
               <Button variant="outline" onPress={() => navigate("/users")}>
                 <span className="inline-flex items-center gap-2">
                   <IconUsers size={18} />
@@ -372,22 +348,6 @@ export default function DashboardPage() {
           </Card.Content>
         </Card.Root>
       </div>
-
-      <SearchModal
-        opened={searchModalOpen}
-        onClose={() => setSearchModalOpen(false)}
-        onSearch={(value) => {
-          if (searchType === "user") {
-            navigate(`/events?userId=${encodeURIComponent(value)}`);
-          } else {
-            navigate(`/events?eventId=${encodeURIComponent(value)}`);
-          }
-        }}
-        title={searchType === "user" ? "Search user" : "Search event"}
-        placeholder={searchType === "user" ? "User ID or email…" : "Event ID…"}
-        label={searchType === "user" ? "User ID or email" : "Event ID"}
-        type={searchType}
-      />
     </div>
   );
 }

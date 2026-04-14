@@ -5,13 +5,14 @@
  * SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { API_KEY_SCOPES } from "@synap/database/schema";
 import {
   db,
   eq,
+  asc,
   getDb,
   EventRepository,
   ApiKeyRepository,
@@ -30,6 +31,19 @@ function generateApiKey(prefix: string): string {
   const randomPart = randomBytes(32).toString("hex");
   return `${prefix}${randomPart}`;
 }
+
+/** Scopes granted per integration type */
+const INTEGRATION_SCOPES: Record<string, string[]> = {
+  raycast: ["hub-protocol.read", "hub-protocol.write", "data.read"],
+  cli: ["hub-protocol.read", "hub-protocol.write", "data.read", "data.write"],
+  openclaw: [
+    "hub-protocol.read",
+    "hub-protocol.write",
+    "mcp.connect",
+    "data.read",
+  ],
+  custom: ["hub-protocol.read", "hub-protocol.write"],
+};
 
 export const apiKeysRouter = router({
   /**
@@ -324,22 +338,9 @@ export const apiKeysRouter = router({
     }),
 
   /**
-   * List all system keys (System Admin only)
+   * List all API keys on the pod (metadata only). Pod-admin workspace only.
    */
-  listSystemKeys: protectedProcedure.query(async ({ ctx }) => {
-    // System admin = user who owns at least one workspace on this pod
-    const ownedWorkspace = await db.query.workspaceMembers.findFirst({
-      where: (members, { and, eq }) =>
-        and(eq(members.userId, ctx.userId), eq(members.role, "owner")),
-    });
-
-    if (!ownedWorkspace) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Requires system admin privileges",
-      });
-    }
-
+  listSystemKeys: podAdminProcedure.query(async () => {
     const keys = await db.query.apiKeys.findMany({
       orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
       with: {
@@ -365,6 +366,132 @@ export const apiKeysRouter = router({
       },
     }));
   }),
+
+  /**
+   * Connect an integration — create a scoped Hub Protocol API key in one call.
+   *
+   * Called from the admin UI /connect page after the user authenticates.
+   * Returns the key + podUrl + workspaceId so the caller can build a deeplink
+   * or display a copy-paste flow — no separate agent provisioning required.
+   */
+  connectIntegration: protectedProcedure
+    .input(
+      z.object({
+        integration: z.enum(["raycast", "cli", "openclaw", "custom"]),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const id = randomUUID();
+
+      // Resolve workspace: use provided (verified) or fall back to user's first
+      let resolvedWorkspaceId = input.workspaceId;
+      if (resolvedWorkspaceId) {
+        // Explicit workspace supplied — verify the caller is actually a member
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: (m, { and, eq }) =>
+            and(
+              eq(m.userId, ctx.userId),
+              eq(m.workspaceId, resolvedWorkspaceId!)
+            ),
+        });
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You are not a member of the requested workspace",
+          });
+        }
+      } else {
+        // No workspace supplied — use caller's first workspace
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: eq(workspaceMembers.userId, ctx.userId),
+          orderBy: [asc(workspaceMembers.joinedAt)],
+        });
+        resolvedWorkspaceId = membership?.workspaceId;
+      }
+
+      // Standard permission gate — same as `create`. Will auto-approve for
+      // direct user actions on their own resources (DEFAULT_AUTO_APPROVE).
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: resolvedWorkspaceId,
+        subjectType: "apiKey",
+        action: "create",
+        data: {
+          id,
+          keyName: input.integration,
+          integration: input.integration,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        // Shouldn't happen for direct user actions, but handle gracefully
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Key creation requires approval on this pod",
+        });
+      }
+
+      const scope =
+        INTEGRATION_SCOPES[input.integration] ?? INTEGRATION_SCOPES.custom;
+      // Use hub prefix so Hub Protocol middleware accepts the key
+      const keyPrefix =
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
+      const keyName = `${input.integration.charAt(0).toUpperCase() + input.integration.slice(1)} — ${new Date().toISOString().slice(0, 10)}`;
+      const key = generateApiKey(keyPrefix);
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      const apiKey = await apiKeyRepo.create(
+        {
+          keyName,
+          keyPrefix,
+          key,
+          // hubId marks this as a Hub Protocol key (drives prefix choice in `create`).
+          // Using the integration name so it's traceable in audit logs.
+          hubId: `integration:${input.integration}`,
+          scope,
+          userId: ctx.userId,
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "create",
+        phase: "completed",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: resolvedWorkspaceId,
+        data: { keyName, integration: input.integration },
+      });
+
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "create",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: resolvedWorkspaceId,
+      });
+
+      const podUrl =
+        process.env.PUBLIC_URL?.replace(/\/$/, "") || "http://localhost:4000";
+
+      return {
+        apiKey: key, // plaintext, shown once
+        keyId: apiKey.id,
+        podUrl,
+        workspaceId: resolvedWorkspaceId ?? null,
+        integration: input.integration,
+      };
+    }),
 
   /**
    * List workspace keys (Workspace Owner/Admin only)

@@ -1,0 +1,429 @@
+import { Alert, Button, Card, Chip, Spinner, Text } from "@heroui/react";
+import {
+  IconPlugConnected,
+  IconRefresh,
+  IconBrandTelegram,
+  IconRss,
+  IconServer,
+  IconCloud,
+} from "@tabler/icons-react";
+import { trpc } from "../../lib/trpc";
+import { useWorkspace } from "../../lib/workspace";
+import { spacing } from "../../theme/tokens";
+import {
+  showSuccessNotification,
+  showErrorNotification,
+} from "../../lib/notifications";
+
+const AGENT_TYPES = ["openclaw", "zeroclaw"] as const;
+
+export default function ConnectionsPage() {
+  const { workspaceId } = useWorkspace();
+
+  const healthQuery = trpc.system.getServiceHealth.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
+
+  const capabilitiesQuery = trpc.capabilities.list.useQuery(undefined, {
+    refetchInterval: 30_000,
+  });
+
+  const connectorsQuery = trpc.connectors.status.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
+
+  const telegramQuery = trpc.channelGateway.telegramStatus.useQuery(undefined, {
+    enabled: !!workspaceId,
+    refetchInterval: 60_000,
+  });
+
+  const feedsQuery = trpc.feeds.listFeeds.useQuery(
+    { workspaceId: workspaceId ?? undefined, limit: 25, offset: 0 },
+    { enabled: !!workspaceId, refetchInterval: 60_000 }
+  );
+
+  const checkHealthMutation = trpc.capabilities.checkHealth.useMutation({
+    onSuccess: (result) => {
+      void capabilitiesQuery.refetch();
+      if (result.isHealthy) {
+        showSuccessNotification({ message: `${result.serviceId} is healthy` });
+      } else {
+        showErrorNotification({
+          message: `${result.serviceId} is unreachable`,
+        });
+      }
+    },
+    onError: (err) => showErrorNotification({ message: err.message }),
+  });
+
+  const openclawStatus = trpc.intelligenceRegistry.getAgentStatus.useQuery(
+    { serviceType: "openclaw" },
+    { enabled: !!workspaceId, retry: false }
+  );
+  const zeroclawStatus = trpc.intelligenceRegistry.getAgentStatus.useQuery(
+    { serviceType: "zeroclaw" },
+    { enabled: !!workspaceId, retry: false }
+  );
+
+  const services = capabilitiesQuery.data?.intelligenceServices ?? [];
+
+  if (!workspaceId) {
+    return (
+      <div className="p-8">
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>Select a workspace</Alert.Title>
+            <Alert.Description>
+              Telegram, feeds, and external agent status are scoped to the
+              active workspace. Choose one in the sidebar.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-8">
+      <header className="space-y-2">
+        <div className="flex items-center gap-2">
+          <IconPlugConnected className="text-primary" size={24} />
+          <Text className="text-2xl font-semibold tracking-tight text-foreground">
+            Connections & services
+          </Text>
+        </div>
+        <Text className="max-w-3xl text-small text-default-500">
+          Live view of intelligence services, control-plane wiring, workspace
+          gateway status, and your RSS feed channels. Pod-wide infra health is
+          always shown; some rows follow the workspace selector in the sidebar.
+        </Text>
+      </header>
+
+      <Card.Root className="border border-divider">
+        <Card.Header>
+          <Card.Title className="inline-flex items-center gap-2">
+            <IconServer size={18} />
+            Infrastructure & dependencies
+          </Card.Title>
+          <Card.Description>
+            From <code className="text-xs">system.getServiceHealth</code>
+          </Card.Description>
+        </Card.Header>
+        <Card.Content>
+          {healthQuery.isLoading ? (
+            <div className="flex justify-center py-8">
+              <Spinner color="accent" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-medium border border-divider">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-divider bg-default-50/80">
+                    <th className="px-3 py-2 font-medium">Service</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(healthQuery.data ?? []).map((row) => (
+                    <tr
+                      key={row.name}
+                      className="border-b border-divider/60 odd:bg-default-50/20"
+                    >
+                      <td className="px-3 py-2 font-medium">{row.name}</td>
+                      <td className="px-3 py-2">
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color={
+                            row.status === "healthy"
+                              ? "success"
+                              : row.status === "degraded"
+                                ? "warning"
+                                : "danger"
+                          }
+                        >
+                          {row.status}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2 text-default-500">
+                        {row.message ?? "—"}
+                        {typeof row.latency === "number"
+                          ? ` · ${row.latency}ms`
+                          : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card.Content>
+      </Card.Root>
+
+      <Card.Root className="border border-divider">
+        <Card.Header>
+          <Card.Title className="inline-flex items-center gap-2">
+            <IconPlugConnected size={18} />
+            Intelligence services
+          </Card.Title>
+          <Card.Description>
+            Registry + last health check (
+            <code className="text-xs">capabilities.list</code>)
+          </Card.Description>
+        </Card.Header>
+        <Card.Content>
+          {capabilitiesQuery.isLoading ? (
+            <div className="flex justify-center py-8">
+              <Spinner color="accent" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-medium border border-divider">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-divider bg-default-50/80">
+                    <th className="px-3 py-2 font-medium">Service</th>
+                    <th className="px-3 py-2 font-medium">Health</th>
+                    <th className="px-3 py-2 font-medium">Ping</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {services.map((svc) => (
+                    <tr
+                      key={svc.id}
+                      className="border-b border-divider/60 odd:bg-default-50/20"
+                    >
+                      <td className="px-3 py-2">
+                        <div className="flex flex-col gap-0.5">
+                          <Text className="text-sm font-medium">
+                            {svc.name}
+                          </Text>
+                          <Text className="text-xs text-default-500">
+                            {svc.serviceId}
+                          </Text>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Chip size="sm" variant="soft" color="default">
+                          {svc.lastHealthStatus ?? "unknown"}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2">
+                        {svc.serviceId !== "default" ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            isIconOnly
+                            isDisabled={
+                              checkHealthMutation.isPending &&
+                              checkHealthMutation.variables?.serviceId ===
+                                svc.serviceId
+                            }
+                            onPress={() =>
+                              checkHealthMutation.mutate({
+                                serviceId: svc.serviceId,
+                              })
+                            }
+                            aria-label="Ping health"
+                          >
+                            {checkHealthMutation.isPending &&
+                            checkHealthMutation.variables?.serviceId ===
+                              svc.serviceId ? (
+                              <Spinner size="sm" color="current" />
+                            ) : (
+                              <IconRefresh size={16} />
+                            )}
+                          </Button>
+                        ) : (
+                          <Text className="text-xs text-default-400">—</Text>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card.Content>
+      </Card.Root>
+
+      <Card.Root className="border border-divider">
+        <Card.Header>
+          <Card.Title>External agents (workspace)</Card.Title>
+          <Card.Description>
+            OpenClaw / ZeroClaw provisioning state for the active workspace
+          </Card.Description>
+        </Card.Header>
+        <Card.Content
+          className="grid gap-4"
+          style={{
+            gap: spacing[4],
+            gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
+          }}
+        >
+          {AGENT_TYPES.map((type) => {
+            const q = type === "openclaw" ? openclawStatus : zeroclawStatus;
+            const d = q.data;
+            return (
+              <div
+                key={type}
+                className="rounded-medium border border-divider bg-default-50/40 p-4"
+              >
+                <Text className="text-sm font-semibold capitalize">{type}</Text>
+                {q.isLoading ? (
+                  <Spinner className="mt-2" size="sm" color="accent" />
+                ) : (
+                  <div className="mt-2 space-y-1 text-xs text-default-600">
+                    <div>
+                      Provisioned:{" "}
+                      <strong>{d?.provisioned ? "yes" : "no"}</strong>
+                    </div>
+                    <div>
+                      Registered:{" "}
+                      <strong>
+                        {d && "serviceRegistered" in d && d.serviceRegistered
+                          ? "yes"
+                          : "no"}
+                      </strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Card.Content>
+      </Card.Root>
+
+      <Card.Root className="border border-divider">
+        <Card.Header>
+          <Card.Title className="inline-flex items-center gap-2">
+            <IconCloud size={18} />
+            Control plane & connectors
+          </Card.Title>
+        </Card.Header>
+        <Card.Content className="space-y-2 text-sm text-default-600">
+          {connectorsQuery.isLoading ? (
+            <Spinner size="sm" color="accent" />
+          ) : (
+            <>
+              <div>
+                <Text className="font-medium text-foreground">CP URL</Text>
+                <Text className="text-xs">
+                  {connectorsQuery.data?.controlPlane.url ?? "—"}
+                </Text>
+              </div>
+              <div>
+                <Text className="font-medium text-foreground">Pod ID</Text>
+                <Text className="text-xs">
+                  {connectorsQuery.data?.controlPlane.podId ?? "—"}
+                </Text>
+              </div>
+              <div>
+                <Text className="font-medium text-foreground">Tier</Text>
+                <Text className="text-xs">
+                  {connectorsQuery.data?.controlPlane.tier ?? "—"}
+                </Text>
+              </div>
+            </>
+          )}
+        </Card.Content>
+      </Card.Root>
+
+      <div
+        className="grid gap-4"
+        style={{
+          gap: spacing[4],
+          gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))",
+        }}
+      >
+        <Card.Root className="border border-divider">
+          <Card.Header>
+            <Card.Title className="inline-flex items-center gap-2">
+              <IconBrandTelegram size={18} />
+              Telegram gateway
+            </Card.Title>
+            <Card.Description>Workspace bot + webhook wiring</Card.Description>
+          </Card.Header>
+          <Card.Content className="space-y-2 text-sm">
+            {telegramQuery.isLoading ? (
+              <Spinner size="sm" color="accent" />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip size="sm" variant="soft" color="default">
+                    {telegramQuery.data?.configured
+                      ? "Configured"
+                      : "Not configured"}
+                  </Chip>
+                  {telegramQuery.data?.enabled ? (
+                    <Chip size="sm" variant="soft" color="success">
+                      Enabled
+                    </Chip>
+                  ) : (
+                    <Chip size="sm" variant="soft" color="warning">
+                      Disabled
+                    </Chip>
+                  )}
+                </div>
+                {telegramQuery.data?.message ? (
+                  <Alert status="warning">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Description>
+                        {telegramQuery.data.message}
+                      </Alert.Description>
+                    </Alert.Content>
+                  </Alert>
+                ) : null}
+                <Text className="text-xs text-default-500">
+                  Bot: {telegramQuery.data?.botUsername ?? "—"} · Source:{" "}
+                  {telegramQuery.data?.source ?? "—"}
+                </Text>
+              </>
+            )}
+          </Card.Content>
+        </Card.Root>
+
+        <Card.Root className="border border-divider">
+          <Card.Header>
+            <Card.Title className="inline-flex items-center gap-2">
+              <IconRss size={18} />
+              RSS & feeds (your channels)
+            </Card.Title>
+            <Card.Description>
+              Feed channels you own in this workspace (
+              <code className="text-xs">feeds.listFeeds</code>)
+            </Card.Description>
+          </Card.Header>
+          <Card.Content>
+            {feedsQuery.isLoading ? (
+              <Spinner size="sm" color="accent" />
+            ) : (feedsQuery.data?.items?.length ?? 0) === 0 ? (
+              <Text className="text-sm text-default-500">
+                No active feed channels for this workspace.
+              </Text>
+            ) : (
+              <ul className="space-y-2">
+                {feedsQuery.data!.items.map((f) => (
+                  <li
+                    key={f.id}
+                    className="rounded-medium border border-divider px-3 py-2 text-sm"
+                  >
+                    <div className="font-medium">{f.title}</div>
+                    <div className="text-xs text-default-500">
+                      {f.feedType ?? "feed"} · last run:{" "}
+                      {f.status.lastRunAt
+                        ? new Date(f.status.lastRunAt).toLocaleString()
+                        : "—"}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card.Content>
+        </Card.Root>
+      </div>
+    </div>
+  );
+}

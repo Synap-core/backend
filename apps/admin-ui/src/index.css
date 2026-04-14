@@ -48,6 +48,25 @@ body {
   }
 }
 
+/* HeroUI Tabs: default .tabs__tab is w-full; flex-wrap on the list stacks one tab per row. */
+@layer components {
+  .tabs[data-orientation="horizontal"]
+    .tabs__list[data-orientation="horizontal"] {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: visible;
+    scrollbar-width: thin;
+  }
+
+  .tabs[data-orientation="horizontal"]
+    .tabs__list[data-orientation="horizontal"]
+    .tabs__tab {
+    width: auto;
+    flex: 0 0 auto;
+    min-width: min-content;
+  }
+}
+
 /* Mobile menu button visibility (match prior behavior) */
 @media (max-width: 768px) {
   .mobile-menu-btn {

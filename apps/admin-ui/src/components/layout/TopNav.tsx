@@ -1,14 +1,10 @@
-import {
-  IconCommand,
-  IconMenu2,
-  IconUser,
-  IconLogout,
-} from "@tabler/icons-react";
-import { Badge } from "@heroui/react";
+import { IconMenu2, IconUser, IconLogout } from "@tabler/icons-react";
 import { Button } from "@heroui/react";
 import { Dropdown } from "@heroui/react";
 import { useAuth } from "../../lib/auth";
 import { useWorkspace } from "../../lib/workspace";
+import BrandMark from "./BrandMark";
+import SearchCommandButton from "./SearchCommandButton";
 
 interface TopNavProps {
   onMenuOpen?: () => void;
@@ -23,7 +19,7 @@ export default function TopNav({
   const { workspaceName } = useWorkspace();
 
   return (
-    <header className="sticky top-0 z-[100] flex h-[60px] shrink-0 items-center justify-between border-b border-divider bg-background/95 px-6 backdrop-blur-md">
+    <header className="sticky top-0 z-100 flex h-[60px] shrink-0 items-center justify-between border-b border-divider bg-background/95 px-6 backdrop-blur-md">
       <div className="flex items-center gap-3">
         {onMenuOpen ? (
           <Button
@@ -36,12 +32,7 @@ export default function TopNav({
             <IconMenu2 size={20} />
           </Button>
         ) : null}
-        <span className="bg-gradient-to-br from-[var(--pod-accent)] to-[var(--pod-accent-2)] bg-clip-text text-lg font-bold text-transparent">
-          Synap
-        </span>
-        <Badge size="sm" variant="soft" color="default">
-          Pod
-        </Badge>
+        <BrandMark compact={false} />
         {workspaceName ? (
           <span className="flex items-center gap-2 text-small text-default-500">
             <span className="opacity-50">/</span>
@@ -51,14 +42,7 @@ export default function TopNav({
       </div>
 
       <div className="flex items-center gap-1">
-        <Button
-          isIconOnly
-          variant="ghost"
-          aria-label="Command menu (keyboard shortcut Ctrl K or Command K)"
-          onPress={onCommandPaletteOpen}
-        >
-          <IconCommand size={20} />
-        </Button>
+        <SearchCommandButton compact onPress={onCommandPaletteOpen} />
 
         {user ? (
           <Dropdown.Root>

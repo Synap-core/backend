@@ -492,25 +492,21 @@ export default function IntelligencePage() {
         </div>
       </div>
 
-      <Tabs.Root defaultSelectedKey="services">
+      <Tabs.Root defaultSelectedKey="services" orientation="horizontal">
         <Tabs.ListContainer>
-          <Tabs.List
-            className="mb-4 flex flex-wrap gap-1 border-b border-divider pb-1"
-            style={{ marginBottom: spacing[4] }}
-          >
-            <Tabs.Tab id="services" className="rounded-md px-3 py-2 text-sm">
+          <Tabs.List className="mb-4 gap-1">
+            <Tabs.Tab id="services" className="px-3 py-2 text-sm">
               <span className="inline-flex items-center gap-1">
                 <IconPlugConnected size={14} />
                 Service Health
               </span>
             </Tabs.Tab>
-            <Tabs.Tab id="usage" className="rounded-md px-3 py-2 text-sm">
+            <Tabs.Tab id="usage" className="px-3 py-2 text-sm">
               <span className="inline-flex items-center gap-1">
                 <IconChartBar size={14} />
                 Aggregate Usage
               </span>
             </Tabs.Tab>
-            <Tabs.Indicator />
           </Tabs.List>
         </Tabs.ListContainer>
 

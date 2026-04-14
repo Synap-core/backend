@@ -275,16 +275,17 @@ export default function InvestigatePage() {
         <Tabs.Root
           selectedKey={activeTab}
           onSelectionChange={(k) => setActiveTab(String(k))}
+          orientation="horizontal"
         >
           <Tabs.ListContainer>
-            <Tabs.List className="flex flex-wrap gap-1 border-b border-divider pb-2">
-              <Tabs.Tab id="search" className="rounded-md px-3 py-2 text-sm">
+            <Tabs.List className="mb-4 gap-1 overflow-x-auto">
+              <Tabs.Tab id="search" className="px-3 py-2 text-sm">
                 <span className="inline-flex items-center gap-1">
                   <IconSearch size={16} />
                   Search Events
                 </span>
               </Tabs.Tab>
-              <Tabs.Tab id="types" className="rounded-md px-3 py-2 text-sm">
+              <Tabs.Tab id="types" className="px-3 py-2 text-sm">
                 <span className="inline-flex items-center gap-1">
                   <IconList size={16} />
                   Event Types
@@ -300,13 +301,12 @@ export default function InvestigatePage() {
                   ) : null}
                 </span>
               </Tabs.Tab>
-              <Tabs.Tab id="publish" className="rounded-md px-3 py-2 text-sm">
+              <Tabs.Tab id="publish" className="px-3 py-2 text-sm">
                 <span className="inline-flex items-center gap-1">
                   <IconSend size={16} />
                   Publish Event
                 </span>
               </Tabs.Tab>
-              <Tabs.Indicator />
             </Tabs.List>
           </Tabs.ListContainer>
 

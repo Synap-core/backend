@@ -40,15 +40,15 @@ if (!rootEl) {
         <GlobalErrorBoundary>
           <TRPCProvider client={trpcClient} queryClient={queryClient}>
             <QueryClientProvider client={queryClient}>
-              <ToastProvider placement="top end" maxVisibleToasts={4}>
-                <BrowserRouter basename="/admin">
-                  <AuthProvider>
-                    <WorkspaceProvider>
-                      <App />
-                    </WorkspaceProvider>
-                  </AuthProvider>
-                </BrowserRouter>
-              </ToastProvider>
+              {/* ToastRegion renders null when the queue is empty — keep it a sibling, not a parent of the app. */}
+              <ToastProvider placement="top end" maxVisibleToasts={4} />
+              <BrowserRouter basename="/admin">
+                <AuthProvider>
+                  <WorkspaceProvider>
+                    <App />
+                  </WorkspaceProvider>
+                </AuthProvider>
+              </BrowserRouter>
             </QueryClientProvider>
           </TRPCProvider>
         </GlobalErrorBoundary>
