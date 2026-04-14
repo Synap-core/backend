@@ -93,7 +93,10 @@ export default function WorkspaceDetailPage() {
     data: invites,
     isLoading: invitesLoading,
     refetch: refetchInvites,
-  } = trpc.workspaces.listInvites.useQuery({ workspaceId });
+  } = trpc.workspaces.listInvites.useQuery({
+    type: "workspace",
+    workspaceId,
+  });
 
   const {
     data: agents,
@@ -627,6 +630,7 @@ export default function WorkspaceDetailPage() {
           <Button
             onClick={() =>
               createInviteMutation.mutate({
+                type: "workspace",
                 workspaceId,
                 email: inviteEmail,
                 role: inviteRole,

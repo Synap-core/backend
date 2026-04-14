@@ -6,6 +6,15 @@
  *
  * NOTE: FeedMessageMetadata is now defined in @synap-core/types/feeds.
  * This file re-exports it for backward compatibility.
+ *
+ * TYPE SYNCHRONIZATION:
+ * This file maintains compatibility with:
+ * - @synap-core/types (canonical source)
+ * - @synap/feed-service (service-specific)
+ * - synap-intelligence-service (IS classification)
+ * - relay-app (frontend)
+ *
+ * @module feed-types
  */
 
 import { z } from "zod";
@@ -13,6 +22,20 @@ import type { FeedMessageMetadata } from "@synap-core/types/feeds";
 
 // Re-export the canonical type from @synap-core/types
 export type { FeedMessageMetadata };
+
+// Re-export synchronized types from feed-types-sync
+export type {
+  FeedProviderConfig,
+  FeedSourceConfig,
+  FeedPreferences,
+  FeedSource,
+  ClassifiedFeedItem,
+  NormalizedRSSItem,
+  FeedFetchResult,
+  FeedStatus,
+  FeedExecutionPayload,
+  BaseFeedConfig,
+} from "./feed-types-sync.js";
 
 // ============================================================================
 // Feed Types
@@ -95,18 +118,7 @@ export interface ProactiveFeedConfig extends FeedConfig {
   };
 }
 
-// ============================================================================
-// Feed Execution Types
-// ============================================================================
-
-export interface FeedExecutionPayload {
-  channelId: string;
-  userId: string;
-  workspaceId?: string;
-  runId: string;
-  config: RSSFeedConfig | ProactiveFeedConfig | FeedConfig;
-  force?: boolean;
-}
+// Note: FeedExecutionPayload is now re-exported from feed-types-sync
 
 // ============================================================================
 // Feed Message Types
@@ -125,19 +137,7 @@ export interface FeedMessage {
   updatedAt: Date;
 }
 
-// ============================================================================
-// Feed Fetch Result Types
-// ============================================================================
-
-export interface FeedFetchResult {
-  success: boolean;
-  feedId: string;
-  itemsFetched: number;
-  itemsNew: number;
-  error?: string;
-  fetchDurationMs: number;
-  timestamp: Date;
-}
+// Note: FeedFetchResult is now re-exported from feed-types-sync
 
 export interface FeedFetchOptions {
   force?: boolean;

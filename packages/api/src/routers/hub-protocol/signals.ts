@@ -28,6 +28,7 @@ import {
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "crypto";
+import { DeliveryService } from "../../services/DeliveryService.js";
 
 const SIGNAL_PLATFORMS = [
   "twitter",
@@ -60,6 +61,43 @@ function formatErrorResponse(
     errorCode,
     ...(details !== undefined ? { details } : {}),
   };
+}
+
+/**
+ * Format signal data for feed display
+ */
+function formatSignalForFeed(signalData: {
+  title?: string;
+  description?: string;
+  aiSummary?: string;
+  url?: string;
+  sourcePlatform?: string;
+  authorDisplayName?: string;
+  authorUsername?: string;
+}): string {
+  const parts: string[] = [];
+
+  // Use AI summary if available, otherwise use description
+  const content = signalData.aiSummary || signalData.description || "";
+  if (content) {
+    parts.push(content);
+  }
+
+  // Add source attribution
+  const sourceParts: string[] = [];
+  if (signalData.sourcePlatform) {
+    sourceParts.push(`via ${signalData.sourcePlatform}`);
+  }
+  if (signalData.authorDisplayName || signalData.authorUsername) {
+    const author = signalData.authorDisplayName || signalData.authorUsername;
+    sourceParts.push(`by ${author}`);
+  }
+
+  if (sourceParts.length > 0) {
+    parts.push(`\n— ${sourceParts.join(" ")}`);
+  }
+
+  return parts.join("\n");
 }
 
 export const signalsRouter = router({
@@ -458,6 +496,10 @@ export const signalsRouter = router({
           }>;
           totalLinked: number;
         };
+        delivery?: {
+          feedPosted: boolean;
+          notificationCreated: boolean;
+        };
         metadata: {
           captureTimestamp: string;
           captureMethod: string;
@@ -509,12 +551,66 @@ export const signalsRouter = router({
                 "Failed to create entity",
                 "ENTITY_CREATION_FAILED"
               ),
+              delivery: {
+                feedPosted: false,
+                notificationCreated: false,
+              },
               metadata: {
                 captureTimestamp: new Date().toISOString(),
                 captureMethod: input.capture.captureMethod,
                 processingDurationMs: Date.now() - startTime,
               },
             };
+          }
+
+          // Deliver signal to feed via DeliveryService
+          let feedPosted = false;
+          let notificationCreated = false;
+          if (input.capture.createNotification) {
+            try {
+              const relevance = input.signalData.relevanceScore ?? 0.5;
+              const formattedContent = formatSignalForFeed(input.signalData);
+
+              const deliveryResult = await DeliveryService.deliver({
+                userId: input.capture.userId,
+                workspaceId: input.capture.workspaceId,
+                content: {
+                  title: input.signalData.title,
+                  body: formattedContent,
+                  sourceType: "ai_proactive",
+                  metadata: {
+                    signalItemId: result.id,
+                    entityId: result.id,
+                    sourcePlatform: input.signalData.sourcePlatform,
+                    sourceRoute: input.signalData.sourceRoute,
+                    topics: input.signalData.topics,
+                    relevanceScore: relevance,
+                    url: input.signalData.url,
+                    authorUsername: input.signalData.authorUsername,
+                    authorDisplayName: input.signalData.authorDisplayName,
+                  },
+                },
+                surfaces: [
+                  {
+                    type: "feed",
+                    proactiveOptions: {
+                      checkPreferences: true,
+                      deduplicate: false, // Allow multiple signals
+                      proactiveType: "insight",
+                      emitEvents: true,
+                      createNotification: input.capture.createNotification,
+                      notificationType: "signal",
+                    },
+                  },
+                ],
+              });
+
+              feedPosted = deliveryResult.success;
+              notificationCreated = input.capture.createNotification;
+            } catch (deliveryError) {
+              // Log error but don't fail the capture
+              console.warn("Failed to deliver signal to feed:", deliveryError);
+            }
           }
 
           const linkedEntities: Array<{
@@ -566,6 +662,10 @@ export const signalsRouter = router({
             autoLinking: {
               linkedEntities,
               totalLinked: linkedEntities.length,
+            },
+            delivery: {
+              feedPosted,
+              notificationCreated,
             },
             metadata: {
               captureTimestamp: new Date().toISOString(),

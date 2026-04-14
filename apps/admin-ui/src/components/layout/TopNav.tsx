@@ -1,133 +1,112 @@
-import { Group, Text, Badge, ActionIcon, Tooltip, Menu } from "@mantine/core";
 import {
   IconCommand,
   IconMenu2,
   IconUser,
   IconLogout,
 } from "@tabler/icons-react";
+import { Badge } from "@heroui/react";
+import { Button } from "@heroui/react";
+import { Dropdown } from "@heroui/react";
 import { useAuth } from "../../lib/auth";
 import { useWorkspace } from "../../lib/workspace";
-import { colors } from "../../theme/tokens";
 
 interface TopNavProps {
   onMenuOpen?: () => void;
+  onCommandPaletteOpen?: () => void;
 }
 
-export default function TopNav({ onMenuOpen }: TopNavProps) {
+export default function TopNav({
+  onMenuOpen,
+  onCommandPaletteOpen,
+}: TopNavProps) {
   const { user, logout } = useAuth();
   const { workspaceName } = useWorkspace();
 
   return (
-    <Group
-      h={56}
-      px="xl"
-      justify="space-between"
-      style={{
-        borderBottom: `1px solid ${colors.border.default}`,
-        background: colors.background.primary,
-        position: "sticky",
-        top: 0,
-        zIndex: 100,
-        flexShrink: 0,
-      }}
-    >
-      {/* Logo */}
-      <Group gap="sm">
-        {/* Hamburger for mobile */}
-        <ActionIcon
-          variant="subtle"
-          size="lg"
-          color="gray"
-          onClick={onMenuOpen}
-          style={{ display: "none" }}
-          className="mobile-menu-btn"
-          aria-label="Open navigation"
-        />
-        <Text
-          fw={700}
-          size="lg"
-          style={{
-            background: `linear-gradient(135deg, ${colors.eventTypes.created} 0%, ${colors.eventTypes.ai} 100%)`,
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-          }}
-        >
-          SYNAP
-        </Text>
-        <Badge size="xs" variant="light" color="gray">
-          Admin
-        </Badge>
-        {workspaceName && (
-          <>
-            <Text size="xs" c="dimmed" style={{ opacity: 0.5 }}>
-              /
-            </Text>
-            <Text size="xs" style={{ color: colors.text.secondary }}>
-              {workspaceName}
-            </Text>
-          </>
-        )}
-      </Group>
-
-      {/* Actions */}
-      <Group gap="xs">
-        <Tooltip label="Command Menu (⌘K)" position="bottom">
-          <ActionIcon
-            variant="subtle"
-            size="lg"
-            color="gray"
-            aria-label="Open command palette"
+    <header className="sticky top-0 z-[100] flex h-[60px] shrink-0 items-center justify-between border-b border-divider bg-background/95 px-6 backdrop-blur-md">
+      <div className="flex items-center gap-3">
+        {onMenuOpen ? (
+          <Button
+            isIconOnly
+            variant="ghost"
+            className="md:hidden"
+            aria-label="Open navigation"
+            onPress={onMenuOpen}
           >
-            <IconCommand size={20} />
-          </ActionIcon>
-        </Tooltip>
+            <IconMenu2 size={20} />
+          </Button>
+        ) : null}
+        <span className="bg-gradient-to-br from-[var(--pod-accent)] to-[var(--pod-accent-2)] bg-clip-text text-lg font-bold text-transparent">
+          Synap
+        </span>
+        <Badge size="sm" variant="soft" color="default">
+          Pod
+        </Badge>
+        {workspaceName ? (
+          <span className="flex items-center gap-2 text-small text-default-500">
+            <span className="opacity-50">/</span>
+            <span className="text-default-600">{workspaceName}</span>
+          </span>
+        ) : null}
+      </div>
 
-        {/* User menu */}
-        {user && (
-          <Menu shadow="md" width={200} position="bottom-end">
-            <Menu.Target>
-              <ActionIcon
-                variant="subtle"
-                size="lg"
-                color="gray"
-                aria-label="User menu"
-              >
+      <div className="flex items-center gap-1">
+        <Button
+          isIconOnly
+          variant="ghost"
+          aria-label="Command menu (keyboard shortcut Ctrl K or Command K)"
+          onPress={onCommandPaletteOpen}
+        >
+          <IconCommand size={20} />
+        </Button>
+
+        {user ? (
+          <Dropdown.Root>
+            <Dropdown.Trigger>
+              <Button isIconOnly variant="ghost" aria-label="Account menu">
                 <IconUser size={20} />
-              </ActionIcon>
-            </Menu.Target>
-            <Menu.Dropdown>
-              <Menu.Label>{user.email}</Menu.Label>
-              {user.name && (
-                <Menu.Label style={{ fontWeight: 400, paddingTop: 0 }}>
-                  {user.name}
-                </Menu.Label>
-              )}
-              <Menu.Divider />
-              <Menu.Item
-                leftSection={<IconLogout size={14} />}
-                color="red"
-                onClick={logout}
+              </Button>
+            </Dropdown.Trigger>
+            <Dropdown.Popover placement="bottom end">
+              <Dropdown.Menu
+                onAction={(key) => {
+                  if (key === "logout") logout();
+                }}
               >
-                Logout
-              </Menu.Item>
-            </Menu.Dropdown>
-          </Menu>
-        )}
-
-        {onMenuOpen && (
-          <Tooltip label="Navigation" position="bottom">
-            <ActionIcon
-              variant="subtle"
-              size="lg"
-              color="gray"
-              onClick={onMenuOpen}
-              aria-label="Toggle navigation"
-            >
-              <IconMenu2 size={20} />
-            </ActionIcon>
-          </Tooltip>
-        )}
-      </Group>
-    </Group>
+                <Dropdown.Section>
+                  <Dropdown.Item
+                    id="email"
+                    isDisabled
+                    textValue={user.email}
+                    className="cursor-default opacity-100"
+                  >
+                    <div className="flex flex-col gap-0.5 py-1">
+                      <span className="text-xs font-medium text-default-foreground">
+                        {user.email}
+                      </span>
+                      {user.name ? (
+                        <span className="text-xs text-default-500">
+                          {user.name}
+                        </span>
+                      ) : null}
+                    </div>
+                  </Dropdown.Item>
+                </Dropdown.Section>
+                <Dropdown.Item
+                  id="logout"
+                  textValue="Log out"
+                  className="text-danger"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <IconLogout size={16} />
+                    Log out
+                  </span>
+                </Dropdown.Item>
+              </Dropdown.Menu>
+            </Dropdown.Popover>
+          </Dropdown.Root>
+        ) : null}
+      </div>
+    </header>
   );
 }

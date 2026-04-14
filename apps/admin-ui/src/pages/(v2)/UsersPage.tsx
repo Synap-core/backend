@@ -1,18 +1,16 @@
 import { useState } from "react";
 import {
-  Title,
-  Text,
-  Stack,
+  Button,
   Card,
-  Group,
-  Badge,
-  Table,
-  SegmentedControl,
-  Loader,
+  Chip,
+  Label,
   Modal,
-} from "@mantine/core";
+  Spinner,
+  Text,
+  useOverlayState,
+} from "@heroui/react";
 import { IconRobot, IconUser } from "@tabler/icons-react";
-import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
+import { typography, spacing, borderRadius } from "../../theme/tokens";
 import { trpc } from "../../lib/trpc";
 
 type UserType = "all" | "human" | "agent";
@@ -24,9 +22,22 @@ interface AgentMetadata {
   createdByUserId?: string;
 }
 
+const FILTER_OPTIONS: { value: UserType; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "human", label: "Human" },
+  { value: "agent", label: "Agents" },
+];
+
 export default function UsersPage() {
   const [typeFilter, setTypeFilter] = useState<UserType>("all");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+
+  const detailModal = useOverlayState({
+    isOpen: !!selectedUserId,
+    onOpenChange: (open) => {
+      if (!open) setSelectedUserId(null);
+    },
+  });
 
   const { data, isLoading } = trpc.system.listUsers.useQuery({
     type: typeFilter,
@@ -37,276 +48,250 @@ export default function UsersPage() {
 
   return (
     <div style={{ width: "100%", padding: spacing[8] }}>
-      <Stack gap={spacing[6]}>
-        {/* Header */}
-        <Group justify="space-between">
-          <div>
-            <Title
-              order={1}
-              style={{
-                fontFamily: typography.fontFamily.sans,
-                color: colors.text.primary,
-              }}
-            >
-              Users
-            </Title>
-            <Text
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1
+            className="m-0 text-2xl font-bold"
+            style={{ fontFamily: typography.fontFamily.sans }}
+          >
+            Users
+          </h1>
+          <Text className="mt-1 text-sm text-default-500">
+            All users across the Data Pod
+          </Text>
+        </div>
+        <div className="inline-flex rounded-lg bg-default-100 p-1">
+          {FILTER_OPTIONS.map((opt) => (
+            <Button
+              key={opt.value}
               size="sm"
-              style={{
-                color: colors.text.secondary,
-                fontFamily: typography.fontFamily.sans,
-              }}
+              variant={typeFilter === opt.value ? "primary" : "ghost"}
+              className="min-w-[4.5rem]"
+              onPress={() => setTypeFilter(opt.value)}
             >
-              All users across the Data Pod
-            </Text>
-          </div>
-          <SegmentedControl
-            value={typeFilter}
-            onChange={(v) => setTypeFilter(v as UserType)}
-            data={[
-              { label: "All", value: "all" },
-              { label: "Human", value: "human" },
-              { label: "Agents", value: "agent" },
-            ]}
-          />
-        </Group>
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+      </div>
 
-        {/* Users Table */}
-        <Card
-          padding={0}
-          radius={borderRadius.lg}
-          style={{
-            border: `1px solid ${colors.border.default}`,
-            backgroundColor: colors.background.primary,
-          }}
-        >
-          {isLoading ? (
-            <div style={{ padding: spacing[8], textAlign: "center" }}>
-              <Loader />
-            </div>
-          ) : !data || data.users.length === 0 ? (
-            <Text size="sm" c={colors.text.tertiary} ta="center" p={spacing[8]}>
-              No users found
-            </Text>
-          ) : (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Name</Table.Th>
-                  <Table.Th>Email</Table.Th>
-                  <Table.Th>Type</Table.Th>
-                  <Table.Th>Created</Table.Th>
-                  <Table.Th>Workspaces</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
+      <Card
+        className="overflow-hidden border border-divider"
+        style={{ borderRadius: borderRadius.lg }}
+      >
+        {isLoading ? (
+          <div className="flex justify-center py-12">
+            <Spinner size="lg" color="accent" />
+          </div>
+        ) : !data || data.users.length === 0 ? (
+          <Text className="p-8 text-center text-sm text-default-500">
+            No users found
+          </Text>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-divider bg-default-50/80">
+                  <th className="px-4 py-3 font-medium">Name</th>
+                  <th className="px-4 py-3 font-medium">Email</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Created</th>
+                  <th className="px-4 py-3 font-medium">Workspaces</th>
+                </tr>
+              </thead>
+              <tbody>
                 {data.users.map((user) => (
-                  <Table.Tr
+                  <tr
                     key={user.id}
-                    style={{ cursor: "pointer" }}
+                    className="cursor-pointer border-b border-divider/60 transition-colors hover:bg-default-100/60"
                     onClick={() => setSelectedUserId(user.id)}
                   >
-                    <Table.Td>
-                      <Group gap={spacing[2]}>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
                         {user.userType === "agent" ? (
-                          <IconRobot size={16} color={colors.eventTypes.ai} />
+                          <IconRobot size={16} className="text-warning" />
                         ) : (
-                          <IconUser size={16} color={colors.semantic.info} />
+                          <IconUser size={16} className="text-accent" />
                         )}
-                        <Text size="sm" fw={500}>
-                          {user.name || "—"}
-                        </Text>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text
+                        <span className="font-medium">{user.name || "—"}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-default-600">
+                      {user.email}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Chip
                         size="sm"
-                        c="dimmed"
-                        style={{ fontFamily: typography.fontFamily.mono }}
-                      >
-                        {user.email}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge
-                        size="sm"
-                        variant="light"
-                        color={user.userType === "agent" ? "orange" : "blue"}
+                        variant="soft"
+                        color={user.userType === "agent" ? "warning" : "accent"}
                       >
                         {user.userType}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
-                        {user.createdAt
-                          ? new Date(user.createdAt).toLocaleDateString()
-                          : "—"}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge size="sm" variant="outline" color="gray">
+                      </Chip>
+                    </td>
+                    <td className="px-4 py-3 text-default-500">
+                      {user.createdAt
+                        ? new Date(user.createdAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Chip size="sm" variant="soft" color="default">
                         {user.workspaceMembershipCount}
-                      </Badge>
-                    </Table.Td>
-                  </Table.Tr>
+                      </Chip>
+                    </td>
+                  </tr>
                 ))}
-              </Table.Tbody>
-            </Table>
-          )}
-        </Card>
-
-        {data && (
-          <Text size="xs" c={colors.text.tertiary} ta="right">
-            Showing {data.users.length} of {data.pagination.total} users
-          </Text>
+              </tbody>
+            </table>
+          </div>
         )}
-      </Stack>
+      </Card>
 
-      {/* User Detail Modal */}
-      <Modal
-        opened={!!selectedUserId}
-        onClose={() => setSelectedUserId(null)}
-        title={
-          <Text fw={600} size="lg">
-            User Details
-          </Text>
-        }
-        size="md"
-      >
-        {selectedUser && (
-          <Stack gap={spacing[4]}>
-            <div>
-              <Text size="xs" c="dimmed" mb={2}>
-                Name
-              </Text>
-              <Text size="sm" fw={500}>
-                {selectedUser.name || "—"}
-              </Text>
-            </div>
-            <div>
-              <Text size="xs" c="dimmed" mb={2}>
-                Email
-              </Text>
-              <Text
-                size="sm"
-                style={{ fontFamily: typography.fontFamily.mono }}
-              >
-                {selectedUser.email}
-              </Text>
-            </div>
-            <div>
-              <Text size="xs" c="dimmed" mb={2}>
-                ID
-              </Text>
-              <Text
-                size="sm"
-                style={{ fontFamily: typography.fontFamily.mono }}
-              >
-                {selectedUser.id}
-              </Text>
-            </div>
-            <Group>
-              <div>
-                <Text size="xs" c="dimmed" mb={2}>
-                  Type
-                </Text>
-                <Badge
-                  variant="light"
-                  color={selectedUser.userType === "agent" ? "orange" : "blue"}
-                >
-                  {selectedUser.userType}
-                </Badge>
-              </div>
-              <div>
-                <Text size="xs" c="dimmed" mb={2}>
-                  Workspaces
-                </Text>
-                <Badge variant="outline" color="gray">
-                  {selectedUser.workspaceMembershipCount} memberships
-                </Badge>
-              </div>
-            </Group>
-            <div>
-              <Text size="xs" c="dimmed" mb={2}>
-                Created
-              </Text>
-              <Text size="sm">
-                {selectedUser.createdAt
-                  ? new Date(selectedUser.createdAt).toLocaleString()
-                  : "—"}
-              </Text>
-            </div>
-            {selectedUser.userType === "agent" &&
-              selectedUser.agentMetadata && (
-                <Card
-                  padding={spacing[3]}
-                  radius={borderRadius.md}
-                  style={{
-                    backgroundColor: colors.background.secondary,
-                    border: `1px solid ${colors.border.light}`,
-                  }}
-                >
-                  <Text size="sm" fw={600} mb={spacing[2]}>
-                    Agent Metadata
-                  </Text>
-                  <Stack gap={spacing[2]}>
+      {data && (
+        <Text className="mt-2 text-right text-xs text-default-400">
+          Showing {data.users.length} of {data.pagination.total} users
+        </Text>
+      )}
+
+      <Modal state={detailModal}>
+        <Modal.Backdrop isDismissable />
+        <Modal.Container size="md" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+              <Modal.Heading className="text-lg font-semibold">
+                User Details
+              </Modal.Heading>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="gap-4 px-6 py-4">
+              {selectedUser && (
+                <>
+                  <div>
+                    <Label className="text-default-500">Name</Label>
+                    <Text className="mt-1 font-medium">
+                      {selectedUser.name || "—"}
+                    </Text>
+                  </div>
+                  <div>
+                    <Label className="text-default-500">Email</Label>
+                    <Text
+                      className="mt-1 font-mono text-sm"
+                      style={{ fontFamily: typography.fontFamily.mono }}
+                    >
+                      {selectedUser.email}
+                    </Text>
+                  </div>
+                  <div>
+                    <Label className="text-default-500">ID</Label>
+                    <Text
+                      className="mt-1 font-mono text-sm break-all"
+                      style={{ fontFamily: typography.fontFamily.mono }}
+                    >
+                      {selectedUser.id}
+                    </Text>
+                  </div>
+                  <div className="flex flex-wrap gap-6">
                     <div>
-                      <Text size="xs" c="dimmed">
-                        Agent Type
-                      </Text>
-                      <Text size="sm">
-                        {(selectedUser.agentMetadata as AgentMetadata)
-                          .agentType || "—"}
-                      </Text>
-                    </div>
-                    <div>
-                      <Text size="xs" c="dimmed">
-                        Description
-                      </Text>
-                      <Text size="sm">
-                        {(selectedUser.agentMetadata as AgentMetadata)
-                          .description || "—"}
-                      </Text>
-                    </div>
-                    {(selectedUser.agentMetadata as AgentMetadata)
-                      .capabilities && (
-                      <div>
-                        <Text size="xs" c="dimmed" mb={2}>
-                          Capabilities
-                        </Text>
-                        <Group gap={4}>
-                          {(
-                            selectedUser.agentMetadata as AgentMetadata
-                          ).capabilities!.map((cap) => (
-                            <Badge
-                              key={cap}
-                              size="xs"
-                              variant="light"
-                              color="cyan"
-                            >
-                              {cap}
-                            </Badge>
-                          ))}
-                        </Group>
+                      <Label className="text-default-500">Type</Label>
+                      <div className="mt-1">
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color={
+                            selectedUser.userType === "agent"
+                              ? "warning"
+                              : "accent"
+                          }
+                        >
+                          {selectedUser.userType}
+                        </Chip>
                       </div>
-                    )}
-                    <div>
-                      <Text size="xs" c="dimmed">
-                        Created By
-                      </Text>
-                      <Text
-                        size="sm"
-                        style={{ fontFamily: typography.fontFamily.mono }}
-                      >
-                        {(selectedUser.agentMetadata as AgentMetadata)
-                          .createdByUserId || "—"}
-                      </Text>
                     </div>
-                  </Stack>
-                </Card>
+                    <div>
+                      <Label className="text-default-500">Workspaces</Label>
+                      <div className="mt-1">
+                        <Chip size="sm" variant="soft" color="default">
+                          {selectedUser.workspaceMembershipCount} memberships
+                        </Chip>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-default-500">Created</Label>
+                    <Text className="mt-1 text-sm">
+                      {selectedUser.createdAt
+                        ? new Date(selectedUser.createdAt).toLocaleString()
+                        : "—"}
+                    </Text>
+                  </div>
+                  {selectedUser.userType === "agent" &&
+                    selectedUser.agentMetadata && (
+                      <Card className="border border-divider bg-default-50/80 p-4">
+                        <Text className="mb-3 font-semibold text-sm">
+                          Agent Metadata
+                        </Text>
+                        <div className="flex flex-col gap-3">
+                          <div>
+                            <Label className="text-default-500">
+                              Agent Type
+                            </Label>
+                            <Text className="mt-1 text-sm">
+                              {(selectedUser.agentMetadata as AgentMetadata)
+                                .agentType || "—"}
+                            </Text>
+                          </div>
+                          <div>
+                            <Label className="text-default-500">
+                              Description
+                            </Label>
+                            <Text className="mt-1 text-sm">
+                              {(selectedUser.agentMetadata as AgentMetadata)
+                                .description || "—"}
+                            </Text>
+                          </div>
+                          {(selectedUser.agentMetadata as AgentMetadata)
+                            .capabilities && (
+                            <div>
+                              <Label className="mb-2 text-default-500">
+                                Capabilities
+                              </Label>
+                              <div className="flex flex-wrap gap-1">
+                                {(
+                                  selectedUser.agentMetadata as AgentMetadata
+                                ).capabilities!.map((cap) => (
+                                  <Chip
+                                    key={cap}
+                                    size="sm"
+                                    variant="soft"
+                                    color="accent"
+                                  >
+                                    {cap}
+                                  </Chip>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <div>
+                            <Label className="text-default-500">
+                              Created By
+                            </Label>
+                            <Text
+                              className="mt-1 font-mono text-sm"
+                              style={{
+                                fontFamily: typography.fontFamily.mono,
+                              }}
+                            >
+                              {(selectedUser.agentMetadata as AgentMetadata)
+                                .createdByUserId || "—"}
+                            </Text>
+                          </div>
+                        </div>
+                      </Card>
+                    )}
+                </>
               )}
-          </Stack>
-        )}
+            </Modal.Body>
+          </Modal.Dialog>
+        </Modal.Container>
       </Modal>
     </div>
   );

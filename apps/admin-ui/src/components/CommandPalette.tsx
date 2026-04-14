@@ -4,17 +4,16 @@ import { Command } from "cmdk";
 import {
   IconHome,
   IconSearch,
-  IconFlask,
   IconUser,
   IconTimeline,
-  IconTool,
-  IconLayoutGrid,
-  IconCpu,
-  IconSend,
   IconRefresh,
   IconCopy,
-  IconSettings,
-  IconFolder,
+  IconUsers,
+  IconBuildingCommunity,
+  IconKey,
+  IconCheckbox,
+  IconTerminal2,
+  IconPlug,
 } from "@tabler/icons-react";
 import {
   colors,
@@ -143,8 +142,8 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           >
             <CommandItem
               icon={<IconHome size={18} />}
-              label="Health"
-              description="System health & metrics dashboard"
+              label="Overview"
+              description="Pod health & activity"
               keywords={[
                 "home",
                 "main",
@@ -156,52 +155,60 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               onSelect={() => handleNavigate("/")}
             />
             <CommandItem
+              icon={<IconUsers size={18} />}
+              label="Users"
+              description="Humans and agents on this pod"
+              keywords={["users", "people", "agents"]}
+              onSelect={() => handleNavigate("/users")}
+            />
+            <CommandItem
+              icon={<IconBuildingCommunity size={18} />}
+              label="Workspaces"
+              description="Workspaces and membership"
+              keywords={["workspaces", "spaces", "teams"]}
+              onSelect={() => handleNavigate("/workspaces")}
+            />
+            <CommandItem
               icon={<IconSearch size={18} />}
               label="Events"
-              description="Event explorer & trace viewer"
+              description="Search and inspect the event log"
               keywords={["events", "search", "trace", "investigate", "logs"]}
               onSelect={() => handleNavigate("/events")}
             />
             <CommandItem
-              icon={<IconCpu size={18} />}
-              label="Data"
-              description="Database tables & vectors"
-              keywords={["database", "tables", "data", "postgres", "vector"]}
-              onSelect={() => handleNavigate("/data")}
+              icon={<IconKey size={18} />}
+              label="API keys"
+              description="Hub protocol keys and scopes"
+              keywords={["api", "keys", "token", "integration", "hub"]}
+              onSelect={() => handleNavigate("/api-keys")}
             />
             <CommandItem
-              icon={<IconFolder size={18} />}
-              label="Files"
-              description="Browse & manage files in storage"
-              keywords={["files", "storage", "minio", "s3", "bucket", "upload"]}
-              onSelect={() => handleNavigate("/files")}
+              icon={<IconHome size={18} />}
+              label="Workspace overview"
+              description="Settings for the selected workspace"
+              keywords={["workspace", "settings", "scope"]}
+              onSelect={() => handleNavigate("/workspace")}
             />
             <CommandItem
-              icon={<IconTool size={18} />}
-              label="Automation"
-              description="Workers, webhooks & n8n"
-              keywords={[
-                "automation",
-                "workers",
-                "webhooks",
-                "n8n",
-                "subscribers",
-              ]}
-              onSelect={() => handleNavigate("/automation")}
+              icon={<IconCheckbox size={18} />}
+              label="Proposals"
+              description="Pending AI and sync proposals"
+              keywords={["proposals", "review", "governance"]}
+              onSelect={() => handleNavigate("/proposals")}
             />
             <CommandItem
-              icon={<IconLayoutGrid size={18} />}
-              label="Architecture"
-              description="Data Pod architecture overview"
-              keywords={["architecture", "flow", "diagram", "overview"]}
-              onSelect={() => handleNavigate("/flow")}
+              icon={<IconTerminal2 size={18} />}
+              label="Intelligence"
+              description="Intelligence service connection"
+              keywords={["intelligence", "ai", "is", "hub"]}
+              onSelect={() => handleNavigate("/intelligence")}
             />
             <CommandItem
-              icon={<IconFlask size={18} />}
-              label="Testing"
-              description="Development & testing tools"
-              keywords={["test", "playground", "ai", "tools", "publish"]}
-              onSelect={() => handleNavigate("/testing")}
+              icon={<IconPlug size={18} />}
+              label="Services"
+              description="Connected services and workers"
+              keywords={["services", "workers", "jobs"]}
+              onSelect={() => handleNavigate("/services")}
             />
           </Command.Group>
 
@@ -231,13 +238,6 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               description="Trace an event and its correlations"
               keywords={["trace", "event", "correlation", "causation"]}
               onSelect={() => handleNavigate("/events")}
-            />
-            <CommandItem
-              icon={<IconSend size={18} />}
-              label="Publish Event"
-              description="Manually publish a test event"
-              keywords={["publish", "event", "send", "test"]}
-              onSelect={() => handleNavigate("/testing")}
             />
             <CommandItem
               icon={<IconRefresh size={18} />}
@@ -274,13 +274,6 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 showInfoNotification({ message: "URL copied to clipboard" });
                 onClose();
               }}
-            />
-            <CommandItem
-              icon={<IconSettings size={18} />}
-              label="View Automation"
-              description="View webhooks and integrations"
-              keywords={["automation", "webhooks", "n8n", "integrations"]}
-              onSelect={() => handleNavigate("/automation")}
             />
           </Command.Group>
         </Command.List>

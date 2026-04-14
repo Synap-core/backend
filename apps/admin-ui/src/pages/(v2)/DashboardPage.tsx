@@ -1,15 +1,8 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Title,
-  Text,
-  Stack,
-  Card,
-  Group,
-  Button,
-  ActionIcon,
-  Badge,
-} from "@mantine/core";
+import { Button } from "@heroui/react";
+import { Card } from "@heroui/react";
+import { Chip } from "@heroui/react";
 import SearchModal from "../../components/search/SearchModal";
 import {
   IconActivity,
@@ -25,7 +18,6 @@ import {
   IconRobot,
   IconDatabase,
 } from "@tabler/icons-react";
-import { colors, typography, spacing, borderRadius } from "../../theme/tokens";
 import { trpc } from "../../lib/trpc";
 import {
   MetricCardSkeleton,
@@ -40,13 +32,11 @@ export default function DashboardPage() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchType, setSearchType] = useState<"user" | "event">("user");
 
-  // Fetch pod stats
   const { data: podStats, isLoading: isLoadingPodStats } =
     trpc.system.getDataPodStats.useQuery(undefined, {
       refetchInterval: isAutoRefreshEnabled ? 30000 : false,
     });
 
-  // Fetch dashboard metrics
   const {
     data: metrics,
     refetch: refetchMetrics,
@@ -57,7 +47,6 @@ export default function DashboardPage() {
     refetchOnWindowFocus: true,
   });
 
-  // Fetch recent events
   const {
     data: recentEventsData,
     refetch: refetchEvents,
@@ -86,61 +75,28 @@ export default function DashboardPage() {
     });
   };
 
-  // Health status configuration
-  const healthConfig = {
-    healthy: {
-      label: "Healthy",
-      color: colors.health.healthy,
-      bgColor: "#D1FAE5",
-    },
-    degraded: {
-      label: "Degraded",
-      color: colors.health.degraded,
-      bgColor: "#FEF3C7",
-    },
-    critical: {
-      label: "Critical",
-      color: colors.health.critical,
-      bgColor: "#FEE2E2",
-    },
-  };
-
-  const healthStatus = metrics?.health.status || "healthy";
-  const healthStyle = healthConfig[healthStatus];
+  const healthStatus = metrics?.health.status ?? "healthy";
+  const healthColor =
+    healthStatus === "healthy"
+      ? "success"
+      : healthStatus === "degraded"
+        ? "warning"
+        : "danger";
 
   return (
-    <div style={{ width: "100%", padding: spacing[8] }}>
-      <Stack gap={spacing[8]}>
-        {/* Header */}
-        <div>
-          <Title
-            order={1}
-            style={{
-              fontFamily: typography.fontFamily.sans,
-              color: colors.text.primary,
-            }}
-          >
-            Data Pod
-          </Title>
-          <Text
-            size="sm"
-            style={{
-              color: colors.text.secondary,
-              fontFamily: typography.fontFamily.sans,
-            }}
-          >
-            System-wide overview — all workspaces, users, and events
-          </Text>
-        </div>
+    <div className="w-full max-w-[1400px] p-8">
+      <div className="flex flex-col gap-8">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+            Your data pod
+          </h1>
+          <p className="max-w-2xl text-small text-default-500">
+            A calm home for this server — health, activity, and quick paths into
+            operations. Workspace editing stays in Synap Browser.
+          </p>
+        </header>
 
-        {/* Row 1 — Key Counts */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-            gap: spacing[4],
-          }}
-        >
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
           {isLoadingPodStats ? (
             <>
               <MetricCardSkeleton />
@@ -150,153 +106,89 @@ export default function DashboardPage() {
             </>
           ) : (
             <>
-              {/* Users Card */}
-              <Card
-                padding={spacing[4]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                  cursor: "pointer",
-                }}
+              <Card.Root
+                className="cursor-pointer border border-divider transition-colors hover:bg-default-100"
                 onClick={() => navigate("/users")}
               >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
+                <Card.Header className="flex flex-row items-start justify-between pb-1">
+                  <span className="text-small font-medium text-default-500">
                     Users
-                  </Text>
-                  <IconUsers size={20} color={colors.semantic.info} />
-                </Group>
-                <Text
-                  size="2rem"
-                  fw={typography.fontWeight.bold}
-                  c={colors.text.primary}
-                >
-                  {(podStats?.userCount ?? 0) + (podStats?.agentCount ?? 0)}
-                </Text>
-                <Group gap={spacing[2]} mt={spacing[1]}>
-                  <Badge size="xs" variant="light" color="blue">
-                    {podStats?.userCount ?? 0} human
-                  </Badge>
-                  <Badge size="xs" variant="light" color="orange">
-                    {podStats?.agentCount ?? 0} agent
-                  </Badge>
-                </Group>
-              </Card>
+                  </span>
+                  <IconUsers size={20} className="text-primary" />
+                </Card.Header>
+                <Card.Content className="gap-1">
+                  <p className="text-3xl font-bold text-foreground">
+                    {(podStats?.userCount ?? 0) + (podStats?.agentCount ?? 0)}
+                  </p>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    <Chip size="sm" variant="soft" color="accent">
+                      {podStats?.userCount ?? 0} human
+                    </Chip>
+                    <Chip size="sm" variant="soft" color="warning">
+                      {podStats?.agentCount ?? 0} agent
+                    </Chip>
+                  </div>
+                </Card.Content>
+              </Card.Root>
 
-              {/* Workspaces Card */}
-              <Card
-                padding={spacing[4]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                  cursor: "pointer",
-                }}
+              <Card.Root
+                className="cursor-pointer border border-divider transition-colors hover:bg-default-100"
                 onClick={() => navigate("/workspaces")}
               >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
+                <Card.Header className="flex flex-row items-start justify-between pb-1">
+                  <span className="text-small font-medium text-default-500">
                     Workspaces
-                  </Text>
-                  <IconBuildingCommunity
-                    size={20}
-                    color={colors.eventTypes.created}
-                  />
-                </Group>
-                <Text
-                  size="2rem"
-                  fw={typography.fontWeight.bold}
-                  c={colors.text.primary}
-                >
-                  {podStats?.workspaceCount ?? 0}
-                </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
-                  across the pod
-                </Text>
-              </Card>
+                  </span>
+                  <IconBuildingCommunity size={20} className="text-secondary" />
+                </Card.Header>
+                <Card.Content>
+                  <p className="text-3xl font-bold text-foreground">
+                    {podStats?.workspaceCount ?? 0}
+                  </p>
+                  <p className="mt-1 text-xs text-default-400">
+                    Across this pod
+                  </p>
+                </Card.Content>
+              </Card.Root>
 
-              {/* Entities Card */}
-              <Card
-                padding={spacing[4]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                }}
-              >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
+              <Card.Root className="border border-divider">
+                <Card.Header className="flex flex-row items-start justify-between pb-1">
+                  <span className="text-small font-medium text-default-500">
                     Entities
-                  </Text>
-                  <IconDatabase size={20} color={colors.semantic.success} />
-                </Group>
-                <Text
-                  size="2rem"
-                  fw={typography.fontWeight.bold}
-                  c={colors.text.primary}
-                >
-                  {podStats?.entityCount ?? 0}
-                </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
-                  people, companies, projects...
-                </Text>
-              </Card>
+                  </span>
+                  <IconDatabase size={20} className="text-success" />
+                </Card.Header>
+                <Card.Content>
+                  <p className="text-3xl font-bold text-foreground">
+                    {podStats?.entityCount ?? 0}
+                  </p>
+                  <p className="mt-1 text-xs text-default-400">
+                    People, companies, projects…
+                  </p>
+                </Card.Content>
+              </Card.Root>
 
-              {/* Documents Card */}
-              <Card
-                padding={spacing[4]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                }}
-              >
-                <Group justify="space-between" mb={spacing[2]}>
-                  <Text
-                    size="sm"
-                    fw={typography.fontWeight.medium}
-                    c={colors.text.secondary}
-                  >
+              <Card.Root className="border border-divider">
+                <Card.Header className="flex flex-row items-start justify-between pb-1">
+                  <span className="text-small font-medium text-default-500">
                     Documents
-                  </Text>
-                  <IconFiles size={20} color={colors.semantic.warning} />
-                </Group>
-                <Text
-                  size="2rem"
-                  fw={typography.fontWeight.bold}
-                  c={colors.text.primary}
-                >
-                  {podStats?.documentCount ?? 0}
-                </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
-                  notes, docs, pages
-                </Text>
-              </Card>
+                  </span>
+                  <IconFiles size={20} className="text-warning" />
+                </Card.Header>
+                <Card.Content>
+                  <p className="text-3xl font-bold text-foreground">
+                    {podStats?.documentCount ?? 0}
+                  </p>
+                  <p className="mt-1 text-xs text-default-400">
+                    Notes, files, pages
+                  </p>
+                </Card.Content>
+              </Card.Root>
             </>
           )}
         </div>
 
-        {/* Row 2 — System Health (compact) */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
-            gap: spacing[4],
-          }}
-        >
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-4">
           {isLoadingMetrics ? (
             <>
               <MetricCardSkeleton />
@@ -305,269 +197,195 @@ export default function DashboardPage() {
             </>
           ) : (
             <>
-              {/* Health Status */}
-              <Card
-                padding={spacing[3]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                }}
-              >
-                <Group justify="space-between">
+              <Card.Root className="border border-divider">
+                <Card.Content className="flex items-center justify-between gap-3 py-4">
                   <div>
-                    <Text size="xs" c={colors.text.tertiary} mb={2}>
-                      System Health
-                    </Text>
-                    <Group gap={spacing[2]}>
-                      <Badge
-                        size="lg"
-                        variant="light"
-                        color={
-                          healthStatus === "healthy"
-                            ? "green"
-                            : healthStatus === "degraded"
-                              ? "yellow"
-                              : "red"
-                        }
-                      >
-                        {healthStyle.label}
-                      </Badge>
-                      <Text size="xs" c={colors.text.tertiary}>
-                        {metrics?.health.errorRate.toFixed(1) || "0.0"}% errors
-                      </Text>
-                    </Group>
+                    <p className="text-xs text-default-400">System health</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <Chip size="sm" variant="soft" color={healthColor}>
+                        {healthStatus === "healthy"
+                          ? "Healthy"
+                          : healthStatus === "degraded"
+                            ? "Degraded"
+                            : "Critical"}
+                      </Chip>
+                      <span className="text-xs text-default-400">
+                        {metrics?.health.errorRate.toFixed(1) ?? "0.0"}% errors
+                      </span>
+                    </div>
                   </div>
-                  <IconActivity size={20} color={healthStyle.color} />
-                </Group>
-              </Card>
+                  <IconActivity size={22} className="text-default-400" />
+                </Card.Content>
+              </Card.Root>
 
-              {/* Throughput */}
-              <Card
-                padding={spacing[3]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                }}
-              >
-                <Group justify="space-between">
+              <Card.Root className="border border-divider">
+                <Card.Content className="flex items-center justify-between gap-3 py-4">
                   <div>
-                    <Text size="xs" c={colors.text.tertiary} mb={2}>
-                      Throughput
-                    </Text>
-                    <Group gap={spacing[2]} align="baseline">
-                      <Text
-                        size="xl"
-                        fw={typography.fontWeight.bold}
-                        c={colors.text.primary}
-                      >
-                        {metrics?.throughput.eventsPerSecond.toFixed(2) ||
-                          "0.00"}
-                      </Text>
-                      <Text size="xs" c={colors.text.tertiary}>
+                    <p className="text-xs text-default-400">Throughput</p>
+                    <p className="mt-1 text-xl font-bold text-foreground">
+                      {metrics?.throughput.eventsPerSecond.toFixed(2) ?? "0.00"}
+                      <span className="ml-1 text-xs font-normal text-default-400">
                         events/sec
-                      </Text>
-                    </Group>
+                      </span>
+                    </p>
                   </div>
-                  <IconBolt size={20} color={colors.semantic.info} />
-                </Group>
-              </Card>
+                  <IconBolt size={22} className="text-primary" />
+                </Card.Content>
+              </Card.Root>
 
-              {/* Connections */}
-              <Card
-                padding={spacing[3]}
-                radius={borderRadius.lg}
-                style={{
-                  border: `1px solid ${colors.border.default}`,
-                  backgroundColor: colors.background.primary,
-                }}
-              >
-                <Group justify="space-between">
+              <Card.Root className="border border-divider">
+                <Card.Content className="flex items-center justify-between gap-3 py-4">
                   <div>
-                    <Text size="xs" c={colors.text.tertiary} mb={2}>
-                      Live Connections
-                    </Text>
-                    <Group gap={spacing[2]} align="baseline">
-                      <Text
-                        size="xl"
-                        fw={typography.fontWeight.bold}
-                        c={colors.text.primary}
-                      >
-                        {metrics?.connections.activeSSEClients ?? 0}
-                      </Text>
-                      <Text size="xs" c={colors.text.tertiary}>
+                    <p className="text-xs text-default-400">Live connections</p>
+                    <p className="mt-1 text-xl font-bold text-foreground">
+                      {metrics?.connections.activeSSEClients ?? 0}
+                      <span className="ml-1 text-xs font-normal text-default-400">
                         SSE clients
-                      </Text>
-                    </Group>
+                      </span>
+                    </p>
                   </div>
-                  <IconRobot size={20} color={colors.eventTypes.ai} />
-                </Group>
-              </Card>
+                  <IconRobot size={22} className="text-secondary" />
+                </Card.Content>
+              </Card.Root>
             </>
           )}
         </div>
 
-        {/* Row 3 — Quick Actions */}
-        <Card
-          padding={spacing[4]}
-          radius={borderRadius.lg}
-          style={{
-            border: `1px solid ${colors.border.default}`,
-            backgroundColor: colors.background.primary,
-          }}
-        >
-          <Text
-            size="lg"
-            fw={typography.fontWeight.semibold}
-            mb={spacing[4]}
-            c={colors.text.primary}
-          >
-            Quick Actions
-          </Text>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-              gap: spacing[3],
-            }}
-          >
-            <Button
-              variant="light"
-              leftSection={<IconSearch size={18} />}
-              onClick={() => {
-                setSearchType("user");
-                setSearchModalOpen(true);
-              }}
-            >
-              Investigate User
-            </Button>
-            <Button
-              variant="light"
-              leftSection={<IconTimeline size={18} />}
-              onClick={() => {
-                setSearchType("event");
-                setSearchModalOpen(true);
-              }}
-            >
-              View Event Trace
-            </Button>
-            <Button
-              variant="light"
-              leftSection={<IconUsers size={18} />}
-              onClick={() => navigate("/users")}
-            >
-              Manage Users
-            </Button>
-          </div>
-        </Card>
+        <Card.Root className="border border-divider">
+          <Card.Header>
+            <Card.Title>Quick actions</Card.Title>
+            <Card.Description>
+              Search people and events, or open API keys
+            </Card.Description>
+          </Card.Header>
+          <Card.Content>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+              <Button
+                variant="outline"
+                onPress={() => {
+                  setSearchType("user");
+                  setSearchModalOpen(true);
+                }}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <IconSearch size={18} />
+                  Find user
+                </span>
+              </Button>
+              <Button
+                variant="outline"
+                onPress={() => {
+                  setSearchType("event");
+                  setSearchModalOpen(true);
+                }}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <IconTimeline size={18} />
+                  Trace event
+                </span>
+              </Button>
+              <Button variant="outline" onPress={() => navigate("/users")}>
+                <span className="inline-flex items-center gap-2">
+                  <IconUsers size={18} />
+                  Users
+                </span>
+              </Button>
+              <Button variant="primary" onPress={() => navigate("/api-keys")}>
+                API keys
+              </Button>
+            </div>
+          </Card.Content>
+        </Card.Root>
 
-        {/* Row 4 — Live Event Stream */}
-        <Card
-          padding={spacing[4]}
-          radius={borderRadius.lg}
-          style={{
-            border: `1px solid ${colors.border.default}`,
-            backgroundColor: colors.background.primary,
-          }}
-        >
-          <Group justify="space-between" mb={spacing[4]}>
-            <Text
-              size="lg"
-              fw={typography.fontWeight.semibold}
-              c={colors.text.primary}
-            >
-              Recent Activity
-            </Text>
-            <Group gap={spacing[2]}>
-              <Text size="xs" c={colors.text.tertiary}>
-                Last refresh: {lastRefresh.toLocaleTimeString()}
-              </Text>
-              <ActionIcon
-                variant="subtle"
-                onClick={handleManualRefresh}
-                title="Refresh now"
+        <Card.Root className="border border-divider">
+          <Card.Header className="flex flex-row flex-wrap items-center justify-between gap-3">
+            <div>
+              <Card.Title>Recent activity</Card.Title>
+              <Card.Description>
+                Last refresh {lastRefresh.toLocaleTimeString()}
+              </Card.Description>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                isIconOnly
+                size="sm"
+                variant="ghost"
+                aria-label="Refresh now"
+                onPress={handleManualRefresh}
               >
                 <IconRefresh size={18} />
-              </ActionIcon>
-              <ActionIcon
-                variant="subtle"
-                onClick={() => setIsAutoRefreshEnabled(!isAutoRefreshEnabled)}
-                title={
+              </Button>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="ghost"
+                aria-label={
                   isAutoRefreshEnabled
                     ? "Pause auto-refresh"
                     : "Resume auto-refresh"
                 }
+                onPress={() => setIsAutoRefreshEnabled(!isAutoRefreshEnabled)}
               >
                 {isAutoRefreshEnabled ? (
                   <IconPlayerPause size={18} />
                 ) : (
                   <IconPlayerPlay size={18} />
                 )}
-              </ActionIcon>
-            </Group>
-          </Group>
-
-          {isLoadingEvents ? (
-            <Stack gap={spacing[2]}>
-              {Array.from({ length: 5 }).map((_, i) => (
-                <EventListItemSkeleton key={i} />
-              ))}
-            </Stack>
-          ) : !events || events.length === 0 ? (
-            <Text size="sm" c={colors.text.tertiary} ta="center" p={spacing[6]}>
-              No recent events
-            </Text>
-          ) : (
-            <VirtualizedEventList
-              events={events.map((e) => ({
-                ...e,
-                eventId: e.id,
-                eventType: e.type,
-              }))}
-              onEventClick={(eventId) =>
-                navigate(`/investigate?eventId=${encodeURIComponent(eventId)}`)
-              }
-              onPublishSimilar={(event) => {
-                const eventData = JSON.stringify(event.data || {}, null, 2);
-                navigate(
-                  `/publish?type=${encodeURIComponent(event.eventType)}&data=${encodeURIComponent(eventData)}&userId=${encodeURIComponent(event.userId || "")}`
-                );
-              }}
-            />
-          )}
-
-          {events && events.length > 0 && (
-            <Group justify="center" mt={spacing[4]}>
-              <Button
-                variant="subtle"
-                onClick={() => navigate("/events")}
-                size="sm"
-              >
-                View all events
               </Button>
-            </Group>
-          )}
-        </Card>
-      </Stack>
+            </div>
+          </Card.Header>
+          <Card.Content>
+            {isLoadingEvents ? (
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <EventListItemSkeleton key={i} />
+                ))}
+              </div>
+            ) : !events || events.length === 0 ? (
+              <p className="py-10 text-center text-small text-default-400">
+                No recent events
+              </p>
+            ) : (
+              <VirtualizedEventList
+                events={events.map((e) => ({
+                  ...e,
+                  eventId: e.id,
+                  eventType: e.type,
+                }))}
+                onEventClick={(eventId) =>
+                  navigate(`/events?eventId=${encodeURIComponent(eventId)}`)
+                }
+              />
+            )}
+
+            {events && events.length > 0 ? (
+              <div className="mt-4 flex justify-center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onPress={() => navigate("/events")}
+                >
+                  View all events
+                </Button>
+              </div>
+            ) : null}
+          </Card.Content>
+        </Card.Root>
+      </div>
 
       <SearchModal
         opened={searchModalOpen}
         onClose={() => setSearchModalOpen(false)}
         onSearch={(value) => {
           if (searchType === "user") {
-            navigate(`/investigate?userId=${encodeURIComponent(value)}`);
+            navigate(`/events?userId=${encodeURIComponent(value)}`);
           } else {
-            navigate(`/investigate?eventId=${encodeURIComponent(value)}`);
+            navigate(`/events?eventId=${encodeURIComponent(value)}`);
           }
         }}
-        title={searchType === "user" ? "Search User" : "Search Event"}
-        placeholder={
-          searchType === "user"
-            ? "Enter user ID or email..."
-            : "Enter event ID..."
-        }
-        label={searchType === "user" ? "User ID or Email" : "Event ID"}
+        title={searchType === "user" ? "Search user" : "Search event"}
+        placeholder={searchType === "user" ? "User ID or email…" : "Event ID…"}
+        label={searchType === "user" ? "User ID or email" : "Event ID"}
         type={searchType}
       />
     </div>

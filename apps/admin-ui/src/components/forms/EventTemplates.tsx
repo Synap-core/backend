@@ -1,4 +1,4 @@
-import { Button, Group, Stack, Text } from "@mantine/core";
+import { Button, Text } from "@heroui/react";
 import { IconTemplate } from "@tabler/icons-react";
 import { colors, spacing, typography } from "../../theme/tokens";
 
@@ -53,30 +53,32 @@ export default function EventTemplates({
   onSelectTemplate,
 }: EventTemplatesProps) {
   return (
-    <Stack gap={spacing[2]}>
-      <Group gap={spacing[2]}>
+    <div className="flex flex-col gap-2" style={{ gap: spacing[2] }}>
+      <div className="flex items-center gap-2">
         <IconTemplate size={16} color={colors.text.secondary} />
         <Text
-          size="sm"
-          fw={typography.fontWeight.semibold}
-          c={colors.text.primary}
+          className="text-sm font-semibold"
+          style={{
+            fontWeight: typography.fontWeight.semibold,
+            color: colors.text.primary,
+          }}
         >
           Templates
         </Text>
-      </Group>
-      <Group gap={spacing[2]}>
+      </div>
+      <div className="flex flex-wrap gap-2">
         {EVENT_TEMPLATES.map((template) => (
-          <Button
-            key={template.name}
-            variant="light"
-            size="xs"
-            onClick={() => onSelectTemplate(template)}
-            title={template.description}
-          >
-            {template.name}
-          </Button>
+          <span key={template.name} title={template.description ?? undefined}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onPress={() => onSelectTemplate(template)}
+            >
+              {template.name}
+            </Button>
+          </span>
         ))}
-      </Group>
-    </Stack>
+      </div>
+    </div>
   );
 }

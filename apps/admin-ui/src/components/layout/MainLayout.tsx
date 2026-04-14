@@ -1,20 +1,17 @@
 import { useState, useEffect } from "react";
 import { Outlet } from "react-router-dom";
-import { Drawer } from "@mantine/core";
-import { useMediaQuery } from "@mantine/hooks";
 import TopNav from "./TopNav";
 import MainNav from "./MainNav";
 import CommandPalette from "../CommandPalette";
-import { colors, breakpoints, layout } from "../../theme/tokens";
+import { layout, breakpoints } from "../../theme/tokens";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 export default function MainLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
 
-  // Default to false (desktop) to avoid flash — mobile users get a single re-render
   const isMobile = useMediaQuery(`(max-width: ${breakpoints.tablet})`, false);
 
-  // Keyboard shortcut for Command Palette (Cmd+K / Ctrl+K)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -28,85 +25,58 @@ export default function MainLayout() {
   }, []);
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        backgroundColor: colors.background.secondary,
-      }}
-    >
-      {/* Top Bar — fixed at top, full width */}
+    <div className="min-h-screen bg-[var(--pod-surface-2)]">
       <div
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 100,
-          height: layout.topBarHeight,
-        }}
+        className="fixed left-0 right-0 top-0 z-[100]"
+        style={{ height: layout.topBarHeight }}
       >
-        <TopNav onMenuOpen={() => setNavDrawerOpen(true)} />
+        <TopNav
+          onMenuOpen={() => setNavDrawerOpen(true)}
+          onCommandPaletteOpen={() => setCommandPaletteOpen(true)}
+        />
       </div>
 
-      {/* Sidebar — fixed left, below top bar (desktop only) */}
-      {!isMobile && (
+      {!isMobile ? (
         <div
+          className="fixed bottom-0 left-0 z-[99] overflow-y-auto"
           style={{
-            position: "fixed",
             top: layout.topBarHeight,
-            left: 0,
-            bottom: 0,
             width: layout.navWidth,
-            zIndex: 99,
-            overflowY: "auto",
           }}
         >
           <MainNav />
         </div>
-      )}
+      ) : null}
 
-      {/* Main Content — offset by top bar height and sidebar width */}
       <main
+        className="min-h-[calc(100vh-60px)]"
         style={{
           marginTop: layout.topBarHeight,
           marginLeft: isMobile ? 0 : layout.navWidth,
-          minHeight: `calc(100vh - ${layout.topBarHeight})`,
         }}
       >
         <Outlet />
       </main>
 
-      {/* Mobile Navigation Drawer */}
-      <Drawer
-        opened={navDrawerOpen}
-        onClose={() => setNavDrawerOpen(false)}
-        position="left"
-        size={layout.navWidth}
-        withCloseButton={false}
-        styles={{
-          body: { padding: 0 },
-        }}
-      >
-        <div
-          style={{
-            height: "56px",
-            borderBottom: `1px solid ${colors.border.default}`,
-            display: "flex",
-            alignItems: "center",
-            padding: "0 16px",
-            fontWeight: 700,
-            fontSize: "16px",
-            background: `linear-gradient(135deg, ${colors.eventTypes.created} 0%, ${colors.eventTypes.ai} 100%)`,
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-          }}
-        >
-          SYNAP Admin
-        </div>
-        <MainNav onNavigate={() => setNavDrawerOpen(false)} />
-      </Drawer>
+      {isMobile && navDrawerOpen ? (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-[200] bg-black/40"
+            aria-label="Close navigation"
+            onClick={() => setNavDrawerOpen(false)}
+          />
+          <div className="fixed bottom-0 left-0 top-[60px] z-[201] w-[min(280px,90vw)] overflow-y-auto border-r border-divider bg-background shadow-lg">
+            <div className="border-b border-divider px-4 py-3">
+              <span className="bg-gradient-to-br from-[var(--pod-accent)] to-[var(--pod-accent-2)] bg-clip-text text-base font-bold text-transparent">
+                Synap Pod
+              </span>
+            </div>
+            <MainNav onNavigate={() => setNavDrawerOpen(false)} />
+          </div>
+        </>
+      ) : null}
 
-      {/* Command Palette */}
       <CommandPalette
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}

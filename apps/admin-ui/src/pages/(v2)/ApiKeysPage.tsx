@@ -1,21 +1,5 @@
 import { useState } from "react";
-import {
-  Button,
-  Text,
-  Badge,
-  Modal,
-  TextInput,
-  MultiSelect,
-  NumberInput,
-  Alert,
-  Code,
-  Table,
-  ActionIcon,
-  Tooltip,
-  Group,
-  Stack,
-  Loader,
-} from "@mantine/core";
+import { Button, Card, Chip } from "@heroui/react";
 import {
   IconKey,
   IconPlus,
@@ -29,7 +13,7 @@ import {
   showSuccessNotification,
   showErrorNotification,
 } from "../../lib/notifications";
-import { colors, spacing, typography } from "../../theme/tokens";
+import { spacing, typography } from "../../theme/tokens";
 
 const HUB_SCOPES = [
   { value: "hub-protocol.read", label: "Hub: Read", group: "Hub" },
@@ -40,46 +24,80 @@ const HUB_SCOPES = [
   { value: "mcp.connect", label: "MCP: Connect", group: "MCP" },
 ];
 
+/** Option A: session-created user keys — presets map to scopes external tools need. */
+const INTEGRATION_PRESETS: {
+  id: string;
+  label: string;
+  description: string;
+  keyName: string;
+  scopes: string[];
+}[] = [
+  {
+    id: "raycast",
+    label: "Raycast / launcher",
+    description: "Hub read/write for quick actions against your pod",
+    keyName: "Raycast",
+    scopes: ["hub-protocol.read", "hub-protocol.write", "data.read"],
+  },
+  {
+    id: "cli",
+    label: "CLI / scripts",
+    description: "Automation with Hub + data read/write",
+    keyName: "CLI",
+    scopes: [
+      "hub-protocol.read",
+      "hub-protocol.write",
+      "data.read",
+      "data.write",
+    ],
+  },
+  {
+    id: "openclaw",
+    label: "OpenClaw / agents",
+    description: "MCP + Hub for tool-using agents",
+    keyName: "OpenClaw",
+    scopes: [
+      "hub-protocol.read",
+      "hub-protocol.write",
+      "mcp.connect",
+      "data.read",
+    ],
+  },
+];
+
 function KeyPrefix({ prefix }: { prefix: string }) {
   return (
-    <Code
-      style={{
-        fontFamily: typography.fontFamily.mono,
-        fontSize: typography.fontSize.xs,
-        color: colors.text.secondary,
-      }}
-    >
+    <code className="rounded bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
       {prefix}••••
-    </Code>
+    </code>
   );
 }
 
 function ScopeBadges({ scopes }: { scopes: string[] }) {
   return (
-    <Group gap={4}>
+    <div className="flex flex-wrap gap-1">
       {scopes.map((s) => (
-        <Badge key={s} size="xs" variant="light" color="violet">
+        <Chip key={s} size="sm" variant="soft" color="accent">
           {s}
-        </Badge>
+        </Chip>
       ))}
-    </Group>
+    </div>
   );
 }
 
-function SectionHeader({ title, color }: { title: string; color: string }) {
+function SectionHeader({
+  title,
+  className,
+}: {
+  title: string;
+  className?: string;
+}) {
   return (
-    <div
-      style={{
-        fontSize: typography.fontSize.sm,
-        fontWeight: typography.fontWeight.semibold,
-        color,
-        marginBottom: spacing[3],
-        paddingBottom: spacing[2],
-        borderBottom: `2px solid ${color}30`,
-      }}
+    <h2
+      className={`mb-3 border-b border-divider pb-2 text-small font-semibold uppercase tracking-wide text-default-500 ${className ?? ""}`}
     >
       {title}
-    </div>
+    </h2>
   );
 }
 
@@ -88,7 +106,7 @@ export default function ApiKeysPage() {
   const [newKey, setNewKey] = useState<string | null>(null);
   const [keyName, setKeyName] = useState("");
   const [scopes, setScopes] = useState<string[]>([]);
-  const [expiresInDays, setExpiresInDays] = useState<number | string>("");
+  const [expiresInDays, setExpiresInDays] = useState("");
 
   const {
     data: myKeys,
@@ -126,7 +144,7 @@ export default function ApiKeysPage() {
       refetchMy();
       refetchSystem();
       showSuccessNotification({
-        message: "Key rotated — get new key from the response",
+        message: "Key rotated — new key is shown once in the response",
       });
     },
     onError: (err) => showErrorNotification({ message: err.message }),
@@ -166,253 +184,374 @@ export default function ApiKeysPage() {
 
   const isLoading = myKeysLoading || systemKeysLoading;
 
-  function KeyRow({
-    k,
-  }: {
-    k: NonNullable<typeof allKeys>[number];
-    accent: string;
-  }) {
-    return (
-      <Table.Tr key={k.id}>
-        <Table.Td>
-          <Text size="sm" fw={500}>
-            {k.keyName}
-          </Text>
-        </Table.Td>
-        <Table.Td>
-          <KeyPrefix prefix={k.keyPrefix} />
-        </Table.Td>
-        <Table.Td>
-          <ScopeBadges scopes={k.scope} />
-        </Table.Td>
-        <Table.Td>
-          <Text size="sm" c="dimmed">
-            {k.usageCount}
-          </Text>
-        </Table.Td>
-        <Table.Td>
-          <Text size="sm" c="dimmed">
-            {formatDate(k.lastUsedAt)}
-          </Text>
-        </Table.Td>
-        <Table.Td>
-          {k.isActive ? (
-            <Badge size="xs" color="green">
-              Active
-            </Badge>
-          ) : (
-            <Badge size="xs" color="red">
-              Revoked
-            </Badge>
-          )}
-        </Table.Td>
-        <Table.Td>
-          <Group gap={4}>
-            {k.isActive && (
-              <>
-                <Tooltip label="Rotate key">
-                  <ActionIcon
-                    size="sm"
-                    variant="subtle"
-                    color="blue"
-                    loading={rotateMutation.isPending}
-                    onClick={() => rotateMutation.mutate({ keyId: k.id })}
-                  >
-                    <IconRefresh size={14} />
-                  </ActionIcon>
-                </Tooltip>
-                <Tooltip label="Revoke key">
-                  <ActionIcon
-                    size="sm"
-                    variant="subtle"
-                    color="red"
-                    loading={revokeMutation.isPending}
-                    onClick={() => revokeMutation.mutate({ keyId: k.id })}
-                  >
-                    <IconTrash size={14} />
-                  </ActionIcon>
-                </Tooltip>
-              </>
-            )}
-          </Group>
-        </Table.Td>
-      </Table.Tr>
-    );
+  function applyPreset(preset: (typeof INTEGRATION_PRESETS)[number]) {
+    setKeyName(preset.keyName);
+    setScopes([...preset.scopes]);
   }
 
   return (
-    <div style={{ padding: spacing[6] }}>
-      {/* Header */}
-      <Group justify="space-between" mb={spacing[6]}>
+    <div className="p-8" style={{ padding: spacing[8] }}>
+      <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
         <div>
-          <Group gap="sm" mb={spacing[1]}>
-            <IconKey size={22} color={colors.eventTypes.created} />
-            <Text size="xl" fw={700}>
-              API Keys
-            </Text>
-          </Group>
-          <Text size="sm" c="dimmed">
-            Manage authentication keys for Hub Protocol, Data, and MCP access.
-          </Text>
+          <div className="mb-1 flex items-center gap-2">
+            <IconKey size={22} className="text-secondary" />
+            <h1 className="text-2xl font-bold text-foreground">API keys</h1>
+          </div>
+          <p className="max-w-xl text-small text-default-500">
+            Create keys while signed in to this pod (Kratos session). They are
+            user-scoped — use presets for common integrations, then refine
+            scopes as needed.
+          </p>
         </div>
         <Button
-          leftSection={<IconPlus size={16} />}
-          onClick={() => setCreateOpen(true)}
-          color="violet"
+          variant="primary"
+          onPress={() => setCreateOpen(true)}
+          className="shrink-0"
         >
-          Create Key
+          <span className="inline-flex items-center gap-2">
+            <IconPlus size={16} />
+            Create key
+          </span>
         </Button>
-      </Group>
+      </div>
+
+      <Card.Root className="mb-8 border border-divider">
+        <Card.Header>
+          <Card.Title>Quick presets</Card.Title>
+          <Card.Description>
+            Same keys as you would mint from integrations — no separate agent
+            provisioning endpoint required (Option A).
+          </Card.Description>
+        </Card.Header>
+        <Card.Content className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+          {INTEGRATION_PRESETS.map((p) => (
+            <Button
+              key={p.id}
+              variant="outline"
+              className="h-auto min-h-14 flex-col items-start gap-1 py-3 text-left"
+              onPress={() => {
+                applyPreset(p);
+                setCreateOpen(true);
+              }}
+            >
+              <span className="font-semibold">{p.label}</span>
+              <span className="max-w-xs text-xs font-normal text-default-500">
+                {p.description}
+              </span>
+            </Button>
+          ))}
+        </Card.Content>
+      </Card.Root>
 
       {isLoading ? (
-        <Loader />
+        <div className="flex justify-center py-16 text-default-400">
+          Loading…
+        </div>
       ) : (
-        <Stack gap={spacing[8]}>
-          {/* Hub Protocol Keys */}
+        <div className="flex flex-col gap-10">
           {hubKeys.length > 0 && (
             <div>
-              <SectionHeader
-                title="Hub Protocol Keys"
-                color={colors.semantic.warning}
-              />
-              <Table striped highlightOnHover>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Name</Table.Th>
-                    <Table.Th>Prefix</Table.Th>
-                    <Table.Th>Scopes</Table.Th>
-                    <Table.Th>Usage</Table.Th>
-                    <Table.Th>Last Used</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                    <Table.Th>Actions</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {hubKeys.map((k) => (
-                    <KeyRow key={k.id} k={k} accent={colors.semantic.warning} />
-                  ))}
-                </Table.Tbody>
-              </Table>
+              <SectionHeader title="Hub protocol keys" />
+              <div className="overflow-x-auto rounded-large border border-divider">
+                <table className="w-full min-w-[720px] text-left text-small">
+                  <thead className="border-b border-divider bg-default-100 text-xs uppercase text-default-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Name</th>
+                      <th className="px-3 py-2 font-medium">Prefix</th>
+                      <th className="px-3 py-2 font-medium">Scopes</th>
+                      <th className="px-3 py-2 font-medium">Usage</th>
+                      <th className="px-3 py-2 font-medium">Last used</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                      <th className="px-3 py-2 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hubKeys.map((k) => (
+                      <tr
+                        key={k.id}
+                        className="border-b border-divider last:border-0"
+                      >
+                        <td className="px-3 py-2 font-medium">{k.keyName}</td>
+                        <td className="px-3 py-2">
+                          <KeyPrefix prefix={k.keyPrefix} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <ScopeBadges scopes={k.scope} />
+                        </td>
+                        <td className="px-3 py-2 text-default-500">
+                          {k.usageCount}
+                        </td>
+                        <td className="px-3 py-2 text-default-500">
+                          {formatDate(k.lastUsedAt)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <Chip
+                            size="sm"
+                            variant="soft"
+                            color={k.isActive ? "success" : "danger"}
+                          >
+                            {k.isActive ? "Active" : "Revoked"}
+                          </Chip>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex gap-1">
+                            {k.isActive ? (
+                              <>
+                                <Button
+                                  isIconOnly
+                                  size="sm"
+                                  variant="ghost"
+                                  aria-label="Rotate key"
+                                  isDisabled={rotateMutation.isPending}
+                                  onPress={() =>
+                                    rotateMutation.mutate({ keyId: k.id })
+                                  }
+                                >
+                                  <IconRefresh size={14} />
+                                </Button>
+                                <Button
+                                  isIconOnly
+                                  size="sm"
+                                  variant="ghost"
+                                  aria-label="Revoke key"
+                                  isDisabled={revokeMutation.isPending}
+                                  onPress={() =>
+                                    revokeMutation.mutate({ keyId: k.id })
+                                  }
+                                >
+                                  <IconTrash size={14} />
+                                </Button>
+                              </>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
-          {/* User Keys */}
           {userKeys.length > 0 && (
             <div>
-              <SectionHeader title="User Keys" color={colors.semantic.info} />
-              <Table striped highlightOnHover>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Name</Table.Th>
-                    <Table.Th>Prefix</Table.Th>
-                    <Table.Th>Scopes</Table.Th>
-                    <Table.Th>Usage</Table.Th>
-                    <Table.Th>Last Used</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                    <Table.Th>Actions</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {userKeys.map((k) => (
-                    <KeyRow key={k.id} k={k} accent={colors.semantic.info} />
-                  ))}
-                </Table.Tbody>
-              </Table>
+              <SectionHeader title="Other keys" />
+              <div className="overflow-x-auto rounded-large border border-divider">
+                <table className="w-full min-w-[720px] text-left text-small">
+                  <thead className="border-b border-divider bg-default-100 text-xs uppercase text-default-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Name</th>
+                      <th className="px-3 py-2 font-medium">Prefix</th>
+                      <th className="px-3 py-2 font-medium">Scopes</th>
+                      <th className="px-3 py-2 font-medium">Usage</th>
+                      <th className="px-3 py-2 font-medium">Last used</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                      <th className="px-3 py-2 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {userKeys.map((k) => (
+                      <tr
+                        key={k.id}
+                        className="border-b border-divider last:border-0"
+                      >
+                        <td className="px-3 py-2 font-medium">{k.keyName}</td>
+                        <td className="px-3 py-2">
+                          <KeyPrefix prefix={k.keyPrefix} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <ScopeBadges scopes={k.scope} />
+                        </td>
+                        <td className="px-3 py-2 text-default-500">
+                          {k.usageCount}
+                        </td>
+                        <td className="px-3 py-2 text-default-500">
+                          {formatDate(k.lastUsedAt)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <Chip
+                            size="sm"
+                            variant="soft"
+                            color={k.isActive ? "success" : "danger"}
+                          >
+                            {k.isActive ? "Active" : "Revoked"}
+                          </Chip>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex gap-1">
+                            {k.isActive ? (
+                              <>
+                                <Button
+                                  isIconOnly
+                                  size="sm"
+                                  variant="ghost"
+                                  aria-label="Rotate key"
+                                  isDisabled={rotateMutation.isPending}
+                                  onPress={() =>
+                                    rotateMutation.mutate({ keyId: k.id })
+                                  }
+                                >
+                                  <IconRefresh size={14} />
+                                </Button>
+                                <Button
+                                  isIconOnly
+                                  size="sm"
+                                  variant="ghost"
+                                  aria-label="Revoke key"
+                                  isDisabled={revokeMutation.isPending}
+                                  onPress={() =>
+                                    revokeMutation.mutate({ keyId: k.id })
+                                  }
+                                >
+                                  <IconTrash size={14} />
+                                </Button>
+                              </>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
           {hubKeys.length === 0 && userKeys.length === 0 && (
-            <Text c="dimmed" ta="center" py={spacing[10]}>
-              No API keys found. Create your first key to get started.
-            </Text>
+            <p className="py-16 text-center text-default-400">
+              No API keys yet. Use a preset or create a custom key.
+            </p>
           )}
-        </Stack>
+        </div>
       )}
 
-      {/* Create Key Modal */}
-      <Modal
-        opened={createOpen}
-        onClose={handleCloseCreate}
-        title={
-          <Text fw={600} size="lg">
-            Create API Key
-          </Text>
-        }
-        size="md"
-      >
-        {newKey ? (
-          <Stack gap={spacing[4]}>
-            <Alert
-              icon={<IconAlertCircle size={16} />}
-              color="yellow"
-              title="Save this key now"
-            >
-              This key will only be shown once. Copy it before closing.
-            </Alert>
-            <Code
-              block
-              style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: typography.fontSize.sm,
-                padding: spacing[4],
-                backgroundColor: `${colors.semantic.warning}10`,
-                border: `1px solid ${colors.semantic.warning}40`,
-                color: colors.semantic.warning,
-                wordBreak: "break-all",
-              }}
-            >
-              {newKey}
-            </Code>
-            <Button
-              leftSection={<IconCopy size={16} />}
-              variant="outline"
-              onClick={() => {
-                navigator.clipboard.writeText(newKey);
-                showSuccessNotification({ message: "Key copied to clipboard" });
-              }}
-            >
-              Copy Key
-            </Button>
-            <Button onClick={handleCloseCreate} fullWidth>
-              Done
-            </Button>
-          </Stack>
-        ) : (
-          <Stack gap={spacing[4]}>
-            <TextInput
-              label="Key Name"
-              placeholder="e.g. Production Hub Key"
-              value={keyName}
-              onChange={(e) => setKeyName(e.currentTarget.value)}
-              required
-            />
-            <MultiSelect
-              label="Scopes"
-              placeholder="Select permissions"
-              data={HUB_SCOPES}
-              value={scopes}
-              onChange={setScopes}
-              required
-            />
-            <NumberInput
-              label="Expires in days (optional)"
-              placeholder="Leave blank for no expiry"
-              value={expiresInDays}
-              onChange={setExpiresInDays}
-              min={1}
-              max={3650}
-            />
-            <Button
-              onClick={handleCreate}
-              loading={createMutation.isPending}
-              disabled={!keyName.trim() || scopes.length === 0}
-              fullWidth
-            >
-              Create Key
-            </Button>
-          </Stack>
-        )}
-      </Modal>
+      {createOpen ? (
+        <div
+          className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 p-4"
+          role="presentation"
+          onClick={handleCloseCreate}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-divider bg-content1 p-0 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-divider px-5 py-4">
+              <h2 className="text-lg font-semibold">Create API key</h2>
+            </div>
+            <div className="px-5 py-4">
+              {newKey ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
+                    <IconAlertCircle size={18} className="shrink-0" />
+                    <div>
+                      <p className="font-semibold">Save this key now</p>
+                      <p className="text-xs opacity-90">
+                        This key is shown only once. Copy it before you close.
+                      </p>
+                    </div>
+                  </div>
+                  <pre
+                    className="overflow-x-auto rounded-medium border border-warning-200 bg-warning-50 p-4 font-mono text-sm text-warning-700"
+                    style={{ fontFamily: typography.fontFamily.mono }}
+                  >
+                    {newKey}
+                  </pre>
+                  <Button
+                    variant="outline"
+                    onPress={() => {
+                      void navigator.clipboard.writeText(newKey);
+                      showSuccessNotification({
+                        message: "Key copied to clipboard",
+                      });
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <IconCopy size={16} />
+                      Copy key
+                    </span>
+                  </Button>
+                  <Button variant="primary" onPress={handleCloseCreate}>
+                    Done
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="mb-1 block text-small font-medium">
+                      Key name
+                    </label>
+                    <input
+                      className="w-full rounded-medium border border-divider bg-default-100 px-3 py-2 text-small outline-none focus:border-primary focus:ring-2"
+                      value={keyName}
+                      onChange={(e) => setKeyName(e.target.value)}
+                      placeholder="e.g. Production Hub Key"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-small font-medium">
+                      Scopes
+                    </label>
+                    <input type="hidden" value={scopes.join(",")} readOnly />
+                    <div className="max-h-48 space-y-1 overflow-y-auto rounded-medium border border-divider p-2">
+                      {HUB_SCOPES.map((s) => (
+                        <label
+                          key={s.value}
+                          className="flex cursor-pointer items-center gap-2 rounded-small px-2 py-1.5 hover:bg-default-100"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={scopes.includes(s.value)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setScopes([...scopes, s.value]);
+                              } else {
+                                setScopes(scopes.filter((x) => x !== s.value));
+                              }
+                            }}
+                          />
+                          <span className="text-small">{s.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-small font-medium">
+                      Expires in days (optional)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={3650}
+                      className="w-full rounded-medium border border-divider bg-default-100 px-3 py-2 text-small"
+                      value={expiresInDays}
+                      onChange={(e) => setExpiresInDays(e.target.value)}
+                      placeholder="No expiry"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="ghost" onPress={handleCloseCreate}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="primary"
+                      isDisabled={
+                        !keyName.trim() ||
+                        scopes.length === 0 ||
+                        createMutation.isPending
+                      }
+                      onPress={handleCreate}
+                    >
+                      {createMutation.isPending ? "Creating…" : "Create key"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,23 +1,17 @@
-import { NavLink, Select, Text } from "@mantine/core";
 import { Link, useLocation } from "react-router-dom";
 import {
   IconHome,
   IconSearch,
-  IconFlask,
-  IconDatabase,
-  IconWebhook,
-  IconFolder,
   IconKey,
   IconTerminal2,
   IconCheckbox,
   IconUsers,
   IconBuildingCommunity,
-  IconTopologyStarRing3,
   IconPlug,
-  IconBrain,
 } from "@tabler/icons-react";
+import { cn } from "@heroui/react";
 import { useWorkspace } from "../../lib/workspace";
-import { colors, layout, spacing, typography } from "../../theme/tokens";
+import { layout, spacing } from "../../theme/tokens";
 
 interface MainNavProps {
   onNavigate?: () => void;
@@ -26,29 +20,38 @@ interface MainNavProps {
 interface NavItem {
   path: string;
   label: string;
-  icon: React.ComponentType<{ size?: number }>;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
 }
 
 interface NavSection {
   label: string;
+  hint?: string;
   items: NavItem[];
 }
 
 const sections: NavSection[] = [
   {
-    label: "Data Pod",
+    label: "Home",
+    hint: "Your server at a glance",
+    items: [{ path: "/", label: "Overview", icon: IconHome }],
+  },
+  {
+    label: "Operate",
+    hint: "Pod-wide: people, spaces, and audit trail",
     items: [
-      { path: "/", label: "Dashboard", icon: IconHome },
       { path: "/users", label: "Users", icon: IconUsers },
       { path: "/workspaces", label: "Workspaces", icon: IconBuildingCommunity },
-      { path: "/data", label: "Database", icon: IconDatabase },
-      { path: "/files", label: "Files", icon: IconFolder },
       { path: "/events", label: "Events", icon: IconSearch },
-      { path: "/api-keys", label: "API Keys", icon: IconKey },
     ],
   },
   {
+    label: "Connect",
+    hint: "API keys and integrations",
+    items: [{ path: "/api-keys", label: "API keys", icon: IconKey }],
+  },
+  {
     label: "Workspace",
+    hint: "Scoped to the workspace below — full editing lives in Synap Browser.",
     items: [
       { path: "/workspace", label: "Overview", icon: IconHome },
       { path: "/proposals", label: "Proposals", icon: IconCheckbox },
@@ -56,39 +59,51 @@ const sections: NavSection[] = [
       { path: "/services", label: "Services", icon: IconPlug },
     ],
   },
-  {
-    label: "Developer",
-    items: [
-      { path: "/testing", label: "Testing", icon: IconFlask },
-      { path: "/automation", label: "Webhooks", icon: IconWebhook },
-      { path: "/memory", label: "Memory", icon: IconBrain },
-      { path: "/flow", label: "Architecture", icon: IconTopologyStarRing3 },
-    ],
-  },
 ];
+
+function NavLinkRow({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  onNavigate?: () => void;
+}) {
+  const Icon = item.icon;
+  return (
+    <Link
+      to={item.path}
+      onClick={onNavigate}
+      className={cn(
+        "flex items-center gap-2 rounded-medium px-3 py-2 text-small transition-colors",
+        active
+          ? "bg-primary/15 font-semibold text-primary"
+          : "text-default-600 hover:bg-default-100"
+      )}
+      aria-current={active ? "page" : undefined}
+    >
+      <Icon size={18} className="shrink-0 opacity-80" />
+      {item.label}
+    </Link>
+  );
+}
 
 export default function MainNav({ onNavigate }: MainNavProps) {
   const location = useLocation();
-  const {
-    workspaceId,
-    workspaceName,
-    workspaceRole,
-    workspaces,
-    setWorkspace,
-  } = useWorkspace();
+  const { workspaceId, workspaceRole, workspaces, setWorkspace } =
+    useWorkspace();
 
-  // Only show Data Pod section for owner/admin roles
   const isAdmin = workspaceRole === "owner" || workspaceRole === "admin";
   const visibleSections = isAdmin
     ? sections
-    : sections.filter((s) => s.label !== "Data Pod");
+    : sections.filter((s) => s.label !== "Operate" && s.label !== "Connect");
 
   const isActive = (path: string) => {
     if (path === "/") {
       return location.pathname === "/";
     }
     if (path === "/workspaces") {
-      // Match /workspaces and /workspaces/:id but not /workspace
       return (
         location.pathname === "/workspaces" ||
         location.pathname.startsWith("/workspaces/")
@@ -104,110 +119,75 @@ export default function MainNav({ onNavigate }: MainNavProps) {
 
   return (
     <nav
-      style={{
-        width: layout.navWidth,
-        height: "100%",
-        borderRight: `1px solid ${colors.border.default}`,
-        backgroundColor: colors.background.primary,
-        padding: `${spacing[3]} ${spacing[2]}`,
-      }}
+      className="h-full overflow-y-auto border-r border-divider bg-background p-3"
+      style={{ width: layout.navWidth }}
       aria-label="Main navigation"
     >
       {visibleSections.map((section, sectionIndex) => (
-        <div key={section.label} style={{ marginBottom: spacing[4] }}>
-          {/* Workspace selector — appears above the Workspace section */}
-          {section.label === "Workspace" && workspaces.length > 0 && (
-            <div style={{ marginBottom: spacing[3] }}>
-              <Text
-                size="xs"
-                style={{
-                  color: colors.text.tertiary,
-                  padding: `0 ${spacing[3]}`,
-                  marginBottom: spacing[1],
-                  fontFamily: typography.fontFamily.sans,
-                }}
+        <div
+          key={section.label}
+          className="mb-4"
+          style={{ marginBottom: spacing[4] }}
+        >
+          {section.label === "Workspace" && workspaces.length > 0 ? (
+            <div className="mb-3 px-1">
+              <label
+                className="mb-1 block text-xs font-medium uppercase tracking-wide text-default-400"
+                htmlFor="admin-workspace-select"
               >
                 Active workspace
-              </Text>
-              <Select
-                size="xs"
-                value={workspaceId}
-                onChange={(v) => v && setWorkspace(v)}
-                data={workspaces.map((w) => ({ value: w.id, label: w.name }))}
-                placeholder={workspaceName ?? "Select workspace"}
-                styles={{
-                  input: {
-                    fontSize: typography.fontSize.xs,
-                    fontFamily: typography.fontFamily.sans,
-                    borderColor: colors.border.default,
-                    backgroundColor: colors.background.secondary,
-                  },
+              </label>
+              <select
+                id="admin-workspace-select"
+                className="w-full rounded-medium border border-divider bg-default-100 px-2 py-1.5 text-xs text-default-700 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                value={workspaceId ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v) setWorkspace(v);
                 }}
-              />
+              >
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+              {section.hint ? (
+                <p className="mt-2 text-[11px] leading-snug text-default-400">
+                  {section.hint}
+                </p>
+              ) : null}
             </div>
-          )}
+          ) : null}
 
-          {/* Section label */}
-          <div
-            style={{
-              fontSize: typography.fontSize.xs,
-              fontWeight: typography.fontWeight.semibold,
-              color: colors.text.tertiary,
-              textTransform: "uppercase",
-              letterSpacing: "0.07em",
-              padding: `${spacing[1]} ${spacing[3]}`,
-              marginBottom: spacing[1],
-              marginTop: sectionIndex > 0 ? spacing[2] : 0,
-            }}
-          >
-            {section.label}
+          <div className="mb-1 px-2">
+            <div className="text-xs font-semibold uppercase tracking-wider text-default-400">
+              {section.label}
+            </div>
+            {section.hint && section.label !== "Workspace" ? (
+              <p className="mt-1 text-[11px] leading-snug text-default-400">
+                {section.hint}
+              </p>
+            ) : null}
           </div>
 
-          {/* Section items */}
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: spacing[1],
-            }}
-          >
-            {section.items.map((item) => {
-              const Icon = item.icon;
-              const active = isActive(item.path);
-
-              return (
-                <NavLink
-                  key={item.path}
-                  component={Link}
-                  to={item.path}
-                  label={item.label}
-                  leftSection={<Icon size={18} />}
-                  active={active}
-                  onClick={onNavigate}
-                  style={{
-                    borderRadius: "6px",
-                    fontFamily: typography.fontFamily.sans,
-                    fontSize: typography.fontSize.sm,
-                    fontWeight: active
-                      ? typography.fontWeight.semibold
-                      : typography.fontWeight.normal,
-                  }}
-                  aria-label={item.label}
-                />
-              );
-            })}
+          <div className="flex flex-col gap-0.5">
+            {section.items.map((item) => (
+              <NavLinkRow
+                key={item.path}
+                item={item}
+                active={isActive(item.path)}
+                onNavigate={onNavigate}
+              />
+            ))}
           </div>
 
-          {/* Divider between sections */}
-          {sectionIndex < visibleSections.length - 1 && (
+          {sectionIndex < visibleSections.length - 1 ? (
             <div
-              style={{
-                height: "1px",
-                backgroundColor: colors.border.light,
-                margin: `${spacing[3]} ${spacing[2]} 0`,
-              }}
+              className="mx-2 mt-3 h-px bg-divider"
+              style={{ marginTop: spacing[3] }}
             />
-          )}
+          ) : null}
         </div>
       ))}
     </nav>

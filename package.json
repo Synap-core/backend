@@ -26,7 +26,8 @@
     "format:fix": "prettier --write .",
     "run-ci": "run-s lint typecheck test build",
     "prepare": "husky",
-    "postinstall": "husky || true"
+    "postinstall": "husky || true",
+    "lint:staged": "lint-staged"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [

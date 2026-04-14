@@ -1,17 +1,8 @@
 /**
- * Notification System
- *
- * Centralized notification utilities using Mantine's notification system.
- * Provides type-safe wrappers for showing success, error, warning, and info notifications.
+ * Notifications via Hero UI toast (session-scoped, non-blocking).
  */
 
-import { notifications } from "@mantine/notifications";
-import {
-  IconCheck,
-  IconX,
-  IconAlertCircle,
-  IconInfoCircle,
-} from "@tabler/icons-react";
+import { toast } from "@heroui/react";
 
 interface NotificationOptions {
   title?: string;
@@ -20,62 +11,42 @@ interface NotificationOptions {
   autoClose?: boolean;
 }
 
-/**
- * Show a success notification
- */
+function timeoutMs(
+  options: NotificationOptions,
+  fallback: number
+): number | undefined {
+  if (options.autoClose === false) return 0;
+  return options.duration ?? fallback;
+}
+
 export function showSuccessNotification(options: NotificationOptions): void {
-  notifications.show({
-    title: options.title || "Success",
-    message: options.message,
-    color: "green",
-    icon: <IconCheck size={18} />,
-    autoClose: options.duration ?? 4000,
+  toast.success(options.title ?? "Success", {
+    description: options.message,
+    timeout: timeoutMs(options, 4000),
   });
 }
 
-/**
- * Show an error notification
- */
 export function showErrorNotification(options: NotificationOptions): void {
-  notifications.show({
-    title: options.title || "Error",
-    message: options.message,
-    color: "red",
-    icon: <IconX size={18} />,
-    autoClose: options.duration ?? 6000,
+  toast.danger(options.title ?? "Error", {
+    description: options.message,
+    timeout: timeoutMs(options, 6000),
   });
 }
 
-/**
- * Show a warning notification
- */
 export function showWarningNotification(options: NotificationOptions): void {
-  notifications.show({
-    title: options.title || "Warning",
-    message: options.message,
-    color: "yellow",
-    icon: <IconAlertCircle size={18} />,
-    autoClose: options.duration ?? 5000,
+  toast.warning(options.title ?? "Warning", {
+    description: options.message,
+    timeout: timeoutMs(options, 5000),
   });
 }
 
-/**
- * Show an info notification
- */
 export function showInfoNotification(options: NotificationOptions): void {
-  notifications.show({
-    title: options.title || "Info",
-    message: options.message,
-    color: "blue",
-    icon: <IconInfoCircle size={18} />,
-    autoClose: options.duration ?? 4000,
+  toast.info(options.title ?? "Info", {
+    description: options.message,
+    timeout: timeoutMs(options, 4000),
   });
 }
 
-/**
- * Show a notification for API errors
- * Extracts error message from tRPC/API errors
- */
 export function showApiErrorNotification(
   error: unknown,
   options?: Omit<NotificationOptions, "message">
@@ -89,7 +60,7 @@ export function showApiErrorNotification(
     error !== null &&
     "message" in error
   ) {
-    errorMessage = String(error.message);
+    errorMessage = String((error as { message: unknown }).message);
   } else if (typeof error === "string") {
     errorMessage = error;
   }

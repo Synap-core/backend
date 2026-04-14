@@ -1,1 +1,3 @@
+#!/usr/bin/env sh
+cd "$(dirname "$0")/.." || exit 1
 pnpm exec lint-staged --no-stash

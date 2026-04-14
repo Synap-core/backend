@@ -79,6 +79,13 @@ services:
       ORY_HYDRA_SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
       REALTIME_URL: http://realtime:4001
       HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}
+      # RSS Feed Provider Configuration
+      RSS_PROVIDER_TYPE: ${RSS_PROVIDER_TYPE:-cpproxy}
+      RSSHUB_URL: ${RSSHUB_URL:-http://rsshub:1200}
+      RSSHUB_ACCESS_KEY: ${RSSHUB_ACCESS_KEY:-}
+      CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
+      RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
+      RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
     depends_on:
       postgres:
         condition: service_healthy
@@ -460,6 +467,59 @@ services:
       start_period: 10s
 
   # ============================================================================
+  # RSSHUB — Optional RSS aggregation service
+  # Start with: docker compose --profile rsshub up -d
+  # ============================================================================
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: synap-rsshub
+    restart: unless-stopped
+    ports:
+      - "1200:1200"
+    environment:
+      - NODE_ENV=production
+      - CACHE_TYPE=redis
+      - REDIS_URL=redis://redis:6379
+      - PUPPETEER_WS_ENDPOINT=ws://browserless:3000
+      - ACCESS_KEY=${RSSHUB_ACCESS_KEY:-}
+    depends_on:
+      - redis
+      - browserless
+    profiles:
+      - rsshub
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:1200/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # BROWSERLESS — Chrome headless for RSSHub Puppeteer support
+  # ============================================================================
+  browserless:
+    image: browserless/chrome:latest
+    container_name: synap-browserless
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - MAX_CONCURRENT_SESSIONS=10
+      - CONNECTION_TIMEOUT=60000
+      - MAX_QUEUE_LENGTH=20
+    profiles:
+      - rsshub
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
   # MONITORING — Dozzle log viewer (optional)
   # Enable with: docker compose --profile monitoring up -d dozzle
   # ============================================================================
@@ -476,6 +536,59 @@ services:
     profiles:
       - monitoring
 
+  # ============================================================================
+  # PROMETHEUS — Metrics scraping + alerting rules
+  # Enable with: docker compose --profile monitoring up -d
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9090:9090"
+    networks:
+      - synap-net
+    restart: unless-stopped
+
+  # ============================================================================
+  # GRAFANA — Metrics dashboards
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.4.0
+    profiles: ["monitoring"]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/synap.json:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3333:3000"
+    networks:
+      - synap-net
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  # ============================================================================
+  # ALERTMANAGER — Alert routing (Slack, PagerDuty, etc.)
+  # ============================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    networks:
+      - synap-net
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
@@ -485,6 +598,8 @@ volumes:
   caddy_config:
   openclaw_config:
   openclaw_workspace:
+  prometheus-data:
+  grafana-data:
 
 networks:
   synap-net:

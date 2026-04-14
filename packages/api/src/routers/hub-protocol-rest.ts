@@ -18,7 +18,7 @@ import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
 import { ChannelType } from "@synap/database/schema";
-import type { ProactiveMessageType } from "../utils/proactive-channel-post.js";
+import type { ProactiveMessageType } from "../services/DeliveryService.js";
 import { routeSignal } from "../utils/delivery-router.js";
 import { randomUUID, randomBytes } from "crypto";
 import {
@@ -3882,7 +3882,7 @@ app.post("/channels/trigger-ai", async (c) => {
  * user's proactive FEED channel (morning briefings, insights, nudges, etc.).
  *
  * Rate-limited: max 3 messages/hour and 10 messages/24h per user+workspace.
- * Delegates to postProactiveMessage() from Phase 1 utility.
+ * Delegates to routeSignal() from delivery-router which uses DeliveryService.
  */
 app.post("/proactive/post", async (c) => {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {

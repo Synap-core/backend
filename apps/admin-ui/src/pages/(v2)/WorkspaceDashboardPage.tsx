@@ -405,7 +405,9 @@ export default function WorkspaceDashboardPage() {
                   <Table.Tr key={p.id}>
                     <Table.Td>
                       <Text size="sm" fw={500} lineClamp={1}>
-                        {p.action}
+                        {(
+                          p.request as { operation?: string } | null | undefined
+                        )?.operation ?? p.id}
                       </Text>
                     </Table.Td>
                     <Table.Td>

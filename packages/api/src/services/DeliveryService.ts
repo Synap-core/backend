@@ -10,21 +10,34 @@
  * - Circuit breaker pattern for resilience
  * - Delivery metrics tracking
  * - Dead letter queue integration
+ * - Proactive AI feed delivery with preference checking
+ * - Deduplication (one per proactiveType per day)
+ * - Event emission and Socket.IO broadcast
  */
 
-import { db, eq, and } from "@synap/database";
+import { randomUUID, createHash } from "crypto";
+import { db, eq, and, gte } from "@synap/database";
 import {
   channels,
   messages,
+  workspaces,
   ChannelType,
   ChannelStatus,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
+  type WorkspaceSettings,
+  type ProactiveAiPreferences,
+  getDefaultProactiveAiPreferences,
 } from "@synap/database/schema";
+import { eventRepository } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../notifications/NotificationService.js";
-import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import {
+  ensurePersonalChannel,
+  ensureProactiveFeedChannel,
+} from "../utils/personal-channel.js";
+import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import {
   withRetryResult,
   API_RETRY_OPTIONS,
@@ -32,6 +45,9 @@ import {
   CircuitBreaker,
   circuitBreakerRegistry,
 } from "@synap/shared-utils";
+
+// Note: emitSideEffects import removed to avoid circular dependency
+// Side effects are emitted directly via eventRepository
 
 // Note: Removed @synap/jobs import to avoid circular dependency
 // Retry queue and dead letter queue functionality moved to separate worker
@@ -41,11 +57,54 @@ const logger = createLogger({ module: "delivery-service" });
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type DeliverySurface =
-  | { type: "feed"; feedChannelId?: string }
+  | {
+      type: "feed";
+      feedChannelId?: string;
+      proactiveOptions?: FeedDeliveryOptions["deliveryOptions"];
+    }
   | { type: "chat"; channelId?: string }
   | { type: "notification"; notificationType: string }
   | { type: "external"; platform: string; externalChannelId?: string }
   | { type: "email" };
+
+/**
+ * Proactive message types for feed delivery
+ */
+export type ProactiveMessageType =
+  | "morning_briefing"
+  | "weekly_digest"
+  | "health_check"
+  | "nudge"
+  | "insight"
+  | "suggestion"
+  | "alert";
+
+/**
+ * Feed-specific delivery options
+ */
+export interface FeedDeliveryOptions {
+  userId: string;
+  workspaceId: string;
+  content: {
+    title?: string;
+    body: string;
+    metadata?: Record<string, unknown>;
+  };
+  deliveryOptions?: {
+    /** Check proactive AI settings (enabled, mutedUntil) */
+    checkPreferences?: boolean;
+    /** Deduplicate: one per proactiveType per day */
+    deduplicate?: boolean;
+    /** Proactive type for deduplication key */
+    proactiveType?: ProactiveMessageType;
+    /** Fire proactive.post.completed event */
+    emitEvents?: boolean;
+    /** Create a notification alongside the feed message */
+    createNotification?: boolean;
+    /** Notification type (if createNotification is true) */
+    notificationType?: string;
+  };
+}
 
 export interface DeliveryContent {
   title?: string;
@@ -289,6 +348,228 @@ function checkDuplicate(key: string): boolean {
   return false;
 }
 
+// ── Proactive Feed Delivery Helpers ──────────────────────────────────────────
+
+/**
+ * Read proactive AI preferences for a workspace, returning defaults if unset.
+ */
+async function getProactivePrefsForWorkspace(
+  workspaceId: string
+): Promise<ProactiveAiPreferences> {
+  const ws = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { settings: true },
+  });
+
+  const settings = (ws?.settings ?? {}) as WorkspaceSettings;
+  return settings.proactiveAi ?? getDefaultProactiveAiPreferences();
+}
+
+/**
+ * Start of today (UTC midnight) — used for deduplication window.
+ */
+function startOfTodayUTC(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+/**
+ * Check if a proactive message of the given type was already sent today.
+ */
+async function checkProactiveTypeSentToday(
+  channelId: string,
+  proactiveType: string
+): Promise<boolean> {
+  const todayStart = startOfTodayUTC();
+
+  const todayMessages = await db.query.messages.findMany({
+    where: and(
+      eq(messages.channelId, channelId),
+      eq(messages.role, MessageRole.SYSTEM),
+      gte(messages.timestamp, todayStart)
+    ),
+    columns: { metadata: true },
+  });
+
+  return todayMessages.some((m) => {
+    const meta = m.metadata as Record<string, unknown> | null;
+    return meta?.proactiveType === proactiveType;
+  });
+}
+
+/**
+ * Deliver to the proactive feed channel with full proactive AI logic:
+ * - Preference checking (enabled, mutedUntil)
+ * - Deduplication (one per proactiveType per day)
+ * - Socket.IO broadcast
+ * - Event emission
+ */
+async function deliverToProactiveFeed(
+  options: FeedDeliveryOptions
+): Promise<{ success: boolean; messageId?: string; reason?: string }> {
+  const { userId, workspaceId, content, deliveryOptions = {} } = options;
+  const {
+    checkPreferences = true,
+    deduplicate = true,
+    proactiveType = "insight",
+    emitEvents = true,
+    createNotification = false,
+    notificationType = "ai.proactive.insight",
+  } = deliveryOptions;
+
+  try {
+    // ── 1. Validate content ────────────────────────────────────────────────
+    if (!content.body || content.body.trim().length === 0) {
+      return { success: false, reason: "empty_content" };
+    }
+
+    // ── 2. Check preferences ───────────────────────────────────────────────
+    if (checkPreferences) {
+      const prefs = await getProactivePrefsForWorkspace(workspaceId);
+
+      if (!prefs.enabled) {
+        return { success: false, reason: "proactive_ai_disabled" };
+      }
+
+      // Check mutedUntil
+      if (prefs.mutedUntil) {
+        const mutedUntilDate = new Date(prefs.mutedUntil);
+        if (!isNaN(mutedUntilDate.getTime()) && mutedUntilDate > new Date()) {
+          return { success: false, reason: "muted_until_active" };
+        }
+      }
+    }
+
+    // ── 3. Ensure proactive feed channel ───────────────────────────────────
+    const channel = await ensureProactiveFeedChannel(userId, workspaceId);
+
+    // ── 4. Deduplication ───────────────────────────────────────────────────
+    if (deduplicate && proactiveType) {
+      const alreadySent = await checkProactiveTypeSentToday(
+        channel.id,
+        proactiveType
+      );
+      if (alreadySent) {
+        return { success: false, reason: "already_sent_today" };
+      }
+    }
+
+    // ── 5. Insert message ──────────────────────────────────────────────────
+    const messageId = randomUUID();
+    const messageHash = createHash("sha256")
+      .update(`${messageId}${content.body}`)
+      .digest("hex");
+
+    const messageMetadata = {
+      ...content.metadata,
+      proactiveType,
+      proactiveAi: true,
+      title: content.title,
+    };
+
+    await db.insert(messages).values({
+      id: messageId,
+      channelId: channel.id,
+      role: MessageRole.SYSTEM,
+      authorType: MessageAuthorType.BOT,
+      messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
+      content: content.body.trim(),
+      userId,
+      previousHash: "",
+      hash: messageHash,
+      metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
+    });
+
+    // ── 6. Emit real-time event ────────────────────────────────────────────
+    emitChatEvent({
+      event: "chat:message",
+      data: {
+        threadId: channel.id,
+        message: {
+          id: messageId,
+          threadId: channel.id,
+          role: MessageRole.SYSTEM,
+          authorType: MessageAuthorType.BOT,
+          content: content.body.trim(),
+          userId,
+          timestamp: new Date(),
+          previousHash: "",
+          hash: messageHash,
+          metadata: messageMetadata,
+        },
+        userId,
+      },
+      channelId: channel.id,
+      userId,
+    });
+
+    logger.info(
+      { userId, workspaceId, proactiveType, messageId },
+      "Proactive message delivered via DeliveryService"
+    );
+
+    // ── 7. Emit events ─────────────────────────────────────────────────────
+    if (emitEvents) {
+      const proactiveEventData = {
+        proactiveType,
+        workspaceId,
+        channelId: channel.id,
+        messageId,
+      };
+
+      // Fire and forget event log append
+      eventRepository
+        .append({
+          id: messageId,
+          version: "v1",
+          type: "proactive.post.completed",
+          subjectType: "proactive",
+          subjectId: messageId,
+          data: proactiveEventData,
+          userId,
+          source: "system",
+          timestamp: new Date(),
+        })
+        .catch(() => {});
+    }
+
+    // ── 8. Create notification if requested ────────────────────────────────
+    if (createNotification) {
+      await NotificationService.create({
+        type: notificationType,
+        workspaceId,
+        userId,
+        sourceType: "proactive_message",
+        sourceId: messageId,
+        data: {
+          title: content.title || "AI Insight",
+          body: content.body.substring(0, 200),
+          proactiveType,
+          ...content.metadata,
+        },
+      }).catch((err) => {
+        logger.warn(
+          { err, userId, workspaceId, messageId },
+          "Failed to create notification alongside feed message"
+        );
+      });
+    }
+
+    return { success: true, messageId };
+  } catch (err) {
+    logger.error(
+      { err, userId, workspaceId, proactiveType },
+      "Failed to deliver proactive message"
+    );
+    return {
+      success: false,
+      reason: err instanceof Error ? err.message : "unknown_error",
+    };
+  }
+}
+
 // ── Surface Handlers with Retry & Circuit Breaker ────────────────────────────
 
 // Get or create circuit breakers for each surface type
@@ -336,6 +617,33 @@ async function deliverToFeedWithRetry(
     };
   }
 
+  // Use proactive feed delivery if proactiveOptions are specified
+  if (surface.proactiveOptions) {
+    const result = await withRetryResult(async () => {
+      return await circuitBreaker.execute(async () => {
+        const feedResult = await deliverToProactiveFeed({
+          userId: request.userId,
+          workspaceId: request.workspaceId ?? "default",
+          content: {
+            title: request.content.title,
+            body: request.content.body,
+            metadata: request.content.metadata,
+          },
+          deliveryOptions: surface.proactiveOptions,
+        });
+        return feedResult.success ? feedResult.messageId : undefined;
+      });
+    }, retryOptions);
+
+    return {
+      success: result.success,
+      id: result.data,
+      error: result.error?.message,
+      retries: result.attempts,
+    };
+  }
+
+  // Use standard feed delivery for backward compatibility
   const result = await withRetryResult(async () => {
     return await circuitBreaker.execute(async () => {
       return await deliverToFeedInternal(request, surface);
@@ -728,12 +1036,67 @@ export class DeliveryService {
    * Deliver to feed surface only.
    */
   static async deliverToFeed(
-    request: Omit<DeliveryRequest, "surfaces"> & { feedChannelId?: string }
+    request: Omit<DeliveryRequest, "surfaces"> & {
+      feedChannelId?: string;
+      proactiveOptions?: FeedDeliveryOptions["deliveryOptions"];
+    }
   ): Promise<DeliveryResult> {
     return this.deliver({
       ...request,
-      surfaces: [{ type: "feed", feedChannelId: request.feedChannelId }],
+      surfaces: [
+        {
+          type: "feed",
+          feedChannelId: request.feedChannelId,
+          proactiveOptions: request.proactiveOptions,
+        },
+      ],
     });
+  }
+
+  /**
+   * Deliver to the proactive feed channel with full proactive AI support.
+   * This is the preferred method for posting proactive AI messages.
+   *
+   * @example
+   * ```typescript
+   * const result = await DeliveryService.deliverToProactiveFeed({
+   *   userId: "user-123",
+   *   workspaceId: "ws-456",
+   *   content: { title: "Morning Briefing", body: "You have 3 tasks today" },
+   *   deliveryOptions: {
+   *     proactiveType: "morning_briefing",
+   *     checkPreferences: true,
+   *     deduplicate: true,
+   *     emitEvents: true,
+   *   },
+   * });
+   * ```
+   */
+  static async deliverToProactiveFeed(
+    options: FeedDeliveryOptions
+  ): Promise<DeliveryResult> {
+    const startTime = Date.now();
+
+    const result = await deliverToProactiveFeed(options);
+
+    const duration = Date.now() - startTime;
+
+    return {
+      success: result.success,
+      deliveries: [
+        {
+          surface: "feed",
+          success: result.success,
+          id: result.messageId,
+          error: result.reason,
+          retries: 0,
+        },
+      ],
+      metrics: {
+        totalDurationMs: duration,
+        totalRetries: 0,
+      },
+    };
   }
 
   /**

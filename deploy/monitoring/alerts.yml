@@ -1,0 +1,103 @@
+groups:
+  - name: synap_pod_critical
+    interval: 30s
+    rules:
+      # Pod health
+      - alert: PodDown
+        expr: up{job="synap-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synap pod is down"
+          description: "Pod {{ $labels.instance }} has been unreachable for 1 minute."
+
+      - alert: PodHighErrorRate
+        expr: rate(http_requests_total{job="synap-backend",status=~"5.."}[5m]) / rate(http_requests_total{job="synap-backend"}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate on pod"
+          description: "Pod {{ $labels.instance }} has >5% error rate for 2 minutes."
+
+      # Hub Protocol
+      - alert: HubProtocolHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="synap-backend",path=~"/api/hub/.*"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hub Protocol P95 latency > 2s"
+          description: "Hub Protocol on {{ $labels.instance }} is slow."
+
+      # Database
+      - alert: PostgresConnectionPoolExhausted
+        expr: pg_stat_activity_count{state="active"} > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection pool near exhaustion"
+          description: "Active connections: {{ $value }}/100"
+
+      # Migration
+      - alert: MigrationFailed
+        expr: synap_migration_last_run_success == 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database migration failed on pod startup"
+          description: "Pod {{ $labels.instance }} failed its migration run."
+
+  - name: synap_cp_critical
+    interval: 30s
+    rules:
+      - alert: PodProvisioningStuck
+        expr: synap_pod_provisioning_duration_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod provisioning taking > 10 minutes"
+          description: "Pod {{ $labels.pod_id }} has been provisioning for {{ $value }}s."
+
+      - alert: WarmPoolDepleted
+        expr: synap_warm_pool_available == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Warm pool is empty"
+          description: "No warm pods available — new signups will provision from scratch."
+
+      - alert: StripeWebhookFailures
+        expr: rate(synap_stripe_webhook_errors_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stripe webhook processing errors"
+          description: "{{ $value }} webhook errors/sec in last 15 minutes."
+
+  - name: synap_is_critical
+    interval: 30s
+    rules:
+      - alert: IntelligenceServiceDown
+        expr: up{job="synap-intelligence-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Intelligence Service is down"
+          description: "IS has been unreachable for 2 minutes — AI features disabled."
+
+      - alert: LLMProviderErrors
+        expr: rate(synap_llm_errors_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High LLM provider error rate"
+          description: "{{ $value }} LLM errors/sec — check OpenRouter API key and quota."

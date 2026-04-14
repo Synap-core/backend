@@ -112,12 +112,19 @@
         reverse_proxy backend:4000
     }
 
-    # Admin UI (static SPA served from backend)
+    # Admin UI (static SPA + assets under this prefix only — not Kratos
+    # `/.ory/kratos/admin`, which is handled above)
     handle /admin* {
         reverse_proxy backend:4000
     }
 
-    # Default: Return API info
+    # Pod home: redirect exact site root to the console (not a second /admin rule)
+    @site_root path /
+    handle @site_root {
+        redir * /admin/ 302
+    }
+
+    # Default: API info (paths that matched nothing above)
     handle {
         respond "Synap Backend API - https://docs.synap.live" 200
     }

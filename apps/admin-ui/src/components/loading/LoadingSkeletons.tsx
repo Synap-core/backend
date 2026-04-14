@@ -1,138 +1,46 @@
 /**
- * Loading Skeleton Components
- *
- * Reusable skeleton components for consistent loading states across the application.
+ * Loading skeletons — Hero UI Skeleton + shared layout classes.
  */
 
-import { Skeleton, Stack, Card, Group } from "@mantine/core";
-import { spacing, borderRadius } from "../../theme/tokens";
+import { Card } from "@heroui/react";
+import { Skeleton } from "@heroui/react";
+import { borderRadius } from "../../theme/tokens";
 
-/**
- * Skeleton for metric cards (Dashboard)
- */
 export function MetricCardSkeleton() {
   return (
-    <Card padding={spacing[4]} radius={borderRadius.lg}>
-      <Group justify="space-between" mb={spacing[2]}>
-        <Skeleton height={16} width={100} />
-        <Skeleton height={20} width={20} circle />
-      </Group>
-      <Skeleton height={32} width={120} mb={spacing[1]} />
-      <Skeleton height={12} width={150} />
-    </Card>
+    <Card.Root className="border border-divider p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <Skeleton className="h-4 w-24 rounded-medium" />
+        <Skeleton className="h-5 w-5 rounded-full" />
+      </div>
+      <Skeleton className="mb-1 h-8 w-28 rounded-medium" />
+      <Skeleton className="h-3 w-36 rounded-medium" />
+    </Card.Root>
   );
 }
 
-/**
- * Skeleton for event list items
- */
 export function EventListItemSkeleton() {
   return (
     <div
-      style={{
-        padding: spacing[3],
-        borderRadius: borderRadius.base,
-        border: "1px solid #E5E7EB",
-        display: "flex",
-        alignItems: "center",
-        gap: spacing[3],
-      }}
+      className="flex items-center gap-3 rounded-medium border border-divider p-3"
+      style={{ borderRadius: borderRadius.base }}
     >
-      <Skeleton height={24} width={120} />
-      <div style={{ flex: 1 }}>
-        <Skeleton height={14} width="60%" mb={spacing[1]} />
-        <Skeleton height={12} width="40%" />
+      <Skeleton className="h-6 w-28 rounded-medium" />
+      <div className="min-w-0 flex-1 space-y-1">
+        <Skeleton className="h-3.5 w-[60%] rounded-medium" />
+        <Skeleton className="h-3 w-[40%] rounded-medium" />
       </div>
-      <Skeleton height={12} width={80} />
+      <Skeleton className="h-3 w-16 rounded-medium" />
     </div>
   );
 }
 
-/**
- * Skeleton for event card (detailed)
- */
-export function EventCardSkeleton() {
-  return (
-    <Card padding={spacing[3]} radius={borderRadius.base}>
-      <Group justify="space-between" mb={spacing[2]}>
-        <Skeleton height={24} width={120} />
-        <Skeleton height={14} width={150} />
-      </Group>
-      <Skeleton height={14} width="80%" mb={spacing[1]} />
-      <Skeleton height={12} width="60%" />
-    </Card>
-  );
-}
-
-/**
- * Skeleton for search results list
- */
 export function SearchResultsSkeleton({ count = 5 }: { count?: number }) {
   return (
-    <Stack gap={spacing[2]}>
+    <div className="flex flex-col gap-2">
       {Array.from({ length: count }).map((_, i) => (
         <EventListItemSkeleton key={i} />
       ))}
-    </Stack>
-  );
-}
-
-/**
- * Skeleton for architecture component cards
- */
-export function ArchitectureComponentSkeleton() {
-  return (
-    <Card padding={spacing[4]} radius={borderRadius.base}>
-      <Group mb={spacing[3]}>
-        <Skeleton height={24} width={24} circle />
-        <Skeleton height={18} width={120} />
-      </Group>
-      <Skeleton height={14} width="100%" mb={spacing[3]} />
-      <Group gap={spacing[4]}>
-        <div>
-          <Skeleton height={12} width={80} mb={spacing[1]} />
-          <Skeleton height={20} width={60} />
-        </div>
-        <div>
-          <Skeleton height={12} width={80} mb={spacing[1]} />
-          <Skeleton height={20} width={60} />
-        </div>
-      </Group>
-    </Card>
-  );
-}
-
-/**
- * Skeleton for tool accordion items
- */
-export function ToolAccordionSkeleton() {
-  return (
-    <Stack gap={spacing[2]}>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i}>
-          <Skeleton height={40} width="100%" radius={borderRadius.base} />
-        </div>
-      ))}
-    </Stack>
-  );
-}
-
-/**
- * Skeleton for code block
- */
-export function CodeBlockSkeleton() {
-  return (
-    <div
-      style={{
-        padding: spacing[3],
-        backgroundColor: "#F9FAFB",
-        borderRadius: borderRadius.base,
-      }}
-    >
-      <Skeleton height={12} width="100%" mb={spacing[1]} />
-      <Skeleton height={12} width="90%" mb={spacing[1]} />
-      <Skeleton height={12} width="95%" mb={spacing[1]} />
-      <Skeleton height={12} width="85%" />
     </div>
   );
 }

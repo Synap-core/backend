@@ -23,7 +23,10 @@ import {
   ActionIcon,
   Tooltip,
 } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
+import {
+  showSuccessNotification,
+  showErrorNotification,
+} from "../../lib/notifications";
 import {
   IconSearch,
   IconFilter,
@@ -136,18 +139,16 @@ export default function InvestigatePage() {
   // Republish mutation
   const republishMutation = trpc.system.publishEvent.useMutation({
     onSuccess: () => {
-      notifications.show({
+      showSuccessNotification({
         title: "Event Republished",
         message: "The event has been successfully republished.",
-        color: "green",
       });
       refetchSearch();
     },
     onError: (err) => {
-      notifications.show({
+      showErrorNotification({
         title: "Republish Failed",
         message: err.message,
-        color: "red",
       });
     },
   });
@@ -155,19 +156,17 @@ export default function InvestigatePage() {
   // Publish new event
   const publishMutation = trpc.system.publishEvent.useMutation({
     onSuccess: (data) => {
-      notifications.show({
+      showSuccessNotification({
         title: "Event Published",
         message: `Event ID: ${(data as { eventId?: string }).eventId ?? ""}`,
-        color: "green",
       });
       setPublishData({});
       refetchSearch();
     },
     onError: (err) => {
-      notifications.show({
+      showErrorNotification({
         title: "Publish Failed",
         message: err.message,
-        color: "red",
       });
     },
   });

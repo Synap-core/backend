@@ -48,6 +48,13 @@ x-backend-env: &backend-env
   HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}
   INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
   INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
+  # RSS Feed Provider Configuration
+  RSS_PROVIDER_TYPE: ${RSS_PROVIDER_TYPE:-cpproxy}
+  RSSHUB_URL: ${RSSHUB_URL:-http://rsshub:1200}
+  RSSHUB_ACCESS_KEY: ${RSSHUB_ACCESS_KEY:-}
+  CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
+  RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
+  RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
 
 services:
   # ============================================================================
@@ -458,6 +465,59 @@ services:
       - synap-net
     profiles:
       - openclaw
+
+  # ============================================================================
+  # RSSHUB — Optional RSS aggregation service
+  # Start with: docker compose --profile rsshub up -d
+  # ============================================================================
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-synap}-rsshub
+    restart: unless-stopped
+    ports:
+      - "1200:1200"
+    environment:
+      - NODE_ENV=production
+      - CACHE_TYPE=redis
+      - REDIS_URL=redis://redis:6379
+      - PUPPETEER_WS_ENDPOINT=ws://browserless:3000
+      - ACCESS_KEY=${RSSHUB_ACCESS_KEY:-}
+    depends_on:
+      - redis
+      - browserless
+    profiles:
+      - rsshub
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:1200/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # BROWSERLESS — Chrome headless for RSSHub Puppeteer support
+  # ============================================================================
+  browserless:
+    image: browserless/chrome:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-synap}-browserless
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - MAX_CONCURRENT_SESSIONS=10
+      - CONNECTION_TIMEOUT=60000
+      - MAX_QUEUE_LENGTH=20
+    profiles:
+      - rsshub
+    networks:
+      - synap-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ============================================================================
   # MONITORING (Dozzle)

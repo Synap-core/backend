@@ -17,7 +17,7 @@
  *   connector   → notification
  *
  * Surfaces:
- *   feed         → postProactiveMessage() to the proactive feed channel
+ *   feed         → DeliveryService.deliverToProactiveFeed() to the proactive feed channel
  *   chat         → inserts message into the personal chat channel
  *   notification → NotificationService.create()
  *   suppress     → no-op
@@ -45,8 +45,10 @@ import type {
   SignalSurface,
   DeliveryPreferences,
 } from "@synap/database/schema";
-import { postProactiveMessage } from "./proactive-channel-post.js";
-import type { ProactiveMessageType } from "./proactive-channel-post.js";
+import {
+  DeliveryService,
+  type ProactiveMessageType,
+} from "../services/DeliveryService.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { ensurePersonalChannel } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
@@ -135,18 +137,28 @@ function resolveRule(
 async function deliverToFeed(
   input: RouteSignalInput & { proactiveType: ProactiveMessageType }
 ): Promise<SurfaceResult> {
-  const result = await postProactiveMessage({
+  const result = await DeliveryService.deliverToProactiveFeed({
     userId: input.userId,
     workspaceId: input.workspaceId,
-    content: input.content,
-    proactiveType: input.proactiveType,
-    metadata: input.metadata,
+    content: {
+      body: input.content,
+      metadata: input.metadata,
+    },
+    deliveryOptions: {
+      proactiveType: input.proactiveType,
+      checkPreferences: true,
+      deduplicate: true,
+      emitEvents: true,
+      createNotification: false,
+    },
   });
+
+  const feedDelivery = result.deliveries[0];
   return {
     surface: "feed",
-    success: result.posted,
-    reason: result.reason,
-    messageId: result.messageId,
+    success: result.success,
+    reason: feedDelivery?.error,
+    messageId: feedDelivery?.id,
   };
 }
 

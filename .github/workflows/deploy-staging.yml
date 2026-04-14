@@ -2,141 +2,89 @@ name: Deploy to Staging
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: ["develop"]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["develop"]
   workflow_dispatch:
-  # Note: Removed automatic deployment on main branch pushes
-  # This prevents deploying on every commit
-  # Deployments happen only on version tags (releases) or manual dispatch
-  # Use workflow_dispatch to manually trigger deployments when needed
-
-env:
-  REGISTRY: ghcr.io
-  # Convert repository name to lowercase (required for Docker registry)
-  IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name }}
 
 jobs:
-  deploy:
+  deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
+    # Run on direct push to develop, or when CI passes on develop
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     environment: staging
+    timeout-minutes: 15
     permissions:
       contents: read
-      packages: read
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Determine image tag and name
-        id: image
-        run: |
-          # Convert to lowercase for Docker registry
-          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_NAME="${REPO_OWNER}/${REPO_NAME}"
-          echo "name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
-
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "tag=main" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Pull latest image
-        run: |
-          IMAGE_NAME="${{ steps.image.outputs.name }}"
-          TAG="${{ steps.image.outputs.tag }}"
-          docker pull ${{ env.REGISTRY }}/${IMAGE_NAME}:${TAG} || \
-          docker pull ${{ env.REGISTRY }}/${IMAGE_NAME}:main || \
-          docker pull ${{ env.REGISTRY }}/${IMAGE_NAME}:latest || \
-          echo "⚠️  Image not found, deployment will skip"
 
       - name: Check if staging secrets are configured
         id: check-secrets
         run: |
-          if [ -n "${{ secrets.STAGING_HOST }}" ]; then
+          if [ -n "${{ secrets.STAGING_POD_URL }}" ]; then
             echo "staging_configured=true" >> $GITHUB_OUTPUT
           else
             echo "staging_configured=false" >> $GITHUB_OUTPUT
-          fi
-          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
-            echo "slack_configured=true" >> $GITHUB_OUTPUT
-          else
-            echo "slack_configured=false" >> $GITHUB_OUTPUT
+            echo "Staging secrets not configured — deployment skipped"
           fi
 
-      - name: Deploy to staging
-        if: steps.check-secrets.outputs.staging_configured == 'true'
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          script: |
-            cd /opt/synap/deploy || cd /opt/synap
-            # Login to GHCR if needed
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin || true
-            # Pull latest image
-            docker compose pull backend || true
-            # Update services
-            docker compose up -d backend
-            # Run migrations
-            docker compose exec -T backend-migrate node node_modules/@synap/database/dist/scripts/migrate.js || \
-            docker compose exec -T backend node node_modules/@synap/database/dist/scripts/migrate.js || true
-
-      - name: Wait for health check
+      - name: Deploy to staging pod via CP API
         if: steps.check-secrets.outputs.staging_configured == 'true'
         run: |
-          sleep 10
-          curl -f https://staging.synap.app/health || exit 1
+          curl -sf -X POST "${{ secrets.CP_API_URL }}/admin/pods/${{ secrets.STAGING_POD_ID }}/action" \
+            -H "Authorization: Bearer ${{ secrets.CP_ADMIN_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"update\",\"targetVersion\":\"${{ github.sha }}\"}" \
+            || echo "Deploy trigger failed (non-fatal — pod may self-update)"
+        continue-on-error: true
 
-      - name: Run smoke tests
+      - name: Wait for staging to be healthy (2 min)
         if: steps.check-secrets.outputs.staging_configured == 'true'
         run: |
-          if [ -f "tests/postman/smoke-tests.json" ]; then
-            npx newman run tests/postman/smoke-tests.json \
-              --env-var baseUrl=https://staging.synap.app \
-              --bail
-          else
-            echo "⚠️  Smoke tests not found, skipping"
-          fi
+          for i in $(seq 1 24); do
+            if curl -sf "${{ secrets.STAGING_POD_URL }}/health" > /dev/null; then
+              echo "Staging healthy after attempt $i"
+              exit 0
+            fi
+            echo "Waiting... attempt $i/24"
+            sleep 5
+          done
+          echo "Staging did not become healthy in time"
+          exit 1
+
+      - name: Run smoke tests against staging
+        if: steps.check-secrets.outputs.staging_configured == 'true' && secrets.STAGING_HUB_API_KEY != ''
+        run: |
+          chmod +x scripts/smoke-test.sh
+          BASE_URL="${{ secrets.STAGING_POD_URL }}" \
+          HUB_API_KEY="${{ secrets.STAGING_HUB_API_KEY }}" \
+          bash scripts/smoke-test.sh
+        env:
+          BASE_URL: ${{ secrets.STAGING_POD_URL }}
+          HUB_API_KEY: ${{ secrets.STAGING_HUB_API_KEY }}
+
+      - name: Run health-only smoke tests (no API key)
+        if: steps.check-secrets.outputs.staging_configured == 'true' && secrets.STAGING_HUB_API_KEY == ''
+        run: |
+          chmod +x scripts/smoke-test.sh
+          BASE_URL="${{ secrets.STAGING_POD_URL }}" \
+          bash scripts/smoke-test.sh
+        env:
+          BASE_URL: ${{ secrets.STAGING_POD_URL }}
 
       - name: Rollback on failure
         if: failure() && steps.check-secrets.outputs.staging_configured == 'true'
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          script: |
-            cd /opt/synap/deploy || cd /opt/synap
-            # Rollback to previous image tag if available
-            REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-            REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
-            IMAGE_NAME="${REPO_OWNER}/${REPO_NAME}"
-            if docker images | grep -q "${{ env.REGISTRY }}/${IMAGE_NAME}:previous"; then
-              docker compose down backend
-              # Update docker-compose.yml to use previous tag (manual or via script)
-              docker compose up -d backend
-            else
-              echo "No previous image found for rollback"
-            fi
-
-      - name: Notify deployment
-        if: always() && steps.check-secrets.outputs.slack_configured == 'true'
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          text: "Staging deployment ${{ job.status }}"
-          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          echo "Deployment failed — triggering rollback via CP API"
+          curl -sf -X POST "${{ secrets.CP_API_URL }}/admin/pods/${{ secrets.STAGING_POD_ID }}/action" \
+            -H "Authorization: Bearer ${{ secrets.CP_ADMIN_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"rollback\"}" \
+            || echo "Rollback trigger failed — manual intervention may be needed"
+        continue-on-error: true

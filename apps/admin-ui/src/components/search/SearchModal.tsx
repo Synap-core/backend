@@ -1,17 +1,7 @@
 import { useState } from "react";
-import {
-  Modal,
-  TextInput,
-  Button,
-  Stack,
-  Group,
-  Text,
-  Badge,
-  ScrollArea,
-  ActionIcon,
-} from "@mantine/core";
 import { IconSearch, IconX, IconClock } from "@tabler/icons-react";
-import { colors, spacing, typography } from "../../theme/tokens";
+import { Button } from "@heroui/react";
+import { spacing } from "../../theme/tokens";
 
 interface SearchModalProps {
   opened: boolean;
@@ -46,13 +36,11 @@ export default function SearchModal({
     }
   });
 
-  // Combine localStorage history with prop history
   const allHistory = [...new Set([...localHistory, ...history])].slice(0, 10);
 
   const handleSearch = () => {
     if (!searchValue.trim()) return;
 
-    // Save to history
     const newHistory = [
       searchValue,
       ...localHistory.filter((h) => h !== searchValue),
@@ -65,144 +53,142 @@ export default function SearchModal({
     onClose();
   };
 
-  const handleHistoryClick = (value: string) => {
-    setSearchValue(value);
-  };
-
-  const handlePresetClick = (value: string) => {
-    setSearchValue(value);
-  };
-
   const clearHistory = () => {
     setLocalHistory([]);
     localStorage.removeItem(`search-history-${type}`);
   };
 
+  if (!opened) return null;
+
   return (
-    <Modal
-      opened={opened}
-      onClose={onClose}
-      title={title}
-      size="md"
-      styles={{
-        header: {
-          borderBottom: `1px solid ${colors.border.default}`,
-        },
-      }}
+    <div
+      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 p-4"
+      role="presentation"
+      onClick={onClose}
     >
-      <Stack gap={spacing[4]}>
-        <TextInput
-          label={label}
-          placeholder={placeholder}
-          value={searchValue}
-          onChange={(e) => setSearchValue(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              handleSearch();
-            }
-          }}
-          leftSection={<IconSearch size={16} />}
-          rightSection={
-            searchValue && (
-              <ActionIcon
-                variant="subtle"
-                size="sm"
-                onClick={() => setSearchValue("")}
-                aria-label="Clear search"
-              >
-                <IconX size={14} />
-              </ActionIcon>
-            )
-          }
-          autoFocus
-        />
+      <div
+        className="w-full max-w-md rounded-2xl border border-divider bg-content1 p-0 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="search-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="border-b border-divider px-5 py-4"
+          style={{ padding: `${spacing[4]} ${spacing[5]}` }}
+        >
+          <h2
+            id="search-modal-title"
+            className="text-lg font-semibold text-foreground"
+          >
+            {title}
+          </h2>
+        </div>
 
-        {presets.length > 0 && (
-          <div>
-            <Text
-              size="xs"
-              fw={typography.fontWeight.semibold}
-              c={colors.text.tertiary}
-              mb={spacing[2]}
+        <div className="flex flex-col gap-4 px-5 py-4">
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="search-modal-input"
+              className="text-small font-medium text-default-600"
             >
-              PRESETS
-            </Text>
-            <Group gap={spacing[2]}>
-              {presets.map((preset) => (
-                <Badge
-                  key={preset.value}
-                  variant="light"
-                  style={{ cursor: "pointer" }}
-                  onClick={() => handlePresetClick(preset.value)}
+              {label}
+            </label>
+            <div className="relative flex items-center">
+              <IconSearch
+                className="pointer-events-none absolute left-3 text-default-400"
+                size={16}
+              />
+              <input
+                id="search-modal-input"
+                type="text"
+                className="w-full rounded-medium border border-divider bg-default-100 py-2 pl-9 pr-10 text-small text-foreground outline-none ring-primary focus:border-primary focus:ring-2"
+                placeholder={placeholder}
+                value={searchValue}
+                onChange={(e) => setSearchValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSearch();
+                }}
+                autoFocus
+              />
+              {searchValue ? (
+                <button
+                  type="button"
+                  className="absolute right-2 rounded-full p-1 text-default-400 hover:bg-default-200"
+                  aria-label="Clear search"
+                  onClick={() => setSearchValue("")}
                 >
-                  {preset.label}
-                </Badge>
-              ))}
-            </Group>
+                  <IconX size={14} />
+                </button>
+              ) : null}
+            </div>
           </div>
-        )}
 
-        {allHistory.length > 0 && (
-          <div>
-            <Group justify="space-between" mb={spacing[2]}>
-              <Text
-                size="xs"
-                fw={typography.fontWeight.semibold}
-                c={colors.text.tertiary}
-              >
-                RECENT SEARCHES
-              </Text>
-              <Button
-                variant="subtle"
-                size="xs"
-                onClick={clearHistory}
-                aria-label="Clear history"
-              >
-                Clear
-              </Button>
-            </Group>
-            <ScrollArea style={{ maxHeight: "200px" }}>
-              <Stack gap={spacing[1]}>
-                {allHistory.map((item, index) => (
-                  <Group
-                    key={index}
-                    justify="space-between"
-                    style={{
-                      padding: spacing[2],
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                      backgroundColor: colors.background.secondary,
-                    }}
-                    onClick={() => handleHistoryClick(item)}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor =
-                        colors.background.secondary;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor =
-                        colors.background.secondary;
-                    }}
+          {presets.length > 0 ? (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-default-400">
+                Presets
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {presets.map((preset) => (
+                  <Button
+                    key={preset.value}
+                    size="sm"
+                    variant="outline"
+                    onPress={() => setSearchValue(preset.value)}
                   >
-                    <Group gap={spacing[2]}>
-                      <IconClock size={14} color={colors.text.tertiary} />
-                      <Text size="sm">{item}</Text>
-                    </Group>
-                  </Group>
+                    {preset.label}
+                  </Button>
                 ))}
-              </Stack>
-            </ScrollArea>
-          </div>
-        )}
+              </div>
+            </div>
+          ) : null}
 
-        <Group justify="flex-end" mt={spacing[2]}>
-          <Button variant="subtle" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={handleSearch} disabled={!searchValue.trim()}>
-            Search
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
+          {allHistory.length > 0 ? (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-default-400">
+                  Recent
+                </p>
+                <Button size="sm" variant="ghost" onPress={clearHistory}>
+                  Clear
+                </Button>
+              </div>
+              <div
+                className="max-h-[200px] space-y-1 overflow-y-auto rounded-medium border border-divider bg-default-50 p-1"
+                style={{ maxHeight: 200 }}
+              >
+                {allHistory.map((item, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-small px-2 py-2 text-left text-small text-default-700 hover:bg-default-100"
+                    onClick={() => setSearchValue(item)}
+                  >
+                    <IconClock
+                      size={14}
+                      className="shrink-0 text-default-400"
+                    />
+                    <span className="truncate">{item}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onPress={onClose}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onPress={handleSearch}
+              isDisabled={!searchValue.trim()}
+            >
+              Search
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,18 +1,16 @@
 import { useState } from "react";
 import {
   Button,
-  Text,
-  Badge,
-  Modal,
-  TextInput,
-  Textarea,
-  Select,
-  SimpleGrid,
   Card,
-  Group,
-  Stack,
-  Loader,
-} from "@mantine/core";
+  Chip,
+  Input,
+  Label,
+  Modal,
+  Spinner,
+  TextArea,
+  Text,
+  useOverlayState,
+} from "@heroui/react";
 import {
   IconBuildingCommunity,
   IconPlus,
@@ -27,24 +25,31 @@ import {
 } from "../../lib/notifications";
 import { colors, spacing } from "../../theme/tokens";
 
-const WORKSPACE_TYPE_COLORS: Record<string, string> = {
-  personal: "blue",
-  team: "green",
-  enterprise: "violet",
-};
+const WORKSPACE_TYPE_COLORS: Record<string, "accent" | "success" | "warning"> =
+  {
+    personal: "accent",
+    team: "success",
+    enterprise: "warning",
+  };
 
-const ROLE_COLORS: Record<string, string> = {
-  owner: "violet",
-  admin: "orange",
-  editor: "blue",
-  viewer: "gray",
-};
+const ROLE_COLORS: Record<string, "accent" | "warning" | "accent" | "default"> =
+  {
+    owner: "accent",
+    admin: "warning",
+    editor: "accent",
+    viewer: "default",
+  };
 
 export default function WorkspacesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [type, setType] = useState<"personal" | "team" | "enterprise">("team");
+
+  const createModal = useOverlayState({
+    isOpen: createOpen,
+    onOpenChange: setCreateOpen,
+  });
 
   const {
     data: workspaces,
@@ -75,169 +80,158 @@ export default function WorkspacesPage() {
 
   return (
     <div style={{ padding: spacing[6] }}>
-      {/* Header */}
-      <Group justify="space-between" mb={spacing[6]}>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Group gap="sm" mb={spacing[1]}>
+          <div className="mb-1 flex items-center gap-2">
             <IconBuildingCommunity
               size={22}
               color={colors.eventTypes.created}
             />
-            <Text size="xl" fw={700}>
-              Workspaces
-            </Text>
-          </Group>
-          <Text size="sm" c="dimmed">
+            <Text className="text-xl font-bold">Workspaces</Text>
+          </div>
+          <Text className="text-sm text-default-500">
             Manage workspaces, members, and settings.
           </Text>
         </div>
-        <Button
-          leftSection={<IconPlus size={16} />}
-          onClick={() => setCreateOpen(true)}
-          color="violet"
-        >
-          New Workspace
+        <Button variant="primary" onPress={() => createModal.open()}>
+          <span className="inline-flex items-center gap-2">
+            <IconPlus size={16} />
+            New Workspace
+          </span>
         </Button>
-      </Group>
+      </div>
 
       {isLoading ? (
-        <Loader />
+        <div className="flex justify-center py-12">
+          <Spinner size="lg" color="accent" />
+        </div>
       ) : (
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing={spacing[4]}>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {workspaces?.map((ws) => (
             <Card
               key={ws.id}
-              shadow="sm"
-              padding="lg"
-              radius="md"
-              withBorder
-              style={{
-                borderColor: colors.border.default,
-                cursor: "pointer",
-                transition: "box-shadow 0.15s ease",
-              }}
+              className="cursor-pointer border border-divider transition-shadow hover:shadow-sm"
             >
-              <Stack gap={spacing[3]}>
-                {/* Name + type badge */}
-                <Group justify="space-between" align="flex-start">
-                  <Text fw={600} size="md" style={{ flex: 1 }}>
-                    {ws.name}
-                  </Text>
-                  <Badge
-                    size="xs"
-                    color={WORKSPACE_TYPE_COLORS[ws.type] ?? "gray"}
-                    variant="light"
+              <div className="flex flex-col gap-3 p-5">
+                <div className="flex items-start justify-between gap-2">
+                  <Text className="flex-1 font-semibold">{ws.name}</Text>
+                  <Chip
+                    size="sm"
+                    variant="soft"
+                    color={WORKSPACE_TYPE_COLORS[ws.type] ?? "default"}
                   >
                     {ws.type}
-                  </Badge>
-                </Group>
+                  </Chip>
+                </div>
 
-                {/* Role badge */}
-                <Badge
-                  size="xs"
-                  color={ROLE_COLORS[ws.role] ?? "gray"}
-                  variant="outline"
-                  style={{ alignSelf: "flex-start" }}
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={ROLE_COLORS[ws.role] ?? "default"}
+                  className="self-start ring-1 ring-divider"
                 >
                   {ws.role}
-                </Badge>
+                </Chip>
 
-                {/* Description */}
                 {ws.description && (
-                  <Text size="sm" c="dimmed" lineClamp={2}>
+                  <Text className="line-clamp-2 text-sm text-default-500">
                     {ws.description}
                   </Text>
                 )}
 
-                {/* Meta info */}
-                <Group gap={spacing[4]}>
-                  <Group gap={4}>
+                <div className="flex flex-wrap items-center gap-4 text-xs text-default-500">
+                  <div className="flex items-center gap-1">
                     <IconUsers size={14} color={colors.text.tertiary} />
-                    <Text size="xs" c="dimmed">
+                    <span>
                       {ws.settings?.intelligenceServiceId
                         ? "AI connected"
                         : "No AI service"}
-                    </Text>
-                  </Group>
-                  <Text size="xs" c="dimmed">
-                    {new Date(ws.createdAt).toLocaleDateString()}
-                  </Text>
-                </Group>
+                    </span>
+                  </div>
+                  <span>{new Date(ws.createdAt).toLocaleDateString()}</span>
+                </div>
 
-                {/* Manage button */}
-                <Button
-                  component={Link}
+                <Link
                   to={`/workspaces/${ws.id}`}
-                  variant="light"
-                  size="xs"
-                  rightSection={<IconArrowRight size={14} />}
-                  fullWidth
-                  color="violet"
+                  className="mt-1 block w-full no-underline"
                 >
-                  Manage
-                </Button>
-              </Stack>
+                  <Button variant="ghost" fullWidth>
+                    <span className="inline-flex w-full items-center justify-center gap-2">
+                      Manage
+                      <IconArrowRight size={14} />
+                    </span>
+                  </Button>
+                </Link>
+              </div>
             </Card>
           ))}
 
           {workspaces?.length === 0 && (
-            <Text
-              c="dimmed"
-              ta="center"
-              py={spacing[10]}
-              style={{ gridColumn: "1 / -1" }}
-            >
+            <Text className="col-span-full py-10 text-center text-default-500">
               No workspaces found.
             </Text>
           )}
-        </SimpleGrid>
+        </div>
       )}
 
-      {/* Create Modal */}
-      <Modal
-        opened={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title={
-          <Text fw={600} size="lg">
-            Create Workspace
-          </Text>
-        }
-        size="md"
-      >
-        <Stack gap={spacing[4]}>
-          <TextInput
-            label="Name"
-            placeholder="My Team Workspace"
-            value={name}
-            onChange={(e) => setName(e.currentTarget.value)}
-            required
-          />
-          <Textarea
-            label="Description"
-            placeholder="Optional description"
-            value={description}
-            onChange={(e) => setDescription(e.currentTarget.value)}
-            rows={3}
-          />
-          <Select
-            label="Type"
-            data={[
-              { value: "personal", label: "Personal" },
-              { value: "team", label: "Team" },
-              { value: "enterprise", label: "Enterprise" },
-            ]}
-            value={type}
-            onChange={(v) => setType((v as typeof type) ?? "team")}
-          />
-          <Button
-            onClick={handleCreate}
-            loading={createMutation.isPending}
-            disabled={!name.trim()}
-            fullWidth
-          >
-            Create
-          </Button>
-        </Stack>
+      <Modal state={createModal}>
+        <Modal.Backdrop isDismissable />
+        <Modal.Container size="md" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+              <Modal.Heading className="text-lg font-semibold">
+                Create Workspace
+              </Modal.Heading>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="gap-4 px-6 py-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ws-name">Name</Label>
+                <Input
+                  id="ws-name"
+                  placeholder="My Team Workspace"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ws-desc">Description</Label>
+                <TextArea
+                  id="ws-desc"
+                  placeholder="Optional description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={3}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ws-type">Type</Label>
+                <select
+                  id="ws-type"
+                  className="border-default-200 bg-background text-foreground focus:border-accent focus:ring-accent w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                  value={type}
+                  onChange={(e) => setType(e.target.value as typeof type)}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="team">Team</option>
+                  <option value="enterprise">Enterprise</option>
+                </select>
+              </div>
+              <Button
+                variant="primary"
+                fullWidth
+                onPress={handleCreate}
+                isDisabled={!name.trim() || createMutation.isPending}
+              >
+                {createMutation.isPending ? (
+                  <Spinner size="sm" color="current" />
+                ) : (
+                  "Create"
+                )}
+              </Button>
+            </Modal.Body>
+          </Modal.Dialog>
+        </Modal.Container>
       </Modal>
     </div>
   );

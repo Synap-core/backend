@@ -57,6 +57,9 @@
       "path": "./packages/events"
     },
     {
+      "path": "./packages/feed-service"
+    },
+    {
       "path": "./packages/hub-protocol"
     },
     {

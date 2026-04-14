@@ -1,62 +1,39 @@
 /**
- * SDK Configuration
- *
- * Note: @synap/client package was removed. Admin UI needs refactoring to use tRPC client directly.
- * This file is temporarily disabled to allow builds to complete.
+ * Legacy admin SDK shim — used by a few pages until fully migrated to tRPC hooks.
  */
 
-// import { createSynapClient } from '@synap/client'; // Package removed
+type QueryFn = (...args: unknown[]) => Promise<unknown>;
+type MutateFn = (...args: unknown[]) => Promise<unknown>;
 
-// const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'; // Unused
+const noopQuery: QueryFn = async () => ({});
+const noopListQuery: QueryFn = async () => [];
+const noopTableRowsQuery: QueryFn = async () => ({ rows: [], total: 0 });
+const noopMutate: MutateFn = async () => ({});
 
-/**
- * Placeholder SDK - Admin UI needs refactoring
- * TODO: Implement tRPC client for admin UI
- */
 export const sdk = {
   system: {
-    getCapabilities: { query: async () => ({ workers: [] }) },
-    getDashboardMetrics: { query: async () => ({}) },
-    searchEvents: { query: async () => [] },
-    getTrace: { query: async () => [] },
-    getEventTrace: { query: async () => null },
-    publishEvent: { mutate: async () => ({}) },
-    getDatabaseTables: { query: async () => [] },
-    getDatabaseTableRows: { query: async () => ({ rows: [], total: 0 }) },
+    getCapabilities: { query: noopQuery },
+    getDashboardMetrics: { query: noopQuery },
+    searchEvents: { query: noopListQuery },
+    getTrace: { query: noopListQuery },
+    getEventTrace: { query: noopQuery },
+    publishEvent: { mutate: noopMutate },
+    getDatabaseTables: { query: noopListQuery },
+    getDatabaseTableRows: { query: noopTableRowsQuery },
   },
   webhooks: {
-    list: { query: async () => [] },
-    create: { mutate: async () => ({}) },
-    delete: { mutate: async () => ({}) },
+    list: { query: noopListQuery },
+    create: { mutate: noopMutate },
+    delete: { mutate: noopMutate },
   },
-} as Record<
-  string,
-  Record<
-    string,
-    {
-      query?: (...args: unknown[]) => Promise<unknown>;
-      mutate?: (...args: unknown[]) => Promise<unknown>;
-    }
-  >
->;
+};
 
-/**
- * Admin SDK Helpers
- *
- * Specialized helpers for Admin UI pages that wrap SDK calls
- */
 export const AdminSDK = {
-  /**
-   * System Management
-   */
   system: {
     getCapabilities: () => sdk.system.getCapabilities.query(),
     getMetrics: () => sdk.system.getDashboardMetrics.query(),
   },
 
-  /**
-   * Event Store Management
-   */
   events: {
     search: (params: {
       limit?: number;
@@ -85,28 +62,26 @@ export const AdminSDK = {
       }),
   },
 
-  /**
-   * Worker Management
-   */
   workers: {
     list: async () => {
-      const caps = await sdk.system.getCapabilities.query();
-      return caps.workers || [];
+      const caps = (await sdk.system.getCapabilities.query()) as {
+        workers?: unknown[];
+      };
+      return caps.workers ?? [];
     },
   },
 
-  /**
-   * Database
-   */
   database: {
     listTables: () => sdk.system.getDatabaseTables.query(),
-    getTableData: (tableName: string, offset: number = 0) =>
-      sdk.system.getDatabaseTableRows.query({ tableName, offset }),
+    getTableData: async (tableName: string, offset: number = 0) => {
+      const res = (await sdk.system.getDatabaseTableRows.query({
+        tableName,
+        offset,
+      })) as { rows: Record<string, unknown>[]; total: number };
+      return res.rows;
+    },
   },
 
-  /**
-   * Webhook Subscriptions
-   */
   webhooks: {
     list: () => sdk.webhooks.list.query(),
     create: (input: { name: string; url: string; eventTypes: string[] }) =>

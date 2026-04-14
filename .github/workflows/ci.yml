@@ -95,6 +95,35 @@ jobs:
         # Typecheck all packages (admin-ui already excluded from tsconfig.json references)
         run: pnpm typecheck
 
+      - name: Start API server for smoke tests
+        run: |
+          # Start server in background with test config
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/synap_test \
+          NODE_ENV=test \
+          PORT=4000 \
+          SKIP_SECRET_VALIDATION=true \
+          node apps/api/dist/index.js &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+          # Wait for server to be healthy (up to 30s)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+        continue-on-error: true
+
+      - name: Smoke test
+        run: |
+          if [ -f scripts/smoke-test.sh ]; then
+            chmod +x scripts/smoke-test.sh
+            BASE_URL=http://localhost:4000 bash scripts/smoke-test.sh || echo "Smoke tests failed (non-blocking)"
+          fi
+        continue-on-error: true
+        env:
+          BASE_URL: http://localhost:4000
+
       - name: Validate migrations
         run: pnpm --filter @synap/database migrate
         env:
@@ -107,10 +136,18 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
-        continue-on-error: true
 
       - name: Build
         run: pnpm build
+
+      - name: Validate smoke test script
+        run: |
+          if [ -f scripts/smoke-test.sh ]; then
+            bash -n scripts/smoke-test.sh && echo "✓ smoke-test.sh syntax valid"
+          else
+            echo "⚠️  scripts/smoke-test.sh not found"
+          fi
+        continue-on-error: true
 
       - name: Test Docker Build
         run: |

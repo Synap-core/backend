@@ -2,21 +2,17 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MantineProvider } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
+import { ToastProvider } from "@heroui/react";
 import { BrowserRouter } from "react-router-dom";
 import { trpc, trpcClient } from "./lib/trpc";
 import App from "./App";
 import GlobalErrorBoundary from "./components/error/GlobalErrorBoundary";
 import { AuthProvider } from "./lib/auth";
 import { WorkspaceProvider } from "./lib/workspace";
-
-// Import Mantine styles
 import "@mantine/core/styles.css";
 import "@mantine/dates/styles.css";
-import "@mantine/notifications/styles.css";
 import "./index.css";
 
-// Create QueryClient for React Query
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -32,18 +28,20 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <TRPCProvider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
-        <MantineProvider>
-          <GlobalErrorBoundary>
-            <Notifications position="top-right" zIndex={1000} />
-            <BrowserRouter basename="/admin">
-              <AuthProvider>
-                <WorkspaceProvider>
-                  <App />
-                </WorkspaceProvider>
-              </AuthProvider>
-            </BrowserRouter>
-          </GlobalErrorBoundary>
-        </MantineProvider>
+        <ToastProvider placement="top end" maxVisibleToasts={4}>
+          {/* Mantine: legacy pages until migrated to Hero UI + Tailwind */}
+          <MantineProvider>
+            <GlobalErrorBoundary>
+              <BrowserRouter basename="/admin">
+                <AuthProvider>
+                  <WorkspaceProvider>
+                    <App />
+                  </WorkspaceProvider>
+                </AuthProvider>
+              </BrowserRouter>
+            </GlobalErrorBoundary>
+          </MantineProvider>
+        </ToastProvider>
       </QueryClientProvider>
     </TRPCProvider>
   </StrictMode>
