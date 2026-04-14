@@ -23,7 +23,7 @@ import type { FeedMessageMetadata } from "@synap-core/types/feeds";
 // Re-export the canonical type from @synap-core/types
 export type { FeedMessageMetadata };
 
-// Re-export synchronized types from feed-types-sync
+// Re-export synchronized types from feed-types-sync (SOURCE OF TRUTH)
 export type {
   FeedProviderConfig,
   FeedSourceConfig,
@@ -35,6 +35,9 @@ export type {
   FeedStatus,
   FeedExecutionPayload,
   BaseFeedConfig,
+  // These are the canonical RSSFeedConfig and ProactiveFeedConfig
+  RSSFeedConfig,
+  ProactiveFeedConfig,
 } from "./feed-types-sync.js";
 
 // ============================================================================
@@ -67,56 +70,11 @@ export interface RSSFeedSource {
   name?: string;
 }
 
-export interface RSSFeedConfig extends FeedConfig {
-  type: "rss" | "atom";
-  feedTitle?: string;
-  feedDescription?: string;
-  feedLink?: string;
-  itemCount?: number;
-  // Additional fields for feed workers
-  feedType?: "rss" | "atom";
-  sources?: RSSFeedSource[];
-  rsshubConfig?: { useCpProxy?: boolean };
-  enabled?: boolean;
-  schedule?: string;
-  timezone?: string;
-  maxItemsPerRun?: number;
-  dedupWindowDays?: number;
-  minRelevanceScore?: number;
-  postMode?: "individual" | "batch";
-}
+// NOTE: RSSFeedConfig and ProactiveFeedConfig are re-exported from feed-types-sync.ts
+// They are the canonical types used across all packages
 
-export interface ProactiveFeedConfig extends FeedConfig {
-  type: "proactive";
-  intelligenceServiceId?: string;
-  agentType?: string;
-  nudgeDensity?: "low" | "medium" | "high";
-  categories?: string[];
-  // Additional fields for feed workers
-  feedType?: "proactive";
-  enabled?: boolean;
-  schedule?: string;
-  timezone?: string;
-  maxItemsPerRun?: number;
-  dedupWindowDays?: number;
-  minRelevanceScore?: number;
-  postMode?: "individual" | "batch";
-  include?: {
-    tasksDue?: boolean;
-    tasksDueDays?: number;
-    pendingProposals?: boolean;
-    recentEntities?: boolean;
-    recentEntitiesHours?: number;
-    recentCaptures?: boolean;
-    recentCapturesHours?: number;
-    activitySummary?: boolean;
-  };
-  summarization?: {
-    style?: "brief" | "detailed";
-    maxItems?: number;
-    includeInsights?: boolean;
-  };
-}
+// Legacy FeedConfig kept for backward compatibility
+// New code should use BaseFeedConfig from feed-types-sync.ts
 
 // Note: FeedExecutionPayload is now re-exported from feed-types-sync
 
