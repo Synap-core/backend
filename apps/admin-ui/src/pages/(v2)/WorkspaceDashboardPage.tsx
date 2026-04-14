@@ -1,16 +1,5 @@
 import { useNavigate, Link } from "react-router-dom";
-import {
-  Title,
-  Text,
-  Stack,
-  Card,
-  Group,
-  Button,
-  Badge,
-  Table,
-  Loader,
-  ThemeIcon,
-} from "@mantine/core";
+import { Button, Card, Chip, Spinner, Text } from "@heroui/react";
 import {
   IconUsers,
   IconRobot,
@@ -34,24 +23,26 @@ function timeSince(date: Date | string) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-const WORKSPACE_TYPE_COLORS: Record<string, string> = {
-  personal: "blue",
-  team: "green",
-  enterprise: "violet",
+const WORKSPACE_TYPE_COLORS: Record<string, "accent" | "success" | "warning"> =
+  {
+    personal: "accent",
+    team: "success",
+    enterprise: "warning",
+  };
+
+const ROLE_COLORS: Record<string, "accent" | "warning" | "default"> = {
+  owner: "accent",
+  admin: "warning",
+  editor: "accent",
+  viewer: "default",
 };
 
-const ROLE_COLORS: Record<string, string> = {
-  owner: "violet",
-  admin: "orange",
-  editor: "blue",
-  viewer: "gray",
-};
-
-const PROPOSAL_STATUS_COLORS: Record<string, string> = {
-  pending: "yellow",
-  validated: "green",
-  rejected: "red",
-};
+const PROPOSAL_STATUS_COLORS: Record<string, "warning" | "success" | "danger"> =
+  {
+    pending: "warning",
+    validated: "success",
+    rejected: "danger",
+  };
 
 export default function WorkspaceDashboardPage() {
   const navigate = useNavigate();
@@ -89,210 +80,194 @@ export default function WorkspaceDashboardPage() {
   if (!workspaceId) {
     return (
       <div style={{ padding: spacing[8] }}>
-        <Text c="dimmed">No workspace selected.</Text>
+        <Text className="text-sm text-default-500">No workspace selected.</Text>
       </div>
     );
   }
 
   return (
-    <div style={{ width: "100%", padding: spacing[8] }}>
-      <Stack gap={spacing[6]}>
-        {/* Header */}
-        <Group justify="space-between" align="flex-start">
+    <div className="w-full" style={{ padding: spacing[8] }}>
+      <div className="flex flex-col gap-6" style={{ gap: spacing[6] }}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <Group gap={spacing[2]} mb={spacing[1]}>
+            <div
+              className="mb-1 flex flex-wrap items-center gap-2"
+              style={{ marginBottom: spacing[1] }}
+            >
               <IconBuildingCommunity
                 size={20}
                 color={colors.eventTypes.created}
               />
-              <Title
-                order={1}
-                style={{
-                  fontFamily: typography.fontFamily.sans,
-                  color: colors.text.primary,
-                }}
+              <h1
+                className="m-0 text-2xl font-bold text-foreground"
+                style={{ fontFamily: typography.fontFamily.sans }}
               >
                 {workspaceName ?? "Workspace"}
-              </Title>
-              {workspace && (
-                <Badge
+              </h1>
+              {workspace ? (
+                <Chip
                   size="sm"
-                  variant="light"
-                  color={WORKSPACE_TYPE_COLORS[workspace.type] ?? "gray"}
+                  variant="soft"
+                  color={WORKSPACE_TYPE_COLORS[workspace.type] ?? "default"}
                 >
                   {workspace.type}
-                </Badge>
-              )}
-              {workspace?.role && (
-                <Badge
+                </Chip>
+              ) : null}
+              {workspace?.role ? (
+                <Chip
                   size="sm"
-                  variant="outline"
-                  color={ROLE_COLORS[workspace.role] ?? "gray"}
+                  variant="soft"
+                  color={ROLE_COLORS[workspace.role] ?? "default"}
                 >
                   {workspace.role}
-                </Badge>
-              )}
-            </Group>
-            <Text size="sm" style={{ color: colors.text.secondary }}>
+                </Chip>
+              ) : null}
+            </div>
+            <Text className="text-sm text-default-500">
               Workspace overview — members, agents, and pending actions
             </Text>
           </div>
-          <Button
-            component={Link}
-            to={`/workspaces/${workspaceId}`}
-            variant="light"
-            leftSection={<IconSettings size={16} />}
-            rightSection={<IconArrowRight size={14} />}
-            color="violet"
-          >
-            Manage Workspace
-          </Button>
-        </Group>
+          <Link to={`/workspaces/${workspaceId}`} className="no-underline">
+            <Button variant="ghost">
+              <span className="inline-flex items-center gap-2">
+                <IconSettings size={16} />
+                Manage Workspace
+                <IconArrowRight size={14} />
+              </span>
+            </Button>
+          </Link>
+        </div>
 
-        {/* Stats row */}
         <div
+          className="grid gap-4"
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             gap: spacing[4],
           }}
         >
-          {/* Members */}
           <Card
-            padding={spacing[4]}
-            radius={borderRadius.lg}
-            style={{
-              border: `1px solid ${colors.border.default}`,
-              backgroundColor: colors.background.primary,
-              cursor: "pointer",
-            }}
+            className="cursor-pointer border border-divider p-4 transition-colors hover:bg-default-100/40"
+            style={{ borderRadius: borderRadius.lg }}
             onClick={() => navigate(`/workspaces/${workspaceId}`)}
           >
-            <Group justify="space-between" mb={spacing[2]}>
-              <Text size="sm" fw={500} c={colors.text.secondary}>
+            <div className="mb-2 flex items-center justify-between">
+              <Text className="text-sm font-medium text-default-600">
                 Members
               </Text>
-              <ThemeIcon size={32} radius="md" color="blue" variant="light">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-accent/15 text-accent">
                 <IconUsers size={16} />
-              </ThemeIcon>
-            </Group>
+              </div>
+            </div>
             {membersLoading ? (
-              <Loader size="sm" />
+              <Spinner size="sm" color="accent" />
             ) : (
               <>
-                <Text size="2rem" fw={700} c={colors.text.primary}>
+                <p className="m-0 text-3xl font-bold text-foreground">
                   {memberCount}
-                </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                </p>
+                <Text
+                  className="mt-1 text-xs text-default-500"
+                  style={{ marginTop: spacing[1] }}
+                >
                   active members
                 </Text>
               </>
             )}
           </Card>
 
-          {/* Agents */}
           <Card
-            padding={spacing[4]}
-            radius={borderRadius.lg}
-            style={{
-              border: `1px solid ${colors.border.default}`,
-              backgroundColor: colors.background.primary,
-              cursor: "pointer",
-            }}
+            className="cursor-pointer border border-divider p-4 transition-colors hover:bg-default-100/40"
+            style={{ borderRadius: borderRadius.lg }}
             onClick={() => navigate(`/workspaces/${workspaceId}`)}
           >
-            <Group justify="space-between" mb={spacing[2]}>
-              <Text size="sm" fw={500} c={colors.text.secondary}>
+            <div className="mb-2 flex items-center justify-between">
+              <Text className="text-sm font-medium text-default-600">
                 Agents
               </Text>
-              <ThemeIcon size={32} radius="md" color="orange" variant="light">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-warning/15 text-warning">
                 <IconRobot size={16} />
-              </ThemeIcon>
-            </Group>
+              </div>
+            </div>
             {agentsLoading ? (
-              <Loader size="sm" />
+              <Spinner size="sm" color="accent" />
             ) : (
               <>
-                <Text size="2rem" fw={700} c={colors.text.primary}>
+                <p className="m-0 text-3xl font-bold text-foreground">
                   {agentCount}
-                </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                </p>
+                <Text
+                  className="mt-1 text-xs text-default-500"
+                  style={{ marginTop: spacing[1] }}
+                >
                   AI agents
                 </Text>
               </>
             )}
           </Card>
 
-          {/* Pending Proposals */}
           <Card
-            padding={spacing[4]}
-            radius={borderRadius.lg}
-            style={{
-              border: `1px solid ${colors.border.default}`,
-              backgroundColor: colors.background.primary,
-              cursor: "pointer",
-            }}
+            className="cursor-pointer border border-divider p-4 transition-colors hover:bg-default-100/40"
+            style={{ borderRadius: borderRadius.lg }}
             onClick={() => navigate("/proposals")}
           >
-            <Group justify="space-between" mb={spacing[2]}>
-              <Text size="sm" fw={500} c={colors.text.secondary}>
+            <div className="mb-2 flex items-center justify-between">
+              <Text className="text-sm font-medium text-default-600">
                 Pending
               </Text>
-              <ThemeIcon size={32} radius="md" color="yellow" variant="light">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-warning/15 text-warning">
                 <IconCheckbox size={16} />
-              </ThemeIcon>
-            </Group>
+              </div>
+            </div>
             {proposalsLoading ? (
-              <Loader size="sm" />
+              <Spinner size="sm" color="accent" />
             ) : (
               <>
-                <Text size="2rem" fw={700} c={colors.text.primary}>
+                <p className="m-0 text-3xl font-bold text-foreground">
                   {pendingProposals.length}
-                </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                </p>
+                <Text
+                  className="mt-1 text-xs text-default-500"
+                  style={{ marginTop: spacing[1] }}
+                >
                   proposals to review
                 </Text>
               </>
             )}
           </Card>
 
-          {/* Intelligence */}
           <Card
-            padding={spacing[4]}
-            radius={borderRadius.lg}
-            style={{
-              border: `1px solid ${colors.border.default}`,
-              backgroundColor: colors.background.primary,
-              cursor: "pointer",
-            }}
+            className="cursor-pointer border border-divider p-4 transition-colors hover:bg-default-100/40"
+            style={{ borderRadius: borderRadius.lg }}
             onClick={() => navigate("/intelligence")}
           >
-            <Group justify="space-between" mb={spacing[2]}>
-              <Text size="sm" fw={500} c={colors.text.secondary}>
+            <div className="mb-2 flex items-center justify-between">
+              <Text className="text-sm font-medium text-default-600">
                 Intelligence
               </Text>
-              <ThemeIcon size={32} radius="md" color="violet" variant="light">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-accent/15 text-accent">
                 <IconBrain size={16} />
-              </ThemeIcon>
-            </Group>
+              </div>
+            </div>
             {isLoading ? (
-              <Loader size="sm" />
+              <Spinner size="sm" color="accent" />
             ) : (
               <>
                 <Text
-                  size="sm"
-                  fw={600}
-                  c={
+                  className={`text-sm font-semibold ${
                     workspace?.settings?.intelligenceServiceId
-                      ? colors.semantic.success
-                      : colors.text.tertiary
-                  }
+                      ? "text-success"
+                      : "text-default-500"
+                  }`}
                 >
                   {workspace?.settings?.intelligenceServiceId
                     ? "Connected"
                     : "Not connected"}
                 </Text>
-                <Text size="xs" c={colors.text.tertiary} mt={spacing[1]}>
+                <Text
+                  className="mt-1 text-xs text-default-500"
+                  style={{ marginTop: spacing[1] }}
+                >
                   AI service
                 </Text>
               </>
@@ -300,142 +275,135 @@ export default function WorkspaceDashboardPage() {
           </Card>
         </div>
 
-        {/* Quick Actions */}
         <Card
-          padding={spacing[4]}
-          radius={borderRadius.lg}
-          style={{
-            border: `1px solid ${colors.border.default}`,
-            backgroundColor: colors.background.primary,
-          }}
+          className="border border-divider p-4"
+          style={{ borderRadius: borderRadius.lg }}
         >
-          <Text size="sm" fw={600} mb={spacing[3]} c={colors.text.primary}>
+          <Text className="mb-3 text-sm font-semibold text-foreground">
             Quick Actions
           </Text>
-          <Group gap={spacing[3]} wrap="wrap">
+          <div className="flex flex-wrap gap-3">
+            <Link to={`/workspaces/${workspaceId}`} className="no-underline">
+              <Button variant="ghost" size="sm">
+                <span className="inline-flex items-center gap-2">
+                  <IconPlus size={16} />
+                  Invite Member
+                </span>
+              </Button>
+            </Link>
             <Button
-              variant="light"
+              variant="ghost"
               size="sm"
-              leftSection={<IconPlus size={16} />}
-              component={Link}
-              to={`/workspaces/${workspaceId}`}
-              color="blue"
+              onPress={() => navigate("/proposals")}
             >
-              Invite Member
+              <span className="inline-flex items-center gap-2">
+                <IconCheckbox size={16} />
+                Review Proposals
+              </span>
             </Button>
+            <Link to={`/workspaces/${workspaceId}`} className="no-underline">
+              <Button variant="ghost" size="sm">
+                <span className="inline-flex items-center gap-2">
+                  <IconRobot size={16} />
+                  Manage Agents
+                </span>
+              </Button>
+            </Link>
             <Button
-              variant="light"
+              variant="ghost"
               size="sm"
-              leftSection={<IconCheckbox size={16} />}
-              onClick={() => navigate("/proposals")}
-              color="yellow"
+              onPress={() => navigate("/intelligence")}
             >
-              Review Proposals
+              <span className="inline-flex items-center gap-2">
+                <IconBrain size={16} />
+                Configure Intelligence
+              </span>
             </Button>
-            <Button
-              variant="light"
-              size="sm"
-              leftSection={<IconRobot size={16} />}
-              component={Link}
-              to={`/workspaces/${workspaceId}`}
-              color="orange"
-            >
-              Manage Agents
-            </Button>
-            <Button
-              variant="light"
-              size="sm"
-              leftSection={<IconBrain size={16} />}
-              onClick={() => navigate("/intelligence")}
-              color="violet"
-            >
-              Configure Intelligence
-            </Button>
-          </Group>
+          </div>
         </Card>
 
-        {/* Pending Proposals */}
         <Card
-          padding={spacing[4]}
-          radius={borderRadius.lg}
-          style={{
-            border: `1px solid ${colors.border.default}`,
-            backgroundColor: colors.background.primary,
-          }}
+          className="border border-divider p-4"
+          style={{ borderRadius: borderRadius.lg }}
         >
-          <Group justify="space-between" mb={spacing[3]}>
-            <Text size="sm" fw={600} c={colors.text.primary}>
+          <div className="mb-3 flex items-center justify-between">
+            <Text className="text-sm font-semibold text-foreground">
               Pending Proposals
             </Text>
             <Button
-              variant="subtle"
-              size="xs"
-              rightSection={<IconArrowRight size={12} />}
-              onClick={() => navigate("/proposals")}
+              variant="ghost"
+              size="sm"
+              onPress={() => navigate("/proposals")}
             >
-              View all
+              <span className="inline-flex items-center gap-1">
+                View all
+                <IconArrowRight size={12} />
+              </span>
             </Button>
-          </Group>
+          </div>
 
           {proposalsLoading ? (
-            <Group justify="center" py={spacing[4]}>
-              <Loader size="sm" />
-            </Group>
+            <div className="flex justify-center py-8">
+              <Spinner size="sm" color="accent" />
+            </div>
           ) : pendingProposals.length === 0 ? (
-            <Text
-              size="sm"
-              c={colors.text.tertiary}
-              ta="center"
-              py={spacing[4]}
-            >
+            <Text className="py-8 text-center text-sm text-default-500">
               No pending proposals
             </Text>
           ) : (
-            <Table highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Action</Table.Th>
-                  <Table.Th>Type</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th>When</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {pendingProposals.map((p) => (
-                  <Table.Tr key={p.id}>
-                    <Table.Td>
-                      <Text size="sm" fw={500} lineClamp={1}>
-                        {(
-                          p.request as { operation?: string } | null | undefined
-                        )?.operation ?? p.id}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge size="xs" variant="light" color="gray">
-                        {p.targetType}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge
-                        size="xs"
-                        variant="light"
-                        color={PROPOSAL_STATUS_COLORS[p.status] ?? "gray"}
-                      >
-                        {p.status}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c="dimmed">
-                        {timeSince(p.createdAt)}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-divider bg-default-50/80">
+                    <th className="px-3 py-2 font-medium">Action</th>
+                    <th className="px-3 py-2 font-medium">Type</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium">When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingProposals.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-divider/60 transition-colors hover:bg-default-100/50"
+                    >
+                      <td className="px-3 py-2">
+                        <Text className="line-clamp-1 text-sm font-medium">
+                          {(
+                            p.request as
+                              | { operation?: string }
+                              | null
+                              | undefined
+                          )?.operation ?? p.id}
+                        </Text>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Chip size="sm" variant="soft" color="default">
+                          {p.targetType}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color={PROPOSAL_STATUS_COLORS[p.status] ?? "default"}
+                        >
+                          {p.status}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Text className="text-xs text-default-500">
+                          {timeSince(p.createdAt)}
+                        </Text>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
-      </Stack>
+      </div>
     </div>
   );
 }

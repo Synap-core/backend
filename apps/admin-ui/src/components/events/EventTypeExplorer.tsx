@@ -1,17 +1,14 @@
 import { useState } from "react";
 import {
-  Card,
-  Text,
-  Stack,
-  Group,
-  Badge,
-  Button,
-  ThemeIcon,
-  Code,
-  Collapse,
-  TextInput,
   Alert,
-} from "@mantine/core";
+  Button,
+  Card,
+  Chip,
+  Input,
+  Label,
+  Spinner,
+  Text,
+} from "@heroui/react";
 import {
   IconBolt,
   IconArrowRight,
@@ -23,9 +20,12 @@ import {
   IconCheck,
   IconX,
 } from "@tabler/icons-react";
-import { colors, spacing, borderRadius, typography } from "../../theme/tokens";
+import { colors, borderRadius, typography } from "../../theme/tokens";
 import { trpc } from "../../lib/trpc";
 import SchemaFormGenerator from "../forms/SchemaFormGenerator";
+
+const inputClass =
+  "border-default-200 bg-background text-foreground focus:border-accent w-full rounded-lg border px-3 py-2 text-sm outline-none";
 
 interface EventTypeExplorerProps {
   eventType: string;
@@ -44,22 +44,18 @@ export default function EventTypeExplorer({
     message: string;
   } | null>(null);
 
-  // Fetch capabilities for flow context
   const { data: capabilities } = trpc.system.getCapabilities.useQuery();
 
-  // Fetch schema for this event type
   const { data: schemaData } = trpc.system.getEventTypeSchema.useQuery(
     { eventType },
     { enabled: !!eventType }
   );
 
-  // Fetch recent events of this type
   const { data: recentEvents } = trpc.system.getRecentEvents.useQuery(
     { limit: 5, eventType },
     { enabled: !!eventType }
   );
 
-  // Publish mutation
   const publishMutation = trpc.system.publishEvent.useMutation({
     onSuccess: (data) => {
       setPublishResult({
@@ -83,13 +79,11 @@ export default function EventTypeExplorer({
     eventTypes?: string[];
   }
 
-  // Find workers that listen to this event
   const subscribers: Worker[] =
     (capabilities as { workers?: Worker[] } | undefined)?.workers?.filter((w) =>
       w.triggers?.includes(eventType)
     ) || [];
 
-  // Find webhooks subscribed to this event
   const { data: webhooks } = trpc.integrations.list.useQuery(undefined, {
     retry: false,
   });
@@ -107,155 +101,140 @@ export default function EventTypeExplorer({
   };
 
   return (
-    <Stack gap="md">
-      {/* Header */}
+    <div className="flex flex-col gap-4">
       <Card
-        padding="md"
-        radius={borderRadius.lg}
-        style={{ background: colors.background.secondary }}
+        className="border border-transparent p-4"
+        style={{
+          borderRadius: borderRadius.lg,
+          background: colors.background.secondary,
+        }}
       >
-        <Group justify="space-between">
-          <Group>
-            <ThemeIcon size={40} radius="md" color="blue">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/15 text-accent">
               <IconBolt size={24} />
-            </ThemeIcon>
+            </div>
             <div>
-              <Text size="lg" fw={700}>
-                {eventType}
-              </Text>
-              <Text size="sm" c="dimmed">
+              <Text className="text-lg font-bold">{eventType}</Text>
+              <Text className="text-sm text-default-500">
                 Event Type Deep Dive
               </Text>
             </div>
-          </Group>
-          <Button variant="subtle" onClick={onClose}>
+          </div>
+          <Button variant="ghost" size="sm" onPress={onClose}>
             Close
           </Button>
-        </Group>
+        </div>
       </Card>
 
-      {/* Flow Context */}
       <Card
-        padding="md"
-        radius={borderRadius.lg}
-        style={{ border: `1px solid ${colors.border.default}` }}
+        className="border border-divider p-4"
+        style={{ borderRadius: borderRadius.lg }}
       >
-        <Text size="sm" fw={600} mb="md">
-          Flow Context
-        </Text>
-        <Group gap="xs" align="center" style={{ flexWrap: "wrap" }}>
-          <Badge
-            size="lg"
-            variant="light"
-            color="gray"
-            leftSection={<IconArrowRight size={12} />}
-          >
-            Trigger (API/SDK)
-          </Badge>
+        <Text className="mb-3 text-sm font-semibold">Flow Context</Text>
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip size="sm" variant="soft" color="default">
+            <span className="inline-flex items-center gap-1">
+              <IconArrowRight size={12} />
+              Trigger (API/SDK)
+            </span>
+          </Chip>
           <IconArrowRight size={16} color={colors.text.tertiary} />
-          <Badge size="lg" variant="filled" color="blue">
+          <Chip size="sm" variant="soft" color="accent">
             {eventType.split(".").slice(-2).join(".")}
-          </Badge>
+          </Chip>
           <IconArrowRight size={16} color={colors.text.tertiary} />
-          <Stack gap={4}>
+          <div className="flex flex-col gap-1">
             {subscribers.length > 0 ? (
               subscribers.map((s) => (
-                <Badge
-                  key={s.name}
-                  size="lg"
-                  variant="light"
-                  color="violet"
-                  leftSection={<IconCpu size={12} />}
-                >
-                  {s.name}
-                </Badge>
+                <Chip key={s.name} size="sm" variant="soft" color="warning">
+                  <span className="inline-flex items-center gap-1">
+                    <IconCpu size={12} />
+                    {s.name}
+                  </span>
+                </Chip>
               ))
             ) : (
-              <Badge size="lg" variant="light" color="gray">
+              <Chip size="sm" variant="soft" color="default">
                 No workers
-              </Badge>
+              </Chip>
             )}
             {subscribedWebhooks.map((wh) => (
-              <Badge
-                key={wh.id}
-                size="lg"
-                variant="light"
-                color="green"
-                leftSection={<IconWebhook size={12} />}
-              >
-                {wh.name}
-              </Badge>
+              <Chip key={wh.id} size="sm" variant="soft" color="success">
+                <span className="inline-flex items-center gap-1">
+                  <IconWebhook size={12} />
+                  {wh.name}
+                </span>
+              </Chip>
             ))}
-          </Stack>
-        </Group>
+          </div>
+        </div>
       </Card>
 
-      {/* Schema */}
       {schemaData?.hasSchema && schemaData.fields && (
         <Card
-          padding="md"
-          radius={borderRadius.lg}
-          style={{ border: `1px solid ${colors.border.default}` }}
+          className="border border-divider p-4"
+          style={{ borderRadius: borderRadius.lg }}
         >
-          <Text size="sm" fw={600} mb="md">
-            Event Schema
-          </Text>
-          <Stack gap={4}>
+          <Text className="mb-3 text-sm font-semibold">Event Schema</Text>
+          <div className="flex flex-col gap-1">
             {schemaData.fields.map(
               (field: { name: string; type: string; required: boolean }) => (
-                <Group key={field.name} gap="xs">
-                  <Code style={{ fontFamily: typography.fontFamily.mono }}>
+                <div
+                  key={field.name}
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <code
+                    className="rounded bg-default-100 px-1.5 py-0.5 text-xs"
+                    style={{ fontFamily: typography.fontFamily.mono }}
+                  >
                     {field.name}
-                  </Code>
-                  <Text size="xs" c="dimmed">
-                    {field.type}
-                  </Text>
-                  {field.required && (
-                    <Badge size="xs" color="red">
+                  </code>
+                  <Text className="text-xs text-default-500">{field.type}</Text>
+                  {field.required ? (
+                    <Chip size="sm" variant="soft" color="danger">
                       required
-                    </Badge>
-                  )}
-                </Group>
+                    </Chip>
+                  ) : null}
+                </div>
               )
             )}
-          </Stack>
+          </div>
         </Card>
       )}
 
-      {/* Publish Test Event */}
       <Card
-        padding="md"
-        radius={borderRadius.lg}
-        style={{ border: `1px solid ${colors.border.default}` }}
+        className="border border-divider p-4"
+        style={{ borderRadius: borderRadius.lg }}
       >
-        <Group justify="space-between" mb={showPublish ? "md" : 0}>
-          <Text size="sm" fw={600}>
-            Test: Publish Event
-          </Text>
+        <div className="mb-2 flex items-center justify-between">
+          <Text className="text-sm font-semibold">Test: Publish Event</Text>
           <Button
-            variant="subtle"
-            size="xs"
-            rightSection={
-              showPublish ? (
+            variant="ghost"
+            size="sm"
+            onPress={() => setShowPublish(!showPublish)}
+          >
+            <span className="inline-flex items-center gap-1">
+              {showPublish ? (
                 <IconChevronUp size={14} />
               ) : (
                 <IconChevronDown size={14} />
-              )
-            }
-            onClick={() => setShowPublish(!showPublish)}
-          >
-            {showPublish ? "Collapse" : "Expand"}
+              )}
+              {showPublish ? "Collapse" : "Expand"}
+            </span>
           </Button>
-        </Group>
-        <Collapse in={showPublish}>
-          <Stack gap="sm">
-            <TextInput
-              label="User ID"
-              placeholder="test-user"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              size="sm"
-            />
+        </div>
+        {showPublish ? (
+          <div className="flex flex-col gap-3">
+            <div>
+              <Label className="text-default-600">User ID</Label>
+              <Input
+                className={`${inputClass} mt-1`}
+                placeholder="test-user"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+              />
+            </div>
 
             {schemaData?.hasSchema ? (
               <SchemaFormGenerator
@@ -265,84 +244,87 @@ export default function EventTypeExplorer({
                 errors={{}}
               />
             ) : (
-              <Text size="xs" c="dimmed">
+              <Text className="text-xs text-default-500">
                 No schema available. Using empty payload.
               </Text>
             )}
 
             <Button
-              leftSection={<IconPlayerPlay size={16} />}
-              onClick={handlePublish}
-              loading={publishMutation.isPending}
+              variant="primary"
               fullWidth
+              onPress={handlePublish}
+              isDisabled={publishMutation.isPending}
             >
-              Publish Test Event
+              {publishMutation.isPending ? (
+                <Spinner size="sm" color="current" />
+              ) : (
+                <span className="inline-flex items-center gap-2">
+                  <IconPlayerPlay size={16} />
+                  Publish Test Event
+                </span>
+              )}
             </Button>
 
-            {publishResult && (
-              <Alert
-                icon={
-                  publishResult.success ? (
+            {publishResult ? (
+              <Alert status={publishResult.success ? "success" : "danger"}>
+                <Alert.Indicator>
+                  {publishResult.success ? (
                     <IconCheck size={16} />
                   ) : (
                     <IconX size={16} />
-                  )
-                }
-                color={publishResult.success ? "green" : "red"}
-              >
-                {publishResult.message}
+                  )}
+                </Alert.Indicator>
+                <Alert.Content>
+                  <Alert.Description>{publishResult.message}</Alert.Description>
+                </Alert.Content>
               </Alert>
-            )}
-          </Stack>
-        </Collapse>
+            ) : null}
+          </div>
+        ) : null}
       </Card>
 
-      {/* Recent Instances */}
       <Card
-        padding="md"
-        radius={borderRadius.lg}
-        style={{ border: `1px solid ${colors.border.default}` }}
+        className="border border-divider p-4"
+        style={{ borderRadius: borderRadius.lg }}
       >
-        <Group justify="space-between" mb="sm">
-          <Text size="sm" fw={600}>
-            Recent Instances
-          </Text>
-          <Badge variant="light">{recentEvents?.events?.length || 0}</Badge>
-        </Group>
-        <Stack gap={4}>
+        <div className="mb-2 flex items-center justify-between">
+          <Text className="text-sm font-semibold">Recent Instances</Text>
+          <Chip size="sm" variant="soft" color="default">
+            {recentEvents?.events?.length || 0}
+          </Chip>
+        </div>
+        <div className="flex flex-col gap-1">
           {recentEvents?.events && recentEvents.events.length > 0 ? (
             recentEvents.events.slice(0, 5).map((event) => (
-              <Group
+              <div
                 key={event.id}
-                justify="space-between"
+                className="flex items-center justify-between gap-2 rounded-md px-3 py-2"
                 style={{
-                  padding: `${spacing[2]} ${spacing[3]}`,
                   background: colors.background.secondary,
                   borderRadius: borderRadius.base,
                 }}
               >
-                <Group gap="xs">
+                <div className="flex items-center gap-2">
                   <Text
-                    size="xs"
-                    c="dimmed"
+                    className="text-xs text-default-500"
                     style={{ fontFamily: typography.fontFamily.mono }}
                   >
                     {new Date(event.timestamp).toLocaleTimeString()}
                   </Text>
-                  <Text size="xs">{event.userId || "anonymous"}</Text>
-                </Group>
-                <Badge size="xs" color="green">
+                  <Text className="text-xs">{event.userId || "anonymous"}</Text>
+                </div>
+                <Chip size="sm" variant="soft" color="success">
                   SUCCESS
-                </Badge>
-              </Group>
+                </Chip>
+              </div>
             ))
           ) : (
-            <Text size="xs" c="dimmed" ta="center" py="sm">
+            <Text className="py-2 text-center text-xs text-default-500">
               No recent events
             </Text>
           )}
-        </Stack>
+        </div>
       </Card>
-    </Stack>
+    </div>
   );
 }

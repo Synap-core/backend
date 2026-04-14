@@ -1,28 +1,19 @@
 import { useState, useDeferredValue } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Title,
-  Text,
-  Stack,
-  Card,
-  TextInput,
-  Select,
   Button,
-  Group,
-  Badge,
-  Timeline,
+  Card,
+  Chip,
   Drawer,
-  ScrollArea,
-  Code,
-  Divider,
+  Input,
+  Label,
+  Separator,
   Skeleton,
+  Spinner,
   Tabs,
-  SimpleGrid,
-  ThemeIcon,
-  Collapse,
-  ActionIcon,
-  Tooltip,
-} from "@mantine/core";
+  Text,
+  useOverlayState,
+} from "@heroui/react";
 import {
   showSuccessNotification,
   showErrorNotification,
@@ -54,11 +45,37 @@ import { trpc } from "../../lib/trpc";
 import EventTypeExplorer from "../../components/events/EventTypeExplorer";
 import SchemaFormGenerator from "../../components/forms/SchemaFormGenerator";
 
+const inputClass =
+  "border-default-200 bg-background text-foreground focus:border-accent w-full rounded-lg border px-3 py-2 text-sm outline-none";
+
+function actionTone(action: string): string {
+  if (action === "create" || action === "add")
+    return "bg-success/15 text-success";
+  if (action === "update") return "bg-warning/15 text-warning";
+  if (action === "delete" || action === "remove")
+    return "bg-danger/15 text-danger";
+  return "bg-default-100 text-default-600";
+}
+
+function actionIconNode(action: string) {
+  if (action === "create" || action === "add") return <IconPlus size={14} />;
+  if (action === "update") return <IconPencil size={14} />;
+  if (action === "delete" || action === "remove")
+    return <IconTrash size={14} />;
+  return <IconBolt size={14} />;
+}
+
+type EventTypeEntry = {
+  type: string;
+  hasSchema: boolean;
+  action: string;
+  modifier: string;
+};
+
 export default function InvestigatePage() {
   const [searchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<string | null>("search");
+  const [activeTab, setActiveTab] = useState("search");
 
-  // Search state
   const [searchTerm, setSearchTerm] = useState(
     searchParams.get("userId") || searchParams.get("eventId") || ""
   );
@@ -66,14 +83,12 @@ export default function InvestigatePage() {
     searchParams.get("eventType")
   );
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [fromDate, setFromDate] = useState<string>("");
-  const [toDate, setToDate] = useState<string>("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
-  // Deferred values for live filtering (avoids layout jank)
   const deferredSearch = useDeferredValue(searchTerm);
   const deferredEventType = useDeferredValue(eventTypeFilter);
 
-  // Event details state
   const [selectedEventId, setSelectedEventId] = useState<string | null>(() =>
     searchParams.get("eventId")
   );
@@ -81,30 +96,29 @@ export default function InvestigatePage() {
     null
   );
 
-  // Event Types tab search
   const [typesSearch, setTypesSearch] = useState("");
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
 
-  // Publish state
-  const [publishEventType, setPublishEventType] = useState<string>("");
+  const [publishEventType, setPublishEventType] = useState("");
   const [publishData, setPublishData] = useState<Record<string, unknown>>({});
   const [publishUserId, setPublishUserId] = useState("test-user");
 
-  // ── Data fetching via tRPC ──────────────────────────────────────────────
+  const eventDrawer = useOverlayState({
+    isOpen: !!selectedEventId,
+    onOpenChange: (open) => {
+      if (!open) setSelectedEventId(null);
+    },
+  });
 
-  // Fetch system capabilities (event types list)
   const { data: capabilities } = trpc.system.getCapabilities.useQuery();
 
-  // Fetch schema for publish form
   const { data: publishSchema } = trpc.system.getEventTypeSchema.useQuery(
     { eventType: publishEventType },
     { enabled: !!publishEventType }
   );
 
-  // Convert datetime-local value (no tz) to ISO 8601 with timezone
   const toIso = (v: string) => (v ? new Date(v).toISOString() : undefined);
 
-  // Build search filters from current state
   const buildFilters = () => {
     const isUuid = /^[0-9a-f-]{36}$/i.test(deferredSearch);
     return {
@@ -117,7 +131,6 @@ export default function InvestigatePage() {
     };
   };
 
-  // Search events — always enabled, refetches when filters change
   const {
     data: searchData,
     isLoading: isLoadingSearch,
@@ -129,14 +142,12 @@ export default function InvestigatePage() {
 
   const events = searchData?.events ?? [];
 
-  // Fetch trace when an event is selected
   const { data: traceData, isLoading: isLoadingTrace } =
     trpc.system.getEventTrace.useQuery(
       { eventId: selectedEventId! },
       { enabled: !!selectedEventId }
     );
 
-  // Republish mutation
   const republishMutation = trpc.system.publishEvent.useMutation({
     onSuccess: () => {
       showSuccessNotification({
@@ -153,7 +164,6 @@ export default function InvestigatePage() {
     },
   });
 
-  // Publish new event
   const publishMutation = trpc.system.publishEvent.useMutation({
     onSuccess: (data) => {
       showSuccessNotification({
@@ -207,8 +217,6 @@ export default function InvestigatePage() {
     toDate
   );
 
-  // ── Event Types tab helpers ─────────────────────────────────────────────
-
   const toggleTable = (table: string) => {
     setExpandedTables((prev) => {
       const next = new Set(prev);
@@ -218,33 +226,9 @@ export default function InvestigatePage() {
     });
   };
 
-  const actionColor = (action: string) =>
-    action === "create"
-      ? "green"
-      : action === "update" || action === "add"
-        ? "orange"
-        : action === "delete" || action === "remove"
-          ? "red"
-          : "gray";
-
-  const actionIcon = (action: string) => {
-    if (action === "create" || action === "add") return <IconPlus size={14} />;
-    if (action === "update") return <IconPencil size={14} />;
-    if (action === "delete" || action === "remove")
-      return <IconTrash size={14} />;
-    return <IconBolt size={14} />;
-  };
-
-  // Filter + group event types for the Event Types tab
   const filteredGrouped = (() => {
     const allTypes = capabilities?.eventTypes ?? [];
     const q = typesSearch.toLowerCase();
-    type EventTypeEntry = {
-      type: string;
-      hasSchema: boolean;
-      action: string;
-      modifier: string;
-    };
     const filtered = q
       ? allTypes.filter((et) => et.type.toLowerCase().includes(q))
       : allTypes;
@@ -267,194 +251,209 @@ export default function InvestigatePage() {
     return Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]));
   })();
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  const eventTypeOptions =
+    capabilities?.eventTypes?.map((et) => ({
+      value: et.type,
+      label: et.type,
+    })) ?? [];
 
   return (
-    <div style={{ width: "100%", padding: spacing[8] }}>
-      <Stack gap={spacing[6]}>
-        {/* Header */}
+    <div className="w-full" style={{ padding: spacing[8] }}>
+      <div className="flex flex-col gap-6" style={{ gap: spacing[6] }}>
         <div>
-          <Title
-            order={1}
-            style={{
-              fontFamily: typography.fontFamily.sans,
-              color: colors.text.primary,
-            }}
+          <h1
+            className="m-0 text-2xl font-bold text-foreground"
+            style={{ fontFamily: typography.fontFamily.sans }}
           >
             Events
-          </Title>
-          <Text
-            size="sm"
-            style={{
-              color: colors.text.secondary,
-              fontFamily: typography.fontFamily.sans,
-            }}
-          >
+          </h1>
+          <Text className="mt-1 text-sm text-default-500">
             Search, explore, and publish events
           </Text>
         </div>
 
-        {/* Tabs */}
-        <Tabs value={activeTab} onChange={setActiveTab}>
-          <Tabs.List>
-            <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
-              Search Events
-            </Tabs.Tab>
-            <Tabs.Tab value="types" leftSection={<IconList size={16} />}>
-              Event Types
-              {capabilities?.eventTypes && (
-                <Badge size="xs" variant="light" color="gray" ml={6}>
-                  {capabilities.eventTypes.length}
-                </Badge>
-              )}
-            </Tabs.Tab>
-            <Tabs.Tab value="publish" leftSection={<IconSend size={16} />}>
-              Publish Event
-            </Tabs.Tab>
-          </Tabs.List>
+        <Tabs.Root
+          selectedKey={activeTab}
+          onSelectionChange={(k) => setActiveTab(String(k))}
+        >
+          <Tabs.ListContainer>
+            <Tabs.List className="flex flex-wrap gap-1 border-b border-divider pb-2">
+              <Tabs.Tab id="search" className="rounded-md px-3 py-2 text-sm">
+                <span className="inline-flex items-center gap-1">
+                  <IconSearch size={16} />
+                  Search Events
+                </span>
+              </Tabs.Tab>
+              <Tabs.Tab id="types" className="rounded-md px-3 py-2 text-sm">
+                <span className="inline-flex items-center gap-1">
+                  <IconList size={16} />
+                  Event Types
+                  {capabilities?.eventTypes ? (
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color="default"
+                      className="ml-1"
+                    >
+                      {capabilities.eventTypes.length}
+                    </Chip>
+                  ) : null}
+                </span>
+              </Tabs.Tab>
+              <Tabs.Tab id="publish" className="rounded-md px-3 py-2 text-sm">
+                <span className="inline-flex items-center gap-1">
+                  <IconSend size={16} />
+                  Publish Event
+                </span>
+              </Tabs.Tab>
+              <Tabs.Indicator />
+            </Tabs.List>
+          </Tabs.ListContainer>
 
-          {/* ── Search Events Tab ── */}
-          <Tabs.Panel value="search" pt="md">
-            <Stack gap="md">
-              {/* Filters Bar */}
+          <Tabs.Panel id="search" className="pt-4">
+            <div className="flex flex-col gap-4">
               <Card
-                padding="md"
-                radius={borderRadius.lg}
-                style={{ border: `1px solid ${colors.border.default}` }}
+                className="border border-divider p-4"
+                style={{ borderRadius: borderRadius.lg }}
               >
-                <Group gap="sm" align="flex-end" wrap="nowrap">
-                  <TextInput
-                    placeholder="Filter by user ID, UUID (correlation), or leave empty to see all…"
-                    leftSection={<IconSearch size={16} />}
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    style={{ flex: 1 }}
-                    rightSection={
-                      searchTerm ? (
-                        <ActionIcon
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="min-w-[200px] flex-1">
+                    <div className="relative">
+                      <IconSearch
+                        size={16}
+                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-default-400"
+                      />
+                      <Input
+                        className={`${inputClass} pl-9 pr-9`}
+                        placeholder="Filter by user ID, UUID (correlation), or leave empty…"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                      />
+                      {searchTerm ? (
+                        <Button
+                          variant="ghost"
                           size="sm"
-                          variant="subtle"
-                          onClick={() => setSearchTerm("")}
+                          isIconOnly
+                          className="absolute right-1 top-1/2 -translate-y-1/2"
+                          aria-label="Clear search"
+                          onPress={() => setSearchTerm("")}
                         >
                           <IconX size={14} />
-                        </ActionIcon>
-                      ) : null
-                    }
-                  />
-                  <Select
-                    placeholder="All types"
-                    leftSection={<IconFilter size={14} />}
-                    data={
-                      capabilities?.eventTypes?.map((et) => ({
-                        value: et.type,
-                        label: et.type,
-                      })) || []
-                    }
-                    value={eventTypeFilter}
-                    onChange={(value) => setEventTypeFilter(value)}
-                    clearable
-                    searchable
-                    style={{ width: "220px" }}
-                  />
-                  <Tooltip label="Advanced filters">
-                    <ActionIcon
-                      variant={showAdvancedFilters ? "filled" : "subtle"}
-                      color={showAdvancedFilters ? "blue" : "gray"}
-                      onClick={() =>
-                        setShowAdvancedFilters(!showAdvancedFilters)
-                      }
-                    >
-                      <IconFilter size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  {hasActiveFilters && (
-                    <Button
-                      variant="subtle"
-                      color="gray"
-                      size="sm"
-                      onClick={clearFilters}
-                    >
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <select
+                    className={inputClass}
+                    style={{ width: 220 }}
+                    value={eventTypeFilter ?? ""}
+                    onChange={(e) => setEventTypeFilter(e.target.value || null)}
+                  >
+                    <option value="">All types</option>
+                    {eventTypeOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant={showAdvancedFilters ? "primary" : "ghost"}
+                    size="sm"
+                    isIconOnly
+                    aria-label="Advanced filters"
+                    onPress={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                  >
+                    <IconFilter size={16} />
+                  </Button>
+                  {hasActiveFilters ? (
+                    <Button variant="ghost" size="sm" onPress={clearFilters}>
                       Clear
                     </Button>
-                  )}
-                </Group>
+                  ) : null}
+                </div>
 
-                <Collapse in={showAdvancedFilters}>
-                  <Group gap="sm" mt="sm">
-                    <TextInput
-                      label="From"
-                      type="datetime-local"
-                      value={fromDate}
-                      onChange={(e) => setFromDate(e.target.value)}
-                      style={{ flex: 1 }}
-                    />
-                    <TextInput
-                      label="To"
-                      type="datetime-local"
-                      value={toDate}
-                      onChange={(e) => setToDate(e.target.value)}
-                      style={{ flex: 1 }}
-                    />
-                  </Group>
-                </Collapse>
+                {showAdvancedFilters ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="min-w-[160px] flex-1">
+                      <Label className="text-xs text-default-600">From</Label>
+                      <Input
+                        type="datetime-local"
+                        className={`${inputClass} mt-1`}
+                        value={fromDate}
+                        onChange={(e) => setFromDate(e.target.value)}
+                      />
+                    </div>
+                    <div className="min-w-[160px] flex-1">
+                      <Label className="text-xs text-default-600">To</Label>
+                      <Input
+                        type="datetime-local"
+                        className={`${inputClass} mt-1`}
+                        value={toDate}
+                        onChange={(e) => setToDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </Card>
 
-              {/* Results */}
               <Card
-                padding="md"
-                radius={borderRadius.lg}
-                style={{ border: `1px solid ${colors.border.default}` }}
+                className="border border-divider p-4"
+                style={{ borderRadius: borderRadius.lg }}
               >
-                <Group justify="space-between" mb="md">
-                  <Group gap="xs">
-                    <Text size="lg" fw={600}>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Text className="text-lg font-semibold">
                       {hasActiveFilters ? "Filtered Results" : "Recent Events"}
                     </Text>
-                    {isFetchingSearch && !isLoadingSearch && (
-                      <Text size="xs" c="dimmed">
+                    {isFetchingSearch && !isLoadingSearch ? (
+                      <Text className="text-xs text-default-500">
                         updating…
                       </Text>
-                    )}
-                  </Group>
-                  <Group gap="xs">
-                    <Badge variant="light" color="gray">
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Chip size="sm" variant="soft" color="default">
                       {events.length} events
-                    </Badge>
-                    <ActionIcon
-                      variant="subtle"
-                      onClick={() => refetchSearch()}
+                    </Chip>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      isIconOnly
+                      aria-label="Refresh"
+                      onPress={() => refetchSearch()}
                     >
                       <IconRefresh size={16} />
-                    </ActionIcon>
-                  </Group>
-                </Group>
+                    </Button>
+                  </div>
+                </div>
 
-                <ScrollArea style={{ height: "520px" }}>
-                  <Stack gap="xs">
+                <div className="max-h-[520px] overflow-y-auto">
+                  <div className="flex flex-col gap-2">
                     {isLoadingSearch ? (
                       <SearchResultsSkeleton count={8} />
                     ) : events.length === 0 ? (
-                      <Stack align="center" py="xl" gap="xs">
-                        <Text size="sm" c="dimmed">
+                      <div className="flex flex-col items-center gap-2 py-10">
+                        <Text className="text-sm text-default-500">
                           {hasActiveFilters
                             ? "No events match the current filters."
                             : "No events recorded yet."}
                         </Text>
-                        {hasActiveFilters && (
+                        {hasActiveFilters ? (
                           <Button
-                            variant="subtle"
-                            size="xs"
-                            onClick={clearFilters}
+                            variant="ghost"
+                            size="sm"
+                            onPress={clearFilters}
                           >
                             Clear filters
                           </Button>
-                        )}
-                      </Stack>
+                        ) : null}
+                      </div>
                     ) : (
                       events.map((event) => (
-                        <div
+                        <button
+                          type="button"
                           key={event.id}
-                          onClick={() => handleEventClick(event.id)}
+                          className="w-full cursor-pointer rounded-md border p-2 text-left transition-colors"
                           style={{
                             padding: `${spacing[2]} ${spacing[3]}`,
                             borderRadius: borderRadius.base,
@@ -467,120 +466,106 @@ export default function InvestigatePage() {
                               selectedEventId === event.id
                                 ? "#EFF6FF"
                                 : colors.background.secondary,
-                            cursor: "pointer",
-                            transition: "background-color 0.1s ease",
                           }}
+                          onClick={() => handleEventClick(event.id)}
                         >
-                          <Group justify="space-between" gap="xs">
-                            <Group gap="xs" style={{ flex: 1, minWidth: 0 }}>
-                              <Badge
-                                variant="light"
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <Chip
+                                size="sm"
+                                variant="soft"
                                 color={
                                   (event.type ?? "").includes("error") ||
                                   (event.type ?? "").includes("failed")
-                                    ? "red"
-                                    : "blue"
+                                    ? "danger"
+                                    : "accent"
                                 }
-                                size="sm"
-                                style={{
-                                  fontFamily: typography.fontFamily.mono,
-                                  flexShrink: 0,
-                                }}
+                                className="shrink-0 font-mono text-xs"
                               >
                                 {event.type}
-                              </Badge>
-                              <Text
-                                size="xs"
-                                c="dimmed"
+                              </Chip>
+                              <span
+                                className="truncate text-xs text-default-500"
                                 style={{
                                   fontFamily: typography.fontFamily.mono,
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
                                 }}
                               >
                                 {event.id}
-                              </Text>
-                            </Group>
-                            <Group gap="xs" style={{ flexShrink: 0 }}>
-                              {event.userId && (
-                                <Text size="xs" c="dimmed">
+                              </span>
+                            </div>
+                            <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-default-500">
+                              {event.userId ? (
+                                <span>
                                   {event.userId.length > 20
                                     ? `${event.userId.slice(0, 8)}…`
                                     : event.userId}
-                                </Text>
-                              )}
-                              <Text size="xs" c="dimmed">
+                                </span>
+                              ) : null}
+                              <span>
                                 {new Date(event.timestamp).toLocaleString()}
-                              </Text>
-                            </Group>
-                          </Group>
-                        </div>
+                              </span>
+                            </div>
+                          </div>
+                        </button>
                       ))
                     )}
-                  </Stack>
-                </ScrollArea>
+                  </div>
+                </div>
               </Card>
-            </Stack>
+            </div>
           </Tabs.Panel>
 
-          {/* ── Event Types Tab ── */}
-          <Tabs.Panel value="types" pt="md">
+          <Tabs.Panel id="types" className="pt-4">
             {selectedEventType ? (
               <EventTypeExplorer
                 eventType={selectedEventType}
                 onClose={() => setSelectedEventType(null)}
               />
             ) : (
-              <Stack gap="md">
-                {/* Search bar for types */}
+              <div className="flex flex-col gap-4">
                 <Card
-                  padding="md"
-                  radius={borderRadius.lg}
-                  style={{ border: `1px solid ${colors.border.default}` }}
+                  className="border border-divider p-4"
+                  style={{ borderRadius: borderRadius.lg }}
                 >
-                  <Group gap="sm" justify="space-between">
-                    <TextInput
-                      placeholder="Filter event types…"
-                      leftSection={<IconSearch size={16} />}
-                      value={typesSearch}
-                      onChange={(e) => setTypesSearch(e.target.value)}
-                      rightSection={
-                        typesSearch ? (
-                          <ActionIcon
-                            size="sm"
-                            variant="subtle"
-                            onClick={() => setTypesSearch("")}
-                          >
-                            <IconX size={14} />
-                          </ActionIcon>
-                        ) : null
-                      }
-                      style={{ flex: 1 }}
-                    />
-                    <Text size="sm" c="dimmed">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="relative min-w-[200px] flex-1">
+                      <IconSearch
+                        size={16}
+                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-default-400"
+                      />
+                      <Input
+                        className={`${inputClass} pl-9 pr-9`}
+                        placeholder="Filter event types…"
+                        value={typesSearch}
+                        onChange={(e) => setTypesSearch(e.target.value)}
+                      />
+                      {typesSearch ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isIconOnly
+                          className="absolute right-1 top-1/2 -translate-y-1/2"
+                          onPress={() => setTypesSearch("")}
+                          aria-label="Clear"
+                        >
+                          <IconX size={14} />
+                        </Button>
+                      ) : null}
+                    </div>
+                    <Text className="text-sm text-default-500">
                       {filteredGrouped.length} table
                       {filteredGrouped.length !== 1 ? "s" : ""}
-                      {typesSearch && ` matching "${typesSearch}"`}
+                      {typesSearch ? ` matching "${typesSearch}"` : ""}
                     </Text>
-                  </Group>
-                  <Text size="xs" c="dimmed" mt="xs">
+                  </div>
+                  <Text className="mt-2 text-xs text-default-500">
                     Pattern: <code>table.action.modifier</code> — click a
                     modifier to explore
                   </Text>
                 </Card>
 
-                {/* Grouped cards — collapsed by default, expand on click */}
                 {filteredGrouped.map(([table, tableEvents]) => {
                   const isOpen = expandedTables.has(table) || !!typesSearch;
-
-                  // Group by action within table
-                  type EventTypeEntry = {
-                    type: string;
-                    hasSchema: boolean;
-                    action: string;
-                    modifier: string;
-                  };
                   const byAction = tableEvents.reduce(
                     (acc: Record<string, EventTypeEntry[]>, e) => {
                       const action = e.action || "other";
@@ -594,49 +579,51 @@ export default function InvestigatePage() {
                   return (
                     <Card
                       key={table}
-                      padding="md"
-                      radius={borderRadius.lg}
-                      style={{ border: `1px solid ${colors.border.default}` }}
+                      className="border border-divider p-4"
+                      style={{ borderRadius: borderRadius.lg }}
                     >
-                      {/* Table header — clickable to expand/collapse */}
-                      <Group
-                        gap="sm"
-                        style={{ cursor: "pointer" }}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className="flex cursor-pointer items-center gap-2"
                         onClick={() => !typesSearch && toggleTable(table)}
+                        onKeyDown={(e) => {
+                          if (
+                            !typesSearch &&
+                            (e.key === "Enter" || e.key === " ")
+                          ) {
+                            e.preventDefault();
+                            toggleTable(table);
+                          }
+                        }}
                       >
-                        <ThemeIcon
-                          size={36}
-                          radius="md"
-                          color="blue"
-                          variant="light"
-                        >
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
                           <IconDatabase size={20} />
-                        </ThemeIcon>
-                        <div style={{ flex: 1 }}>
-                          <Text size="md" fw={600}>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <Text className="text-base font-semibold">
                             {table}
                           </Text>
-                          <Text size="xs" c="dimmed">
+                          <Text className="text-xs text-default-500">
                             {tableEvents.length} event type
                             {tableEvents.length !== 1 ? "s" : ""}
                           </Text>
                         </div>
-                        {!typesSearch && (
-                          <ActionIcon variant="subtle" color="gray">
+                        {!typesSearch ? (
+                          <span className="text-default-500">
                             {isOpen ? (
                               <IconChevronDown size={16} />
                             ) : (
                               <IconChevronRight size={16} />
                             )}
-                          </ActionIcon>
-                        )}
-                      </Group>
+                          </span>
+                        ) : null}
+                      </div>
 
-                      <Collapse in={isOpen}>
-                        <SimpleGrid
-                          cols={{ base: 1, sm: 2, md: 3 }}
-                          spacing="sm"
-                          mt="md"
+                      {isOpen ? (
+                        <div
+                          className="mt-4 grid gap-2 sm:grid-cols-2 md:grid-cols-3"
+                          style={{ marginTop: spacing[3] }}
                         >
                           {Object.entries(byAction)
                             .sort((a, b) => a[0].localeCompare(b[0]))
@@ -649,355 +636,363 @@ export default function InvestigatePage() {
                               return (
                                 <Card
                                   key={`${table}.${action}`}
-                                  padding="sm"
-                                  radius="md"
+                                  className="border border-divider p-3"
                                   style={{
                                     background: colors.background.secondary,
-                                    border: `1px solid ${colors.border.light}`,
+                                    borderRadius: borderRadius.md,
                                   }}
                                 >
-                                  <Group gap="xs" mb={hasModifiers ? "xs" : 0}>
-                                    <ThemeIcon
-                                      size={26}
-                                      radius="sm"
-                                      color={actionColor(action)}
-                                      variant="light"
-                                    >
-                                      {actionIcon(action)}
-                                    </ThemeIcon>
-                                    <Text size="sm" fw={500}>
+                                  <div
+                                    className={`mb-2 flex items-center gap-2 rounded-md p-1 ${actionTone(action)}`}
+                                  >
+                                    <span className="flex h-7 w-7 items-center justify-center rounded-sm bg-background/60">
+                                      {actionIconNode(action)}
+                                    </span>
+                                    <Text className="text-sm font-medium">
                                       {action}
                                     </Text>
-                                  </Group>
+                                  </div>
 
-                                  {hasModifiers && (
-                                    <Stack gap={4} ml={34}>
+                                  {hasModifiers ? (
+                                    <div className="ml-2 flex flex-col gap-1 border-l-2 border-divider pl-3">
                                       {actionEvents.map((e) => (
-                                        <Group
+                                        <button
+                                          type="button"
                                           key={e.type}
-                                          gap="xs"
-                                          style={{ cursor: "pointer" }}
+                                          className="flex cursor-pointer flex-wrap items-center gap-2 text-left"
                                           onClick={() =>
                                             setSelectedEventType(e.type)
                                           }
                                         >
-                                          <Text size="xs" c="dimmed">
+                                          <span className="text-xs text-default-400">
                                             →
-                                          </Text>
-                                          <Badge
-                                            size="xs"
-                                            variant="dot"
+                                          </span>
+                                          <Chip
+                                            size="sm"
+                                            variant="soft"
                                             color={
                                               e.modifier === "requested"
-                                                ? "blue"
-                                                : e.modifier === "completed"
-                                                  ? "green"
-                                                  : e.modifier === "validated"
-                                                    ? "teal"
-                                                    : "gray"
+                                                ? "accent"
+                                                : e.modifier === "completed" ||
+                                                    e.modifier === "validated"
+                                                  ? "success"
+                                                  : "default"
                                             }
                                           >
                                             {e.modifier}
-                                          </Badge>
-                                          {e.hasSchema && (
-                                            <Badge
-                                              size="xs"
-                                              color="violet"
-                                              variant="light"
+                                          </Chip>
+                                          {e.hasSchema ? (
+                                            <Chip
+                                              size="sm"
+                                              variant="soft"
+                                              color="warning"
                                             >
                                               Schema
-                                            </Badge>
-                                          )}
-                                        </Group>
+                                            </Chip>
+                                          ) : null}
+                                        </button>
                                       ))}
-                                    </Stack>
-                                  )}
-
-                                  {!hasModifiers && (
-                                    <div
-                                      style={{
-                                        cursor: "pointer",
-                                        marginTop: 4,
-                                      }}
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="mt-1 cursor-pointer text-left"
                                       onClick={() =>
                                         setSelectedEventType(
                                           actionEvents[0]?.type
                                         )
                                       }
                                     >
-                                      <Text size="xs" c="dimmed">
+                                      <Text className="text-xs text-default-500">
                                         {actionEvents[0]?.type}
                                       </Text>
-                                    </div>
+                                    </button>
                                   )}
                                 </Card>
                               );
                             })}
-                        </SimpleGrid>
-                      </Collapse>
+                        </div>
+                      ) : null}
                     </Card>
                   );
                 })}
 
-                {filteredGrouped.length === 0 && (
-                  <Text size="sm" c="dimmed" ta="center" py="xl">
+                {filteredGrouped.length === 0 ? (
+                  <Text className="py-10 text-center text-sm text-default-500">
                     No event types match "{typesSearch}"
                   </Text>
-                )}
-              </Stack>
+                ) : null}
+              </div>
             )}
           </Tabs.Panel>
 
-          {/* ── Publish Event Tab ── */}
-          <Tabs.Panel value="publish" pt="md">
+          <Tabs.Panel id="publish" className="pt-4">
             <Card
-              padding="md"
-              radius={borderRadius.lg}
-              style={{ border: `1px solid ${colors.border.default}` }}
+              className="border border-divider p-4"
+              style={{ borderRadius: borderRadius.lg }}
             >
-              <Text size="lg" fw={600} mb="xs">
+              <Text className="mb-1 text-lg font-semibold">
                 Publish Test Event
               </Text>
-              <Text size="sm" c="dimmed" mb="md">
+              <Text className="mb-4 text-sm text-default-500">
                 Inject an event directly into the event store for testing or
                 debugging.
               </Text>
-              <Stack gap="md">
-                <Select
-                  label="Event Type"
-                  placeholder="Select or search event type"
-                  data={
-                    capabilities?.eventTypes?.map((et) => ({
-                      value: et.type,
-                      label: et.type,
-                    })) || []
-                  }
-                  value={publishEventType}
-                  onChange={(value) => setPublishEventType(value || "")}
-                  searchable
-                  required
-                  clearable
-                />
-
-                <TextInput
-                  label="User ID"
-                  description="The user to attribute this event to"
-                  placeholder="test-user"
-                  value={publishUserId}
-                  onChange={(e) => setPublishUserId(e.target.value)}
-                />
-
-                {publishEventType && publishSchema?.hasSchema && (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <Label className="text-default-600">Event Type</Label>
+                  <select
+                    className={`${inputClass} mt-1`}
+                    value={publishEventType}
+                    onChange={(e) => setPublishEventType(e.target.value)}
+                    required
+                  >
+                    <option value="">Select event type</option>
+                    {eventTypeOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-default-600">User ID</Label>
+                  <Text className="mb-1 text-xs text-default-500">
+                    The user to attribute this event to
+                  </Text>
+                  <Input
+                    className={inputClass}
+                    placeholder="test-user"
+                    value={publishUserId}
+                    onChange={(e) => setPublishUserId(e.target.value)}
+                  />
+                </div>
+                {publishEventType && publishSchema?.hasSchema ? (
                   <SchemaFormGenerator
                     eventType={publishEventType}
                     value={publishData}
                     onChange={setPublishData}
                     errors={{}}
                   />
-                )}
-
-                {publishEventType && !publishSchema?.hasSchema && (
-                  <Text size="xs" c="dimmed">
+                ) : null}
+                {publishEventType && !publishSchema?.hasSchema ? (
+                  <Text className="text-xs text-default-500">
                     No schema registered for this event type — it will be
                     published with empty data.
                   </Text>
-                )}
-
+                ) : null}
                 <Button
-                  leftSection={<IconSend size={16} />}
-                  onClick={handlePublish}
-                  loading={publishMutation.isPending}
-                  disabled={!publishEventType}
+                  variant="primary"
                   fullWidth
+                  isDisabled={!publishEventType}
+                  onPress={handlePublish}
                 >
-                  Publish Event
+                  {publishMutation.isPending ? (
+                    <Spinner size="sm" color="current" />
+                  ) : (
+                    <span className="inline-flex items-center gap-2">
+                      <IconSend size={16} />
+                      Publish Event
+                    </span>
+                  )}
                 </Button>
-              </Stack>
+              </div>
             </Card>
           </Tabs.Panel>
-        </Tabs>
-      </Stack>
+        </Tabs.Root>
+      </div>
 
-      {/* ── Event Details Drawer ── */}
-      <Drawer
-        opened={!!selectedEventId}
-        onClose={() => setSelectedEventId(null)}
-        position="right"
-        size="xl"
-        title={
-          <Group gap="sm">
-            <IconTimeline size={20} color={colors.semantic.info} />
-            <Text size="lg" fw={600}>
-              Event Details & Trace
-            </Text>
-          </Group>
-        }
-      >
-        {/* Republish action in drawer header area */}
-        {traceData?.event && (
-          <Group mb="md">
-            <Button
-              variant="light"
-              color="orange"
-              size="xs"
-              leftSection={<IconRefresh size={14} />}
-              loading={republishMutation.isPending}
-              onClick={handleRepublish}
-            >
-              Republish Event
-            </Button>
-          </Group>
-        )}
-
-        {isLoadingTrace ? (
-          <Stack gap="md">
-            <Skeleton height={140} radius="md" />
-            <Skeleton height={100} radius="md" />
-            <Skeleton height={160} radius="md" />
-          </Stack>
-        ) : traceData ? (
-          <Stack gap="lg">
-            {/* Main Event */}
-            <div>
-              <Text size="sm" fw={600} mb="sm">
-                Main Event
-              </Text>
-              <Card
-                padding="sm"
-                style={{ backgroundColor: colors.background.secondary }}
-              >
-                <Stack gap="xs">
-                  <Group gap="xs">
-                    <IconTag size={15} color={colors.text.secondary} />
-                    <Badge
-                      variant="light"
-                      color="blue"
-                      style={{ fontFamily: typography.fontFamily.mono }}
-                    >
-                      {traceData.event.eventType}
-                    </Badge>
-                  </Group>
-                  <Group gap="xs">
-                    <IconClock size={15} color={colors.text.secondary} />
-                    <Text size="xs" c="dimmed">
-                      {new Date(traceData.event.timestamp).toLocaleString()}
-                    </Text>
-                  </Group>
-                  {traceData.event.userId && (
-                    <Group gap="xs">
-                      <IconUser size={15} color={colors.text.secondary} />
-                      <Text size="xs" c="dimmed">
-                        {traceData.event.userId}
-                      </Text>
-                    </Group>
+      <Drawer state={eventDrawer}>
+        <Drawer.Backdrop isDismissable />
+        <Drawer.Content placement="right" className="max-w-xl">
+          <Drawer.Dialog>
+            <Drawer.Handle />
+            <Drawer.Header className="border-b border-divider px-4 py-3">
+              <div className="flex items-center gap-2 pr-8">
+                <IconTimeline size={20} color={colors.semantic.info} />
+                <Drawer.Heading className="text-lg font-semibold">
+                  Event Details & Trace
+                </Drawer.Heading>
+              </div>
+              <Drawer.CloseTrigger />
+            </Drawer.Header>
+            <Drawer.Body className="gap-4 px-4 py-4">
+              {traceData?.event ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-fit"
+                  isDisabled={republishMutation.isPending}
+                  onPress={handleRepublish}
+                >
+                  {republishMutation.isPending ? (
+                    <Spinner size="sm" color="current" />
+                  ) : (
+                    <span className="inline-flex items-center gap-2">
+                      <IconRefresh size={14} />
+                      Republish Event
+                    </span>
                   )}
-                  <Group gap="xs">
-                    <IconCode size={15} color={colors.text.secondary} />
-                    <Text
-                      size="xs"
-                      c="dimmed"
-                      style={{ fontFamily: typography.fontFamily.mono }}
+                </Button>
+              ) : null}
+
+              {isLoadingTrace ? (
+                <div className="flex flex-col gap-3">
+                  <Skeleton className="h-36 rounded-md" />
+                  <Skeleton className="h-24 rounded-md" />
+                  <Skeleton className="h-40 rounded-md" />
+                </div>
+              ) : traceData ? (
+                <div className="flex flex-col gap-6">
+                  <div>
+                    <Text className="mb-2 text-sm font-semibold">
+                      Main Event
+                    </Text>
+                    <Card
+                      className="border border-divider p-3"
+                      style={{ backgroundColor: colors.background.secondary }}
                     >
-                      {traceData.event.eventId}
-                    </Text>
-                  </Group>
-                  {traceData.event.correlationId && (
-                    <Group gap="xs">
-                      <IconTimeline size={15} color={colors.text.secondary} />
-                      <Text
-                        size="xs"
-                        c="dimmed"
-                        style={{ fontFamily: typography.fontFamily.mono }}
-                      >
-                        corr: {traceData.event.correlationId}
-                      </Text>
-                    </Group>
-                  )}
-                </Stack>
-              </Card>
-            </div>
-
-            <Divider />
-
-            {/* Event Data */}
-            <div>
-              <Text size="sm" fw={600} mb="sm">
-                Event Data
-              </Text>
-              <ScrollArea style={{ maxHeight: "220px" }}>
-                <Code block style={{ fontSize: typography.fontSize.xs }}>
-                  {JSON.stringify(traceData.event.data, null, 2)}
-                </Code>
-              </ScrollArea>
-            </div>
-
-            {/* Related Events Timeline */}
-            {traceData.relatedEvents && traceData.relatedEvents.length > 0 && (
-              <>
-                <Divider />
-                <div>
-                  <Group justify="space-between" mb="sm">
-                    <Text size="sm" fw={600}>
-                      Correlated Events
-                    </Text>
-                    <Badge variant="light" color="blue">
-                      {traceData.relatedEvents.length}
-                    </Badge>
-                  </Group>
-                  <Timeline active={-1} bulletSize={22} lineWidth={2}>
-                    {traceData.relatedEvents.map((relEvent) => (
-                      <Timeline.Item
-                        key={relEvent.eventId}
-                        bullet={<IconTimeline size={11} />}
-                        title={
-                          <Badge
-                            variant="light"
-                            color="blue"
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                          <IconTag size={15} color={colors.text.secondary} />
+                          <Chip
                             size="sm"
+                            variant="soft"
+                            color="accent"
+                            className="font-mono text-xs"
+                          >
+                            {traceData.event.eventType}
+                          </Chip>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <IconClock size={15} color={colors.text.secondary} />
+                          <Text className="text-xs text-default-500">
+                            {new Date(
+                              traceData.event.timestamp
+                            ).toLocaleString()}
+                          </Text>
+                        </div>
+                        {traceData.event.userId ? (
+                          <div className="flex items-center gap-2">
+                            <IconUser size={15} color={colors.text.secondary} />
+                            <Text className="text-xs text-default-500">
+                              {traceData.event.userId}
+                            </Text>
+                          </div>
+                        ) : null}
+                        <div className="flex items-center gap-2">
+                          <IconCode size={15} color={colors.text.secondary} />
+                          <Text
+                            className="text-xs text-default-500"
                             style={{ fontFamily: typography.fontFamily.mono }}
                           >
-                            {relEvent.eventType}
-                          </Badge>
-                        }
-                      >
-                        <Text size="xs" c="dimmed" mt={4}>
-                          {new Date(relEvent.timestamp).toLocaleString()}
-                        </Text>
-                        <Text
-                          size="xs"
-                          c="gray"
-                          mt={2}
-                          style={{ fontFamily: typography.fontFamily.mono }}
-                        >
-                          {relEvent.eventId}
-                        </Text>
-                        <Button
-                          variant="subtle"
-                          size="xs"
-                          leftSection={<IconArrowRight size={12} />}
-                          onClick={() => handleEventClick(relEvent.eventId)}
-                          mt="xs"
-                        >
-                          View details
-                        </Button>
-                      </Timeline.Item>
-                    ))}
-                  </Timeline>
-                </div>
-              </>
-            )}
+                            {traceData.event.eventId}
+                          </Text>
+                        </div>
+                        {traceData.event.correlationId ? (
+                          <div className="flex items-center gap-2">
+                            <IconTimeline
+                              size={15}
+                              color={colors.text.secondary}
+                            />
+                            <Text
+                              className="text-xs text-default-500"
+                              style={{ fontFamily: typography.fontFamily.mono }}
+                            >
+                              corr: {traceData.event.correlationId}
+                            </Text>
+                          </div>
+                        ) : null}
+                      </div>
+                    </Card>
+                  </div>
 
-            {traceData.relatedEvents?.length === 0 && (
-              <Text size="xs" c="dimmed" ta="center">
-                No correlated events — this event has no correlation ID.
-              </Text>
-            )}
-          </Stack>
-        ) : (
-          <Text size="sm" c="dimmed" ta="center" py="xl">
-            Event not found.
-          </Text>
-        )}
+                  <Separator />
+
+                  <div>
+                    <Text className="mb-2 text-sm font-semibold">
+                      Event Data
+                    </Text>
+                    <pre
+                      className="max-h-[220px] overflow-y-auto rounded-md border border-divider bg-default-50 p-3 text-xs"
+                      style={{ fontFamily: typography.fontFamily.mono }}
+                    >
+                      {JSON.stringify(traceData.event.data, null, 2)}
+                    </pre>
+                  </div>
+
+                  {traceData.relatedEvents &&
+                  traceData.relatedEvents.length > 0 ? (
+                    <>
+                      <Separator />
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <Text className="text-sm font-semibold">
+                            Correlated Events
+                          </Text>
+                          <Chip size="sm" variant="soft" color="accent">
+                            {traceData.relatedEvents.length}
+                          </Chip>
+                        </div>
+                        <div className="flex flex-col gap-4 border-l-2 border-divider pl-4">
+                          {traceData.relatedEvents.map((relEvent) => (
+                            <div key={relEvent.eventId} className="relative">
+                              <div className="absolute -left-[21px] top-1 flex h-5 w-5 items-center justify-center rounded-full border border-divider bg-background">
+                                <IconTimeline size={11} />
+                              </div>
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="accent"
+                                className="font-mono text-xs"
+                              >
+                                {relEvent.eventType}
+                              </Chip>
+                              <Text className="mt-1 text-xs text-default-500">
+                                {new Date(relEvent.timestamp).toLocaleString()}
+                              </Text>
+                              <Text
+                                className="mt-1 text-xs text-default-500"
+                                style={{
+                                  fontFamily: typography.fontFamily.mono,
+                                }}
+                              >
+                                {relEvent.eventId}
+                              </Text>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="mt-2 h-auto p-0"
+                                onPress={() =>
+                                  handleEventClick(relEvent.eventId)
+                                }
+                              >
+                                <span className="inline-flex items-center gap-1 text-xs">
+                                  <IconArrowRight size={12} />
+                                  View details
+                                </span>
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {traceData.relatedEvents?.length === 0 ? (
+                    <Text className="text-center text-xs text-default-500">
+                      No correlated events — this event has no correlation ID.
+                    </Text>
+                  ) : null}
+                </div>
+              ) : (
+                <Text className="py-10 text-center text-sm text-default-500">
+                  Event not found.
+                </Text>
+              )}
+            </Drawer.Body>
+          </Drawer.Dialog>
+        </Drawer.Content>
       </Drawer>
     </div>
   );

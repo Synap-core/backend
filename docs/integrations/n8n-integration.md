@@ -280,7 +280,21 @@ If missing:
 - `documents.create.validated` - Document uploaded
 - `documents.update.validated` - Document modified
 
-See [docs/api/event-types-catalog.md](../api/event-types-catalog.md) for all 55+ events.
+See **`synap-team-docs/content/docs/integrate/reference/event-catalog.md`** (site route `/docs/integrate/reference/event-catalog`) for validated event names.
+
+---
+
+## Self-hosted n8n (Docker)
+
+With the backend repo’s compose **automation** profile:
+
+```bash
+docker compose --profile automation up -d n8n
+docker compose ps n8n
+docker compose logs -f n8n
+```
+
+Open **http://localhost:5678** for the n8n UI (first run: create admin, skip or complete tutorial).
 
 ---
 
@@ -305,4 +319,4 @@ Each gets its own subscription with different event filters.
 - ⏭️ Add LangFlow integration
 - ⏭️ Build custom automations
 
-See [../automation/n8n-examples.md](../automation/n8n-examples.md) for more workflow examples.
+Use n8n’s own docs and community templates for workflow examples beyond the patterns above.

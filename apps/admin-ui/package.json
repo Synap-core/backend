@@ -12,10 +12,6 @@
   "dependencies": {
     "@heroui/react": "^3.0.2",
     "@heroui/styles": "3.0.2",
-    "@mantine/core": "7.17.8",
-    "@mantine/dates": "7.17.8",
-    "@mantine/hooks": "7.17.8",
-    "@mantine/notifications": "7.17.8",
     "@tabler/icons-react": "^3.35.0",
     "@tanstack/react-query": "^5.62.13",
     "@tanstack/react-virtual": "^3.13.12",
@@ -23,7 +19,6 @@
     "@trpc/react-query": "^11.0.0",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
-    "framer-motion": "^12.38.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.2.0",

@@ -4,9 +4,9 @@ import {
   useEffect,
   useState,
   useCallback,
+  type CSSProperties,
   type ReactNode,
 } from "react";
-import { Button, Spinner, Text } from "@heroui/react";
 
 const IS_DEV = import.meta.env.DEV;
 // In production, admin-ui is same-origin with the backend — use relative paths.
@@ -20,6 +20,47 @@ function loginBrowserUrl(): string {
 }
 
 const WHOAMI_TIMEOUT_MS = 20_000;
+
+/** No HeroUI/Tailwind — always visible even if design-system CSS fails. */
+const bootShell: CSSProperties = {
+  minHeight: "100vh",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+  textAlign: "center",
+  background: "#e4e4e7",
+  color: "#18181b",
+  fontFamily:
+    'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+};
+
+const spinnerStyle: CSSProperties = {
+  width: 36,
+  height: 36,
+  border: "3px solid #d4d4d8",
+  borderTopColor: "#d97706",
+  borderRadius: "50%",
+  animation: "synap-auth-spin 0.75s linear infinite",
+};
+
+const btnStyle: CSSProperties = {
+  padding: "10px 16px",
+  borderRadius: 8,
+  border: "1px solid #d4d4d8",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 14,
+  margin: 4,
+};
+
+const btnPrimaryStyle: CSSProperties = {
+  ...btnStyle,
+  background: "#18181b",
+  color: "#fafafa",
+  borderColor: "#18181b",
+};
 
 interface AuthUser {
   id: string;
@@ -47,9 +88,20 @@ export function useAuth(): AuthState {
 
 function AuthBootShell({ message }: { message: string }) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[var(--pod-surface-2)] px-6 text-center">
-      <Spinner size="lg" color="accent" />
-      <Text className="max-w-md text-sm text-default-600">{message}</Text>
+    <div style={bootShell}>
+      <style>{`@keyframes synap-auth-spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={spinnerStyle} aria-hidden />
+      <p
+        style={{
+          maxWidth: 420,
+          marginTop: 16,
+          fontSize: 14,
+          lineHeight: 1.5,
+          color: "#3f3f46",
+        }}
+      >
+        {message}
+      </p>
     </div>
   );
 }
@@ -156,18 +208,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (IS_DEV) return children;
     if (bootError) {
       return (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-[var(--pod-surface-2)] px-6 text-center">
-          <Text className="max-w-lg text-sm text-default-700">{bootError}</Text>
-          <div className="flex flex-wrap justify-center gap-2">
-            <Button variant="primary" onPress={retrySessionCheck}>
+        <div style={bootShell}>
+          <p
+            style={{
+              maxWidth: 480,
+              margin: 0,
+              fontSize: 14,
+              lineHeight: 1.5,
+              color: "#3f3f46",
+            }}
+          >
+            {bootError}
+          </p>
+          <div style={{ marginTop: 16 }}>
+            <button
+              type="button"
+              style={btnPrimaryStyle}
+              onClick={retrySessionCheck}
+            >
               Try again
-            </Button>
-            <Button
-              variant="ghost"
-              onPress={() => window.location.assign(loginBrowserUrl())}
+            </button>
+            <button
+              type="button"
+              style={btnStyle}
+              onClick={() => window.location.assign(loginBrowserUrl())}
             >
               Open sign-in
-            </Button>
+            </button>
           </div>
         </div>
       );

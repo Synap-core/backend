@@ -2,7 +2,7 @@
 
 > **Version 2.0** - Internal Admin Tool for Synap System Management
 
-The Synap Control Tower is a powerful, user-friendly admin interface for managing, monitoring, and debugging the Synap event-driven system. Built with React, TypeScript, Mantine UI, and tRPC.
+The Synap Control Tower is a powerful, user-friendly admin interface for managing, monitoring, and debugging the Synap event-driven system. Built with React, TypeScript, Hero UI, Tailwind CSS, and tRPC.
 
 ## 🎯 Overview
 
@@ -165,9 +165,10 @@ Press **⌘K** (Mac) or **Ctrl+K** (Windows/Linux) to open the Command Palette.
 
 ### Tech Stack
 
-- **React 18** - UI framework
+- **React 19** - UI framework
 - **TypeScript** - Type safety
-- **Mantine UI** - Component library
+- **Hero UI** - Component library (React Aria)
+- **Tailwind CSS** - Styling
 - **tRPC** - Type-safe API client
 - **React Router** - Navigation
 - **TanStack Query** - Data fetching
@@ -206,7 +207,7 @@ apps/admin-ui/
 
 #### Dynamic Form Generators
 
-- **`SchemaFormGenerator`**: Converts Zod schemas to Mantine forms
+- **`SchemaFormGenerator`**: Converts Zod schemas to Hero UI / native form controls
 - **`ToolFormGenerator`**: Generates forms for AI tool parameters
 - **`EventTemplates`**: Pre-filled event templates
 
@@ -243,12 +244,10 @@ export const EventTypeSchemas = {
 1. Create a new file in `src/pages/(v2)/`:
 
 ```typescript
-import { Title } from '@mantine/core';
-
 export default function MyNewPage() {
   return (
-    <div>
-      <Title>My New Page</Title>
+    <div className="p-6">
+      <h1 className="text-xl font-semibold">My New Page</h1>
     </div>
   );
 }

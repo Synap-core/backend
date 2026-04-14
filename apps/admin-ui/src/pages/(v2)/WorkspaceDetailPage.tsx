@@ -1,24 +1,19 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   Button,
-  Text,
-  Badge,
-  Modal,
-  TextInput,
-  Select,
-  Tabs,
-  Table,
-  ActionIcon,
-  Group,
-  Stack,
-  Loader,
-  Switch,
-  Anchor,
-  Textarea,
-  TagsInput,
   Card,
-} from "@mantine/core";
+  Chip,
+  Input,
+  Label,
+  Modal,
+  Spinner,
+  Switch,
+  Tabs,
+  Text,
+  TextArea,
+  useOverlayState,
+} from "@heroui/react";
 import {
   IconArrowLeft,
   IconPlus,
@@ -35,17 +30,20 @@ import {
 } from "../../lib/notifications";
 import { colors, spacing, typography, borderRadius } from "../../theme/tokens";
 
+const inputClass =
+  "border-default-200 bg-background text-foreground focus:border-accent w-full rounded-lg border px-3 py-2 text-sm outline-none";
+
 const ROLE_OPTIONS = [
   { value: "viewer", label: "Viewer" },
   { value: "editor", label: "Editor" },
   { value: "admin", label: "Admin" },
 ];
 
-const ROLE_COLORS: Record<string, string> = {
-  owner: "violet",
-  admin: "orange",
-  editor: "blue",
-  viewer: "gray",
+const ROLE_COLORS: Record<string, "accent" | "warning" | "default"> = {
+  owner: "accent",
+  admin: "warning",
+  editor: "accent",
+  viewer: "default",
 };
 
 const AGENT_TYPE_OPTIONS = [
@@ -67,7 +65,6 @@ export default function WorkspaceDetailPage() {
     "editor"
   );
 
-  // Agent creation state
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [agentName, setAgentName] = useState("");
   const [agentType, setAgentType] = useState("assistant");
@@ -75,7 +72,19 @@ export default function WorkspaceDetailPage() {
     "editor"
   );
   const [agentDescription, setAgentDescription] = useState("");
-  const [agentCapabilities, setAgentCapabilities] = useState<string[]>([]);
+  const [agentCapabilitiesText, setAgentCapabilitiesText] = useState("");
+
+  const inviteModal = useOverlayState({
+    isOpen: inviteOpen,
+    onOpenChange: setInviteOpen,
+  });
+  const agentModal = useOverlayState({
+    isOpen: agentModalOpen,
+    onOpenChange: (open) => {
+      setAgentModalOpen(open);
+      if (!open) resetAgentForm();
+    },
+  });
 
   const {
     data: workspace,
@@ -169,8 +178,17 @@ export default function WorkspaceDetailPage() {
     setAgentType("assistant");
     setAgentRole("editor");
     setAgentDescription("");
-    setAgentCapabilities([]);
+    setAgentCapabilitiesText("");
   }
+
+  const agentCapabilities = useMemo(
+    () =>
+      agentCapabilitiesText
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [agentCapabilitiesText]
+  );
 
   function handleSettingChange(key: string, value: unknown) {
     if (!workspace) return;
@@ -185,8 +203,8 @@ export default function WorkspaceDetailPage() {
 
   if (wsLoading) {
     return (
-      <div style={{ padding: spacing[6] }}>
-        <Loader />
+      <div className="flex justify-center p-8">
+        <Spinner size="lg" color="accent" />
       </div>
     );
   }
@@ -194,7 +212,7 @@ export default function WorkspaceDetailPage() {
   if (!workspace) {
     return (
       <div style={{ padding: spacing[6] }}>
-        <Text c="dimmed">Workspace not found.</Text>
+        <Text className="text-default-500">Workspace not found.</Text>
       </div>
     );
   }
@@ -203,518 +221,646 @@ export default function WorkspaceDetailPage() {
 
   return (
     <div style={{ padding: spacing[6] }}>
-      {/* Back + header */}
-      <Group mb={spacing[6]}>
-        <Anchor component={Link} to="/workspaces" c="dimmed" size="sm">
-          <Group gap={4}>
-            <IconArrowLeft size={14} />
-            Workspaces
-          </Group>
-        </Anchor>
-      </Group>
+      <div className="mb-6">
+        <Link
+          to="/workspaces"
+          className="inline-flex items-center gap-1 text-sm text-default-500 no-underline hover:text-foreground"
+        >
+          <IconArrowLeft size={14} />
+          Workspaces
+        </Link>
+      </div>
 
-      <Group mb={spacing[6]}>
+      <div
+        className="mb-6 flex flex-wrap items-center gap-3"
+        style={{ marginBottom: spacing[6] }}
+      >
         <IconBuildingCommunity size={22} color={colors.eventTypes.created} />
         <div>
-          <Text size="xl" fw={700}>
-            {workspace.name}
-          </Text>
-          <Group gap="xs">
-            <Badge size="xs" variant="light" color="gray">
+          <Text className="text-xl font-bold">{workspace.name}</Text>
+          <div className="mt-1 flex flex-wrap gap-2">
+            <Chip size="sm" variant="soft" color="default">
               {workspace.type}
-            </Badge>
-            <Badge
-              size="xs"
-              variant="outline"
-              color={ROLE_COLORS[workspace.role] ?? "gray"}
+            </Chip>
+            <Chip
+              size="sm"
+              variant="soft"
+              color={ROLE_COLORS[workspace.role] ?? "default"}
             >
               {workspace.role}
-            </Badge>
-          </Group>
+            </Chip>
+          </div>
         </div>
-      </Group>
+      </div>
 
-      <Tabs defaultValue="members">
-        <Tabs.List mb={spacing[4]}>
-          <Tabs.Tab value="members">Members</Tabs.Tab>
-          <Tabs.Tab value="agents">
-            <Group gap={4}>
-              <IconRobot size={14} />
-              AI Agents
-            </Group>
-          </Tabs.Tab>
-          <Tabs.Tab value="invitations">Invitations</Tabs.Tab>
-          <Tabs.Tab value="settings">Settings</Tabs.Tab>
-          <Tabs.Tab value="intelligence">Intelligence</Tabs.Tab>
-          <Tabs.Tab value="services">
-            <Group gap={4}>
-              <IconPlug size={14} />
-              Services
-            </Group>
-          </Tabs.Tab>
-        </Tabs.List>
-
-        {/* Members Tab */}
-        <Tabs.Panel value="members">
-          <Group justify="space-between" mb={spacing[4]}>
-            <Text fw={600}>Members</Text>
-            <Button
-              leftSection={<IconPlus size={16} />}
-              size="sm"
-              onClick={() => setInviteOpen(true)}
-              color="violet"
+      <Tabs.Root defaultSelectedKey="members">
+        <Tabs.ListContainer>
+          <Tabs.List
+            className="mb-4 flex flex-wrap gap-1 border-b border-divider pb-1"
+            style={{ marginBottom: spacing[4] }}
+          >
+            <Tabs.Tab id="members" className="rounded-md px-3 py-2 text-sm">
+              Members
+            </Tabs.Tab>
+            <Tabs.Tab id="agents" className="rounded-md px-3 py-2 text-sm">
+              <span className="inline-flex items-center gap-1">
+                <IconRobot size={14} />
+                AI Agents
+              </span>
+            </Tabs.Tab>
+            <Tabs.Tab id="invitations" className="rounded-md px-3 py-2 text-sm">
+              Invitations
+            </Tabs.Tab>
+            <Tabs.Tab id="settings" className="rounded-md px-3 py-2 text-sm">
+              Settings
+            </Tabs.Tab>
+            <Tabs.Tab
+              id="intelligence"
+              className="rounded-md px-3 py-2 text-sm"
             >
-              Invite Member
+              Intelligence
+            </Tabs.Tab>
+            <Tabs.Tab id="services" className="rounded-md px-3 py-2 text-sm">
+              <span className="inline-flex items-center gap-1">
+                <IconPlug size={14} />
+                Services
+              </span>
+            </Tabs.Tab>
+            <Tabs.Indicator />
+          </Tabs.List>
+        </Tabs.ListContainer>
+
+        <Tabs.Panel id="members" className="pt-1">
+          <div className="mb-4 flex justify-between gap-4">
+            <Text className="font-semibold">Members</Text>
+            <Button
+              variant="primary"
+              size="sm"
+              onPress={() => setInviteOpen(true)}
+            >
+              <span className="inline-flex items-center gap-2">
+                <IconPlus size={16} />
+                Invite Member
+              </span>
             </Button>
-          </Group>
+          </div>
           {membersLoading ? (
-            <Loader />
+            <Spinner color="accent" />
           ) : (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>User</Table.Th>
-                  <Table.Th>Email</Table.Th>
-                  <Table.Th>Role</Table.Th>
-                  <Table.Th>Joined</Table.Th>
-                  <Table.Th>Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {members?.map((m) => (
-                  <Table.Tr key={m.id}>
-                    <Table.Td>
-                      <Text size="sm" fw={500}>
-                        {m.user.name ?? "—"}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
+            <div className="overflow-x-auto rounded-lg border border-divider">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-divider bg-default-50/80">
+                    <th className="px-3 py-2 font-medium">User</th>
+                    <th className="px-3 py-2 font-medium">Email</th>
+                    <th className="px-3 py-2 font-medium">Role</th>
+                    <th className="px-3 py-2 font-medium">Joined</th>
+                    <th className="px-3 py-2 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members?.map((m) => (
+                    <tr
+                      key={m.id}
+                      className="border-b border-divider/60 odd:bg-default-50/30 hover:bg-default-100/40"
+                    >
+                      <td className="px-3 py-2">
+                        <Text className="text-sm font-medium">
+                          {m.user.name ?? "—"}
+                        </Text>
+                      </td>
+                      <td className="px-3 py-2 text-sm text-default-500">
                         {m.user.email}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Select
-                        size="xs"
-                        data={ROLE_OPTIONS}
-                        value={m.role}
-                        onChange={(role) => {
-                          if (role && role !== m.role) {
-                            updateRoleMutation.mutate({
+                      </td>
+                      <td className="px-3 py-2">
+                        <select
+                          className={inputClass}
+                          style={{ width: 120 }}
+                          value={m.role}
+                          onChange={(e) => {
+                            const role = e.target.value;
+                            if (role && role !== m.role) {
+                              updateRoleMutation.mutate({
+                                workspaceId,
+                                userId: m.userId,
+                                role: role as "admin" | "editor" | "viewer",
+                              });
+                            }
+                          }}
+                        >
+                          {ROLE_OPTIONS.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2 text-sm text-default-500">
+                        {new Date(m.joinedAt).toLocaleDateString()}
+                      </td>
+                      <td className="px-3 py-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isIconOnly
+                          className="text-danger"
+                          aria-label="Remove member"
+                          onPress={() =>
+                            removeMemberMutation.mutate({
                               workspaceId,
                               userId: m.userId,
-                              role: role as "admin" | "editor" | "viewer",
-                            });
+                            })
                           }
-                        }}
-                        style={{ width: 120 }}
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
-                        {new Date(m.joinedAt).toLocaleDateString()}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        color="red"
-                        onClick={() =>
-                          removeMemberMutation.mutate({
-                            workspaceId,
-                            userId: m.userId,
-                          })
-                        }
-                      >
-                        <IconTrash size={14} />
-                      </ActionIcon>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                        >
+                          <IconTrash size={14} />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Tabs.Panel>
 
-        {/* AI Agents Tab */}
-        <Tabs.Panel value="agents">
-          <Group justify="space-between" mb={spacing[4]}>
-            <Text fw={600}>AI Agents</Text>
+        <Tabs.Panel id="agents" className="pt-1">
+          <div className="mb-4 flex justify-between gap-4">
+            <Text className="font-semibold">AI Agents</Text>
             <Button
-              leftSection={<IconPlus size={16} />}
+              variant="primary"
               size="sm"
-              onClick={() => setAgentModalOpen(true)}
-              color="orange"
+              onPress={() => setAgentModalOpen(true)}
             >
-              Create Agent
+              <span className="inline-flex items-center gap-2">
+                <IconPlus size={16} />
+                Create Agent
+              </span>
             </Button>
-          </Group>
+          </div>
           {agentsLoading ? (
-            <Loader />
+            <Spinner color="accent" />
           ) : !agents || agents.length === 0 ? (
             <Card
-              padding={spacing[6]}
-              radius={borderRadius.lg}
-              style={{
-                border: `1px dashed ${colors.border.default}`,
-                backgroundColor: colors.background.secondary,
-                textAlign: "center",
-              }}
+              className="border border-dashed border-divider p-8 text-center"
+              style={{ borderRadius: borderRadius.lg }}
             >
               <IconRobot
                 size={40}
                 color={colors.text.tertiary}
                 style={{ marginBottom: spacing[2] }}
               />
-              <Text size="sm" c={colors.text.secondary} mb={spacing[2]}>
+              <Text className="mb-2 text-sm text-default-600">
                 No AI agents in this workspace yet.
               </Text>
-              <Text size="xs" c={colors.text.tertiary}>
+              <Text className="text-xs text-default-500">
                 Create an agent to automate tasks with workspace-scoped
                 permissions.
               </Text>
             </Card>
           ) : (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Name</Table.Th>
-                  <Table.Th>Type</Table.Th>
-                  <Table.Th>Role</Table.Th>
-                  <Table.Th>Capabilities</Table.Th>
-                  <Table.Th>Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {agents.map((agent) => (
-                  <Table.Tr key={agent.id}>
-                    <Table.Td>
-                      <Group gap={spacing[2]}>
-                        <IconRobot size={16} color={colors.eventTypes.ai} />
-                        <Text size="sm" fw={500}>
-                          {agent.name}
-                        </Text>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge size="sm" variant="light" color="orange">
-                        {agent.agentMetadata?.agentType || "—"}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge
-                        size="sm"
-                        variant="outline"
-                        color={ROLE_COLORS[agent.role] ?? "gray"}
-                      >
-                        {agent.role}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap={4}>
-                        {agent.agentMetadata?.capabilities
-                          ?.slice(0, 3)
-                          .map((cap) => (
-                            <Badge
-                              key={cap}
-                              size="xs"
-                              variant="light"
-                              color="cyan"
-                            >
-                              {cap}
-                            </Badge>
-                          ))}
-                        {(agent.agentMetadata?.capabilities?.length ?? 0) >
-                          3 && (
-                          <Badge size="xs" variant="light" color="gray">
-                            +
-                            {(agent.agentMetadata?.capabilities?.length ?? 0) -
-                              3}
-                          </Badge>
-                        )}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        color="red"
-                        onClick={() =>
-                          removeAgentMutation.mutate({
-                            workspaceId,
-                            agentUserId: agent.id,
-                          })
-                        }
-                      >
-                        <IconTrash size={14} />
-                      </ActionIcon>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+            <div className="overflow-x-auto rounded-lg border border-divider">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-divider bg-default-50/80">
+                    <th className="px-3 py-2 font-medium">Name</th>
+                    <th className="px-3 py-2 font-medium">Type</th>
+                    <th className="px-3 py-2 font-medium">Role</th>
+                    <th className="px-3 py-2 font-medium">Capabilities</th>
+                    <th className="px-3 py-2 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agents.map((agent) => (
+                    <tr
+                      key={agent.id}
+                      className="border-b border-divider/60 odd:bg-default-50/30 hover:bg-default-100/40"
+                    >
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <IconRobot size={16} color={colors.eventTypes.ai} />
+                          <Text className="text-sm font-medium">
+                            {agent.name}
+                          </Text>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Chip size="sm" variant="soft" color="warning">
+                          {agent.agentMetadata?.agentType || "—"}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color={ROLE_COLORS[agent.role] ?? "default"}
+                        >
+                          {agent.role}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {agent.agentMetadata?.capabilities
+                            ?.slice(0, 3)
+                            .map((cap) => (
+                              <Chip
+                                key={cap}
+                                size="sm"
+                                variant="soft"
+                                color="accent"
+                              >
+                                {cap}
+                              </Chip>
+                            ))}
+                          {(agent.agentMetadata?.capabilities?.length ?? 0) >
+                            3 && (
+                            <Chip size="sm" variant="soft" color="default">
+                              +
+                              {(agent.agentMetadata?.capabilities?.length ??
+                                0) - 3}
+                            </Chip>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isIconOnly
+                          className="text-danger"
+                          aria-label="Remove agent"
+                          onPress={() =>
+                            removeAgentMutation.mutate({
+                              workspaceId,
+                              agentUserId: agent.id,
+                            })
+                          }
+                        >
+                          <IconTrash size={14} />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Tabs.Panel>
 
-        {/* Invitations Tab */}
-        <Tabs.Panel value="invitations">
-          <Text fw={600} mb={spacing[4]}>
-            Pending Invitations
-          </Text>
+        <Tabs.Panel id="invitations" className="pt-1">
+          <Text className="mb-4 font-semibold">Pending Invitations</Text>
           {invitesLoading ? (
-            <Loader />
+            <Spinner color="accent" />
           ) : (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Email</Table.Th>
-                  <Table.Th>Role</Table.Th>
-                  <Table.Th>Expires</Table.Th>
-                  <Table.Th>Actions</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {invites?.map((inv) => (
-                  <Table.Tr key={inv.id}>
-                    <Table.Td>
-                      <Text size="sm">{inv.email}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge size="xs" color={ROLE_COLORS[inv.role] ?? "gray"}>
-                        {inv.role}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
+            <div className="overflow-x-auto rounded-lg border border-divider">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-divider bg-default-50/80">
+                    <th className="px-3 py-2 font-medium">Email</th>
+                    <th className="px-3 py-2 font-medium">Role</th>
+                    <th className="px-3 py-2 font-medium">Expires</th>
+                    <th className="px-3 py-2 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invites?.map((inv) => (
+                    <tr
+                      key={inv.id}
+                      className="border-b border-divider/60 odd:bg-default-50/30 hover:bg-default-100/40"
+                    >
+                      <td className="px-3 py-2 text-sm">{inv.email}</td>
+                      <td className="px-3 py-2">
+                        <Chip
+                          size="sm"
+                          variant="soft"
+                          color={ROLE_COLORS[inv.role] ?? "default"}
+                        >
+                          {inv.role}
+                        </Chip>
+                      </td>
+                      <td className="px-3 py-2 text-sm text-default-500">
                         {new Date(inv.expiresAt).toLocaleDateString()}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        color="red"
-                        onClick={() =>
-                          revokeInviteMutation.mutate({ id: inv.id })
-                        }
-                      >
-                        <IconTrash size={14} />
-                      </ActionIcon>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-                {invites?.length === 0 && (
-                  <Table.Tr>
-                    <Table.Td colSpan={4}>
-                      <Text c="dimmed" ta="center" py={spacing[4]}>
-                        No pending invitations.
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                )}
-              </Table.Tbody>
-            </Table>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isIconOnly
+                          className="text-danger"
+                          aria-label="Revoke invite"
+                          onPress={() =>
+                            revokeInviteMutation.mutate({ id: inv.id })
+                          }
+                        >
+                          <IconTrash size={14} />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                  {invites?.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-8 text-center">
+                        <Text className="text-default-500">
+                          No pending invitations.
+                        </Text>
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
           )}
         </Tabs.Panel>
 
-        {/* Settings Tab */}
-        <Tabs.Panel value="settings">
-          <Stack gap={spacing[5]} maw={480}>
-            <Text fw={600}>Workspace Settings</Text>
-            <Switch
-              label="AI Enabled"
-              description="Allow AI features in this workspace"
-              checked={Boolean(settings.aiEnabled)}
-              onChange={(e) =>
-                handleSettingChange("aiEnabled", e.currentTarget.checked)
-              }
-            />
-            <Switch
-              label="External Sharing"
-              description="Allow sharing content outside the workspace"
-              checked={Boolean(settings.externalSharing)}
-              onChange={(e) =>
-                handleSettingChange("externalSharing", e.currentTarget.checked)
-              }
-            />
-            <Switch
-              label="AI Auto-Approve"
-              description="Automatically approve AI-proposed changes"
-              checked={Boolean(
-                (settings.aiGovernance as Record<string, unknown>)?.autoApprove
-              )}
-              onChange={(e) =>
-                handleSettingChange("aiGovernance", {
-                  ...((settings.aiGovernance as Record<string, unknown>) ?? {}),
-                  autoApprove: e.currentTarget.checked,
-                })
-              }
-            />
-          </Stack>
+        <Tabs.Panel id="settings" className="pt-1">
+          <div
+            className="flex max-w-md flex-col gap-5"
+            style={{ maxWidth: 480 }}
+          >
+            <Text className="font-semibold">Workspace Settings</Text>
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-divider p-3">
+              <div>
+                <Text className="text-sm font-medium">AI Enabled</Text>
+                <Text className="text-xs text-default-500">
+                  Allow AI features in this workspace
+                </Text>
+              </div>
+              <Switch
+                isSelected={Boolean(settings.aiEnabled)}
+                onChange={(v) => handleSettingChange("aiEnabled", v)}
+              >
+                <Switch.Control>
+                  <Switch.Thumb />
+                </Switch.Control>
+              </Switch>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-divider p-3">
+              <div>
+                <Text className="text-sm font-medium">External Sharing</Text>
+                <Text className="text-xs text-default-500">
+                  Allow sharing content outside the workspace
+                </Text>
+              </div>
+              <Switch
+                isSelected={Boolean(settings.externalSharing)}
+                onChange={(v) => handleSettingChange("externalSharing", v)}
+              >
+                <Switch.Control>
+                  <Switch.Thumb />
+                </Switch.Control>
+              </Switch>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-divider p-3">
+              <div>
+                <Text className="text-sm font-medium">AI Auto-Approve</Text>
+                <Text className="text-xs text-default-500">
+                  Automatically approve AI-proposed changes
+                </Text>
+              </div>
+              <Switch
+                isSelected={Boolean(
+                  (settings.aiGovernance as Record<string, unknown>)
+                    ?.autoApprove
+                )}
+                onChange={(v) =>
+                  handleSettingChange("aiGovernance", {
+                    ...((settings.aiGovernance as Record<string, unknown>) ??
+                      {}),
+                    autoApprove: v,
+                  })
+                }
+              >
+                <Switch.Control>
+                  <Switch.Thumb />
+                </Switch.Control>
+              </Switch>
+            </div>
+          </div>
         </Tabs.Panel>
 
-        {/* Services Tab */}
-        <Tabs.Panel value="services">
-          <Stack gap={spacing[3]} maw={560}>
-            <Text fw={600}>External Agent Services</Text>
-            <Text size="sm" c="dimmed">
+        <Tabs.Panel id="services" className="pt-1">
+          <div
+            className="flex max-w-xl flex-col gap-3"
+            style={{ maxWidth: 560 }}
+          >
+            <Text className="font-semibold">External Agent Services</Text>
+            <Text className="text-sm text-default-500">
               Provision Docker-based agent containers (OpenClaw, ZeroClaw, …)
               that connect to this workspace via Hub Protocol.
             </Text>
-            <Button
-              component={Link}
-              to="/services"
-              leftSection={<IconPlug size={16} />}
-              variant="light"
-              color="teal"
-              w="fit-content"
-            >
-              Manage Services
-            </Button>
-          </Stack>
+            <Link to="/services" className="no-underline">
+              <Button variant="ghost" className="w-fit">
+                <span className="inline-flex items-center gap-2">
+                  <IconPlug size={16} />
+                  Manage Services
+                </span>
+              </Button>
+            </Link>
+          </div>
         </Tabs.Panel>
 
-        {/* Intelligence Tab */}
-        <Tabs.Panel value="intelligence">
-          <Stack gap={spacing[4]} maw={480}>
-            <Text fw={600}>Intelligence Service</Text>
+        <Tabs.Panel id="intelligence" className="pt-1">
+          <div
+            className="flex max-w-md flex-col gap-4"
+            style={{ maxWidth: 480 }}
+          >
+            <Text className="font-semibold">Intelligence Service</Text>
             <div>
-              <Text size="sm" c="dimmed" mb={spacing[2]}>
+              <Text className="mb-2 text-sm text-default-500">
                 Connected Service ID
               </Text>
-              <Text
-                size="sm"
+              <div
+                className="rounded-md border border-divider px-3 py-2 text-sm"
                 style={{
                   fontFamily: typography.fontFamily.mono,
                   backgroundColor: colors.background.secondary,
-                  padding: `${spacing[2]} ${spacing[3]}`,
-                  borderRadius: 6,
-                  border: `1px solid ${colors.border.default}`,
                 }}
               >
                 {(settings.intelligenceServiceId as string) ?? "Not connected"}
-              </Text>
+              </div>
             </div>
-          </Stack>
+          </div>
         </Tabs.Panel>
-      </Tabs>
+      </Tabs.Root>
 
-      {/* Invite Modal */}
-      <Modal
-        opened={inviteOpen}
-        onClose={() => setInviteOpen(false)}
-        title={
-          <Text fw={600} size="lg">
-            Invite Member
-          </Text>
-        }
-        size="sm"
-      >
-        <Stack gap={spacing[4]}>
-          <TextInput
-            label="Email"
-            placeholder="colleague@example.com"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.currentTarget.value)}
-            required
-          />
-          <Select
-            label="Role"
-            data={ROLE_OPTIONS}
-            value={inviteRole}
-            onChange={(v) =>
-              setInviteRole((v as typeof inviteRole) ?? "editor")
-            }
-          />
-          <Button
-            onClick={() =>
-              createInviteMutation.mutate({
-                type: "workspace",
-                workspaceId,
-                email: inviteEmail,
-                role: inviteRole,
-              })
-            }
-            loading={createInviteMutation.isPending}
-            disabled={!inviteEmail.trim()}
-            fullWidth
-          >
-            Send Invitation
-          </Button>
-        </Stack>
+      <Modal state={inviteModal}>
+        <Modal.Backdrop isDismissable />
+        <Modal.Container size="sm" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+              <Modal.Heading className="text-lg font-semibold">
+                Invite Member
+              </Modal.Heading>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="gap-4 px-6 py-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="invite-email">Email</Label>
+                <Input
+                  id="invite-email"
+                  className={inputClass}
+                  placeholder="colleague@example.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="invite-role">Role</Label>
+                <select
+                  id="invite-role"
+                  className={inputClass}
+                  value={inviteRole}
+                  onChange={(e) =>
+                    setInviteRole(
+                      (e.target.value as typeof inviteRole) ?? "editor"
+                    )
+                  }
+                >
+                  {ROLE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                variant="primary"
+                fullWidth
+                isDisabled={
+                  !inviteEmail.trim() || createInviteMutation.isPending
+                }
+                onPress={() =>
+                  createInviteMutation.mutate({
+                    type: "workspace",
+                    workspaceId,
+                    email: inviteEmail,
+                    role: inviteRole,
+                  })
+                }
+              >
+                {createInviteMutation.isPending ? (
+                  <Spinner size="sm" color="current" />
+                ) : (
+                  "Send Invitation"
+                )}
+              </Button>
+            </Modal.Body>
+          </Modal.Dialog>
+        </Modal.Container>
       </Modal>
 
-      {/* Create Agent Modal */}
-      <Modal
-        opened={agentModalOpen}
-        onClose={() => {
-          setAgentModalOpen(false);
-          resetAgentForm();
-        }}
-        title={
-          <Text fw={600} size="lg">
-            Create AI Agent
-          </Text>
-        }
-        size="md"
-      >
-        <Stack gap={spacing[4]}>
-          <TextInput
-            label="Agent Name"
-            placeholder="e.g. Research Assistant"
-            value={agentName}
-            onChange={(e) => setAgentName(e.currentTarget.value)}
-            required
-          />
-          <Select
-            label="Agent Type"
-            data={AGENT_TYPE_OPTIONS}
-            value={agentType}
-            onChange={(v) => setAgentType(v ?? "assistant")}
-          />
-          <Select
-            label="Workspace Role"
-            description="Determines what the agent can do in this workspace"
-            data={ROLE_OPTIONS}
-            value={agentRole}
-            onChange={(v) => setAgentRole((v as typeof agentRole) ?? "editor")}
-          />
-          <Textarea
-            label="Description"
-            placeholder="What does this agent do?"
-            value={agentDescription}
-            onChange={(e) => setAgentDescription(e.currentTarget.value)}
-            minRows={2}
-          />
-          <TagsInput
-            label="Capabilities"
-            placeholder="Type and press Enter"
-            value={agentCapabilities}
-            onChange={setAgentCapabilities}
-            description="e.g. read_entities, write_documents, search"
-          />
-          <Button
-            onClick={() =>
-              createAgentMutation.mutate({
-                workspaceId,
-                name: agentName,
-                agentType,
-                role: agentRole,
-                description: agentDescription || undefined,
-                capabilities:
-                  agentCapabilities.length > 0 ? agentCapabilities : undefined,
-              })
-            }
-            loading={createAgentMutation.isPending}
-            disabled={!agentName.trim()}
-            fullWidth
-            color="orange"
-            leftSection={<IconRobot size={18} />}
-          >
-            Create Agent
-          </Button>
-        </Stack>
+      <Modal state={agentModal}>
+        <Modal.Backdrop isDismissable />
+        <Modal.Container size="md" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+              <Modal.Heading className="text-lg font-semibold">
+                Create AI Agent
+              </Modal.Heading>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="gap-4 px-6 py-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="agent-name">Agent Name</Label>
+                <Input
+                  id="agent-name"
+                  className={inputClass}
+                  placeholder="e.g. Research Assistant"
+                  value={agentName}
+                  onChange={(e) => setAgentName(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="agent-type">Agent Type</Label>
+                <select
+                  id="agent-type"
+                  className={inputClass}
+                  value={agentType}
+                  onChange={(e) => setAgentType(e.target.value)}
+                >
+                  {AGENT_TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="agent-role">Workspace Role</Label>
+                <Text className="text-xs text-default-500">
+                  Determines what the agent can do in this workspace
+                </Text>
+                <select
+                  id="agent-role"
+                  className={inputClass}
+                  value={agentRole}
+                  onChange={(e) =>
+                    setAgentRole(
+                      (e.target.value as typeof agentRole) ?? "editor"
+                    )
+                  }
+                >
+                  {ROLE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="agent-desc">Description</Label>
+                <TextArea
+                  id="agent-desc"
+                  className={inputClass}
+                  placeholder="What does this agent do?"
+                  value={agentDescription}
+                  onChange={(e) => setAgentDescription(e.target.value)}
+                  rows={2}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="agent-caps">Capabilities</Label>
+                <Text className="text-xs text-default-500">
+                  One per line (e.g. read_entities, write_documents, search)
+                </Text>
+                <TextArea
+                  id="agent-caps"
+                  className={inputClass}
+                  placeholder={"read_entities\nwrite_documents"}
+                  value={agentCapabilitiesText}
+                  onChange={(e) => setAgentCapabilitiesText(e.target.value)}
+                  rows={4}
+                />
+              </div>
+              <Button
+                variant="primary"
+                fullWidth
+                isDisabled={!agentName.trim() || createAgentMutation.isPending}
+                onPress={() =>
+                  createAgentMutation.mutate({
+                    workspaceId,
+                    name: agentName,
+                    agentType,
+                    role: agentRole,
+                    description: agentDescription || undefined,
+                    capabilities:
+                      agentCapabilities.length > 0
+                        ? agentCapabilities
+                        : undefined,
+                  })
+                }
+              >
+                {createAgentMutation.isPending ? (
+                  <Spinner size="sm" color="current" />
+                ) : (
+                  <span className="inline-flex items-center gap-2">
+                    <IconRobot size={18} />
+                    Create Agent
+                  </span>
+                )}
+              </Button>
+            </Modal.Body>
+          </Modal.Dialog>
+        </Modal.Container>
       </Modal>
     </div>
   );

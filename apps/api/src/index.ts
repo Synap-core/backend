@@ -241,6 +241,16 @@ app.get("/health", (c) => {
   });
 });
 
+// Root (direct :4000 / dev without Caddy): not the admin SPA — that lives at /admin/
+app.get("/", (c) => {
+  return c.json({
+    service: "Synap Data Pod API",
+    adminConsole: "/admin/",
+    health: "/health",
+    docs: "https://docs.synap.live",
+  });
+});
+
 // Prometheus metrics endpoint (public, no auth)
 app.get("/metrics", async (c) => {
   const { getMetrics } = await import("@synap-core/core");

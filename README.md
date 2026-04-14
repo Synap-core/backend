@@ -209,8 +209,10 @@ synap-backend/
 │   ├── Dockerfile
 │   └── docs/             # Documentation
 ├── synap                 # Unified CLI (install + management)
-└── docs/                 # Development documentation
+└── docs/                 # Development documentation (see docs/README.md for index + team-docs links)
 ```
+
+See **[`docs/README.md`](./docs/README.md)** for which files are canonical vs **`synap-team-docs`**.
 
 ## 🤝 Contributing
 

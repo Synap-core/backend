@@ -118,10 +118,16 @@
         reverse_proxy backend:4000
     }
 
-    # Pod home: redirect exact site root to the console (not a second /admin rule)
+    # Pod home (exact / only): lightweight landing — NOT a redirect into /admin/.
+    #
+    # Why: The admin SPA is mounted once at /admin/ (Vite base + React basename).
+    # Redirecting / → /admin/ made it feel like "two homes" and confused debugging.
+    # Here / is "this host is your Data Pod"; /admin/ is the operator console.
     @site_root path /
     handle @site_root {
-        redir * /admin/ 302
+        header Content-Type "text/html; charset=utf-8"
+        header X-Robots-Tag "noindex, nofollow"
+        respond "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/><title>Synap Data Pod</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:42rem;margin:0 auto;padding:2.5rem 1.25rem;color:#18181b;background:#f4f4f5;line-height:1.5}h1{font-size:1.5rem;margin:0 0 .5rem}a{color:#b45309}code{font-size:.875em;background:#e4e4e7;padding:.1rem .35rem;border-radius:.25rem}.card{background:#fafafa;border:1px solid #e4e4e7;border-radius:.75rem;padding:1.25rem 1.5rem;margin-top:1.25rem}</style></head><body><h1>Synap Data Pod</h1><p>This hostname is serving your pod (API, auth, realtime). The <strong>operator console</strong> is a separate path.</p><div class='card'><p><strong><a href='/admin/'>Open Pod Admin</a></strong> — <code>/admin/</code></p><p style='margin:.75rem 0 0;font-size:.875rem;color:#52525b'>Health: <a href='/health'>/health</a> · API: <code>/trpc</code>, <code>/api/*</code></p></div></body></html>" 200
     }
 
     # Default: API info (paths that matched nothing above)

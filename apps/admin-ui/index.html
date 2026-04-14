@@ -4,10 +4,81 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>admin-ui</title>
+    <title>Synap Pod Admin</title>
+    <!-- Visible before any JS runs (Vite replaces #root on first paint). -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #e4e4e7;
+        color: #18181b;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+      }
+      #synap-admin-html-boot {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        text-align: center;
+        box-sizing: border-box;
+      }
+      #synap-admin-html-boot .spinner {
+        width: 36px;
+        height: 36px;
+        border: 3px solid #d4d4d8;
+        border-top-color: #d97706;
+        border-radius: 50%;
+        animation: synap-admin-spin 0.75s linear infinite;
+      }
+      @keyframes synap-admin-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      #synap-admin-html-boot h1 {
+        margin: 1.25rem 0 0.5rem;
+        font-size: 1.125rem;
+        font-weight: 600;
+      }
+      #synap-admin-html-boot p {
+        margin: 0;
+        max-width: 28rem;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        color: #52525b;
+      }
+      #synap-admin-html-boot .hint {
+        margin-top: 1rem;
+        font-size: 0.75rem;
+        color: #71717a;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="synap-admin-html-boot">
+        <div class="spinner" aria-hidden="true"></div>
+        <h1>Loading Synap Pod Admin</h1>
+        <p>
+          Starting the console. If this message stays for more than a few
+          seconds, open DevTools → Network and check that JavaScript files under
+          <code>/admin/</code> return 200 (not HTML errors).
+        </p>
+        <p class="hint">
+          Production requires a Vite build: the API serves files from
+          <code>admin-ui/</code> next to the server.
+        </p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,21 +1,15 @@
 import { useState } from "react";
 import {
-  Text,
-  Badge,
-  Tabs,
-  Table,
-  ActionIcon,
-  Tooltip,
-  Group,
-  Loader,
-  Stack,
-  Paper,
-  SimpleGrid,
-  Progress,
-  ThemeIcon,
-  Button,
   Alert,
-} from "@mantine/core";
+  Button,
+  Card,
+  Chip,
+  ProgressBar,
+  Spinner,
+  Tabs,
+  Text,
+  Tooltip,
+} from "@heroui/react";
 import {
   IconActivity,
   IconRefresh,
@@ -35,8 +29,6 @@ import {
 } from "../../lib/notifications";
 import { colors, spacing, typography } from "../../theme/tokens";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 type HealthStatus = "healthy" | "degraded" | "unhealthy" | null;
 
 interface ServiceRecord {
@@ -51,18 +43,18 @@ interface ServiceRecord {
   lastHealthStatus: HealthStatus;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function healthColor(status: HealthStatus): string {
+function healthChipColor(
+  status: HealthStatus
+): "success" | "warning" | "danger" | "default" {
   switch (status) {
     case "healthy":
-      return "green";
+      return "success";
     case "degraded":
-      return "yellow";
+      return "warning";
     case "unhealthy":
-      return "red";
+      return "danger";
     default:
-      return "gray";
+      return "default";
   }
 }
 
@@ -115,7 +107,13 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-// ─── Metric Card ──────────────────────────────────────────────────────────────
+const metricIconTone: Record<string, { wrap: string; icon: string }> = {
+  blue: { wrap: "bg-accent/15 text-accent", icon: "" },
+  green: { wrap: "bg-success/15 text-success", icon: "" },
+  yellow: { wrap: "bg-warning/15 text-warning", icon: "" },
+  red: { wrap: "bg-danger/15 text-danger", icon: "" },
+  violet: { wrap: "bg-accent/15 text-accent", icon: "" },
+};
 
 function MetricCard({
   label,
@@ -130,36 +128,26 @@ function MetricCard({
   color: string;
   sub?: string;
 }) {
+  const tone = metricIconTone[color] ?? metricIconTone.blue;
   return (
-    <Paper
-      p="md"
-      radius="md"
-      withBorder
-      style={{ borderColor: colors.border?.default }}
-    >
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
+    <Card className="border border-divider p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <Text className="text-xs font-semibold uppercase tracking-wide text-default-500">
             {label}
           </Text>
-          <Text size="xl" fw={700}>
-            {value}
-          </Text>
-          {sub && (
-            <Text size="xs" c="dimmed">
-              {sub}
-            </Text>
-          )}
-        </Stack>
-        <ThemeIcon variant="light" color={color} size="lg" radius="md">
+          <Text className="text-2xl font-bold text-foreground">{value}</Text>
+          {sub ? <Text className="text-xs text-default-500">{sub}</Text> : null}
+        </div>
+        <div
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tone.wrap}`}
+        >
           {icon}
-        </ThemeIcon>
-      </Group>
-    </Paper>
+        </div>
+      </div>
+    </Card>
   );
 }
-
-// ─── Services Tab ─────────────────────────────────────────────────────────────
 
 function ServicesHealthTab() {
   const { data, isLoading, refetch } = trpc.capabilities.list.useQuery(
@@ -193,12 +181,17 @@ function ServicesHealthTab() {
     (s) => s.lastHealthStatus === "unhealthy"
   ).length;
 
-  if (isLoading) return <Loader mt="xl" />;
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spinner size="lg" color="accent" />
+      </div>
+    );
+  }
 
   return (
-    <Stack gap={spacing[6]}>
-      {/* Summary */}
-      <SimpleGrid cols={4}>
+    <div className="flex flex-col gap-6" style={{ gap: spacing[6] }}>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <MetricCard
           label="Total Services"
           value={services.length}
@@ -228,135 +221,148 @@ function ServicesHealthTab() {
           icon={<IconCircleX size={18} />}
           color="red"
         />
-      </SimpleGrid>
+      </div>
 
-      {/* Alert when services are down */}
-      {unhealthyCount > 0 && (
-        <Alert
-          icon={<IconAlertTriangle size={16} />}
-          color="red"
-          title="Services unreachable"
-        >
-          {unhealthyCount} intelligence service
-          {unhealthyCount > 1 ? "s are" : " is"} unreachable. Affected
-          workspaces fall back to the default Synap service automatically.
+      {unhealthyCount > 0 ? (
+        <Alert status="danger">
+          <Alert.Indicator>
+            <IconAlertTriangle size={16} />
+          </Alert.Indicator>
+          <Alert.Content>
+            <Alert.Title>Services unreachable</Alert.Title>
+            <Alert.Description>
+              {unhealthyCount} intelligence service
+              {unhealthyCount > 1 ? "s are" : " is"} unreachable. Affected
+              workspaces fall back to the default Synap service automatically.
+            </Alert.Description>
+          </Alert.Content>
         </Alert>
-      )}
+      ) : null}
 
-      {/* Service table */}
-      <Table striped highlightOnHover>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Service</Table.Th>
-            <Table.Th>Type</Table.Th>
-            <Table.Th>Health</Table.Th>
-            <Table.Th>Last Check</Table.Th>
-            <Table.Th>Capabilities</Table.Th>
-            <Table.Th>Ping</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {services.map((svc) => (
-            <Table.Tr key={svc.id}>
-              <Table.Td>
-                <Stack gap={2}>
-                  <Text size="sm" fw={500}>
-                    {svc.name}
-                  </Text>
-                  <Text
-                    size="xs"
-                    c="dimmed"
-                    style={{ fontFamily: typography.fontFamily?.mono }}
-                  >
-                    {svc.serviceId}
-                  </Text>
-                </Stack>
-              </Table.Td>
-              <Table.Td>
-                <Badge
-                  size="xs"
-                  variant="light"
-                  color={svc.serviceId === "default" ? "blue" : "violet"}
-                >
-                  {svc.serviceId === "default" ? "built-in" : "external"}
-                </Badge>
-              </Table.Td>
-              <Table.Td>
-                <Group gap={6}>
-                  <HealthIcon status={svc.lastHealthStatus} />
-                  <Badge
-                    size="xs"
-                    color={healthColor(svc.lastHealthStatus)}
-                    variant="light"
-                  >
-                    {svc.lastHealthStatus ?? "unknown"}
-                  </Badge>
-                </Group>
-              </Table.Td>
-              <Table.Td>
-                <Group gap={4}>
-                  <IconClock size={12} color={colors.text?.secondary} />
-                  <Text size="xs" c="dimmed">
-                    {formatAge(svc.lastHealthCheck)}
-                  </Text>
-                </Group>
-              </Table.Td>
-              <Table.Td>
-                <Group gap={4} wrap="wrap">
-                  {(svc.capabilities ?? []).slice(0, 4).map((cap) => (
-                    <Badge key={cap} size="xs" variant="outline" color="gray">
-                      {cap}
-                    </Badge>
-                  ))}
-                  {(svc.capabilities ?? []).length > 4 && (
-                    <Text size="xs" c="dimmed">
-                      +{svc.capabilities.length - 4}
-                    </Text>
-                  )}
-                </Group>
-              </Table.Td>
-              <Table.Td>
-                {svc.serviceId !== "default" ? (
-                  <Tooltip label="Ping /health endpoint now">
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      loading={
-                        checkHealthMutation.isPending &&
-                        checkHealthMutation.variables?.serviceId ===
-                          svc.serviceId
-                      }
-                      onClick={() =>
-                        checkHealthMutation.mutate({ serviceId: svc.serviceId })
-                      }
+      <div className="overflow-x-auto rounded-lg border border-divider">
+        <table className="w-full border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-divider bg-default-50/80">
+              <th className="px-3 py-2 font-medium">Service</th>
+              <th className="px-3 py-2 font-medium">Type</th>
+              <th className="px-3 py-2 font-medium">Health</th>
+              <th className="px-3 py-2 font-medium">Last Check</th>
+              <th className="px-3 py-2 font-medium">Capabilities</th>
+              <th className="px-3 py-2 font-medium">Ping</th>
+            </tr>
+          </thead>
+          <tbody>
+            {services.map((svc) => (
+              <tr
+                key={svc.id}
+                className="border-b border-divider/60 odd:bg-default-50/30 hover:bg-default-100/40"
+              >
+                <td className="px-3 py-2">
+                  <div className="flex flex-col gap-0.5">
+                    <Text className="text-sm font-medium">{svc.name}</Text>
+                    <span
+                      className="text-xs text-default-500"
+                      style={{ fontFamily: typography.fontFamily?.mono }}
                     >
-                      <IconRefresh size={14} />
-                    </ActionIcon>
-                  </Tooltip>
-                ) : (
-                  <Text size="xs" c="dimmed">
-                    —
+                      {svc.serviceId}
+                    </span>
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  <Chip
+                    size="sm"
+                    variant="soft"
+                    color={svc.serviceId === "default" ? "accent" : "warning"}
+                  >
+                    {svc.serviceId === "default" ? "built-in" : "external"}
+                  </Chip>
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <HealthIcon status={svc.lastHealthStatus} />
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color={healthChipColor(svc.lastHealthStatus)}
+                    >
+                      {svc.lastHealthStatus ?? "unknown"}
+                    </Chip>
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex items-center gap-1 text-xs text-default-500">
+                    <IconClock size={12} color={colors.text?.secondary} />
+                    {formatAge(svc.lastHealthCheck)}
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-1">
+                    {(svc.capabilities ?? []).slice(0, 4).map((cap) => (
+                      <Chip key={cap} size="sm" variant="soft" color="default">
+                        {cap}
+                      </Chip>
+                    ))}
+                    {(svc.capabilities ?? []).length > 4 ? (
+                      <Text className="text-xs text-default-500">
+                        +{svc.capabilities.length - 4}
+                      </Text>
+                    ) : null}
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  {svc.serviceId !== "default" ? (
+                    <Tooltip>
+                      <Tooltip.Trigger>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isIconOnly
+                          isDisabled={
+                            checkHealthMutation.isPending &&
+                            checkHealthMutation.variables?.serviceId ===
+                              svc.serviceId
+                          }
+                          onPress={() =>
+                            checkHealthMutation.mutate({
+                              serviceId: svc.serviceId,
+                            })
+                          }
+                          aria-label="Ping health endpoint"
+                        >
+                          {checkHealthMutation.isPending &&
+                          checkHealthMutation.variables?.serviceId ===
+                            svc.serviceId ? (
+                            <Spinner size="sm" color="current" />
+                          ) : (
+                            <IconRefresh size={14} />
+                          )}
+                        </Button>
+                      </Tooltip.Trigger>
+                      <Tooltip.Content>
+                        Ping /health endpoint now
+                      </Tooltip.Content>
+                    </Tooltip>
+                  ) : (
+                    <Text className="text-xs text-default-500">—</Text>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {services.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-3 py-8 text-center">
+                  <Text className="text-default-500">
+                    No intelligence services registered.
                   </Text>
-                )}
-              </Table.Td>
-            </Table.Tr>
-          ))}
-          {services.length === 0 && (
-            <Table.Tr>
-              <Table.Td colSpan={6}>
-                <Text c="dimmed" ta="center" py={spacing[6]}>
-                  No intelligence services registered.
-                </Text>
-              </Table.Td>
-            </Table.Tr>
-          )}
-        </Table.Tbody>
-      </Table>
-    </Stack>
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
-
-// ─── Usage Tab ────────────────────────────────────────────────────────────────
 
 function UsageTab() {
   const [days, setDays] = useState<30 | 7 | 1>(30);
@@ -383,29 +389,34 @@ function UsageTab() {
       : 0;
   const maxMessages = Math.max(...stats.map((r) => r.messageCount), 1);
 
-  if (isLoading) return <Loader mt="xl" />;
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spinner size="lg" color="accent" />
+      </div>
+    );
+  }
+
+  const latencyColor =
+    avgLatency > 3000 ? "red" : avgLatency > 1500 ? "yellow" : "green";
 
   return (
-    <Stack gap={spacing[6]}>
-      {/* Period selector */}
-      <Group>
-        <Text size="sm" fw={500}>
-          Period:
-        </Text>
+    <div className="flex flex-col gap-6" style={{ gap: spacing[6] }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Text className="text-sm font-medium">Period:</Text>
         {([1, 7, 30] as const).map((d) => (
           <Button
             key={d}
-            size="xs"
-            variant={days === d ? "filled" : "light"}
-            onClick={() => setDays(d)}
+            size="sm"
+            variant={days === d ? "primary" : "ghost"}
+            onPress={() => setDays(d)}
           >
             {d === 1 ? "24h" : `${d}d`}
           </Button>
         ))}
-      </Group>
+      </div>
 
-      {/* Summary cards */}
-      <SimpleGrid cols={3}>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <MetricCard
           label="Total Messages"
           value={totalMessages.toLocaleString()}
@@ -424,99 +435,92 @@ function UsageTab() {
           label="Avg Latency"
           value={`${avgLatency}ms`}
           icon={<IconClock size={18} />}
-          color={
-            avgLatency > 3000 ? "red" : avgLatency > 1500 ? "yellow" : "green"
-          }
+          color={latencyColor}
           sub="per AI response"
         />
-      </SimpleGrid>
+      </div>
 
-      {/* Per-service breakdown */}
       {stats.length > 0 ? (
-        <Paper
-          p="md"
-          radius="md"
-          withBorder
-          style={{ borderColor: colors.border?.default }}
-        >
-          <Text size="sm" fw={600} mb={spacing[4]}>
+        <Card className="border border-divider p-4">
+          <Text className="mb-4 text-sm font-semibold">
             Per-service breakdown
           </Text>
-          <Stack gap={spacing[5]}>
+          <div className="flex flex-col gap-5" style={{ gap: spacing[5] }}>
             {stats.map((stat) => {
               const pct = Math.round((stat.messageCount / maxMessages) * 100);
               const name = serviceNames[stat.serviceId] ?? stat.serviceId;
               return (
-                <Stack key={stat.serviceId} gap={4}>
-                  <Group justify="space-between">
-                    <Text size="sm">{name}</Text>
-                    <Group gap={spacing[4]}>
-                      <Text size="xs" c="dimmed">
-                        {stat.messageCount.toLocaleString()} msgs
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {formatTokens(stat.totalTokens)} tok
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {stat.avgLatencyMs}ms
-                      </Text>
-                    </Group>
-                  </Group>
-                  <Progress value={pct} size="sm" radius="xl" />
-                </Stack>
+                <div key={stat.serviceId} className="flex flex-col gap-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Text className="text-sm">{name}</Text>
+                    <div className="flex flex-wrap gap-4 text-xs text-default-500">
+                      <span>{stat.messageCount.toLocaleString()} msgs</span>
+                      <span>{formatTokens(stat.totalTokens)} tok</span>
+                      <span>{stat.avgLatencyMs}ms</span>
+                    </div>
+                  </div>
+                  <ProgressBar value={pct} minValue={0} maxValue={100} />
+                </div>
               );
             })}
-          </Stack>
-        </Paper>
+          </div>
+        </Card>
       ) : (
-        <Text c="dimmed" ta="center" py={spacing[6]}>
+        <Text className="py-8 text-center text-default-500">
           No usage data for this period.
         </Text>
       )}
-    </Stack>
+    </div>
   );
 }
-
-// ─── Page root ────────────────────────────────────────────────────────────────
 
 export default function IntelligencePage() {
   return (
     <div style={{ padding: spacing[6] }}>
-      {/* Header */}
-      <Group mb={spacing[6]}>
+      <div
+        className="mb-6 flex items-start gap-3"
+        style={{ marginBottom: spacing[6] }}
+      >
         <IconActivity size={22} color={colors.eventTypes?.created} />
         <div>
-          <Text size="xl" fw={700}>
-            Intelligence Services
-          </Text>
-          <Text size="sm" c="dimmed">
+          <Text className="text-xl font-bold">Intelligence Services</Text>
+          <Text className="text-sm text-default-500">
             Health monitoring and aggregate token usage for all registered AI
             services. User-level data (commands, runs, memory, skills) lives
             inside each workspace, not here.
           </Text>
         </div>
-      </Group>
+      </div>
 
-      <Tabs defaultValue="services">
-        <Tabs.List mb={spacing[4]}>
-          <Tabs.Tab
-            value="services"
-            leftSection={<IconPlugConnected size={14} />}
+      <Tabs.Root defaultSelectedKey="services">
+        <Tabs.ListContainer>
+          <Tabs.List
+            className="mb-4 flex flex-wrap gap-1 border-b border-divider pb-1"
+            style={{ marginBottom: spacing[4] }}
           >
-            Service Health
-          </Tabs.Tab>
-          <Tabs.Tab value="usage" leftSection={<IconChartBar size={14} />}>
-            Aggregate Usage
-          </Tabs.Tab>
-        </Tabs.List>
+            <Tabs.Tab id="services" className="rounded-md px-3 py-2 text-sm">
+              <span className="inline-flex items-center gap-1">
+                <IconPlugConnected size={14} />
+                Service Health
+              </span>
+            </Tabs.Tab>
+            <Tabs.Tab id="usage" className="rounded-md px-3 py-2 text-sm">
+              <span className="inline-flex items-center gap-1">
+                <IconChartBar size={14} />
+                Aggregate Usage
+              </span>
+            </Tabs.Tab>
+            <Tabs.Indicator />
+          </Tabs.List>
+        </Tabs.ListContainer>
 
-        <Tabs.Panel value="services">
+        <Tabs.Panel id="services" className="pt-1">
           <ServicesHealthTab />
         </Tabs.Panel>
-        <Tabs.Panel value="usage">
+        <Tabs.Panel id="usage" className="pt-1">
           <UsageTab />
         </Tabs.Panel>
-      </Tabs>
+      </Tabs.Root>
     </div>
   );
 }

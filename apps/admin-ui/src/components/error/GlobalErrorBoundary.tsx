@@ -1,11 +1,9 @@
 /**
- * GlobalErrorBoundary — catches React errors and shows a calm recovery UI.
+ * GlobalErrorBoundary — catches React errors. Uses plain HTML in the fallback
+ * so a broken provider/theme does not hide the failure behind a blank screen.
  */
 
-import { Component, type ReactNode } from "react";
-import { Button } from "@heroui/react";
-import { Card } from "@heroui/react";
-import { IconAlertTriangle, IconRefresh } from "@tabler/icons-react";
+import { Component, type CSSProperties, type ReactNode } from "react";
 
 interface Props {
   children: ReactNode;
@@ -17,6 +15,50 @@ interface State {
   error: Error | null;
   errorInfo: { componentStack: string } | null;
 }
+
+const shellStyle: CSSProperties = {
+  minHeight: "100vh",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+  background: "#e4e4e7",
+  fontFamily:
+    'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+};
+
+const cardStyle: CSSProperties = {
+  maxWidth: 480,
+  background: "#fafafa",
+  border: "1px solid #d4d4d8",
+  borderRadius: 12,
+  padding: 24,
+  textAlign: "center",
+};
+
+const btnRow: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  justifyContent: "center",
+  marginTop: 16,
+};
+
+const btnStyle: CSSProperties = {
+  padding: "10px 16px",
+  borderRadius: 8,
+  border: "1px solid #d4d4d8",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 14,
+};
+
+const btnPrimaryStyle: CSSProperties = {
+  ...btnStyle,
+  background: "#18181b",
+  color: "#fafafa",
+  borderColor: "#18181b",
+};
 
 export default class GlobalErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
@@ -36,9 +78,7 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: { componentStack: string }) {
-    if (import.meta.env.DEV) {
-      console.error("GlobalErrorBoundary caught an error:", error, errorInfo);
-    }
+    console.error("GlobalErrorBoundary:", error, errorInfo);
     this.setState({
       error,
       errorInfo,
@@ -59,50 +99,49 @@ export default class GlobalErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
 
+      const showStack = import.meta.env.DEV && this.state.error;
+
       return (
-        <div className="flex min-h-screen items-center justify-center bg-[var(--pod-surface-2)] p-8">
-          <Card.Root className="max-w-lg border border-divider shadow-sm">
-            <Card.Header className="flex flex-col items-center gap-2 text-center">
-              <IconAlertTriangle
-                className="text-danger"
-                size={48}
-                stroke={1.5}
-              />
-              <Card.Title className="text-xl">Something went wrong</Card.Title>
-              <Card.Description>
-                An unexpected error occurred. Try again or reload the page.
-              </Card.Description>
-            </Card.Header>
-            <Card.Content className="flex flex-col gap-4">
-              {import.meta.env.DEV && this.state.error && (
-                <pre className="max-h-48 overflow-auto rounded-medium bg-default-100 p-3 text-left font-mono text-xs text-default-700">
-                  {this.state.error.toString()}
-                  {this.state.errorInfo && (
-                    <>
-                      {"\n\n"}
-                      Component Stack:
-                      {"\n"}
-                      {this.state.errorInfo.componentStack}
-                    </>
-                  )}
-                </pre>
-              )}
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button variant="outline" onPress={this.handleReset}>
-                  <span className="inline-flex items-center gap-2">
-                    <IconRefresh size={18} />
-                    Try again
-                  </span>
-                </Button>
-                <Button
-                  variant="primary"
-                  onPress={() => window.location.reload()}
-                >
-                  Reload page
-                </Button>
-              </div>
-            </Card.Content>
-          </Card.Root>
+        <div style={shellStyle}>
+          <div style={cardStyle}>
+            <h1 style={{ margin: "0 0 8px", fontSize: 18 }}>
+              Something went wrong
+            </h1>
+            <p style={{ margin: 0, fontSize: 14, color: "#52525b" }}>
+              The admin UI hit an error. Try again or reload. If this is
+              production, check the browser console for details.
+            </p>
+            {showStack && this.state.error && (
+              <pre
+                style={{
+                  marginTop: 16,
+                  padding: 12,
+                  textAlign: "left",
+                  fontSize: 11,
+                  overflow: "auto",
+                  maxHeight: 200,
+                  background: "#f4f4f5",
+                  borderRadius: 8,
+                  color: "#3f3f46",
+                }}
+              >
+                {this.state.error.toString()}
+                {this.state.errorInfo?.componentStack ?? ""}
+              </pre>
+            )}
+            <div style={btnRow}>
+              <button type="button" style={btnStyle} onClick={this.handleReset}>
+                Try again
+              </button>
+              <button
+                type="button"
+                style={btnPrimaryStyle}
+                onClick={() => window.location.reload()}
+              >
+                Reload page
+              </button>
+            </div>
+          </div>
         </div>
       );
     }

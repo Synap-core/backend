@@ -1,17 +1,5 @@
-import { useState } from "react";
-import {
-  Text,
-  Badge,
-  Button,
-  Select,
-  Table,
-  ActionIcon,
-  Group,
-  Loader,
-  Code,
-  Checkbox,
-  Stack,
-} from "@mantine/core";
+import { Fragment, useState } from "react";
+import { Button, Chip, Spinner, Text } from "@heroui/react";
 import {
   IconCheckbox,
   IconCheck,
@@ -26,10 +14,13 @@ import {
 } from "../../lib/notifications";
 import { colors, spacing, typography } from "../../theme/tokens";
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: "yellow",
-  validated: "green",
-  rejected: "red",
+const inputClass =
+  "border-default-200 bg-background text-foreground focus:border-accent rounded-lg border px-3 py-2 text-sm outline-none";
+
+const STATUS_COLORS: Record<string, "warning" | "success" | "danger"> = {
+  pending: "warning",
+  validated: "success",
+  rejected: "danger",
 };
 
 type ProposalStatus = "pending" | "validated" | "rejected" | "all";
@@ -114,228 +105,263 @@ export default function ProposalsPage() {
     setSelected(new Set());
   }
 
+  const allSelected =
+    selected.size === proposals.length && proposals.length > 0;
+  const someSelected = selected.size > 0 && selected.size < proposals.length;
+
   return (
     <div style={{ padding: spacing[6] }}>
-      {/* Header */}
-      <Group mb={spacing[6]}>
+      <div className="mb-6 flex items-start gap-3">
         <IconCheckbox size={22} color={colors.eventTypes.created} />
         <div>
-          <Text size="xl" fw={700}>
-            Proposals
-          </Text>
-          <Text size="sm" c="dimmed">
+          <Text className="text-xl font-bold">Proposals</Text>
+          <Text className="text-sm text-default-500">
             Review and govern AI-proposed changes.
           </Text>
         </div>
-      </Group>
+      </div>
 
-      {/* Filters */}
-      <Group mb={spacing[4]}>
-        <Select
-          label="Status"
-          data={[
-            { value: "pending", label: "Pending" },
-            { value: "validated", label: "Approved" },
-            { value: "rejected", label: "Rejected" },
-            { value: "all", label: "All" },
-          ]}
-          value={status}
-          onChange={(v) => setStatus((v as ProposalStatus) ?? "pending")}
-          style={{ width: 150 }}
-        />
-        <Select
-          label="Target Type"
-          data={[
-            { value: "", label: "All types" },
-            { value: "entity", label: "Entity" },
-            { value: "document", label: "Document" },
-            { value: "view", label: "View" },
-            { value: "whiteboard", label: "Whiteboard" },
-          ]}
-          value={targetType}
-          onChange={(v) => setTargetType((v as TargetType | "") ?? "")}
-          style={{ width: 160 }}
-        />
-      </Group>
+      <div
+        className="mb-4 flex flex-wrap gap-4"
+        style={{ marginBottom: spacing[4] }}
+      >
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-default-600">Status</label>
+          <select
+            className={inputClass}
+            style={{ width: 150 }}
+            value={status}
+            onChange={(e) =>
+              setStatus((e.target.value as ProposalStatus) || "pending")
+            }
+          >
+            <option value="pending">Pending</option>
+            <option value="validated">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-default-600">
+            Target Type
+          </label>
+          <select
+            className={inputClass}
+            style={{ width: 160 }}
+            value={targetType}
+            onChange={(e) =>
+              setTargetType((e.target.value as TargetType | "") || "")
+            }
+          >
+            <option value="">All types</option>
+            <option value="entity">Entity</option>
+            <option value="document">Document</option>
+            <option value="view">View</option>
+            <option value="whiteboard">Whiteboard</option>
+          </select>
+        </div>
+      </div>
 
-      {/* Bulk actions */}
-      {selected.size > 0 && (
-        <Group
-          mb={spacing[4]}
-          p={spacing[3]}
+      {selected.size > 0 ? (
+        <div
+          className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border p-3"
           style={{
+            marginBottom: spacing[4],
             backgroundColor: `${colors.eventTypes.created}10`,
-            borderRadius: 8,
-            border: `1px solid ${colors.eventTypes.created}30`,
+            borderColor: `${colors.eventTypes.created}30`,
           }}
         >
-          <Text size="sm" fw={500}>
-            {selected.size} selected
-          </Text>
+          <Text className="text-sm font-medium">{selected.size} selected</Text>
           <Button
-            size="xs"
-            leftSection={<IconCheck size={14} />}
-            color="green"
-            onClick={bulkApprove}
-            loading={approveMutation.isPending}
+            size="sm"
+            variant="ghost"
+            className="text-success"
+            onPress={bulkApprove}
+            isDisabled={approveMutation.isPending}
           >
-            Approve All
+            {approveMutation.isPending ? (
+              <Spinner size="sm" color="current" />
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <IconCheck size={14} />
+                Approve All
+              </span>
+            )}
           </Button>
           <Button
-            size="xs"
-            leftSection={<IconX size={14} />}
-            color="red"
-            onClick={bulkReject}
-            loading={rejectMutation.isPending}
+            size="sm"
+            variant="ghost"
+            className="text-danger"
+            onPress={bulkReject}
+            isDisabled={rejectMutation.isPending}
           >
-            Reject All
+            {rejectMutation.isPending ? (
+              <Spinner size="sm" color="current" />
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <IconX size={14} />
+                Reject All
+              </span>
+            )}
           </Button>
-        </Group>
-      )}
+        </div>
+      ) : null}
 
       {isLoading ? (
-        <Loader />
+        <div className="flex justify-center py-12">
+          <Spinner size="lg" color="accent" />
+        </div>
       ) : (
-        <Table striped highlightOnHover>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th style={{ width: 40 }}>
-                <Checkbox
-                  checked={
-                    selected.size === proposals.length && proposals.length > 0
-                  }
-                  indeterminate={
-                    selected.size > 0 && selected.size < proposals.length
-                  }
-                  onChange={selectAll}
-                />
-              </Table.Th>
-              <Table.Th></Table.Th>
-              <Table.Th>Target</Table.Th>
-              <Table.Th>Type</Table.Th>
-              <Table.Th>Status</Table.Th>
-              <Table.Th>Age</Table.Th>
-              <Table.Th>Actions</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {proposals.map((p) => (
-              <>
-                <Table.Tr key={p.id}>
-                  <Table.Td>
-                    <Checkbox
-                      checked={selected.has(p.id)}
-                      onChange={() => toggleSelect(p.id)}
-                    />
-                  </Table.Td>
-                  <Table.Td>
-                    <ActionIcon
-                      size="xs"
-                      variant="subtle"
-                      onClick={() => toggleExpand(p.id)}
-                    >
-                      {expanded.has(p.id) ? (
-                        <IconChevronDown size={14} />
-                      ) : (
-                        <IconChevronRight size={14} />
-                      )}
-                    </ActionIcon>
-                  </Table.Td>
-                  <Table.Td>
-                    <Stack gap={2}>
-                      <Badge size="xs" variant="dot" color="gray">
-                        {p.targetType}
-                      </Badge>
-                      <Text
-                        size="xs"
-                        c="dimmed"
-                        style={{ fontFamily: typography.fontFamily.mono }}
+        <div className="overflow-x-auto rounded-lg border border-divider">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-divider bg-default-50/80">
+                <th className="w-10 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-divider"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    onChange={selectAll}
+                    aria-label="Select all"
+                  />
+                </th>
+                <th className="w-8 px-1 py-2" />
+                <th className="px-3 py-2 font-medium">Target</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Age</th>
+                <th className="px-3 py-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {proposals.map((p) => (
+                <Fragment key={p.id}>
+                  <tr className="border-b border-divider/60 hover:bg-default-100/40">
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-divider"
+                        checked={selected.has(p.id)}
+                        onChange={() => toggleSelect(p.id)}
+                        aria-label={`Select ${p.id}`}
+                      />
+                    </td>
+                    <td className="px-1 py-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        isIconOnly
+                        aria-label={expanded.has(p.id) ? "Collapse" : "Expand"}
+                        onPress={() => toggleExpand(p.id)}
                       >
-                        {p.targetId.slice(0, 12)}…
+                        {expanded.has(p.id) ? (
+                          <IconChevronDown size={14} />
+                        ) : (
+                          <IconChevronRight size={14} />
+                        )}
+                      </Button>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-col gap-0.5">
+                        <Chip size="sm" variant="soft" color="default">
+                          {p.targetType}
+                        </Chip>
+                        <span
+                          className="text-xs text-default-500"
+                          style={{ fontFamily: typography.fontFamily.mono }}
+                        >
+                          {p.targetId.slice(0, 12)}…
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Text className="text-sm">{p.proposalType}</Text>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Chip
+                        size="sm"
+                        variant="soft"
+                        color={STATUS_COLORS[p.status] ?? "default"}
+                      >
+                        {p.status}
+                      </Chip>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Text className="text-sm text-default-500">
+                        {timeSince(p.createdAt)}
                       </Text>
-                    </Stack>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm">{p.proposalType}</Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge size="xs" color={STATUS_COLORS[p.status] ?? "gray"}>
-                      {p.status}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm" c="dimmed">
-                      {timeSince(p.createdAt)}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    {p.status === "pending" && (
-                      <Group gap={4}>
-                        <ActionIcon
-                          size="sm"
-                          variant="subtle"
-                          color="green"
-                          loading={approveMutation.isPending}
-                          onClick={() =>
-                            approveMutation.mutate({ proposalId: p.id })
-                          }
-                        >
-                          <IconCheck size={14} />
-                        </ActionIcon>
-                        <ActionIcon
-                          size="sm"
-                          variant="subtle"
-                          color="red"
-                          loading={rejectMutation.isPending}
-                          onClick={() =>
-                            rejectMutation.mutate({ proposalId: p.id })
-                          }
-                        >
-                          <IconX size={14} />
-                        </ActionIcon>
-                      </Group>
-                    )}
-                  </Table.Td>
-                </Table.Tr>
-                {expanded.has(p.id) && (
-                  <Table.Tr>
-                    <Table.Td
-                      colSpan={7}
-                      style={{ backgroundColor: colors.background.secondary }}
-                    >
-                      <div style={{ padding: spacing[3] }}>
-                        <Text size="xs" fw={600} c="dimmed" mb={spacing[1]}>
-                          PROPOSAL DATA
+                    </td>
+                    <td className="px-3 py-2">
+                      {p.status === "pending" ? (
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            isIconOnly
+                            className="text-success"
+                            isDisabled={approveMutation.isPending}
+                            aria-label="Approve"
+                            onPress={() =>
+                              approveMutation.mutate({ proposalId: p.id })
+                            }
+                          >
+                            <IconCheck size={14} />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            isIconOnly
+                            className="text-danger"
+                            isDisabled={rejectMutation.isPending}
+                            aria-label="Reject"
+                            onPress={() =>
+                              rejectMutation.mutate({ proposalId: p.id })
+                            }
+                          >
+                            <IconX size={14} />
+                          </Button>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                  {expanded.has(p.id) ? (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="border-b border-divider px-3 py-3"
+                        style={{
+                          backgroundColor: colors.background.secondary,
+                        }}
+                      >
+                        <Text className="mb-1 text-xs font-semibold uppercase tracking-wide text-default-500">
+                          Proposal data
                         </Text>
-                        <Code
-                          block
-                          style={{
-                            fontFamily: typography.fontFamily.mono,
-                            fontSize: typography.fontSize.xs,
-                            maxHeight: 200,
-                            overflowY: "auto",
-                            whiteSpace: "pre-wrap",
-                          }}
+                        <pre
+                          className="max-h-[200px] overflow-y-auto whitespace-pre-wrap rounded-md border border-divider bg-default-50 p-3 text-xs"
+                          style={{ fontFamily: typography.fontFamily.mono }}
                         >
                           {JSON.stringify(p.data, null, 2)}
-                        </Code>
-                      </div>
-                    </Table.Td>
-                  </Table.Tr>
-                )}
-              </>
-            ))}
-            {proposals.length === 0 && (
-              <Table.Tr>
-                <Table.Td colSpan={7}>
-                  <Text c="dimmed" ta="center" py={spacing[6]}>
-                    No proposals found.
-                  </Text>
-                </Table.Td>
-              </Table.Tr>
-            )}
-          </Table.Tbody>
-        </Table>
+                        </pre>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))}
+              {proposals.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-10 text-center">
+                    <Text className="text-default-500">
+                      No proposals found.
+                    </Text>
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
