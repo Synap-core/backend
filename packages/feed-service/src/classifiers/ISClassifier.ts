@@ -248,12 +248,12 @@ export class ISClassifier implements IFeedClassifier {
   /**
    * Fallback to keyword-based classification
    */
-  private fallbackToKeywords(
+  private async fallbackToKeywords(
     items: NormalizedRSSItem[],
     context?: UserContext
   ): Promise<ClassifiedItem[]> {
-    // Dynamically import to avoid circular dependency
-    const { KeywordClassifier } = require("./KeywordClassifier.js");
+    // Dynamic import to avoid circular dependency
+    const { KeywordClassifier } = await import("./KeywordClassifier.js");
     const fallback = new KeywordClassifier();
     return fallback.classify(items, context);
   }

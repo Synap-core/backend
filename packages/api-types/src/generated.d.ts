@@ -264,6 +264,26 @@ export interface McpServerConfig {
  * so users can have different schedules per workspace.
  */
 export type ProactiveNudgeDensity = "minimal" | "balanced" | "proactive";
+export type EveAiProviderId = "ollama" | "openrouter" | "anthropic" | "openai";
+/**
+ * Eve-side provider routing policy synced to a workspace (non-secret).
+ * This is distinct from Synap's internal intelligence service routing.
+ */
+export interface EveProviderRoutingPolicy {
+	mode?: "local" | "provider" | "hybrid";
+	defaultProvider?: EveAiProviderId;
+	fallbackProvider?: EveAiProviderId;
+	providers?: Array<{
+		id: EveAiProviderId;
+		enabled?: boolean;
+		/** Optional custom base URL for provider gateways (non-secret). */
+		baseUrl?: string;
+		/** Optional default model hint for clients (non-secret). */
+		defaultModel?: string;
+	}>;
+	/** Whether Eve intends this workspace to follow synced provider policy. */
+	syncToSynap?: boolean;
+}
 export interface ProactiveAiPreferences {
 	/** Global kill switch for all proactive AI features. Default: true */
 	enabled: boolean;
@@ -361,6 +381,11 @@ export interface WorkspaceSettings {
 		chat?: string;
 		analysis?: string;
 	};
+	/**
+	 * Eve provider routing policy (Brain-side model/provider selection).
+	 * Kept separate from Synap internal intelligence service routing.
+	 */
+	eveProviderRouting?: EveProviderRoutingPolicy;
 	validationRules?: {
 		[tableName: string]: {
 			create?: boolean;
@@ -2204,7 +2229,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
+					role: "user" | "system" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
@@ -3170,6 +3195,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		resetUserPassword: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				mode?: "single" | "all_humans" | undefined;
+				userId?: string | undefined;
+			};
+			output: {
+				mode: "single" | "all_humans";
+				resetCount: number;
+				failedCount: number;
+				results: {
+					userId: string;
+					email: string;
+					tempPassword: string;
+				}[];
+				failures: {
+					userId: string;
+					email: string;
+					error: string;
+				}[];
+			};
+			meta: object;
+		}>;
 		getCorsSettings: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
@@ -3798,6 +3845,46 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					language: string | null;
 					mimeType: string | null;
 					updatedAt: Date;
+				};
+				content: string;
+			};
+			meta: object;
+		}>;
+		listGlobal: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				markdownOnly?: boolean | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				documents: {
+					id: string;
+					title: string;
+					type: string;
+					mimeType: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					size: number;
+					userId: string;
+					workspaceId: string;
+				}[];
+				total: number;
+			};
+			meta: object;
+		}>;
+		getGlobal: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				documentId: string;
+			};
+			output: {
+				document: {
+					id: string;
+					title: string;
+					type: string;
+					language: string | null;
+					mimeType: string | null;
+					updatedAt: Date;
+					workspaceId: string;
+					userId: string;
 				};
 				content: string;
 			};
@@ -4528,7 +4615,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					status: "completed" | "failed" | "running";
+					status: "completed" | "running" | "failed";
 					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
@@ -4554,7 +4641,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				status: "completed" | "failed" | "running";
+				status: "completed" | "running" | "failed";
 				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
@@ -9330,6 +9417,73 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				config: RSSFeedConfig | ProactiveFeedConfig;
 				nextRunAt: string;
 			};
+			meta: object;
+		}>;
+	}>>;
+	trustedIssuers: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				status: "approved" | "revoked" | "pending" | "rejected";
+				description: string | null;
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				displayName: string;
+				issuerUrl: string;
+				allowedScopes: string[];
+				isBuiltIn: boolean;
+				initialRequestData: unknown;
+			}[];
+			meta: object;
+		}>;
+		approve: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				allowedScopes: string[];
+			};
+			output: {
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				status: "approved" | "revoked" | "pending" | "rejected";
+				description: string | null;
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				displayName: string;
+				issuerUrl: string;
+				allowedScopes: string[];
+				isBuiltIn: boolean;
+				initialRequestData: unknown;
+			};
+			meta: object;
+		}>;
+		reject: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				reason: string;
+			};
+			output: void;
+			meta: object;
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: void;
 			meta: object;
 		}>;
 	}>>;

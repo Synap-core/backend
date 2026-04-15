@@ -8,8 +8,8 @@
  */
 
 import { randomBytes } from "crypto";
-import { and, eq } from "drizzle-orm";
 import type { ApiKeyRepository, CreateApiKeyInput } from "@synap/database";
+import { and, eq } from "@synap/database";
 import { db } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
