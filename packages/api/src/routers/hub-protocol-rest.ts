@@ -17,7 +17,7 @@ import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
-import { ChannelType } from "@synap/database/schema";
+import { ChannelType, ThreadKind } from "@synap/database/schema";
 import type { ProactiveMessageType } from "../services/DeliveryService.js";
 import { routeSignal } from "../utils/delivery-router.js";
 import { randomUUID } from "crypto";
@@ -461,13 +461,16 @@ app.get("/threads", async (c) => {
   const limit = parseInt(c.req.query("limit") ?? "50", 10);
   if (!userId) return c.json({ error: "userId is required" }, 400);
   try {
-    // Scope to user's accessible workspaces + personal channels.
-    // When workspaceId is explicit, return that workspace + personal.
-    // When omitted, return ALL accessible workspaces + personal.
+    // Scope to user's accessible workspaces + pod-wide channels.
+    // When workspaceId is explicit, return that workspace + pod-wide.
+    // When omitted, return ALL accessible workspaces + pod-wide.
     let whereClause;
-    // Pod-wide channels: personal (type='personal') and proactive feed (type='feed')
+    // Pod-wide channels: personal thread + proactive feed.
     const podWideFilter = or(
-      eq(channels.channelType, ChannelType.PERSONAL),
+      and(
+        eq(channels.channelType, ChannelType.THREAD),
+        eq(channels.threadKind, ThreadKind.PERSONAL)
+      ),
       eq(channels.channelType, ChannelType.FEED)
     );
 
@@ -1637,7 +1640,7 @@ app.get("/threads/:threadId/messages", async (c) => {
  * Inject a message into a thread (used by sub-agents to report back or post user messages).
  * Body: { role: "system" | "assistant" | "user", content: string, userId: string, autoRespond?: boolean }
  *
- * autoRespond=true: queues an IS response trigger for THREAD, SUB_THREAD, and AGENT_COLLAB channels.
+ * autoRespond=true: queues an IS response trigger for AI-active THREAD and AGENT_COLLAB channels.
  * Used for async inter-branch messaging — branch A posts "user" message to branch B,
  * branch B's IS responds automatically via the a2ai-response-trigger worker.
  */
@@ -1686,7 +1689,6 @@ app.post("/threads/:threadId/messages", async (c) => {
       if (
         channel?.workspaceId &&
         (channel.channelType === ChannelType.THREAD ||
-          channel.channelType === ChannelType.SUB_THREAD ||
           channel.channelType === ChannelType.AGENT_COLLAB)
       ) {
         try {
@@ -3843,7 +3845,7 @@ app.post("/channels/by-context", async (c) => {
 
 /**
  * GET /channels/personal?userId=...&workspaceId=...
- * Get or create the user's personal AI channel.
+ * Get or create the user's personal AI thread.
  * Used by skill triggers to resolve a channelId before posting.
  */
 app.get("/channels/personal", async (c) => {

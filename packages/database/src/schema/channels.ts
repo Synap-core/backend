@@ -2,7 +2,7 @@
  * Channels Schema — V2
  *
  * A channel is a conversation surface with a context scope.
- * 6 canonical types replace the previous 9.
+ * 4 canonical types replace legacy chat channel variants.
  * `channelPurpose` is removed — absorbed into channelType.
  * `scope` and `feedScope` are new.
  *
@@ -22,32 +22,38 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 /**
  * Channel Types (V2)
  *
- * PERSONAL     — The user's permanent AI assistant channel (pod-wide, one per user).
- *                Was: ai_thread + channelPurpose=chat
  * THREAD       — A conversation linked to a specific context object.
- *                Replaces: ai_thread (free-form), entity_comments, document_review, view_discussion.
- *                contextObjectType determines what the conversation is about.
- * SUB_THREAD   — A specialized sub-agent task spawned within a parent channel.
- *                Always has parentChannelId. AI always active with a specific agent persona.
- *                Was: branch (and the unimplemented thread type)
+ *                Unified model for chat, comments, and branches.
+ *                Behavior is controlled by threadKind + parentChannelId + agentType.
  * FEED         — Proactive AI broadcast channel. AI posts, users read.
  *                feedScope determines user-level vs workspace-level.
- *                Was: ai_thread + channelPurpose=feed
  * EXTERNAL     — Ingested conversation from an external platform (WhatsApp, Slack, Gmail, etc.)
- *                Was: external_import
+ *                Reply routing is capability/toggle-based and only active when connector is live.
  * AGENT_COLLAB — Internal multi-agent collaboration channel (persistent, workspace-scoped).
- *                Distinct from Google A2A (ephemeral, cross-system task delegation).
- *                Was: a2ai
+ *                Visibility is restricted to workspace admin/owner for now.
  */
 export const ChannelType = {
-  PERSONAL: "personal",
   THREAD: "thread",
-  SUB_THREAD: "sub_thread",
   FEED: "feed",
   EXTERNAL: "external",
   AGENT_COLLAB: "agent_collab",
 } as const;
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
+
+/**
+ * Thread behavior variants for ChannelType.THREAD.
+ */
+export const ThreadKind = {
+  PERSONAL: "personal",
+  WORKSPACE: "workspace",
+  ENTITY: "entity",
+  DOCUMENT: "document",
+  VIEW: "view",
+  PROJECT: "project",
+  TASK: "task",
+  BRANCH: "branch",
+} as const;
+export type ThreadKind = (typeof ThreadKind)[keyof typeof ThreadKind];
 
 /**
  * Channel Scope
@@ -98,7 +104,7 @@ export const ChannelAgentType = {
   ORCHESTRATOR: "orchestrator",
   // "meta" is the public-facing name users/frontend see; both route to OrchestratorAgent
   META: "meta",
-  // Personal assistant: user-centric, memory-first. Used for personal channels only.
+  // Personal assistant: user-centric, memory-first.
   PERSONAL: "personal",
   PROMPTING: "prompting",
   KNOWLEDGE_SEARCH: "knowledge-search",
@@ -123,16 +129,14 @@ export const channels = pgTable(
     // Identity
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
-    /** Workspace scope for listing/filtering; null = pod-scoped channel (personal, user feed). */
+    /** Workspace scope for listing/filtering; null = pod-scoped channel (personal-style thread, user feed). */
     workspaceId: uuid("workspace_id"),
 
     // Channel metadata
     title: text("title"),
     channelType: text("channel_type", {
       enum: [
-        ChannelType.PERSONAL,
         ChannelType.THREAD,
-        ChannelType.SUB_THREAD,
         ChannelType.FEED,
         ChannelType.EXTERNAL,
         ChannelType.AGENT_COLLAB,
@@ -143,7 +147,7 @@ export const channels = pgTable(
 
     /**
      * Scope controls visibility across workspaces.
-     * personal → pod, thread/external/agent_collab → workspace, feed → pod or workspace.
+     * thread/external/agent_collab → workspace, feed → pod or workspace.
      */
     scope: text("scope", {
       enum: [ChannelScope.POD, ChannelScope.WORKSPACE, ChannelScope.USER],
@@ -165,10 +169,22 @@ export const channels = pgTable(
     contextObjectType: text("context_object_type"),
     contextObjectId: uuid("context_object_id"),
 
-    // Sub-thread hierarchy (for SUB_THREAD channels)
+    // Thread behavior + hierarchy
+    threadKind: text("thread_kind", {
+      enum: [
+        ThreadKind.PERSONAL,
+        ThreadKind.WORKSPACE,
+        ThreadKind.ENTITY,
+        ThreadKind.DOCUMENT,
+        ThreadKind.VIEW,
+        ThreadKind.PROJECT,
+        ThreadKind.TASK,
+        ThreadKind.BRANCH,
+      ],
+    }),
     parentChannelId: uuid("parent_channel_id"), // Self-reference to channels.id
     branchedFromMessageId: uuid("branched_from_message_id"), // Reference to messages.id
-    branchPurpose: text("branch_purpose"), // Task description for the sub-thread
+    branchPurpose: text("branch_purpose"), // Task description for branch threads
 
     // Agent assignment
     agentId: text("agent_id").notNull().default("orchestrator"),
@@ -185,8 +201,7 @@ export const channels = pgTable(
       .default(ChannelStatus.ACTIVE),
 
     // Agent type for multi-agent system — free string, no DB-level enum constraint.
-    // Use ChannelAgentType.NONE to disable AI. All typed channels (personal, sub_thread,
-    // agent_collab) always have AI active regardless of this field.
+    // Use ChannelAgentType.NONE to disable AI for passive threads.
     agentType: text("agent_type").notNull().default(ChannelAgentType.NONE),
 
     agentConfig: jsonb("agent_config"), // Custom agent configuration (system prompt, tools, etc.)
@@ -197,15 +212,17 @@ export const channels = pgTable(
     // Context (compressed summaries from merged sub-threads)
     contextSummary: text("context_summary"),
 
-    // Sub-thread result tracking (only populated for SUB_THREAD channels)
+    // Branch thread result tracking
     resultSummary: text("result_summary"),
     mergedIntoStateId: uuid("merged_into_state_id"), // FK to compacted_states (circular dep — set in migration)
 
-    // External source (for EXTERNAL channels)
+    // External source (for EXTERNAL channels; reply routing enabled only with live connector capability)
     externalSource: text("external_source"), // 'whatsapp' | 'slack' | 'gmail' | 'telegram' | 'sms'
     externalChannelId: text("external_channel_id"), // ID of conversation in external system
 
     // Metadata
+    // FEED channels: items may include per-item action metadata (primaryAction, secondaryActions).
+    // EXTERNAL channels: relayEnabled + connectorLive gate outbound external reply routing.
     metadata: jsonb("metadata"),
 
     // Timestamps
@@ -244,6 +261,7 @@ export interface Channel {
   feedScope: FeedScope | null;
   contextObjectType: string | null;
   contextObjectId: string | null;
+  threadKind: ThreadKind | null;
   parentChannelId: string | null;
   branchedFromMessageId: string | null;
   branchPurpose: string | null;

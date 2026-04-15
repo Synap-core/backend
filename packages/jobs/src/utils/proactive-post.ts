@@ -7,7 +7,7 @@
  *
  * Surfaces:
  *   feed         → proactive feed channel (channelType='feed', feedScope='user')
- *   chat         → personal chat channel (channelType='personal')
+ *   chat         → personal chat thread (channelType='thread', threadKind='personal')
  *   notification → direct insert to notifications table
  *   suppress     → no-op
  *
@@ -25,6 +25,7 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
+  ThreadKind,
   ChannelStatus,
   ChannelAgentType,
   MessageRole,
@@ -136,7 +137,7 @@ async function ensureProactiveFeedChannel(
   return channel;
 }
 
-/** Get or create the user's personal channel (type='personal'). */
+/** Get or create the user's personal thread (type='thread', threadKind='personal'). */
 async function ensurePersonalChatChannel(
   userId: string,
   _workspaceId?: string
@@ -144,7 +145,8 @@ async function ensurePersonalChatChannel(
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.PERSONAL),
+      eq(channels.channelType, ChannelType.THREAD),
+      eq(channels.threadKind, ThreadKind.PERSONAL),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
@@ -155,7 +157,8 @@ async function ensurePersonalChatChannel(
     .values({
       userId,
       workspaceId: null, // pod-wide
-      channelType: ChannelType.PERSONAL,
+      channelType: ChannelType.THREAD,
+      threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
       agentId: "personal",
@@ -231,6 +234,8 @@ async function postToProactiveFeed(
     .update(`${messageId}${content}`)
     .digest("hex");
 
+  // Feed items can include per-item actions in metadata
+  // (primaryAction + secondaryActions) for client rendering.
   const messageMetadata = { ...metadata, proactiveType, proactiveAi: true };
 
   await db.insert(messages).values({

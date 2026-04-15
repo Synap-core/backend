@@ -215,8 +215,8 @@ async function classifyItemsWithIS(
           signal: AbortSignal.timeout(30000),
         });
 
-        if (!response.ok) {
-          throw new Error(`IS classification failed: ${response.status}`);
+        if (!res.ok) {
+          throw new Error(`IS classification failed: ${res.status}`);
         }
 
         return res;

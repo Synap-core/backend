@@ -15,6 +15,7 @@ import {
   messages,
   channelConnections,
   ChannelType,
+  ThreadKind,
   ChannelStatus,
   ChannelAgentType,
   MessageRole,
@@ -74,7 +75,8 @@ async function ensureBotBranchChannel(
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.SUB_THREAD),
+      eq(channels.channelType, ChannelType.THREAD),
+      eq(channels.threadKind, ThreadKind.BRANCH),
       eq(channels.status, ChannelStatus.ACTIVE),
       drizzleSql`${channels.metadata}->>'telegramBotBranch' = 'true'`
     ),
@@ -88,7 +90,8 @@ async function ensureBotBranchChannel(
     .values({
       userId,
       workspaceId: workspaceId ?? null,
-      channelType: ChannelType.SUB_THREAD,
+      channelType: ChannelType.THREAD,
+      threadKind: ThreadKind.BRANCH,
       status: ChannelStatus.ACTIVE,
       parentChannelId: personalChannelId,
       branchPurpose: "Telegram Bot",

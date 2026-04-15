@@ -3,7 +3,12 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@synap/database";
 import { users } from "@synap/database/schema";
 import { kratosAdmin } from "@synap/auth";
-import { createAdminUser } from "./create-admin-user.js";
+import {
+  createAdminUser,
+  ensureUserRow,
+  ensureWorkspaceForUser,
+  findKratosIdentityByEmail,
+} from "./create-admin-user.js";
 
 type Action = "list" | "add-admin" | "reset-password" | "delete";
 
@@ -11,6 +16,7 @@ const action = (process.env.ACTION || "list") as Action;
 const email = process.env.ADMIN_EMAIL || process.env.USER_EMAIL || "";
 const password = process.env.ADMIN_PASSWORD || process.env.USER_PASSWORD || "";
 const name = process.env.ADMIN_NAME || process.env.USER_NAME || "";
+const createWorkspace = process.env.CREATE_WORKSPACE !== "false";
 const limitRaw = process.env.LIMIT || "200";
 const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 200;
 
@@ -65,10 +71,62 @@ async function runAddAdmin() {
       "ADMIN_EMAIL/USER_EMAIL and ADMIN_PASSWORD/USER_PASSWORD are required"
     );
   }
-  const result = await createAdminUser(email, password, name || undefined);
-  console.log("Admin user created.");
-  console.log(`identity_id=${result.identityId}`);
-  console.log(`workspace_id=${result.workspaceId}`);
+  try {
+    const result = await createAdminUser(email, password, name || undefined, {
+      createWorkspace,
+    });
+    console.log("Admin user created.");
+    console.log(`identity_id=${result.identityId}`);
+    if (result.workspaceId) {
+      console.log(`workspace_id=${result.workspaceId}`);
+    } else {
+      console.log("workspace_id=<none>");
+    }
+    return;
+  } catch (error) {
+    const err = error as { response?: { status?: number } };
+    if (err.response?.status !== 409) throw error;
+  }
+
+  // Existing Kratos identity -> make command idempotent: reset password and ensure DB row.
+  const identity = await findKratosIdentityByEmail(email);
+  if (!identity) {
+    throw new Error(
+      `Identity conflict reported by Kratos, but no identity found for ${email}`
+    );
+  }
+
+  await ensureUserRow(identity.id, email, name || identity.traits?.name);
+  await kratosAdmin.updateIdentity({
+    id: identity.id,
+    updateIdentityBody: {
+      schema_id: identity.schema_id,
+      state: (identity.state ?? "active") as never,
+      traits: (identity.traits ?? { email }) as Record<string, unknown>,
+      credentials: {
+        password: {
+          config: {
+            password,
+          },
+        },
+      },
+    },
+  });
+
+  let workspaceId: string | null = null;
+  if (createWorkspace) {
+    workspaceId = await ensureWorkspaceForUser(identity.id, name);
+  }
+
+  console.log(
+    "Admin identity already existed; password updated and user synced."
+  );
+  console.log(`identity_id=${identity.id}`);
+  if (workspaceId) {
+    console.log(`workspace_id=${workspaceId}`);
+  } else {
+    console.log("workspace_id=<none>");
+  }
 }
 
 async function runResetPassword() {
@@ -79,13 +137,21 @@ async function runResetPassword() {
   }
 
   const identityId = await getIdentityIdByEmail(email);
-  if (!identityId) {
+  const resolvedIdentityId =
+    identityId ?? (await findKratosIdentityByEmail(email))?.id ?? null;
+  if (!resolvedIdentityId)
     throw new Error(`User not found for email: ${email}`);
-  }
 
-  const { data: identity } = await kratosAdmin.getIdentity({ id: identityId });
+  const { data: identity } = await kratosAdmin.getIdentity({
+    id: resolvedIdentityId,
+  });
+  await ensureUserRow(
+    resolvedIdentityId,
+    email,
+    (identity.traits as { name?: string } | undefined)?.name
+  );
   await kratosAdmin.updateIdentity({
-    id: identityId,
+    id: resolvedIdentityId,
     updateIdentityBody: {
       schema_id: identity.schema_id,
       state: (identity.state ?? "active") as never,
@@ -108,11 +174,12 @@ async function runDelete() {
     throw new Error("USER_EMAIL (or ADMIN_EMAIL) is required");
   }
   const identityId = await getIdentityIdByEmail(email);
-  if (!identityId) {
+  const resolvedIdentityId =
+    identityId ?? (await findKratosIdentityByEmail(email))?.id ?? null;
+  if (!resolvedIdentityId)
     throw new Error(`User not found for email: ${email}`);
-  }
-  await kratosAdmin.deleteIdentity({ id: identityId });
-  console.log(`Deleted identity for ${email} (${identityId}).`);
+  await kratosAdmin.deleteIdentity({ id: resolvedIdentityId });
+  console.log(`Deleted identity for ${email} (${resolvedIdentityId}).`);
   console.log("Note: DB cleanup depends on your schema constraints/cascades.");
 }
 

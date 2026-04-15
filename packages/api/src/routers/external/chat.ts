@@ -15,9 +15,9 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, or } from "@synap/database";
 import { channels, workspaceMembers } from "@synap/database/schema";
-import { ChannelType, ChannelStatus } from "@synap/database/schema";
+import { ChannelType, ThreadKind, ChannelStatus } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { ensurePersonalChannel } from "../../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
@@ -40,7 +40,7 @@ export const externalChatApp = new Hono<{
 
 /**
  * GET /channels
- * Returns all ai_thread and branch channels the API key owner can chat in
+ * Returns all AI-chat channels the API key owner can chat in
  * (i.e. channels whose workspace the user is a member of).
  */
 externalChatApp.get(
@@ -65,11 +65,17 @@ externalChatApp.get(
     const rows = await db.query.channels.findMany({
       where: and(
         inArray(channels.workspaceId, workspaceIds),
-        inArray(channels.channelType, [
-          ChannelType.PERSONAL,
-          ChannelType.THREAD,
-          ChannelType.SUB_THREAD,
-        ]),
+        or(
+          eq(channels.channelType, ChannelType.AGENT_COLLAB),
+          and(
+            eq(channels.channelType, ChannelType.THREAD),
+            inArray(channels.threadKind, [
+              ThreadKind.PERSONAL,
+              ThreadKind.WORKSPACE,
+              ThreadKind.BRANCH,
+            ])
+          )
+        )!,
         eq(channels.status, ChannelStatus.ACTIVE)
       ),
       columns: {
@@ -180,7 +186,7 @@ externalChatApp.post(
       }
       resolvedChannelId = input.channelId;
     } else {
-      // Auto-create or retrieve the user's personal ai_thread channel
+      // Auto-create or retrieve the user's personal thread
       try {
         const personalChannel = await ensurePersonalChannel(
           userId,

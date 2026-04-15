@@ -10,6 +10,7 @@ import { createAdminUser } from "./create-admin-user.js";
 const email = process.env.ADMIN_EMAIL;
 const password = process.env.ADMIN_PASSWORD;
 const name = process.env.ADMIN_NAME;
+const createWorkspace = process.env.CREATE_WORKSPACE !== "false";
 
 if (!email || !password) {
   console.error(
@@ -23,12 +24,16 @@ if (!email || !password) {
   process.exit(1);
 }
 
-createAdminUser(email, password, name)
+createAdminUser(email, password, name, { createWorkspace })
   .then(({ identityId, workspaceId }) => {
     console.log("Admin user created successfully");
     console.log(`   Email: ${email}`);
     console.log(`   Identity ID: ${identityId}`);
-    console.log(`   Workspace ID: ${workspaceId}`);
+    if (workspaceId) {
+      console.log(`   Workspace ID: ${workspaceId}`);
+    } else {
+      console.log("   Workspace: skipped (--no-workspace)");
+    }
     console.log("");
     console.log("You can now sign in with this email and password.");
     process.exit(0);

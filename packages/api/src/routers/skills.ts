@@ -640,7 +640,9 @@ export const skillsRouter = router({
         eventPattern: z.string().optional(),
         filters: z.record(z.string(), z.unknown()).optional(),
         cronExpression: z.string().optional(),
-        channelType: z.enum(["personal", "new_thread"]).default("personal"),
+        channelType: z
+          .enum(["personal_thread", "new_thread"])
+          .default("personal_thread"),
       })
     )
     .mutation(async ({ input, ctx }) => {

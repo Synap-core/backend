@@ -13,6 +13,7 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
+  ThreadKind,
   ChannelStatus,
   ChannelAgentType,
 } from "../schema/channels.js";
@@ -27,6 +28,7 @@ export interface CreateChannelData {
   channelType?: ChannelType;
   contextObjectType?: string;
   contextObjectId?: string;
+  threadKind?: ThreadKind;
   parentChannelId?: string;
   branchedFromMessageId?: string;
   branchPurpose?: string;
@@ -76,6 +78,7 @@ export class ChannelRepository {
         feedScope: data.feedScope,
         contextObjectType: data.contextObjectType,
         contextObjectId: data.contextObjectId,
+        threadKind: data.threadKind,
         parentChannelId: data.parentChannelId,
         branchedFromMessageId: data.branchedFromMessageId,
         branchPurpose: data.branchPurpose,
@@ -214,7 +217,7 @@ export class ChannelRepository {
   }
 
   /**
-   * Get or create the user's personal channel (pod-wide).
+   * Get or create the user's personal thread (pod-wide).
    * Pure user↔AI conversation — nothing automated goes here.
    * Pod-wide: one per user across all workspaces (workspaceId NOT in WHERE clause).
    */
@@ -228,7 +231,8 @@ export class ChannelRepository {
       .where(
         and(
           eq(channels.userId, userId),
-          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.channelType, ChannelType.THREAD),
+          eq(channels.threadKind, ThreadKind.PERSONAL),
           eq(channels.status, ChannelStatus.ACTIVE)
         )
       )
@@ -239,7 +243,8 @@ export class ChannelRepository {
     return this.create({
       userId,
       workspaceId: undefined, // pod-wide
-      channelType: ChannelType.PERSONAL,
+      channelType: ChannelType.THREAD,
+      threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
       agentType: ChannelAgentType.PERSONAL,
     });

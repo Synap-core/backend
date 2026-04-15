@@ -1,25 +1,8 @@
 /**
- * Personal Channel Utilities
+ * Thread bootstrap utilities.
  *
- * Two distinct pod-wide AI channels per user:
- *
- * 1. Personal channel  (channelType='personal')
- *    — Pure user↔AI conversation. User types, AI responds in context.
- *    — NOTHING automated goes here. Context stays clean.
- *    — Used by: Chat tab in Browser/Relay, IS agent responses.
- *    — Pod-wide (one per user, not per workspace).
- *
- * 2. Proactive FEED channel  (channelType='feed', feedScope='user')
- *    — AI posts, user reads. Morning briefings, event prep, summaries.
- *    — Automation outputs (channel_message with channelType:'proactive') go here.
- *    — Hub Protocol /proactive/post goes here.
- *    — Rate-limited: 3/hour, 10/day.
- *    — User can tap an item to "continue in chat" (opens a thread).
- *
- * Capture history is NOT a channel — it's a query against the event log:
- *   GET /api/hub/events?types[]=capture.complete.completed&userId=X
- *
- * All are pod-wide, SELECT-or-INSERT (idempotent).
+ * Personal chat now uses ChannelType.THREAD + ThreadKind.PERSONAL.
+ * Proactive posts use ChannelType.FEED + feed metadata.
  */
 
 import { db, eq, and } from "@synap/database";
@@ -28,13 +11,14 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
+  ThreadKind,
   ChannelStatus,
   ChannelAgentType,
 } from "@synap/database/schema";
 import type { Channel } from "@synap/database/schema";
 
 /**
- * Get or create the user's personal channel (pod-wide).
+ * Get or create the user's personal thread (pod-wide).
  * Pure user↔AI conversation — no automation outputs here.
  */
 export async function ensurePersonalChannel(
@@ -44,7 +28,8 @@ export async function ensurePersonalChannel(
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.PERSONAL),
+      eq(channels.channelType, ChannelType.THREAD),
+      eq(channels.threadKind, ThreadKind.PERSONAL),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
@@ -56,7 +41,8 @@ export async function ensurePersonalChannel(
     .values({
       userId,
       workspaceId: null, // pod-wide
-      channelType: ChannelType.PERSONAL,
+      channelType: ChannelType.THREAD,
+      threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
       agentId: "personal",

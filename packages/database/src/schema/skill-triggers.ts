@@ -53,11 +53,11 @@ export const skillTriggers = pgTable(
 
     // Execution behavior
     channelType: text("channel_type", {
-      enum: ["personal", "new_thread"],
+      enum: ["personal_thread", "new_thread"],
     })
       .notNull()
-      .default("personal")
-      .$type<"personal" | "new_thread">(),
+      .default("personal_thread")
+      .$type<"personal_thread" | "new_thread">(),
 
     isActive: boolean("is_active").notNull().default(true),
 

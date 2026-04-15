@@ -35,6 +35,7 @@ import {
   channelContextItems,
   entities as entitiesTable,
   ChannelType,
+  ThreadKind,
   ChannelStatus,
   ChannelAgentType,
   MessageRole,
@@ -350,7 +351,8 @@ export const channelsRouter = router({
             agentId: input.agentId || "orchestrator",
             agentType: input.agentType ?? ChannelAgentType.META,
             agentConfig: input.agentConfig,
-            channelType: ChannelType.SUB_THREAD,
+            channelType: ChannelType.THREAD,
+            threadKind: ThreadKind.BRANCH,
             status: ChannelStatus.ACTIVE,
           })
           .returning();
@@ -449,6 +451,10 @@ export const channelsRouter = router({
         externalChannelId: input.externalChannelId,
         metadata: {
           externalParticipants: input.externalParticipants ?? [],
+          // External reply routing is capability + toggle based and only runs
+          // when the connector marks the conversation as live.
+          relayEnabled: false,
+          connectorLive: false,
           ...(input.metadata ?? {}),
         },
       });
@@ -505,12 +511,12 @@ export const channelsRouter = router({
         });
       }
 
-      // Editor role or higher required to create agent_collab channels (L-2)
-      if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
+      // Restricted for now: only workspace admin/owner can create agent_collab channels.
+      if (!["admin", "owner"].includes(ctx.workspaceRole ?? "")) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
-            "Editor role or higher required to create agent_collab channels",
+            "Admin or owner role required to create agent_collab channels",
         });
       }
 
@@ -821,9 +827,8 @@ export const channelsRouter = router({
       // This is idempotent — the IS also calls getOrCreate, they'll both resolve to the same session.
       let activeSessionId: string | undefined;
       if (
-        channel.channelType === ChannelType.PERSONAL ||
         channel.channelType === ChannelType.THREAD ||
-        channel.channelType === ChannelType.SUB_THREAD
+        channel.channelType === ChannelType.AGENT_COLLAB
       ) {
         try {
           const existingSession = await db.query.sessions.findFirst({
@@ -948,16 +953,12 @@ export const channelsRouter = router({
         capability: "chat",
       });
 
-      // AI routing gate (V2):
-      //   personal + sub_thread + agent_collab: always call IS.
-      //   thread: call IS when agentType is set (AI off by default for entity/doc threads;
-      //     on by default for workspace/project threads; always on via @mention override).
-      //   external: call IS when message is from user (not an imported historical message).
-      //   feed: system posts only — never call IS from user message.
-      //   All other types: never call IS.
+      // AI routing gate:
+      //   thread: AI active when agentType is set and not NONE.
+      //   agent_collab: always AI-active.
+      //   external: AI active when agentType is set and not NONE.
+      //   feed: never AI-driven from user message.
       const isAiChannel =
-        channel.channelType === ChannelType.PERSONAL ||
-        channel.channelType === ChannelType.SUB_THREAD ||
         channel.channelType === ChannelType.AGENT_COLLAB ||
         (channel.channelType === ChannelType.THREAD &&
           !!channel.agentType &&
@@ -1595,8 +1596,16 @@ export const channelsRouter = router({
       // Outbound relay: for EXTERNAL channels, forward the AI response back to
       // the external platform via OpenClaw's OpenAI-compatible endpoint.
       // Non-blocking — failure here must never affect the response to the frontend.
+      const externalMeta = (channel.metadata ?? {}) as {
+        relayEnabled?: boolean;
+        connectorLive?: boolean;
+      };
+      const relayToExternalEnabled =
+        externalMeta.relayEnabled === true &&
+        externalMeta.connectorLive === true;
       if (
         channel.channelType === ChannelType.EXTERNAL &&
+        relayToExternalEnabled &&
         channel.externalSource &&
         channel.externalChannelId &&
         fullContent
@@ -1628,7 +1637,8 @@ export const channelsRouter = router({
             branchPurpose:
               branchDecision.suggestedPurpose || branchDecision.reason,
             agentId: branchDecision.suggestedAgentType || "research-agent",
-            channelType: ChannelType.SUB_THREAD,
+            channelType: ChannelType.THREAD,
+            threadKind: ThreadKind.BRANCH,
             status: ChannelStatus.ACTIVE,
           })
           .returning();
@@ -1640,9 +1650,7 @@ export const channelsRouter = router({
       // Fires fire-and-forget so it never blocks the response.
       if (
         !channel.title &&
-        (channel.channelType === ChannelType.PERSONAL ||
-          channel.channelType === ChannelType.THREAD ||
-          channel.channelType === ChannelType.SUB_THREAD) &&
+        channel.channelType === ChannelType.THREAD &&
         content
       ) {
         (async () => {
@@ -1724,12 +1732,13 @@ export const channelsRouter = router({
           message: "Access denied to this channel",
         });
       }
-      // Personal/feed channels are pod-wide — accessible from any workspace.
-      const isPersonalMsg =
-        channel.channelType === ChannelType.PERSONAL ||
-        channel.channelType === ChannelType.FEED;
+      // Personal-style threads and feed channels are pod-wide.
+      const isPodWideChannel =
+        channel.channelType === ChannelType.FEED ||
+        (channel.channelType === ChannelType.THREAD &&
+          channel.threadKind === ThreadKind.PERSONAL);
       if (
-        !isPersonalMsg &&
+        !isPodWideChannel &&
         ctx.workspaceId &&
         channel.workspaceId &&
         channel.workspaceId !== ctx.workspaceId
@@ -1767,7 +1776,26 @@ export const channelsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        channelType: z.enum(["main", "branch", "ai_thread"]).optional(),
+        channelType: z
+          .enum([
+            ChannelType.THREAD,
+            ChannelType.FEED,
+            ChannelType.EXTERNAL,
+            ChannelType.AGENT_COLLAB,
+          ])
+          .optional(),
+        threadKind: z
+          .enum([
+            ThreadKind.PERSONAL,
+            ThreadKind.WORKSPACE,
+            ThreadKind.ENTITY,
+            ThreadKind.DOCUMENT,
+            ThreadKind.VIEW,
+            ThreadKind.PROJECT,
+            ThreadKind.TASK,
+            ThreadKind.BRANCH,
+          ])
+          .optional(),
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(["entity", "document", "view"]).optional(),
@@ -1777,22 +1805,25 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide channels (personal + feed)
+        // Include workspace channels + pod-wide channels (personal-style thread + feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
-            eq(channels.channelType, ChannelType.PERSONAL),
+            and(
+              eq(channels.channelType, ChannelType.THREAD),
+              eq(channels.threadKind, ThreadKind.PERSONAL)
+            ),
             eq(channels.channelType, ChannelType.FEED)
           )!
         );
       }
 
       if (input.channelType) {
-        const ct =
-          input.channelType === "branch"
-            ? ChannelType.SUB_THREAD
-            : ChannelType.THREAD;
-        conditions.push(eq(channels.channelType, ct));
+        conditions.push(eq(channels.channelType, input.channelType));
+      }
+
+      if (input.threadKind) {
+        conditions.push(eq(channels.threadKind, input.threadKind));
       }
 
       if (input.contextObjectId !== undefined) {
@@ -1846,7 +1877,26 @@ export const channelsRouter = router({
       paginatedInput
         .extend({
           workspaceId: z.string().uuid().optional(),
-          channelType: z.enum(["main", "branch", "ai_thread"]).optional(),
+          channelType: z
+            .enum([
+              ChannelType.THREAD,
+              ChannelType.FEED,
+              ChannelType.EXTERNAL,
+              ChannelType.AGENT_COLLAB,
+            ])
+            .optional(),
+          threadKind: z
+            .enum([
+              ThreadKind.PERSONAL,
+              ThreadKind.WORKSPACE,
+              ThreadKind.ENTITY,
+              ThreadKind.DOCUMENT,
+              ThreadKind.VIEW,
+              ThreadKind.PROJECT,
+              ThreadKind.TASK,
+              ThreadKind.BRANCH,
+            ])
+            .optional(),
           contextObjectId: z.string().uuid().optional(),
           contextObjectType: z.enum(["entity", "document", "view"]).optional(),
         })
@@ -1859,22 +1909,25 @@ export const channelsRouter = router({
       const conditions: any[] = [eq(channels.userId, ctx.userId)];
 
       if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide channels (personal + feed)
+        // Include workspace channels + pod-wide channels (personal-style thread + feed)
         conditions.push(
           or(
             eq(channels.workspaceId, input.workspaceId),
-            eq(channels.channelType, ChannelType.PERSONAL),
+            and(
+              eq(channels.channelType, ChannelType.THREAD),
+              eq(channels.threadKind, ThreadKind.PERSONAL)
+            ),
             eq(channels.channelType, ChannelType.FEED)
           )!
         );
       }
 
       if (input.channelType) {
-        const ct =
-          input.channelType === "branch"
-            ? ChannelType.SUB_THREAD
-            : ChannelType.THREAD;
-        conditions.push(eq(channels.channelType, ct));
+        conditions.push(eq(channels.channelType, input.channelType));
+      }
+
+      if (input.threadKind) {
+        conditions.push(eq(channels.threadKind, input.threadKind));
       }
 
       if (input.contextObjectId !== undefined) {
@@ -1940,11 +1993,9 @@ export const channelsRouter = router({
     }),
 
   /**
-   * Get or create the user's personal AI timeline for the given workspace.
-   * Returns the channel — creates it if it doesn't exist yet (idempotent).
-   * Used by command palette and any AI trigger that has no explicit channelId.
+   * Get or create the user's personal AI thread.
    */
-  getPersonalChannel: protectedProcedure
+  getPersonalThread: protectedProcedure
     .input(z.object({ workspaceId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const channel = await ensurePersonalChannel(
@@ -2093,7 +2144,11 @@ export const channelsRouter = router({
         where: eq(channels.id, input.branchId),
       });
 
-      if (!branch || branch.channelType !== "sub_thread") {
+      if (
+        !branch ||
+        branch.channelType !== ChannelType.THREAD ||
+        branch.threadKind !== ThreadKind.BRANCH
+      ) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Branch not found" });
       }
 
@@ -2155,12 +2210,12 @@ export const channelsRouter = router({
           message: "Channel not found",
         });
       }
-      // Personal/feed channels are pod-wide — accessible from any workspace.
-      const isPersonal =
-        channel.channelType === ChannelType.PERSONAL ||
-        channel.channelType === ChannelType.FEED;
+      const isPodWideChannel =
+        channel.channelType === ChannelType.FEED ||
+        (channel.channelType === ChannelType.THREAD &&
+          channel.threadKind === ThreadKind.PERSONAL);
       if (
-        !isPersonal &&
+        !isPodWideChannel &&
         ctx.workspaceId &&
         channel.workspaceId &&
         channel.workspaceId !== ctx.workspaceId
@@ -2358,7 +2413,8 @@ export const channelsRouter = router({
         where: and(
           eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId),
-          eq(channels.channelType, ChannelType.SUB_THREAD)
+          eq(channels.channelType, ChannelType.THREAD),
+          eq(channels.threadKind, ThreadKind.BRANCH)
         ),
       });
       if (!channel) return { pruned: false };
@@ -2447,15 +2503,25 @@ export const channelsRouter = router({
       const tree = buildBranchTree(allChannels, input.rootChannelId);
 
       const activeBranches = allChannels.filter(
-        (c) => c.status === "active" && c.channelType === "sub_thread"
+        (c) =>
+          c.status === "active" &&
+          c.channelType === ChannelType.THREAD &&
+          c.threadKind === ThreadKind.BRANCH
       );
       const mergedBranches = allChannels.filter(
-        (c) => c.status === "merged" && c.channelType === "sub_thread"
+        (c) =>
+          c.status === "merged" &&
+          c.channelType === ChannelType.THREAD &&
+          c.threadKind === ThreadKind.BRANCH
       );
 
       return {
         tree,
-        flatBranches: allChannels.filter((c) => c.channelType === "sub_thread"),
+        flatBranches: allChannels.filter(
+          (c) =>
+            c.channelType === ChannelType.THREAD &&
+            c.threadKind === ThreadKind.BRANCH
+        ),
         activeBranches,
         mergedBranches,
       };

@@ -2276,13 +2276,21 @@ cmd_users() {
             local email="${1:-}"
             local password="${2:-}"
             local name="${3:-}"
+            local create_workspace="true"
+            local arg4="${4:-}"
+            if [ "$name" = "--no-workspace" ]; then
+                create_workspace="false"
+                name=""
+            elif [ "$arg4" = "--no-workspace" ]; then
+                create_workspace="false"
+            fi
             if [ -z "$email" ] || [ -z "$password" ]; then
-                echo -e "${RED}Usage: synap users add-admin <email> <password> [name]${NC}"
+                echo -e "${RED}Usage: synap users add-admin <email> <password> [name] [--no-workspace]${NC}"
                 exit 1
             fi
             echo -e "${BLUE}👤 Creating admin user ${email}...${NC}"
             docker compose exec -T backend \
-                sh -c "ACTION=add-admin ADMIN_EMAIL='${email}' ADMIN_PASSWORD='${password}' ADMIN_NAME='${name}' node dist/scripts/user-admin-cli.js"
+                sh -c "ACTION=add-admin CREATE_WORKSPACE='${create_workspace}' ADMIN_EMAIL='${email}' ADMIN_PASSWORD='${password}' ADMIN_NAME='${name}' node dist/scripts/user-admin-cli.js"
             ;;
 
         reset-password|passwd)
@@ -2327,13 +2335,14 @@ ${BLUE}Synap Users${NC} — Manage pod users and passwords
 
 ${YELLOW}Usage:${NC}
   synap users list [limit]
-  synap users add-admin <email> <password> [name]
+  synap users add-admin <email> <password> [name] [--no-workspace]
   synap users reset-password <email> <new-password>
   synap users delete [--yes|-y] <email>
 
 ${YELLOW}Examples:${NC}
   synap users list
   synap users add-admin admin@example.com 'StrongPassw0rd!'
+  synap users add-admin admin@example.com 'StrongPassw0rd!' --no-workspace
   synap users reset-password relay@example.com 'NewStrongPassw0rd!'
   synap users delete --yes relay@example.com
 EOF

@@ -162,17 +162,33 @@ async function fetchViaCPProxy(
   source: RSSFeedSource,
   rsshubRoute?: string
 ): Promise<NormalizedRSSItem[]> {
-  const cpUrl = process.env.CONTROL_PLANE_URL || process.env.CP_URL;
-  if (!cpUrl) {
-    throw new Error("CP_URL not configured");
+  const configuredProxyBase = process.env.CP_RSSHUB_PROXY_URL?.trim();
+  const controlPlaneUrl =
+    process.env.CONTROL_PLANE_URL?.trim() || process.env.CP_URL?.trim();
+  const proxyBase =
+    configuredProxyBase ||
+    (controlPlaneUrl ? `${controlPlaneUrl}/api/rsshub-proxy` : undefined);
+
+  if (!proxyBase) {
+    throw new Error(
+      "CP RSS proxy not configured (set CP_RSSHUB_PROXY_URL or CONTROL_PLANE_URL)"
+    );
   }
 
-  // Build RSSHub route - either provided or derived from URL
-  const route =
-    rsshubRoute ||
-    `/rss/${encodeURIComponent(new URL(source.url).hostname)}${new URL(source.url).pathname}`;
+  // CP proxy expects an RSSHub route, not an arbitrary feed URL.
+  // If no route is provided, fallback to direct fetch from source URL.
+  const route = rsshubRoute || source.rsshubRoute;
+  if (!route) {
+    logger.warn(
+      { source: source.url },
+      "No RSSHub route provided for CP proxy source, falling back to direct fetch"
+    );
+    return fetchDirect(source);
+  }
 
-  const proxyUrl = `${cpUrl}/api/v1/rsshub${route}`;
+  const normalizedProxyBase = proxyBase.replace(/\/$/, "");
+  const normalizedRoute = route.startsWith("/") ? route : `/${route}`;
+  const proxyUrl = `${normalizedProxyBase}${normalizedRoute}`;
 
   logger.debug({ proxyUrl, source: source.url }, "Fetching via CP proxy");
 

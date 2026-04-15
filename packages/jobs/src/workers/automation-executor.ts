@@ -45,6 +45,7 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
+  ThreadKind,
   ChannelStatus,
   ChannelAgentType,
 } from "@synap/database/schema";
@@ -267,8 +268,10 @@ async function executeCommandStep(
     const skillId = resolvedInputs.skillId as string | undefined;
     const entityId = resolvedInputs.entityId as string | undefined;
     const channelType =
-      (resolvedInputs.channelType as "personal" | "new_thread" | undefined) ??
-      "personal";
+      (resolvedInputs.channelType as
+        | "personal_thread"
+        | "new_thread"
+        | undefined) ?? "personal_thread";
 
     if (!skillId) {
       throw new Error(
@@ -511,8 +514,8 @@ async function executeOutputStep(
     }
 
     case "channel_message": {
-      // Accepts explicit channelId OR channelType:'personal'|'proactive'
-      // 'personal'  → user's personal channel (channelType='personal') — user↔AI conversation
+      // Accepts explicit channelId OR channelType:'personal_thread'|'proactive'
+      // 'personal_thread'  → user's personal thread (channelType='thread', threadKind='personal')
       // 'proactive' → user's feed channel (channelType='feed', feedScope='user') — automation outputs
       let channelId = config.channelId as string | undefined;
       const content = config.content as string;
@@ -522,12 +525,13 @@ async function executeOutputStep(
         throw new Error("channel_message requires content");
       }
 
-      // Resolve personal channel (channelType='personal')
-      if (!channelId && config.channelType === "personal") {
+      // Resolve personal thread (channelType='thread', threadKind='personal')
+      if (!channelId && config.channelType === "personal_thread") {
         const personalChannel = await db.query.channels.findFirst({
           where: and(
             eq(channels.userId, ownerId),
-            eq(channels.channelType, ChannelType.PERSONAL),
+            eq(channels.channelType, ChannelType.THREAD),
+            eq(channels.threadKind, ThreadKind.PERSONAL),
             eq(channels.status, ChannelStatus.ACTIVE)
           ),
           columns: { id: true },
@@ -541,7 +545,8 @@ async function executeOutputStep(
               id: randomUUID(),
               userId: ownerId,
               workspaceId: null, // pod-wide
-              channelType: ChannelType.PERSONAL,
+              channelType: ChannelType.THREAD,
+              threadKind: ThreadKind.PERSONAL,
               scope: ChannelScope.POD,
               status: ChannelStatus.ACTIVE,
               agentId: "personal",
@@ -585,7 +590,7 @@ async function executeOutputStep(
 
       if (!channelId) {
         throw new Error(
-          "channel_message requires channelId or channelType:'personal'|'proactive'"
+          "channel_message requires channelId or channelType:'personal_thread'|'proactive'"
         );
       }
 
