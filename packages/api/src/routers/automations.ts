@@ -172,7 +172,7 @@ export const automationsRouter = router({
           .optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const database = await getDb();
       const createdBy = input.agentUserId ?? ctx.userId!;
 

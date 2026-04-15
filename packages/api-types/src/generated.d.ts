@@ -701,7 +701,7 @@ declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			columnType: "PgUUID";
 			data: string;
 			driverParam: string;
-			notNull: true;
+			notNull: false;
 			hasDefault: false;
 			isPrimaryKey: false;
 			isAutoincrement: false;
@@ -1199,7 +1199,7 @@ export interface UpdateRequest {
 	source: "user" | "ai" | "system";
 	sourceId: string;
 	/** Context */
-	workspaceId: string;
+	workspaceId: string | null;
 	/** Target Entity */
 	targetType: "document" | "entity" | "whiteboard" | "view" | "profile";
 	targetId: string;
@@ -2276,7 +2276,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
+					role: "user" | "system" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
@@ -2497,7 +2497,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				contextItems: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
@@ -2671,7 +2671,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				items: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
@@ -2684,7 +2684,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				entities: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
@@ -2697,7 +2697,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				documents: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
 					createdAt: Date;
@@ -2767,7 +2767,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				items: {
 					request: UpdateRequest;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
 					data: unknown;
@@ -2795,7 +2795,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				proposals: {
 					request: UpdateRequest;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
 					data: unknown;
@@ -3682,7 +3682,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				document: {
 					id: string;
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					title: string;
 					type: string;
 					language: string | null;
@@ -3819,7 +3819,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documents: {
 					id: string;
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					title: string;
 					type: string;
 					language: string | null;
@@ -3892,7 +3892,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					size: number;
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 				}[];
 				total: number;
 			};
@@ -3910,7 +3910,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					language: string | null;
 					mimeType: string | null;
 					updatedAt: Date;
-					workspaceId: string;
+					workspaceId: string | null;
 					userId: string;
 				};
 				content: string;
@@ -4121,7 +4121,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				type: string;
 				data: unknown;
@@ -4486,7 +4486,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				commands: {
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
@@ -4512,7 +4512,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -4546,7 +4546,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sharedScope?: "user" | "workspace" | undefined;
 			};
 			output: {
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -4582,7 +4582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				id: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				createdBy: string;
 				title: string;
 				promptTemplate: string;
@@ -4638,7 +4638,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				runs: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
@@ -4664,7 +4664,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
@@ -5181,7 +5181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				relations: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					type: string;
 					createdAt: Date;
@@ -5216,7 +5216,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				relations: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					type: string;
 					createdAt: Date;
@@ -5428,7 +5428,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				relations: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					type: string;
 					createdAt: Date;
@@ -5471,7 +5471,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				relations: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					type: string;
 					createdAt: Date;
@@ -6294,7 +6294,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relations: {
 					id: string;
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					sourceEntityId: string;
 					targetEntityId: string;
 					type: string;
@@ -7403,7 +7403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				type: "entity_event" | "cron" | "manual";
 				updatedAt: Date;
@@ -7425,7 +7425,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				id: string;
 				skillId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				userId: string;
 				type: "entity_event" | "cron" | "manual";
 				eventPattern: string | null;
@@ -7447,7 +7447,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				id: string;
 				skillId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				userId: string;
 				type: "entity_event" | "cron" | "manual";
 				eventPattern: string | null;
@@ -7581,7 +7581,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
@@ -7608,7 +7608,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
@@ -7627,7 +7627,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
@@ -7645,7 +7645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
@@ -7666,7 +7666,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
@@ -8411,11 +8411,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				workspaceId?: string | null | undefined;
+			} | undefined;
 			output: {
 				servers: {
 					name: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					errorMessage: string | null;
 					updatedAt: Date;
@@ -8446,11 +8448,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				args?: string[] | undefined;
 				url?: string | undefined;
 				env?: Record<string, string> | undefined;
+				workspaceId?: string | null | undefined;
 			};
 			output: {
 				server: {
 					name: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					errorMessage: string | null;
 					updatedAt: Date;
@@ -8483,11 +8486,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				args?: string[] | undefined;
 				url?: string | undefined;
 				env?: Record<string, string> | undefined;
+				workspaceId?: string | null | undefined;
 			};
 			output: {
 				server: {
 					id: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					slug: string;
 					name: string;
 					description: string | null;
@@ -8516,7 +8520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				server: {
 					id: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					slug: string;
 					name: string;
 					description: string | null;
@@ -8544,7 +8548,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				server: {
 					id: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					slug: string;
 					name: string;
 					description: string | null;
@@ -8602,7 +8606,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				configs: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
@@ -8623,7 +8627,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				config: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
@@ -8649,7 +8653,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				config: {
 					userId: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
@@ -9066,7 +9070,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				notifications: {
 					id: string;
-					workspaceId: string;
+					workspaceId: string | null;
 					userId: string;
 					type: string;
 					category: "data" | "system" | "ai" | "governance" | "inbox";
@@ -9131,7 +9135,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				userId: string;
-				workspaceId: string;
+				workspaceId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
