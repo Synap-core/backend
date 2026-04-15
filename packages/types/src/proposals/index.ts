@@ -47,7 +47,7 @@ export interface UpdateRequest {
   sourceId: string;
 
   /** Context */
-  workspaceId: string;
+  workspaceId: string | null;
 
   /** Target Entity */
   targetType: "document" | "entity" | "whiteboard" | "view" | "profile";
