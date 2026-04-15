@@ -1681,7 +1681,7 @@ app.post("/threads/:threadId/messages", async (c) => {
     });
 
     // autoRespond: trigger IS to respond when an external agent posts a user-role message
-    // to an AI channel (thread, sub_thread, or agent_collab). Enables async inter-agent messaging.
+    // to an AI channel (thread or agent_collab). Enables async inter-agent messaging.
     if (body.autoRespond === true && body.role === "user") {
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, threadId),

@@ -36,6 +36,7 @@ import {
   entities as entitiesTable,
   ChannelType,
   ThreadKind,
+  FeedScope,
   ChannelStatus,
   ChannelAgentType,
   MessageRole,
@@ -66,9 +67,28 @@ import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects, getBoss } from "@synap/events";
-import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 const logger = createLogger({ module: "channels" });
+
+const CHANNEL_TYPE_VALUES = [
+  ChannelType.THREAD,
+  ChannelType.FEED,
+  ChannelType.EXTERNAL,
+  ChannelType.AGENT_COLLAB,
+] as const;
+
+const THREAD_KIND_VALUES = [
+  ThreadKind.PERSONAL,
+  ThreadKind.WORKSPACE,
+  ThreadKind.ENTITY,
+  ThreadKind.DOCUMENT,
+  ThreadKind.VIEW,
+  ThreadKind.PROJECT,
+  ThreadKind.TASK,
+  ThreadKind.BRANCH,
+] as const;
+
+const CONTEXT_OBJECT_TYPE_VALUES = ["entity", "document", "view"] as const;
 
 // ── MCP server list cache ────────────────────────────────────────────────────
 // Avoid a DB query on every message send. TTL = 30s (short enough to pick up
@@ -298,6 +318,92 @@ export type BranchNodeResult = {
  *
  * Registered under the `chat` tRPC key for frontend compatibility.
  */
+async function listChannelsWithFlags(params: {
+  userId: string;
+  workspaceId?: string;
+  channelType?: (typeof CHANNEL_TYPE_VALUES)[number];
+  threadKind?: (typeof THREAD_KIND_VALUES)[number];
+  feedScope?: FeedScope;
+  contextObjectId?: string;
+  contextObjectType?: (typeof CONTEXT_OBJECT_TYPE_VALUES)[number];
+  limit: number;
+  offset?: number;
+}): Promise<
+  Array<
+    Channel & {
+      hasAssistantMessage: boolean;
+      origin: string;
+    }
+  >
+> {
+  const conditions: any[] = [eq(channels.userId, params.userId)];
+
+  if (params.workspaceId !== undefined) {
+    // Include workspace channels + pod-wide channels (personal-style thread + feed)
+    conditions.push(
+      or(
+        eq(channels.workspaceId, params.workspaceId),
+        and(
+          eq(channels.channelType, ChannelType.THREAD),
+          eq(channels.threadKind, ThreadKind.PERSONAL)
+        ),
+        eq(channels.channelType, ChannelType.FEED)
+      )!
+    );
+  }
+
+  if (params.channelType) {
+    conditions.push(eq(channels.channelType, params.channelType));
+  }
+
+  if (params.threadKind) {
+    conditions.push(eq(channels.threadKind, params.threadKind));
+  }
+
+  if (params.feedScope) {
+    conditions.push(eq(channels.feedScope, params.feedScope));
+  }
+
+  if (params.contextObjectId !== undefined) {
+    conditions.push(eq(channels.contextObjectId, params.contextObjectId));
+  }
+
+  if (params.contextObjectType !== undefined) {
+    conditions.push(eq(channels.contextObjectType, params.contextObjectType));
+  }
+
+  const rows = await db.query.channels.findMany({
+    where: and(...conditions),
+    orderBy: [desc(channels.updatedAt)],
+    limit: params.limit,
+    offset: params.offset,
+  });
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const channelIds = rows.map((c) => c.id);
+  const rowsWithAssistant = await db
+    .select({ channelId: messages.channelId })
+    .from(messages)
+    .where(
+      and(
+        inArray(messages.channelId, channelIds),
+        eq(messages.role, MessageRole.ASSISTANT)
+      )
+    );
+  const channelIdsWithAssistant = new Set(
+    rowsWithAssistant.map((r) => r.channelId)
+  );
+
+  return rows.map((c) => ({
+    ...c,
+    hasAssistantMessage: channelIdsWithAssistant.has(c.id),
+    origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
+  }));
+}
+
 export const channelsRouter = router({
   /**
    * Create a new channel.
@@ -1776,219 +1882,164 @@ export const channelsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        channelType: z
-          .enum([
-            ChannelType.THREAD,
-            ChannelType.FEED,
-            ChannelType.EXTERNAL,
-            ChannelType.AGENT_COLLAB,
-          ])
-          .optional(),
-        threadKind: z
-          .enum([
-            ThreadKind.PERSONAL,
-            ThreadKind.WORKSPACE,
-            ThreadKind.ENTITY,
-            ThreadKind.DOCUMENT,
-            ThreadKind.VIEW,
-            ThreadKind.PROJECT,
-            ThreadKind.TASK,
-            ThreadKind.BRANCH,
-          ])
-          .optional(),
+        channelType: z.enum(CHANNEL_TYPE_VALUES).optional(),
+        threadKind: z.enum(THREAD_KIND_VALUES).optional(),
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
-        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
-      const conditions: any[] = [eq(channels.userId, ctx.userId)];
-
-      if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide channels (personal-style thread + feed)
-        conditions.push(
-          or(
-            eq(channels.workspaceId, input.workspaceId),
-            and(
-              eq(channels.channelType, ChannelType.THREAD),
-              eq(channels.threadKind, ThreadKind.PERSONAL)
-            ),
-            eq(channels.channelType, ChannelType.FEED)
-          )!
-        );
-      }
-
-      if (input.channelType) {
-        conditions.push(eq(channels.channelType, input.channelType));
-      }
-
-      if (input.threadKind) {
-        conditions.push(eq(channels.threadKind, input.threadKind));
-      }
-
-      if (input.contextObjectId !== undefined) {
-        conditions.push(eq(channels.contextObjectId, input.contextObjectId));
-      }
-
-      if (input.contextObjectType !== undefined) {
-        conditions.push(
-          eq(channels.contextObjectType, input.contextObjectType)
-        );
-      }
-
-      const allChannels = await db.query.channels.findMany({
-        where: and(...conditions),
-        orderBy: [desc(channels.updatedAt)],
+      const channelsWithFlags = await listChannelsWithFlags({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        channelType: input.channelType,
+        threadKind: input.threadKind,
+        contextObjectId: input.contextObjectId,
+        contextObjectType: input.contextObjectType,
         limit: input.limit,
       });
 
-      if (allChannels.length === 0) {
+      if (channelsWithFlags.length === 0) {
         return { channels: [] };
       }
-
-      const channelIds = allChannels.map((c) => c.id);
-      const rowsWithAssistant = await db
-        .select({ channelId: messages.channelId })
-        .from(messages)
-        .where(
-          and(
-            inArray(messages.channelId, channelIds),
-            eq(messages.role, MessageRole.ASSISTANT)
-          )
-        );
-      const channelIdsWithAssistant = new Set(
-        rowsWithAssistant.map((r) => r.channelId)
-      );
-
-      const channelsWithFlags = allChannels.map((c) => ({
-        ...c,
-        hasAssistantMessage: channelIdsWithAssistant.has(c.id),
-        origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
-      }));
 
       return { channels: channelsWithFlags };
     }),
 
   /**
-   * Backward-compat alias for listChannels (used by Electron client).
+   * List only thread channels.
    */
-  list: protectedProcedure
+  listThreads: protectedProcedure
     .input(
-      paginatedInput
-        .extend({
-          workspaceId: z.string().uuid().optional(),
-          channelType: z
-            .enum([
-              ChannelType.THREAD,
-              ChannelType.FEED,
-              ChannelType.EXTERNAL,
-              ChannelType.AGENT_COLLAB,
-            ])
-            .optional(),
-          threadKind: z
-            .enum([
-              ThreadKind.PERSONAL,
-              ThreadKind.WORKSPACE,
-              ThreadKind.ENTITY,
-              ThreadKind.DOCUMENT,
-              ThreadKind.VIEW,
-              ThreadKind.PROJECT,
-              ThreadKind.TASK,
-              ThreadKind.BRANCH,
-            ])
-            .optional(),
-          contextObjectId: z.string().uuid().optional(),
-          contextObjectType: z.enum(["entity", "document", "view"]).optional(),
-        })
-        .extend({
-          // Override default limit to 20 for channels (backward compat)
-          limit: z.number().min(1).max(100).default(20),
-        })
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        threadKind: z.enum(THREAD_KIND_VALUES).optional(),
+        contextObjectId: z.string().uuid().optional(),
+        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
+        limit: z.number().min(1).max(100).default(20),
+        offset: z.number().min(0).default(0),
+      })
     )
     .query(async ({ input, ctx }) => {
-      const conditions: any[] = [eq(channels.userId, ctx.userId)];
-
-      if (input.workspaceId !== undefined) {
-        // Include workspace channels + pod-wide channels (personal-style thread + feed)
-        conditions.push(
-          or(
-            eq(channels.workspaceId, input.workspaceId),
-            and(
-              eq(channels.channelType, ChannelType.THREAD),
-              eq(channels.threadKind, ThreadKind.PERSONAL)
-            ),
-            eq(channels.channelType, ChannelType.FEED)
-          )!
-        );
-      }
-
-      if (input.channelType) {
-        conditions.push(eq(channels.channelType, input.channelType));
-      }
-
-      if (input.threadKind) {
-        conditions.push(eq(channels.threadKind, input.threadKind));
-      }
-
-      if (input.contextObjectId !== undefined) {
-        conditions.push(eq(channels.contextObjectId, input.contextObjectId));
-      }
-
-      if (input.contextObjectType !== undefined) {
-        conditions.push(
-          eq(channels.contextObjectType, input.contextObjectType)
-        );
-      }
-
-      const allChannels = await db.query.channels.findMany({
-        where: and(...conditions),
-        orderBy: [desc(channels.updatedAt)],
+      const items = await listChannelsWithFlags({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        channelType: ChannelType.THREAD,
+        threadKind: input.threadKind,
+        contextObjectId: input.contextObjectId,
+        contextObjectType: input.contextObjectType,
         limit: input.limit + 1,
         offset: input.offset,
       });
 
-      if (allChannels.length === 0) {
-        const empty = buildPaginatedResponse([], input);
-        return {
-          ...empty,
-          /** @deprecated Use `items` instead */
-          channels: [],
-        };
-      }
-
-      // Trim to limit before enriching (avoid unnecessary work on the extra row)
-      const hasMore = allChannels.length > input.limit;
-      const trimmed = hasMore ? allChannels.slice(0, input.limit) : allChannels;
-
-      const channelIds = trimmed.map((c) => c.id);
-      const rowsWithAssistant = await db
-        .select({ channelId: messages.channelId })
-        .from(messages)
-        .where(
-          and(
-            inArray(messages.channelId, channelIds),
-            eq(messages.role, MessageRole.ASSISTANT)
-          )
-        );
-      const channelIdsWithAssistant = new Set(
-        rowsWithAssistant.map((r) => r.channelId)
-      );
-
-      const channelsWithFlags = trimmed.map((c) => ({
-        ...c,
-        hasAssistantMessage: channelIdsWithAssistant.has(c.id),
-        origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
-      }));
-
+      const hasMore = items.length > input.limit;
+      const trimmed = hasMore ? items.slice(0, input.limit) : items;
       return {
-        items: channelsWithFlags,
+        items: trimmed,
         pagination: {
           hasMore,
           limit: input.limit,
           offset: input.offset,
         },
-        /** @deprecated Use `items` instead */
-        channels: channelsWithFlags,
+      };
+    }),
+
+  /**
+   * List only feed channels.
+   */
+  listFeeds: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        feedScope: z.enum([FeedScope.USER, FeedScope.WORKSPACE]).optional(),
+        limit: z.number().min(1).max(100).default(20),
+        offset: z.number().min(0).default(0),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const items = await listChannelsWithFlags({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        channelType: ChannelType.FEED,
+        feedScope: input.feedScope,
+        limit: input.limit + 1,
+        offset: input.offset,
+      });
+
+      const hasMore = items.length > input.limit;
+      const trimmed = hasMore ? items.slice(0, input.limit) : items;
+      return {
+        items: trimmed,
+        pagination: {
+          hasMore,
+          limit: input.limit,
+          offset: input.offset,
+        },
+      };
+    }),
+
+  /**
+   * List only external channels.
+   */
+  listExternalChannels: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        limit: z.number().min(1).max(100).default(20),
+        offset: z.number().min(0).default(0),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const items = await listChannelsWithFlags({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        channelType: ChannelType.EXTERNAL,
+        limit: input.limit + 1,
+        offset: input.offset,
+      });
+
+      const hasMore = items.length > input.limit;
+      const trimmed = hasMore ? items.slice(0, input.limit) : items;
+      return {
+        items: trimmed,
+        pagination: {
+          hasMore,
+          limit: input.limit,
+          offset: input.offset,
+        },
+      };
+    }),
+
+  /**
+   * List only agent collaboration channels.
+   */
+  listAgentCollabChannels: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        limit: z.number().min(1).max(100).default(20),
+        offset: z.number().min(0).default(0),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const items = await listChannelsWithFlags({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        channelType: ChannelType.AGENT_COLLAB,
+        limit: input.limit + 1,
+        offset: input.offset,
+      });
+
+      const hasMore = items.length > input.limit;
+      const trimmed = hasMore ? items.slice(0, input.limit) : items;
+      return {
+        items: trimmed,
+        pagination: {
+          hasMore,
+          limit: input.limit,
+          offset: input.offset,
+        },
       };
     }),
 

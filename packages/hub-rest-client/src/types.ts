@@ -42,17 +42,17 @@ export interface HubDocument {
 export interface HubChannel {
   id: string;
   name: string;
-  type:
-    | "ai_thread"
-    | "branch"
-    | "entity_comments"
-    | "document_review"
-    | "view_discussion"
-    | "direct"
-    | "feed"
-    | "agent_collab"
+  type: "thread" | "feed" | "external" | "agent_collab";
+  threadKind?:
     | "personal"
-    | "external_import";
+    | "workspace"
+    | "entity"
+    | "document"
+    | "view"
+    | "project"
+    | "task"
+    | "branch"
+    | null;
   workspaceId: string | null;
   agentType?: string;
   createdAt: string;

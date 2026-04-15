@@ -152,7 +152,7 @@ describe("DeliveryService", () => {
     mockEnsurePersonalChannelFn.mockResolvedValue({
       id: "personal-channel-456",
       userId: "user-123",
-      channelType: "personal",
+      channelType: "thread",
       status: "active",
     });
   });
@@ -281,7 +281,7 @@ describe("DeliveryService", () => {
       mockEnsurePersonalChannelFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
-        channelType: "personal",
+        channelType: "thread",
         status: "active",
       });
 
@@ -376,7 +376,7 @@ describe("DeliveryService", () => {
       mockEnsurePersonalChannelFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
-        channelType: "personal",
+        channelType: "thread",
         status: "active",
       });
 
@@ -487,7 +487,7 @@ describe("DeliveryService", () => {
       mockEnsurePersonalChannelFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
-        channelType: "personal",
+        channelType: "thread",
         status: "active",
       });
 
@@ -761,7 +761,7 @@ describe("DeliveryService", () => {
       mockEnsurePersonalChannelFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
-        channelType: "personal",
+        channelType: "thread",
         status: "active",
       });
 
