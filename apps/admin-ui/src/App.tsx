@@ -20,6 +20,7 @@ import ExternalSourcesPage from "./pages/(v2)/ExternalSourcesPage";
 import TrustedIssuersPage from "./pages/(v2)/TrustedIssuersPage";
 import ConnectPage from "./pages/ConnectPage";
 import KratosSelfServicePage from "./pages/KratosSelfServicePage";
+import BootstrapAdminPage from "./pages/BootstrapAdminPage";
 
 import "./App.css";
 
@@ -30,6 +31,8 @@ function App() {
       <Route path="connect" element={<ConnectPage />} />
       {/* Ory Kratos browser flows land here (see deploy kratos.yml ui_url) */}
       <Route path="kratos" element={<KratosSelfServicePage />} />
+      {/* One-time token bootstrap for first self-hosted admin */}
+      <Route path="bootstrap" element={<BootstrapAdminPage />} />
 
       <Route path="/" element={<MainLayout />}>
         {/* Data Pod Routes */}

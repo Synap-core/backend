@@ -34,6 +34,15 @@ const rootEl = document.getElementById("root");
 if (!rootEl) {
   renderFatal("Missing #root element.");
 } else {
+  const pathname = window.location.pathname;
+  const isPublicAdminPath =
+    pathname.endsWith("/admin/kratos") ||
+    pathname.endsWith("/admin/bootstrap") ||
+    pathname.endsWith("/admin/connect") ||
+    pathname === "/admin/kratos" ||
+    pathname === "/admin/bootstrap" ||
+    pathname === "/admin/connect";
+
   try {
     createRoot(rootEl).render(
       <StrictMode>
@@ -43,11 +52,15 @@ if (!rootEl) {
               {/* ToastRegion renders null when the queue is empty — keep it a sibling, not a parent of the app. */}
               <ToastProvider placement="top end" maxVisibleToasts={4} />
               <BrowserRouter basename="/admin">
-                <AuthProvider>
-                  <WorkspaceProvider>
-                    <App />
-                  </WorkspaceProvider>
-                </AuthProvider>
+                {isPublicAdminPath ? (
+                  <App />
+                ) : (
+                  <AuthProvider>
+                    <WorkspaceProvider>
+                      <App />
+                    </WorkspaceProvider>
+                  </AuthProvider>
+                )}
               </BrowserRouter>
             </QueryClientProvider>
           </TRPCProvider>

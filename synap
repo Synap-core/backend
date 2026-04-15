@@ -81,6 +81,8 @@ generate_and_create_env() {
     local admin_email=$7
     local intelligence_url=$8
     local intelligence_key=$9
+    local admin_bootstrap_mode=${10}
+    local admin_bootstrap_token=${11}
     
     # Generate secrets
     echo -e "${BLUE}🔐 Generating secrets...${NC}"
@@ -131,6 +133,8 @@ EMBEDDING_PROVIDER=$([ -n "${openai_key}" ] && echo "openai" || echo "determinis
 
 # Admin Configuration
 ADMIN_EMAIL=${admin_email}
+ADMIN_BOOTSTRAP_MODE=${admin_bootstrap_mode}
+ADMIN_BOOTSTRAP_TOKEN=${admin_bootstrap_token}
 
 # Auto-generated Secrets
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -378,6 +382,8 @@ cmd_install() {
     local ANTHROPIC_API_KEY=""
     local GOOGLE_AI_API_KEY=""
     local ADMIN_EMAIL=""
+    local ADMIN_BOOTSTRAP_MODE=""
+    local ADMIN_BOOTSTRAP_TOKEN=""
     local INTELLIGENCE_URL=""
     local INTELLIGENCE_KEY=""
     local REPO_URL="https://github.com/synap-core/backend.git"
@@ -430,6 +436,14 @@ cmd_install() {
                 ADMIN_EMAIL="$2"
                 shift 2
                 ;;
+            --admin-bootstrap-mode)
+                ADMIN_BOOTSTRAP_MODE="$2"
+                shift 2
+                ;;
+            --admin-bootstrap-token)
+                ADMIN_BOOTSTRAP_TOKEN="$2"
+                shift 2
+                ;;
             --intelligence-url)
                 INTELLIGENCE_URL="$2"
                 shift 2
@@ -474,6 +488,8 @@ ${YELLOW}Options:${NC}
   ${GREEN}--email <email>${NC}     Email for SSL certificates (required for production)
   ${GREEN}--repo-url <url>${NC}    Repository URL (default: synap-core/backend)
   ${GREEN}--non-interactive${NC}   Automated mode (no prompts)
+  ${GREEN}--admin-bootstrap-mode <preseed|token>${NC}  First admin bootstrap strategy
+  ${GREEN}--admin-bootstrap-token <token>${NC}         One-time token (when mode=token)
   
   ${GREEN}--intelligence-url <url>${NC} URL of Intelligence Service (e.g. http://localhost:3001)
   ${GREEN}--intelligence-key <key>${NC} Hub Protocol API Key for Intelligence Service
@@ -568,6 +584,7 @@ EOF
     local DEFAULT_ANTHROPIC_KEY=""
     local DEFAULT_GOOGLE_KEY=""
     local DEFAULT_ADMIN_EMAIL=""
+    local DEFAULT_ADMIN_BOOTSTRAP_MODE=""
     local DEFAULT_INTEL_URL=""
     local DEFAULT_INTEL_KEY=""
     
@@ -578,6 +595,7 @@ EOF
         DEFAULT_ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_GOOGLE_KEY=$(grep "^GOOGLE_AI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_ADMIN_EMAIL=$(grep "^ADMIN_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
+        DEFAULT_ADMIN_BOOTSTRAP_MODE=$(grep "^ADMIN_BOOTSTRAP_MODE=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_INTEL_URL=$(grep "^INTELLIGENCE_HUB_URL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_INTEL_KEY=$(grep "^INTELLIGENCE_HUB_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
     fi
@@ -606,18 +624,38 @@ EOF
             EMAIL=${EMAIL:-$DEFAULT_EMAIL}
         fi
         
-        # Ask for admin email (for self-hosted instances) - BEFORE AI config
-        if [ -z "$ADMIN_EMAIL" ]; then
+        # First-admin bootstrap strategy (self-hosted)
+        echo ""
+        echo -e "${BLUE}👤 Admin Bootstrap${NC}"
+        if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
+            local mode_default=${DEFAULT_ADMIN_BOOTSTRAP_MODE:-preseed}
+            echo "  1) Pre-seed first admin via CLI/script (recommended for operators)"
+            echo "  2) One-time bootstrap token (guided UI at /admin/bootstrap)"
             echo ""
-            echo -e "${BLUE}👤 Admin Configuration${NC}"
-            local prompt="Enter admin email (for first admin user, optional)"
-            if [ -n "$DEFAULT_ADMIN_EMAIL" ]; then
-                prompt="$prompt [${DEFAULT_ADMIN_EMAIL}]: "
+            read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
+            if [ "$ADMIN_BOOTSTRAP_CHOICE" = "2" ] || [ "$mode_default" = "token" -a -z "$ADMIN_BOOTSTRAP_CHOICE" ]; then
+                ADMIN_BOOTSTRAP_MODE="token"
             else
-                prompt="$prompt: "
+                ADMIN_BOOTSTRAP_MODE="preseed"
             fi
-            read -p "$prompt" ADMIN_EMAIL
-            ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
+        fi
+
+        if [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ]; then
+            if [ -z "$ADMIN_EMAIL" ]; then
+                local prompt="Enter admin email (used for pre-seeding/admin scripts)"
+                if [ -n "$DEFAULT_ADMIN_EMAIL" ]; then
+                    prompt="$prompt [${DEFAULT_ADMIN_EMAIL}]: "
+                else
+                    prompt="$prompt: "
+                fi
+                read -p "$prompt" ADMIN_EMAIL
+                ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
+            fi
+        else
+            ADMIN_EMAIL=""
+            if [ -z "$ADMIN_BOOTSTRAP_TOKEN" ]; then
+                ADMIN_BOOTSTRAP_TOKEN=$(openssl rand -hex 24)
+            fi
         fi
         
         # Intelligence Service Configuration (optional)
@@ -717,6 +755,24 @@ EOF
         fi
     fi
     
+    # Normalize bootstrap mode defaults in non-interactive runs
+    if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
+        if [ -n "$ADMIN_BOOTSTRAP_TOKEN" ]; then
+            ADMIN_BOOTSTRAP_MODE="token"
+        else
+            ADMIN_BOOTSTRAP_MODE=${DEFAULT_ADMIN_BOOTSTRAP_MODE:-preseed}
+        fi
+    fi
+
+    if [ "$ADMIN_BOOTSTRAP_MODE" != "preseed" ] && [ "$ADMIN_BOOTSTRAP_MODE" != "token" ]; then
+        echo -e "${RED}Error: --admin-bootstrap-mode must be 'preseed' or 'token'${NC}"
+        exit 1
+    fi
+
+    if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ] && [ -z "$ADMIN_BOOTSTRAP_TOKEN" ]; then
+        ADMIN_BOOTSTRAP_TOKEN=$(openssl rand -hex 24)
+    fi
+
     # Validate required parameters
     if [ -z "$DOMAIN" ]; then
         echo -e "${RED}Error: --domain is required${NC}"
@@ -782,6 +838,8 @@ EOF
                 update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
                 update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
                 update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
+                update_env_value "ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_MODE"
+                update_env_value "ADMIN_BOOTSTRAP_TOKEN" "$ADMIN_BOOTSTRAP_TOKEN"
                 update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
                 update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
                 # Set embedding provider based on whether OpenAI key is present
@@ -798,7 +856,7 @@ EOF
             else
                 # Overwrite .env
                 echo -e "${BLUE}📝 Creating new configuration...${NC}"
-                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY"
+                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
             fi
         else
             # Non-interactive: preserve existing
@@ -810,6 +868,8 @@ EOF
             update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
             update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
             update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
+            update_env_value "ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_MODE"
+            update_env_value "ADMIN_BOOTSTRAP_TOKEN" "$ADMIN_BOOTSTRAP_TOKEN"
             update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
             update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
             # Set embedding provider based on whether OpenAI key is present
@@ -826,7 +886,7 @@ EOF
     else
         # No .env file, create new
         echo -e "${BLUE}📝 Creating configuration...${NC}"
-        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY"
+        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
     fi
     
     # Generate kratos.yml with actual domain values
@@ -898,6 +958,24 @@ EOF
     echo "  ./synap health    # Check status"
     echo "  ./synap logs      # View logs"
     echo "  ./synap update    # Update to latest"
+    echo ""
+    echo "First admin setup:"
+    if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
+        local ui_base="https://${DOMAIN}"
+        if [ "$DOMAIN" = "localhost" ]; then
+            ui_base="http://localhost:4000"
+        fi
+        echo "  1) Open: ${ui_base}/admin/bootstrap"
+        echo "  2) Use token: ${ADMIN_BOOTSTRAP_TOKEN}"
+        echo "  3) Continue to registration and set your password"
+    else
+        echo "  1) Pre-seed with CLI/script:"
+        echo "     ADMIN_EMAIL=<admin@email> ADMIN_PASSWORD='<strong-password>' pnpm tsx scripts/create-admin-cli.ts"
+        if [ -n "$ADMIN_EMAIL" ]; then
+            echo "     (suggested email from install: ${ADMIN_EMAIL})"
+        fi
+        echo "  2) Login at /admin after pre-seed"
+    fi
     if [ "$WITH_OPENCLAW" = "true" ]; then
         echo "  ./synap services status openclaw  # Check OpenClaw status"
     fi
