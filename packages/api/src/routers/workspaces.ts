@@ -51,6 +51,79 @@ import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 
 const logger = createLogger({ module: "workspaces" });
 
+async function notifyCpInviteSync(input: {
+  type: "workspace" | "pod";
+  inviteToken: string;
+  email: string;
+  role: string;
+  workspaceId?: string | null;
+  workspaceName?: string | null;
+  invitedByUserId?: string | null;
+  expiresAt: Date;
+}) {
+  const cpUrl = config.server.controlPlaneUrl;
+  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
+  const podSubdomain =
+    process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
+  if (!cpUrl || !internalKey || !podSubdomain) return;
+  const backendOrigin =
+    process.env.PUBLIC_BACKEND_URL || process.env.SYNAP_INSTANCE_URL;
+  const body = {
+    podSubdomain,
+    inviteToken: input.inviteToken,
+    type: input.type,
+    workspaceId: input.workspaceId ?? null,
+    workspaceName: input.workspaceName ?? null,
+    email: input.email,
+    role: input.role,
+    invitedByUserId: input.invitedByUserId ?? null,
+    backendOrigin,
+    expiresAt: input.expiresAt.toISOString(),
+  };
+  fetch(`${cpUrl}/internal/invites/sync`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Key": internalKey,
+    },
+    body: JSON.stringify(body),
+  }).catch((err) =>
+    logger.warn({ err }, "Failed to sync invite to control plane")
+  );
+}
+
+async function notifyCpInviteLifecycle(input: {
+  inviteToken: string;
+  event: "accepted" | "rejected" | "revoked" | "expired";
+  actorEmail?: string;
+  actorUserId?: string;
+  reason?: string;
+}) {
+  const cpUrl = config.server.controlPlaneUrl;
+  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
+  const podSubdomain =
+    process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
+  if (!cpUrl || !internalKey || !podSubdomain) return;
+  const body = {
+    podSubdomain,
+    inviteToken: input.inviteToken,
+    event: input.event,
+    actorEmail: input.actorEmail,
+    actorUserId: input.actorUserId,
+    reason: input.reason,
+  };
+  fetch(`${cpUrl}/internal/invites/lifecycle`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Key": internalKey,
+    },
+    body: JSON.stringify(body),
+  }).catch((err) =>
+    logger.warn({ err }, "Failed to sync invite lifecycle to control plane")
+  );
+}
+
 /**
  * Workspace CRUD operations
  */
@@ -903,6 +976,15 @@ export const workspacesRouter = router({
         })
         .returning();
 
+      let workspaceNameForSync: string | null = null;
+      if (input.type === "workspace") {
+        const ws = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, input.workspaceId),
+          columns: { name: true },
+        });
+        workspaceNameForSync = ws?.name ?? "Synap Workspace";
+      }
+
       // Notify CP to send invite email (fire-and-forget)
       const cpUrl = config.server.controlPlaneUrl;
       if (cpUrl) {
@@ -928,12 +1010,8 @@ export const workspacesRouter = router({
         if (backendOrigin) {
           body.backendOrigin = backendOrigin;
         }
-        if (input.type === "workspace") {
-          const ws = await db.query.workspaces.findFirst({
-            where: eq(workspaces.id, input.workspaceId),
-            columns: { name: true },
-          });
-          body.workspaceName = ws?.name ?? "Synap Workspace";
+        if (workspaceNameForSync) {
+          body.workspaceName = workspaceNameForSync;
         }
 
         const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
@@ -948,6 +1026,17 @@ export const workspacesRouter = router({
           logger.warn({ err }, "Failed to send invite email (non-fatal)")
         );
       }
+
+      void notifyCpInviteSync({
+        type: input.type,
+        inviteToken: invite.token,
+        email: input.email,
+        role: input.role,
+        workspaceId: input.type === "workspace" ? input.workspaceId : null,
+        workspaceName: workspaceNameForSync,
+        invitedByUserId: ctx.userId,
+        expiresAt: invite.expiresAt,
+      });
 
       return {
         id: invite.id,
@@ -1080,6 +1169,12 @@ export const workspacesRouter = router({
           },
         });
         await db.delete(invites).where(eq(invites.id, invite.id));
+        void notifyCpInviteLifecycle({
+          inviteToken: invite.token,
+          event: "accepted",
+          actorEmail: me?.email ?? undefined,
+          actorUserId: ctx.userId,
+        });
         return {
           status: "accepted" as const,
           type: "workspace" as const,
@@ -1106,6 +1201,12 @@ export const workspacesRouter = router({
           );
         }
         await db.delete(invites).where(eq(invites.id, invite.id));
+        void notifyCpInviteLifecycle({
+          inviteToken: invite.token,
+          event: "accepted",
+          actorEmail: me?.email ?? undefined,
+          actorUserId: ctx.userId,
+        });
         return {
           status: "accepted" as const,
           type: "pod" as const,
@@ -1150,6 +1251,11 @@ export const workspacesRouter = router({
       }
 
       await db.delete(invites).where(eq(invites.id, input.id));
+      void notifyCpInviteLifecycle({
+        inviteToken: invite.token,
+        event: "revoked",
+        actorUserId: ctx.userId,
+      });
       return { success: true };
     }),
 
@@ -1911,6 +2017,12 @@ export const workspacesRouter = router({
           data: { source: "cp-proxy", email: payload.email },
         });
         await db.delete(invites).where(eq(invites.id, invite.id));
+        void notifyCpInviteLifecycle({
+          inviteToken: invite.token,
+          event: "accepted",
+          actorEmail: payload.email,
+          actorUserId: podUser.id,
+        });
         return {
           status: "accepted" as const,
           type: "workspace" as const,
@@ -1936,12 +2048,67 @@ export const workspacesRouter = router({
           );
         }
         await db.delete(invites).where(eq(invites.id, invite.id));
+        void notifyCpInviteLifecycle({
+          inviteToken: invite.token,
+          event: "accepted",
+          actorEmail: payload.email,
+          actorUserId: podUser.id,
+        });
         return {
           status: "accepted" as const,
           type: "pod" as const,
           workspacesJoined: allWorkspaces.length,
         };
       }
+    }),
+
+  /**
+   * Reject invite via CP proxy token when no pod session exists in browser context.
+   */
+  rejectInviteViaCp: publicProcedure
+    .input(
+      z.object({
+        token: z.string(),
+        cpToken: z.string(),
+        reason: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const cpUrl = config.server.controlPlaneUrl;
+      const payload = await verifyCpJwt<{
+        sub: string;
+        email: string;
+        type: string;
+      }>(input.cpToken, cpUrl);
+      if (!payload || payload.type !== "invite-accept") {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Invalid CP token",
+        });
+      }
+
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.token, input.token),
+      });
+      if (!invite) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+      }
+      if (invite.email.toLowerCase() !== payload.email.toLowerCase()) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Invite is not addressed to CP principal email",
+        });
+      }
+
+      await db.delete(invites).where(eq(invites.id, invite.id));
+      void notifyCpInviteLifecycle({
+        inviteToken: invite.token,
+        event: "rejected",
+        actorEmail: payload.email,
+        actorUserId: payload.sub,
+        reason: input.reason,
+      });
+      return { success: true };
     }),
 
   /**
@@ -1973,6 +2140,13 @@ export const workspacesRouter = router({
         });
       }
       await db.delete(invites).where(eq(invites.id, input.id));
+      void notifyCpInviteLifecycle({
+        inviteToken: invite.token,
+        event: "rejected",
+        actorEmail: me.email,
+        actorUserId: ctx.userId,
+        reason: input.reason,
+      });
       auditLog({
         subjectType: "invite",
         action: "delete",
