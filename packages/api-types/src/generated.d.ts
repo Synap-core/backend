@@ -5728,6 +5728,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listMyInvites: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				email: string;
+				workspaceId: string | null;
+				id: string;
+				type: "pod" | "workspace";
+				token: string;
+				createdAt: Date;
+				role: string;
+				expiresAt: Date;
+				invitedBy: string;
+				workspace: {
+					name: string;
+				} | null;
+			}[];
+			meta: object;
+		}>;
 		listInvites: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				type: "pod" | "workspace";
@@ -5999,6 +6017,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				type: "pod";
 				workspacesJoined: number;
 				workspaceId?: undefined;
+			};
+			meta: object;
+		}>;
+		rejectInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				token: string;
+				cpToken: string;
+				reason?: string | undefined;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		rejectInvite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				reason?: string | undefined;
+			};
+			output: {
+				success: boolean;
 			};
 			meta: object;
 		}>;

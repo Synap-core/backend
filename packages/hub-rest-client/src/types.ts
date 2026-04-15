@@ -64,6 +64,11 @@ export interface HubWorkspace {
   role?: string;
 }
 
+/** GET /api/hub/workspaces — canonical Hub Protocol shape (not `data`). */
+export interface HubWorkspacesListResponse {
+  workspaces: HubWorkspace[];
+}
+
 export interface HubUser {
   id: string;
   email: string;

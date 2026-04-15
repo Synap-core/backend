@@ -24,6 +24,7 @@ import type {
   HubMemoryResult,
   HubListResponse,
   HubSingleResponse,
+  HubWorkspacesListResponse,
   CreateEntityInput,
   UpdateEntityInput,
   StoreMemoryInput,
@@ -49,6 +50,21 @@ function unwrapList<T>(result: T[] | HubListResponse<T>): T[] {
   return Array.isArray(result)
     ? result
     : ((result as HubListResponse<T>).data ?? []);
+}
+
+/** Hub GET /workspaces returns `{ workspaces }`, not `{ data }`. */
+function unwrapWorkspacesResponse(
+  result:
+    | HubWorkspace[]
+    | HubListResponse<HubWorkspace>
+    | HubWorkspacesListResponse
+): HubWorkspace[] {
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && "workspaces" in result) {
+    const w = (result as HubWorkspacesListResponse).workspaces;
+    return Array.isArray(w) ? w : [];
+  }
+  return unwrapList(result as HubWorkspace[] | HubListResponse<HubWorkspace>);
 }
 
 function unwrapSingle<T>(result: T | HubSingleResponse<T>): T {
@@ -111,9 +127,9 @@ export class HubRestClient {
 
   async getWorkspaces(): Promise<HubWorkspace[]> {
     const result = await this.request<
-      HubWorkspace[] | HubListResponse<HubWorkspace>
+      HubWorkspace[] | HubListResponse<HubWorkspace> | HubWorkspacesListResponse
     >("GET", "/api/hub/workspaces");
-    return unwrapList(result);
+    return unwrapWorkspacesResponse(result);
   }
 
   // ─── Entities ─────────────────────────────────────────────────────────────

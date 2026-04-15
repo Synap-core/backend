@@ -49,6 +49,7 @@ export type {
   HubDocument,
   HubChannel,
   HubWorkspace,
+  HubWorkspacesListResponse,
   HubUser,
   HubMemoryResult,
   HubListResponse,
