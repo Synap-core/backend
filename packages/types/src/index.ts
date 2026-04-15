@@ -97,3 +97,6 @@ export * from "./imports/index.js";
 
 // External connect (integration registration/provision contracts)
 export * from "./external-connect/index.js";
+
+// Invitations
+export * from "./invitations/index.js";

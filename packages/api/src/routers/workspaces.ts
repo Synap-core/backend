@@ -921,7 +921,13 @@ export const workspacesRouter = router({
           role: input.role,
           inviteToken: invite.token,
           podSubdomain,
+          clientHint: "auto",
         };
+        const backendOrigin =
+          process.env.PUBLIC_BACKEND_URL || process.env.SYNAP_INSTANCE_URL;
+        if (backendOrigin) {
+          body.backendOrigin = backendOrigin;
+        }
         if (input.type === "workspace") {
           const ws = await db.query.workspaces.findFirst({
             where: eq(workspaces.id, input.workspaceId),
@@ -930,9 +936,13 @@ export const workspacesRouter = router({
           body.workspaceName = ws?.name ?? "Synap Workspace";
         }
 
+        const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
         fetch(`${cpUrl}/internal/invite-email`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(internalKey ? { "X-Internal-Key": internalKey } : {}),
+          },
           body: JSON.stringify(body),
         }).catch((err) =>
           logger.warn({ err }, "Failed to send invite email (non-fatal)")
@@ -945,6 +955,22 @@ export const workspacesRouter = router({
         expiresAt: invite.expiresAt,
       };
     }),
+
+  /**
+   * List invites addressed to the current user email (recipient inbox).
+   */
+  listMyInvites: protectedProcedure.query(async ({ ctx }) => {
+    const me = await db.query.users.findFirst({
+      where: eq(users.id, ctx.userId),
+      columns: { email: true },
+    });
+    if (!me?.email) return [];
+    return db.query.invites.findMany({
+      where: eq(invites.email, me.email.toLowerCase()),
+      with: { workspace: { columns: { name: true } } },
+      orderBy: [desc(invites.createdAt)],
+    });
+  }),
 
   /**
    * List pending invites. Pass workspaceId to list workspace invites,
@@ -1009,6 +1035,20 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       if (invite.expiresAt < new Date())
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
+      const me = await db.query.users.findFirst({
+        where: eq(users.id, ctx.userId),
+        columns: { email: true },
+      });
+      if (
+        me?.email &&
+        invite.email &&
+        me.email.toLowerCase() !== invite.email.toLowerCase()
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "This invite is addressed to another email",
+        });
+      }
 
       const dbConn = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -1039,6 +1079,7 @@ export const workspacesRouter = router({
             inviteId: invite.id,
           },
         });
+        await db.delete(invites).where(eq(invites.id, invite.id));
         return {
           status: "accepted" as const,
           type: "workspace" as const,
@@ -1833,6 +1874,16 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       if (invite.expiresAt < new Date())
         throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
+      if (
+        invite.email &&
+        payload.email &&
+        invite.email.toLowerCase() !== payload.email.toLowerCase()
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Invite email does not match CP principal",
+        });
+      }
 
       const dbConn = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -1859,6 +1910,7 @@ export const workspacesRouter = router({
           workspaceId: invite.workspaceId,
           data: { source: "cp-proxy", email: payload.email },
         });
+        await db.delete(invites).where(eq(invites.id, invite.id));
         return {
           status: "accepted" as const,
           type: "workspace" as const,
@@ -1890,6 +1942,51 @@ export const workspacesRouter = router({
           workspacesJoined: allWorkspaces.length,
         };
       }
+    }),
+
+  /**
+   * Reject an invite addressed to the current user (recipient decline).
+   */
+  rejectInvite: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), reason: z.string().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const me = await db.query.users.findFirst({
+        where: eq(users.id, ctx.userId),
+        columns: { email: true },
+      });
+      if (!me?.email) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No email found for current user",
+        });
+      }
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.id, input.id),
+      });
+      if (!invite) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+      }
+      if (invite.email.toLowerCase() !== me.email.toLowerCase()) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Invite is not addressed to current user",
+        });
+      }
+      await db.delete(invites).where(eq(invites.id, input.id));
+      auditLog({
+        subjectType: "invite",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: invite.workspaceId ?? undefined,
+        data: {
+          type: invite.type,
+          reason: input.reason ?? null,
+          disposition: "rejected_by_recipient",
+        },
+      });
+      return { success: true };
     }),
 
   /**
