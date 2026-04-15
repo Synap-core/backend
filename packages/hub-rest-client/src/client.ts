@@ -80,6 +80,9 @@ export class HubRestClient {
   private readonly timeoutMs: number;
   readonly workspaceId: string | undefined;
 
+  /** Cached from GET /users/me — avoids repeated identity calls. */
+  private resolvedUserId: string | null = null;
+
   constructor(config: HubRestClientConfig) {
     this.base = normalizeUrl(config.podUrl);
     this.headers = {
@@ -88,6 +91,14 @@ export class HubRestClient {
     };
     this.workspaceId = config.workspaceId;
     this.timeoutMs = config.timeoutMs ?? 30_000;
+  }
+
+  /** User id for the current API key (Hub REST requires userId on several GETs). */
+  private async resolveUserId(): Promise<string> {
+    if (this.resolvedUserId) return this.resolvedUserId;
+    const me = await this.getMe();
+    this.resolvedUserId = me.id;
+    return me.id;
   }
 
   private async request<T>(
@@ -200,9 +211,10 @@ export class HubRestClient {
   // ─── Memory ───────────────────────────────────────────────────────────────
 
   async storeMemory(input: StoreMemoryInput): Promise<{ id: string }> {
+    const userId = await this.resolveUserId();
     return this.request<{ id: string }>("POST", "/api/hub/memory", {
-      ...input,
-      workspaceId: input.workspaceId ?? this.workspaceId,
+      userId,
+      fact: input.fact,
     });
   }
 
@@ -211,8 +223,10 @@ export class HubRestClient {
     options?: { workspaceId?: string; limit?: number }
   ): Promise<HubMemoryResult[]> {
     const wsId = options?.workspaceId ?? this.workspaceId;
+    const userId = await this.resolveUserId();
     const params = new URLSearchParams({
-      q: query,
+      userId,
+      query,
       limit: String(options?.limit ?? 10),
     });
     if (wsId) params.set("workspaceId", wsId);
@@ -223,11 +237,12 @@ export class HubRestClient {
     return unwrapList(result);
   }
 
-  // ─── Channels ─────────────────────────────────────────────────────────────
+  // ─── Channels (Hub REST: channels are listed via GET /threads) ────────────
 
   async getChannels(options?: { workspaceId?: string }): Promise<HubChannel[]> {
     const wsId = options?.workspaceId ?? this.workspaceId;
-    const params = new URLSearchParams();
+    const userId = await this.resolveUserId();
+    const params = new URLSearchParams({ userId });
     if (wsId) params.set("workspaceId", wsId);
 
     const result = await this.request<
@@ -237,12 +252,17 @@ export class HubRestClient {
   }
 
   async sendToChannel(input: SendToChannelInput): Promise<{ id: string }> {
+    const userId = input.userId ?? (await this.resolveUserId());
     return this.request<{ id: string }>(
       "POST",
-      `/api/hub/channels/${input.channelId}/send`,
+      `/api/hub/threads/${input.channelId}/messages`,
       {
+        role: input.role ?? "user",
         content: input.content,
-        workspaceId: input.workspaceId ?? this.workspaceId,
+        userId,
+        ...(input.autoRespond !== undefined
+          ? { autoRespond: input.autoRespond }
+          : {}),
       }
     );
   }

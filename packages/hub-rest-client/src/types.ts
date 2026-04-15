@@ -69,10 +69,12 @@ export interface HubWorkspacesListResponse {
   workspaces: HubWorkspace[];
 }
 
+/** GET /api/hub/users/me returns at least `id` (and `scopes`); email may be omitted. */
 export interface HubUser {
   id: string;
-  email: string;
+  email?: string;
   name?: string;
+  scopes?: string[];
 }
 
 export interface HubMemoryResult {
@@ -134,6 +136,11 @@ export interface StoreMemoryInput {
 export interface SendToChannelInput {
   channelId: string;
   content: string;
+  /** Defaults to the authenticated user (GET /users/me). */
+  userId?: string;
+  role?: "system" | "assistant" | "user";
+  /** When true, may queue an IS response on AI-active threads (server-side). */
+  autoRespond?: boolean;
   workspaceId?: string;
 }
 

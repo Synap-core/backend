@@ -142,6 +142,11 @@ export {
   type MaterializeOptions,
 } from "./utils/sync-materializer.js";
 
+export {
+  advanceOutboundSyncCursorAfterPushSuccess,
+  type AdvanceOutboundSyncCursorParams,
+} from "./utils/sync-outbound-cursor.js";
+
 // Re-export commonly used drizzle-orm functions
 export {
   // Query builders

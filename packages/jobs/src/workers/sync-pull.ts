@@ -1,7 +1,7 @@
 /**
  * Sync Pull Worker
  *
- * Cron job (every 60s) that pulls completed events from registered pull/bidirectional peers.
+ * Cron job (every minute via pg-boss) that pulls completed events from registered pull/bidirectional peers.
  *
  * For each enabled peer with direction "pull" or "bidirectional":
  * 1. Read the last pull cursor from sync_state (or epoch if first sync)
@@ -177,7 +177,7 @@ async function pullFromPeer(peer: {
 }
 
 /**
- * Main handler — called by pg-boss cron every 60 seconds.
+ * Main handler — called by pg-boss on the `sync-pull` schedule (every minute).
  */
 export async function handleSyncPull(): Promise<void> {
   try {

@@ -1124,6 +1124,12 @@ app.get("/health", async (c) => {
           eventsProcessed: state?.eventsProcessed ?? 0,
           errorCount: state?.errorCount ?? 0,
           lastError: state?.lastError ?? null,
+          /** Outbound event-log cursor (push) or legacy combined cursor */
+          lastCursor: state?.lastCursor?.toISOString() ?? null,
+          /** Bidirectional: outbound push cursor */
+          lastPushCursor: state?.lastPushCursor?.toISOString() ?? null,
+          /** Bidirectional / pull: inbound cursor */
+          lastPullCursor: state?.lastPullCursor?.toISOString() ?? null,
         };
       });
       return c.json({ ...base, peerCount: peers.length, peers: peerSummaries });
@@ -1204,6 +1210,11 @@ app.get("/status", async (c) => {
       status: state?.status ?? "unknown",
       lastSyncAt: state?.lastSyncAt?.toISOString() ?? null,
       eventsProcessed: state?.eventsProcessed ?? 0,
+      errorCount: state?.errorCount ?? 0,
+      lastError: state?.lastError ?? null,
+      lastCursor: state?.lastCursor?.toISOString() ?? null,
+      lastPushCursor: state?.lastPushCursor?.toISOString() ?? null,
+      lastPullCursor: state?.lastPullCursor?.toISOString() ?? null,
     };
   });
 

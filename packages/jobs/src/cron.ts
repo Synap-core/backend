@@ -71,5 +71,17 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("feed-scheduler", "* * * * *", {});
   logger.info("Registered cron: feed-scheduler (every 1min)");
 
+  // Pod-to-pod replication — event log (catch-up + cursor maintenance; realtime hook is primary path)
+  await boss.schedule("sync-push", "* * * * *", {});
+  logger.info("Registered cron: sync-push (every 1min)");
+  await boss.schedule("sync-pull", "* * * * *", {});
+  logger.info("Registered cron: sync-pull (every 1min)");
+
+  // Non-event payloads (large file blobs; less frequent)
+  await boss.schedule("sync-push-files", "*/10 * * * *", {});
+  logger.info("Registered cron: sync-push-files (every 10min)");
+  await boss.schedule("sync-push-supplementary", "*/5 * * * *", {});
+  logger.info("Registered cron: sync-push-supplementary (every 5min)");
+
   logger.info("All cron schedules registered");
 }

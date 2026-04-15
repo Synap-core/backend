@@ -9,12 +9,20 @@
  * - Peer list cached for 30s (avoids DB hit per event)
  * - Short bursts are batched (500ms debounce window)
  * - Backpressure: if a peer signals overload, pauses real-time for 60s
- * - Does NOT advance the sync cursor (polling worker owns that)
+ * - On successful receive: advances outbound sync_state cursors (same as
+ *   sync-push) so monitoring and catch-up stay aligned with realtime delivery.
  *
- * The polling sync-push worker remains as the catch-up mechanism.
+ * The polling sync-push worker remains the catch-up for missed realtime batches.
  */
 
-import { db, syncPeers, eq, or, and } from "@synap/database";
+import {
+  db,
+  syncPeers,
+  eq,
+  or,
+  and,
+  advanceOutboundSyncCursorAfterPushSuccess,
+} from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -32,6 +40,7 @@ interface CachedPeer {
   peerPodUrl: string;
   authToken: string | null;
   workspaceIds: string[] | null;
+  direction: "push" | "bidirectional";
 }
 
 let peerCache: CachedPeer[] = [];
@@ -51,6 +60,7 @@ async function getEnabledPushPeers(): Promise<CachedPeer[]> {
         peerPodUrl: syncPeers.peerPodUrl,
         authToken: syncPeers.authToken,
         workspaceIds: syncPeers.workspaceIds,
+        direction: syncPeers.direction,
       })
       .from(syncPeers)
       .where(
@@ -63,9 +73,12 @@ async function getEnabledPushPeers(): Promise<CachedPeer[]> {
         )
       );
 
-    peerCache = peers.filter(
-      (p) => p.peerPodUrl && p.peerPodUrl.startsWith("http")
-    );
+    peerCache = peers
+      .filter((p) => p.peerPodUrl && p.peerPodUrl.startsWith("http"))
+      .map((p) => ({
+        ...p,
+        direction: p.direction as CachedPeer["direction"],
+      }));
     peerCacheAt = now;
     return peerCache;
   } catch (err) {
@@ -165,9 +178,6 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
     correlationId: e.correlationId,
   }));
 
-  const lastTimestamp =
-    serializedEvents[serializedEvents.length - 1]?.timestamp;
-
   await Promise.allSettled(
     peers.map(async (peer) => {
       if (isPeerBackpressured(peer.id)) return;
@@ -183,6 +193,9 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
         if (eventsForPeer.length === 0) return;
       }
 
+      const peerLastTimestamp =
+        eventsForPeer[eventsForPeer.length - 1]?.timestamp;
+
       try {
         const res = await fetch(`${peer.peerPodUrl}/api/sync/receive`, {
           method: "POST",
@@ -197,7 +210,7 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
           },
           body: JSON.stringify({
             events: eventsForPeer,
-            cursor: lastTimestamp,
+            cursor: peerLastTimestamp,
           }),
           signal: AbortSignal.timeout(POST_TIMEOUT_MS),
         });
@@ -213,6 +226,7 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
               "Peer signalled backpressure — pausing real-time for 60s"
             );
             backpressureUntil.set(peer.id, Date.now() + BACKPRESSURE_PAUSE_MS);
+            return;
           }
 
           // Process peer's generation from response
@@ -222,6 +236,20 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
             typeof body.role === "string" ? body.role : "unknown";
           if (peerGen > 0) {
             await recordPeerGeneration(peerGen, peerRole);
+          }
+
+          try {
+            await advanceOutboundSyncCursorAfterPushSuccess({
+              syncPeerId: peer.id,
+              direction: peer.direction,
+              cursorIso: peerLastTimestamp,
+              eventsSent: eventsForPeer.length,
+            });
+          } catch (err) {
+            logger.warn(
+              { err, peerId: peer.id },
+              "Failed to advance sync cursor after realtime push (non-fatal)"
+            );
           }
         }
         // Non-200 is fine — polling will catch up

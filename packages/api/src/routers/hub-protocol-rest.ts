@@ -684,6 +684,128 @@ app.get("/users/:userId/entities", async (c) => {
 });
 
 /**
+ * GET /entities?q=...&profileSlug=...&workspaceId=...&limit=...&sort=...
+ *
+ * Canonical list/search endpoint for @synap/hub-rest-client (Raycast, CLI, etc.).
+ * When `q` is empty, lists entities (optionally filtered by profileSlug).
+ * When `q` is non-empty, runs unified Typesense search on the entities collection.
+ *
+ * Must be registered before GET /entities/:id so `/entities` is not captured as an id.
+ */
+app.get("/entities", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+
+  // User-bound Hub keys (Raycast, CLI): never honor ?userId= — prevents IDOR where a
+  // caller replays another user's id. Intelligence Service should use GET /users/:userId/entities.
+  const userId = c.get("userId") as string;
+  if (!userId) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const q = (c.req.query("q") ?? "").trim();
+  const profileSlug = c.req.query("profileSlug") || undefined;
+  const workspaceIdParam = c.req.query("workspaceId") || null;
+  const limitRaw = c.req.query("limit");
+  const limit = Math.min(
+    Math.max(parseInt(limitRaw ?? "20", 10) || 20, 1),
+    100
+  );
+  const sortParam = (c.req.query("sort") ?? "").trim();
+
+  try {
+    const effectiveWsIds = workspaceIdParam
+      ? [workspaceIdParam]
+      : await getUserAccessibleWorkspaceIds(userId);
+    if (effectiveWsIds.length === 0) {
+      return c.json([]);
+    }
+
+    if (workspaceIdParam) {
+      const ok = await verifyWorkspaceAccess(userId, workspaceIdParam);
+      if (!ok) {
+        return c.json({ error: "Access denied to workspace" }, 403);
+      }
+    }
+
+    const workspaceId = workspaceIdParam ?? effectiveWsIds[0];
+
+    const caller = await getCaller(c, {
+      workspaceId,
+      userId,
+    });
+
+    const normalizeHubEntity = (e: unknown): unknown => {
+      if (!e || typeof e !== "object") return e;
+      const row = e as Record<string, unknown>;
+      const slug =
+        (typeof row.profileSlug === "string" && row.profileSlug) ||
+        (typeof row.type === "string" && row.type) ||
+        (typeof row.entityType === "string" && row.entityType) ||
+        "note";
+      return { ...row, profileSlug: slug };
+    };
+
+    if (q.length > 0) {
+      const searchResp = await caller.search.search({
+        userId,
+        query: q,
+        workspaceId,
+        collections: ["entities"],
+        limit,
+        page: 1,
+      });
+
+      let docs = searchResp.results
+        .filter((r) => r.collection === "entities")
+        .map((r) => r.document as Record<string, unknown>);
+
+      if (profileSlug) {
+        docs = docs.filter(
+          (d) =>
+            (d.entityType as string | undefined) === profileSlug ||
+            (d.type as string | undefined) === profileSlug
+        );
+      }
+
+      return c.json(docs.map((d) => normalizeHubEntity(d)));
+    }
+
+    const listed = await caller.entities.getEntities({
+      userId,
+      workspaceId: workspaceIdParam || undefined,
+      type: profileSlug,
+      limit,
+    });
+
+    let rows = (listed as unknown[]).map((e) => normalizeHubEntity(e)) as Array<
+      Record<string, unknown>
+    >;
+
+    // @synap/hub-rest-client getRecentEntities sends sort=updatedAt:desc (list defaults to createdAt).
+    if (
+      sortParam.includes("updatedAt") &&
+      sortParam.toLowerCase().includes("desc")
+    ) {
+      rows = [...rows].sort((a, b) => {
+        const tb = new Date(String(b.updatedAt ?? 0)).getTime();
+        const ta = new Date(String(a.updatedAt ?? 0)).getTime();
+        return tb - ta;
+      });
+    }
+
+    return c.json(rows);
+  } catch (err) {
+    logger.error({ err, userId }, "GET /entities failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
  * GET /entities/:id?workspaceId=...&userId=...
  * Fetch a single entity by ID. Used by skill trigger executor to get entity context.
  * On shared pods, verifies the entity belongs to a workspace the user can access.
@@ -1774,12 +1896,14 @@ app.get("/memory", async (c) => {
       403
     );
   }
-  const userId = c.req.query("userId");
-  const query = c.req.query("query") ?? "";
-  const limit = parseInt(c.req.query("limit") ?? "10", 10);
+  const authUserId = c.get("userId") as string;
+  const userId = c.req.query("userId") || authUserId;
   if (!userId) {
     return c.json({ error: "userId is required" }, 400);
   }
+  // Accept `q` (hub-rest-client) or `query` (IS / docs).
+  const query = c.req.query("query") ?? c.req.query("q") ?? "";
+  const limit = parseInt(c.req.query("limit") ?? "10", 10);
   try {
     const facts = await knowledgeRepository.searchFacts({
       userId,

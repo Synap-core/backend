@@ -82,7 +82,8 @@ export function setupEventBroadcasting(): void {
 
   // Hook 4: Real-time sync push — immediately forwards .completed events to
   // registered sync peers over HTTPS. Fire-and-forget with batching (500ms
-  // debounce). The polling sync-push worker (every 60s) remains as catch-up.
+  // debounce). On success, advances outbound sync_state cursors; the pg-boss
+  // sync-push worker (scheduled every minute) catches missed batches.
   // See: utils/sync-realtime-hook.ts
 
   // Register all hooks

@@ -12,6 +12,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { db, workspaceMembers, eq } from "@synap/database";
 
 export const entitiesRouter = router({
   /**
@@ -79,11 +80,27 @@ export const entitiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Use the real user (input.userId), not ctx.userId (API key owner)
+      // Use the real user (input.userId), not ctx.userId (API key owner).
+      //
+      // workspaceProcedure (used by entities.create) requires a non-null workspaceId
+      // for its auth gate. Pod-scoped profiles (bookmark, note, task, …) have no
+      // workspace but still need the gate to pass — so we resolve the user's first
+      // accessible workspace for auth purposes only. The mutation itself determines
+      // the entity's actual workspaceId from the profile's entityScope (null for pod).
+      let authWorkspaceId: string | undefined = ctx.workspaceId ?? undefined;
+      if (!authWorkspaceId) {
+        const rows = await db
+          .select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers)
+          .where(eq(workspaceMembers.userId, input.userId))
+          .limit(1);
+        authWorkspaceId = rows[0]?.workspaceId;
+      }
+
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        ctx.workspaceId ?? undefined,
+        authWorkspaceId,
         ctx.sourceMessageId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);

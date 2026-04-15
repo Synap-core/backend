@@ -1,7 +1,7 @@
 /**
  * Sync Push Worker
  *
- * Cron job (every 60s) that pushes completed events to registered push peers.
+ * Cron job (every minute via pg-boss) that pushes completed events to registered push peers.
  *
  * For each enabled push peer:
  * 1. Read the last cursor from sync_state (or epoch if first sync)
@@ -21,6 +21,7 @@ import {
   eq,
   and,
   drizzleSql,
+  advanceOutboundSyncCursorAfterPushSuccess,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -258,24 +259,12 @@ async function pushToPeer(
       );
     }
 
-    // Success — advance cursor (bidirectional peers use lastPushCursor)
-    const newCursor = new Date(payload.cursor);
-    const cursorUpdate =
-      peer.direction === "bidirectional"
-        ? { lastPushCursor: newCursor }
-        : { lastCursor: newCursor };
-    await db
-      .update(syncState)
-      .set({
-        ...cursorUpdate,
-        lastSyncAt: new Date(),
-        status: "idle",
-        errorCount: 0,
-        lastError: null,
-        eventsProcessed: state.eventsProcessed + batch.length,
-        updatedAt: new Date(),
-      })
-      .where(eq(syncState.id, state.id));
+    await advanceOutboundSyncCursorAfterPushSuccess({
+      syncPeerId: peer.id,
+      direction: peer.direction,
+      cursorIso: payload.cursor,
+      eventsSent: batch.length,
+    });
 
     logger.info(
       { peerId: peer.id, eventsSent: batch.length, cursor: payload.cursor },
@@ -304,7 +293,7 @@ async function pushToPeer(
 }
 
 /**
- * Main handler — called by pg-boss cron every 60 seconds.
+ * Main handler — called by pg-boss on the `sync-push` schedule (every minute).
  */
 export async function handleSyncPush(): Promise<void> {
   try {

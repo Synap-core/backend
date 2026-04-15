@@ -62,6 +62,16 @@ import {
   handleLinkedInBulkImport,
   LINKEDIN_BULK_IMPORT_QUEUE,
 } from "./linkedin-bulk-import.js";
+import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
+import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
+import {
+  handleSyncPushFiles,
+  SYNC_PUSH_FILES_QUEUE,
+} from "./sync-push-files.js";
+import {
+  handleSyncPushSupplementary,
+  SYNC_PUSH_SUPPLEMENTARY_QUEUE,
+} from "./sync-push-supplementary.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -103,6 +113,10 @@ const ALL_QUEUES = [
   "feed-proactive-execute",
   TELEGRAM_BULK_IMPORT_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
+  SYNC_PUSH_QUEUE,
+  SYNC_PULL_QUEUE,
+  SYNC_PUSH_FILES_QUEUE,
+  SYNC_PUSH_SUPPLEMENTARY_QUEUE,
 ];
 
 /**
@@ -304,6 +318,17 @@ export async function registerAllWorkers(): Promise<void> {
     handleLinkedInBulkImport(job)
   );
   logger.info("Registered workers: telegram-bulk-import, linkedin-bulk-import");
+
+  // Pod-to-pod sync (event log replication + supplementary rows + file payloads)
+  await boss.work(SYNC_PUSH_QUEUE, async () => handleSyncPush());
+  await boss.work(SYNC_PULL_QUEUE, async () => handleSyncPull());
+  await boss.work(SYNC_PUSH_FILES_QUEUE, async () => handleSyncPushFiles());
+  await boss.work(SYNC_PUSH_SUPPLEMENTARY_QUEUE, async () =>
+    handleSyncPushSupplementary()
+  );
+  logger.info(
+    "Registered workers: sync-push, sync-pull, sync-push-files, sync-push-supplementary"
+  );
 
   // Note: Delivery retry and dead letter workers removed to avoid circular dependency
   // (jobs → api → jobs). Retry functionality is handled inline in DeliveryService.
