@@ -2975,10 +2975,7 @@ app.post("/automations/create", async (c) => {
   if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
 
   const userId = (body.userId as string) ?? (c.get("userId") as string);
-  const workspaceId = body.workspaceId as string;
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
+  const workspaceId = (body.workspaceId as string | null | undefined) ?? null;
   if (!body.name) {
     return c.json({ error: "name is required" }, 400);
   }
@@ -3033,13 +3030,15 @@ app.get("/automations", async (c) => {
   const userId = c.req.query("userId");
   const workspaceId = c.req.query("workspaceId");
   if (!userId) return c.json({ error: "userId is required" }, 400);
-  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
 
   try {
-    const caller = await getCaller(c, { userId, workspaceId });
+    const caller = await getCaller(c, {
+      userId,
+      workspaceId: workspaceId ?? null,
+    });
     const result = await caller.automations.listAutomations({
       userId,
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       status: (c.req.query("status") || undefined) as
         | "draft"
         | "active"
@@ -3071,13 +3070,15 @@ app.get("/automations/:automationId", async (c) => {
   const userId = c.req.query("userId");
   const workspaceId = c.req.query("workspaceId");
   if (!userId) return c.json({ error: "userId is required" }, 400);
-  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
 
   try {
-    const caller = await getCaller(c, { userId, workspaceId });
+    const caller = await getCaller(c, {
+      userId,
+      workspaceId: workspaceId ?? null,
+    });
     const result = await caller.automations.getAutomation({
       userId,
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       id: c.req.param("automationId"),
     });
     return c.json(result);
@@ -3105,9 +3106,9 @@ app.post("/automations/:automationId/trigger", async (c) => {
     unknown
   >;
   const userId = (body.userId as string) ?? (c.get("userId") as string);
-  const workspaceId = body.workspaceId as string;
-  if (!userId || !workspaceId) {
-    return c.json({ error: "userId and workspaceId are required" }, 400);
+  const workspaceId = (body.workspaceId as string | null | undefined) ?? null;
+  if (!userId) {
+    return c.json({ error: "userId is required" }, 400);
   }
 
   try {
@@ -3669,10 +3670,10 @@ app.post("/vault/request", async (c) => {
   }
 
   const userId = (body.agentUserId as string) ?? (c.get("userId") as string);
-  const workspaceId = body.workspaceId ?? c.req.header("x-workspace-id");
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
+  const workspaceId =
+    (body.workspaceId as string | null | undefined) ??
+    c.req.header("x-workspace-id") ??
+    null;
 
   const accessLevel = body.accessLevel ?? "read";
   const ttl = body.ttl ?? 60;
@@ -3709,7 +3710,7 @@ app.post("/vault/request", async (c) => {
 
     // Emit urgent notification — shows as banner (not toast) in the UI
     NotificationService.create({
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       userId,
       type: "ai_request.vault_access",
       sourceType: "proposal",

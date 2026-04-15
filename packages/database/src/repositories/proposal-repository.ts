@@ -11,7 +11,7 @@ import { proposals } from "../schema/index.js";
 import { type ProposalStatus } from "../schema/proposals.js";
 
 export interface CreateProposalInput {
-  workspaceId: string;
+  workspaceId?: string | null;
   targetType: string;
   targetId: string;
   request: Record<string, unknown>;
@@ -103,10 +103,12 @@ export class ProposalRepository {
    * Find proposals by workspace
    */
   async findByWorkspace(
-    workspaceId: string,
+    workspaceId?: string | null,
     status?: ProposalStatus
   ): Promise<any[]> {
-    const conditions = [eq(proposals.workspaceId, workspaceId)];
+    const conditions = workspaceId
+      ? [eq(proposals.workspaceId, workspaceId)]
+      : [];
 
     if (status) {
       conditions.push(eq(proposals.status, status));

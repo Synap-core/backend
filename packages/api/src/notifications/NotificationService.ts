@@ -55,7 +55,7 @@ function interpolate(template: string, data: Record<string, unknown>): string {
 
 export interface CreateNotificationInput {
   type: string;
-  workspaceId: string;
+  workspaceId?: string | null;
   userId: string;
 
   // Source traceability
@@ -118,7 +118,7 @@ export const NotificationService = {
 
     // Resolve group key if registry specifies groupBy field
     let groupKey: string | undefined = input.groupKey;
-    if (!groupKey && def.groupBy) {
+    if (!groupKey && def.groupBy && input.workspaceId) {
       const groupVal = input.data[def.groupBy];
       if (groupVal) {
         groupKey = `${input.workspaceId}:${input.type}:${groupVal}`;
@@ -130,12 +130,14 @@ export const NotificationService = {
       // Check user preferences: global kill switch, routing rules, quiet hours.
       // routingRules stores category-based rules: { "governance": "mute", "ai": "in_app", ... }
       // If a category is "mute", skip entirely (don't persist, don't emit).
-      const prefs = await db.query.notificationPreferences.findFirst({
-        where: and(
-          eq(notificationPreferences.userId, input.userId),
-          eq(notificationPreferences.workspaceId, input.workspaceId)
-        ),
-      });
+      const prefs = input.workspaceId
+        ? await db.query.notificationPreferences.findFirst({
+            where: and(
+              eq(notificationPreferences.userId, input.userId),
+              eq(notificationPreferences.workspaceId, input.workspaceId)
+            ),
+          })
+        : null;
 
       // Global kill switch — skip everything if notifications are disabled
       if (prefs?.enabled === false) {
@@ -242,12 +244,13 @@ export const NotificationService = {
       // Fire-and-forget — never blocks the caller
       // Skip real-time emission during quiet hours (notification is still persisted above)
       // Skip real-time emission if routing rule is "os" only (no in-app)
-      const shouldEmitSocket = !suppressRealtime && categoryRule !== "os";
+      const shouldEmitSocket =
+        !suppressRealtime && categoryRule !== "os" && !!input.workspaceId;
       if (shouldEmitSocket) {
         emitChatEvent({
           event: "notification:new",
           data: { notification: payload, userId: input.userId },
-          workspaceId: input.workspaceId,
+          workspaceId: input.workspaceId!,
         });
       }
 

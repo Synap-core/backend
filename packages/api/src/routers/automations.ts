@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, protectedProcedure } from "../trpc.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
@@ -14,6 +14,7 @@ import {
   getDb,
   eq,
   and,
+  isNull,
   desc,
   automations,
   automationRuns,
@@ -81,10 +82,11 @@ function computeNextCronRunAt(cronExpr: string, fromDate: Date): Date | null {
 export const automationsRouter = router({
   // ── List automations ────────────────────────────────────────────────────────
 
-  list: workspaceProcedure
+  list: protectedProcedure
     .input(
       z
         .object({
+          workspaceId: z.string().uuid().nullable().optional(),
           status: z.enum(["draft", "active", "paused", "error"]).optional(),
           triggerType: z
             .enum(["event", "cron", "webhook", "manual"])
@@ -95,7 +97,11 @@ export const automationsRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const database = await getDb();
-      const conditions = [eq(automations.workspaceId, ctx.workspaceId!)];
+      const conditions = [
+        input?.workspaceId
+          ? eq(automations.workspaceId, input.workspaceId)
+          : isNull(automations.workspaceId),
+      ];
 
       if (input?.status) {
         conditions.push(eq(automations.status, input.status));
@@ -116,14 +122,21 @@ export const automationsRouter = router({
 
   // ── Get single automation ───────────────────────────────────────────────────
 
-  get: workspaceProcedure
-    .input(z.object({ id: z.string().uuid() }))
+  get: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
     .query(async ({ input, ctx }) => {
       const database = await getDb();
       const row = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.id),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
       });
 
@@ -138,9 +151,10 @@ export const automationsRouter = router({
 
   // ── Create automation ───────────────────────────────────────────────────────
 
-  create: workspaceProcedure
+  create: protectedProcedure
     .input(
       z.object({
+        workspaceId: z.string().uuid().nullable().optional(),
         name: z.string().min(1).max(200),
         description: z.string().optional(),
         triggerType: z.enum(["event", "cron", "webhook", "manual"]),
@@ -181,7 +195,7 @@ export const automationsRouter = router({
       const [row] = await database
         .insert(automations)
         .values({
-          workspaceId: ctx.workspaceId!,
+          workspaceId: input.workspaceId ?? null,
           createdBy,
           name: input.name,
           description: input.description,
@@ -208,9 +222,10 @@ export const automationsRouter = router({
 
   // ── Update automation ───────────────────────────────────────────────────────
 
-  update: workspaceProcedure
+  update: protectedProcedure
     .input(
       z.object({
+        workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
         name: z.string().min(1).max(200).optional(),
         description: z.string().optional(),
@@ -233,7 +248,9 @@ export const automationsRouter = router({
       const existing = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.id),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
         columns: { id: true },
       });
@@ -291,15 +308,22 @@ export const automationsRouter = router({
 
   // ── Delete automation ───────────────────────────────────────────────────────
 
-  delete: workspaceProcedure
-    .input(z.object({ id: z.string().uuid() }))
+  delete: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.id),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
         columns: { id: true },
       });
@@ -317,15 +341,22 @@ export const automationsRouter = router({
 
   // ── Activate / Pause ───────────────────────────────────────────────────────
 
-  activate: workspaceProcedure
-    .input(z.object({ id: z.string().uuid() }))
+  activate: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.id),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
       });
       if (!existing) {
@@ -361,15 +392,22 @@ export const automationsRouter = router({
       return { status: "activated", nextRunAt: nextRunAt?.toISOString() };
     }),
 
-  pause: workspaceProcedure
-    .input(z.object({ id: z.string().uuid() }))
+  pause: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.id),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
         columns: { id: true, status: true },
       });
@@ -390,9 +428,10 @@ export const automationsRouter = router({
 
   // ── Runs: list ──────────────────────────────────────────────────────────────
 
-  listRuns: workspaceProcedure
+  listRuns: protectedProcedure
     .input(
       z.object({
+        workspaceId: z.string().uuid().nullable().optional(),
         automationId: z.string().uuid(),
         limit: z.number().min(1).max(100).optional(),
       })
@@ -404,7 +443,9 @@ export const automationsRouter = router({
       const automation = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.automationId),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
         columns: { id: true },
       });
@@ -427,15 +468,22 @@ export const automationsRouter = router({
 
   // ── Runs: get with step runs ────────────────────────────────────────────────
 
-  getRun: workspaceProcedure
-    .input(z.object({ runId: z.string().uuid() }))
+  getRun: protectedProcedure
+    .input(
+      z.object({
+        runId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
     .query(async ({ input, ctx }) => {
       const database = await getDb();
 
       const run = await database.query.automationRuns.findFirst({
         where: and(
           eq(automationRuns.id, input.runId),
-          eq(automationRuns.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automationRuns.workspaceId, input.workspaceId)
+            : isNull(automationRuns.workspaceId)
         ),
       });
       if (!run) {
@@ -455,7 +503,7 @@ export const automationsRouter = router({
 
   // ── AI: Diagnose run ────────────────────────────────────────────────────────
 
-  diagnoseRun: workspaceProcedure
+  diagnoseRun: protectedProcedure
     .input(
       z.object({
         automationName: z.string(),
@@ -490,7 +538,7 @@ export const automationsRouter = router({
           "X-API-Key": isApiKey,
         },
         body: JSON.stringify({
-          workspaceId: ctx.workspaceId,
+          workspaceId: ctx.workspaceId ?? null,
           userId: ctx.userId,
           ...input,
         }),
@@ -511,7 +559,7 @@ export const automationsRouter = router({
 
   // ── AI: Generate flow ───────────────────────────────────────────────────────
 
-  generateFlow: workspaceProcedure
+  generateFlow: protectedProcedure
     .input(
       z.object({
         prompt: z.string().min(1).max(2000),
@@ -529,7 +577,7 @@ export const automationsRouter = router({
           "X-API-Key": isApiKey,
         },
         body: JSON.stringify({
-          workspaceId: ctx.workspaceId,
+          workspaceId: ctx.workspaceId ?? null,
           userId: ctx.userId,
           ...input,
         }),
@@ -551,10 +599,11 @@ export const automationsRouter = router({
 
   // ── Manual trigger ──────────────────────────────────────────────────────────
 
-  trigger: workspaceProcedure
+  trigger: protectedProcedure
     .input(
       z.object({
         id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         /** Optional payload to inject as trigger.payload in the execution context */
         payload: z.record(z.string(), z.unknown()).optional(),
       })
@@ -566,7 +615,9 @@ export const automationsRouter = router({
       const existing = await database.query.automations.findFirst({
         where: and(
           eq(automations.id, input.id),
-          eq(automations.workspaceId, ctx.workspaceId!)
+          input.workspaceId
+            ? eq(automations.workspaceId, input.workspaceId)
+            : isNull(automations.workspaceId)
         ),
       });
       if (!existing) {
@@ -586,7 +637,7 @@ export const automationsRouter = router({
         .insert(automationRuns)
         .values({
           automationId: existing.id,
-          workspaceId: ctx.workspaceId!,
+          workspaceId: input.workspaceId ?? null,
           triggeredBy: ctx.userId!,
           triggerPayload: {
             type: "manual",
@@ -602,7 +653,7 @@ export const automationsRouter = router({
       await boss.send("automation-execute", {
         runId: run.id,
         automationId: existing.id,
-        workspaceId: ctx.workspaceId!,
+        workspaceId: input.workspaceId ?? null,
         automationContext: {
           automationRunId: run.id,
           automationId: existing.id,

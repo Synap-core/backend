@@ -21,7 +21,7 @@ export const hubAutomationsRouter = router({
       z.object({
         userId: z.string(),
         agentUserId: z.string().uuid().optional(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         sourceMessageId: z.string().optional(),
         name: z.string().min(1).max(200),
         description: z.string().optional(),
@@ -39,12 +39,13 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId,
+        input.workspaceId ?? null,
         input.sourceMessageId
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
 
       return caller.create({
+        workspaceId: input.workspaceId ?? null,
         name: input.name,
         description: input.description,
         triggerType: input.triggerType,
@@ -65,7 +66,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
         limit: z.number().min(1).max(100).optional(),
       })
@@ -74,11 +75,12 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
 
       return caller.list({
+        workspaceId: input.workspaceId ?? null,
         status: input.status,
         limit: input.limit,
       });
@@ -92,7 +94,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
       })
     )
@@ -100,11 +102,14 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
 
-      return caller.get({ id: input.id });
+      return caller.get({
+        id: input.id,
+        workspaceId: input.workspaceId ?? null,
+      });
     }),
 
   /**
@@ -115,7 +120,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
         name: z.string().min(1).max(200).optional(),
         description: z.string().optional(),
@@ -135,11 +140,12 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.update({
         id: input.id,
+        workspaceId: input.workspaceId ?? null,
         name: input.name,
         description: input.description,
         triggerType: input.triggerType,
@@ -158,7 +164,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
       })
     )
@@ -166,10 +172,13 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
-      return caller.activate({ id: input.id });
+      return caller.activate({
+        id: input.id,
+        workspaceId: input.workspaceId ?? null,
+      });
     }),
 
   /**
@@ -180,7 +189,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
       })
     )
@@ -188,10 +197,13 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
-      return caller.pause({ id: input.id });
+      return caller.pause({
+        id: input.id,
+        workspaceId: input.workspaceId ?? null,
+      });
     }),
 
   /**
@@ -202,7 +214,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         id: z.string().uuid(),
         payload: z.record(z.string(), z.unknown()).optional(),
       })
@@ -211,10 +223,14 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
-      return caller.trigger({ id: input.id, payload: input.payload });
+      return caller.trigger({
+        id: input.id,
+        workspaceId: input.workspaceId ?? null,
+        payload: input.payload,
+      });
     }),
 
   /**
@@ -225,7 +241,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         automationId: z.string().uuid(),
         limit: z.number().min(1).max(100).optional(),
       })
@@ -234,10 +250,11 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
       return caller.listRuns({
+        workspaceId: input.workspaceId ?? null,
         automationId: input.automationId,
         limit: input.limit,
       });
@@ -251,7 +268,7 @@ export const hubAutomationsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         runId: z.string().uuid(),
       })
     )
@@ -259,9 +276,12 @@ export const hubAutomationsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId
+        input.workspaceId ?? null
       );
       const caller = regularAutomationsRouter.createCaller(callerContext);
-      return caller.getRun({ runId: input.runId });
+      return caller.getRun({
+        runId: input.runId,
+        workspaceId: input.workspaceId ?? null,
+      });
     }),
 });
