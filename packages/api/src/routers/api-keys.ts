@@ -23,6 +23,11 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { randomUUID, randomBytes } from "crypto";
+import {
+  INTEGRATION_HUB_SCOPES,
+  integrationHubId,
+  mintHubInboundKey,
+} from "../services/hub-integration-registration.js";
 
 /**
  * Generate API key with proper prefix
@@ -31,19 +36,6 @@ function generateApiKey(prefix: string): string {
   const randomPart = randomBytes(32).toString("hex");
   return `${prefix}${randomPart}`;
 }
-
-/** Scopes granted per integration type */
-const INTEGRATION_SCOPES: Record<string, string[]> = {
-  raycast: ["hub-protocol.read", "hub-protocol.write", "data.read"],
-  cli: ["hub-protocol.read", "hub-protocol.write", "data.read", "data.write"],
-  openclaw: [
-    "hub-protocol.read",
-    "hub-protocol.write",
-    "mcp.connect",
-    "data.read",
-  ],
-  custom: ["hub-protocol.read", "hub-protocol.write"],
-};
 
 export const apiKeysRouter = router({
   /**
@@ -436,27 +428,20 @@ export const apiKeysRouter = router({
       }
 
       const scope =
-        INTEGRATION_SCOPES[input.integration] ?? INTEGRATION_SCOPES.custom;
-      // Use hub prefix so Hub Protocol middleware accepts the key
-      const keyPrefix =
-        process.env.NODE_ENV === "production"
-          ? "synap_hub_live_"
-          : "synap_hub_test_";
+        INTEGRATION_HUB_SCOPES[input.integration] ??
+        INTEGRATION_HUB_SCOPES.custom;
       const keyName = `${input.integration.charAt(0).toUpperCase() + input.integration.slice(1)} — ${new Date().toISOString().slice(0, 10)}`;
-      const key = generateApiKey(keyPrefix);
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
 
-      const apiKey = await apiKeyRepo.create(
+      const { apiKey, plainKey } = await mintHubInboundKey(
+        apiKeyRepo,
         {
           keyName,
-          keyPrefix,
-          key,
-          // hubId marks this as a Hub Protocol key (drives prefix choice in `create`).
-          // Using the integration name so it's traceable in audit logs.
-          hubId: `integration:${input.integration}`,
+          // hubId marks this as a Hub Protocol key (traceable in audit logs).
+          hubId: integrationHubId(input.integration),
           scope,
           userId: ctx.userId,
         },
@@ -485,7 +470,7 @@ export const apiKeysRouter = router({
         process.env.PUBLIC_URL?.replace(/\/$/, "") || "http://localhost:4000";
 
       return {
-        apiKey: key, // plaintext, shown once
+        apiKey: plainKey, // plaintext, shown once
         keyId: apiKey.id,
         podUrl,
         workspaceId: resolvedWorkspaceId ?? null,

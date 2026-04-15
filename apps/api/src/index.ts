@@ -410,55 +410,17 @@ app.post("/api/handshake", async (c) => {
     }
 
     // Verify the handshake JWT via the issuer's JWKS (ES256).
-    // The pod is self-hostable and may not know which service signed the token.
     //
-    // Issuer URL resolution (in priority order):
-    //   1. Client-provided issuerUrl (the client just called the issuer, so it knows)
-    //   2. Legacy "cpUrl" field (backward-compat with older clients)
-    //   3. Pod env var CONTROL_PLANE_URL (operator-configured)
-    //   4. workspace.settings.controlPlane.url (set during provisioning)
+    // Issuer URL resolution (OIDC-style, handled by verifyCpJwt):
+    //   - Client-provided issuerUrl or legacy cpUrl → passed as explicit allowlist
+    //   - CONTROL_PLANE_URL env var → passed as explicit allowlist
+    //   - Neither set → verifyCpJwt reads the `iss` claim from the JWT itself
     //
-    // Security: the JWT is verified using JWKS fetched from the issuer URL.
-    // Even if the client provides a malicious URL, verification fails because
-    // the JWT was signed with a different key. The audience check (PUBLIC_URL)
-    // further prevents cross-pod token reuse.
-    let issuerUrl =
+    // Security: signature is always verified against JWKS fetched from the issuer.
+    // Even if the client provides an issuerUrl, verification fails if the JWT was
+    // signed with a different key. The audience check (PUBLIC_URL) prevents cross-pod reuse.
+    const issuerUrl =
       clientIssuerUrl ?? legacyCpUrl ?? config.server.controlPlaneUrl;
-    if (!issuerUrl) {
-      try {
-        const { getDb } = await import("@synap/database");
-        const db = await getDb();
-        const ws = await db.query.workspaces.findFirst();
-        const settings = (ws?.settings as any)?.controlPlane;
-        if (settings?.url) {
-          issuerUrl = settings.url;
-          apiLogger.info(
-            { issuerUrl },
-            "Handshake: resolved issuer URL from workspace settings"
-          );
-        }
-      } catch (e) {
-        apiLogger.debug(
-          { err: e },
-          "Handshake: failed to resolve issuer URL from workspace settings"
-        );
-      }
-    }
-
-    if (!issuerUrl) {
-      apiLogger.warn(
-        "Handshake: no issuer URL available — cannot verify token"
-      );
-      return c.json(
-        {
-          error:
-            "Cannot verify handshake token: no issuer URL available. " +
-            "Pass issuerUrl in the request body, or set CONTROL_PLANE_URL on the pod.",
-          code: "NO_ISSUER_URL",
-        },
-        503
-      );
-    }
 
     const podPublicUrl = process.env.PUBLIC_URL;
     const payload = await verifyCpJwt<{

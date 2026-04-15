@@ -148,7 +148,7 @@ export default function ConnectPage() {
     INTEGRATION_LABELS[integration] ?? INTEGRATION_LABELS.custom;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-(--pod-surface-2) p-6">
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <div className="w-full max-w-md rounded-2xl border border-divider bg-content1 shadow-xl">
         {/* Header */}
         <div className="border-b border-divider px-6 py-5">

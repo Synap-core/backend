@@ -1,22 +1,17 @@
 @import "@heroui/styles";
 
-/* Pod admin: warm, welcoming self-hosted feel (extends HeroUI default theme) */
 @layer theme {
   :root {
-    --pod-radius-card: 1rem;
-    --pod-muted: oklch(0.55 0.02 75);
-    --pod-surface: oklch(0.99 0.005 85);
-    --pod-surface-2: oklch(0.965 0.012 85);
-    --pod-accent: oklch(0.72 0.14 65);
-    --pod-accent-2: oklch(0.65 0.12 200);
+    --admin-fluid-surface: color-mix(in oklab, var(--color-content1) 92%, var(--color-primary) 8%);
+    --admin-fluid-surface-soft: color-mix(in oklab, var(--color-default-50) 90%, var(--color-primary) 10%);
+    --admin-fluid-selected: color-mix(in oklab, var(--color-default-100) 76%, var(--color-primary) 12%);
   }
 
-  .dark {
-    --pod-muted: oklch(0.72 0.02 75);
-    --pod-surface: oklch(0.2 0.02 260);
-    --pod-surface-2: oklch(0.24 0.025 260);
-    --pod-accent: oklch(0.78 0.12 75);
-    --pod-accent-2: oklch(0.72 0.1 200);
+  .dark,
+  [data-theme="dark"] {
+    --admin-fluid-surface: color-mix(in oklab, var(--color-content1) 88%, var(--color-primary) 12%);
+    --admin-fluid-surface-soft: color-mix(in oklab, var(--color-content2) 90%, var(--color-primary) 10%);
+    --admin-fluid-selected: color-mix(in oklab, var(--color-default-200) 68%, var(--color-primary) 14%);
   }
 }
 
@@ -70,12 +65,29 @@ body {
 /* Command palette (cmdk) — align with HeroUI semantic surfaces */
 @layer components {
   .command-palette-group [cmdk-group-heading] {
-    @apply px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider;
-    color: var(--color-default-400);
+    @apply px-1 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em];
+    color: color-mix(in oklab, var(--color-default-500) 75%, var(--color-primary) 25%);
+  }
+
+  .command-palette-section:first-child .command-palette-group [cmdk-group-heading] {
+    @apply pt-1;
   }
 
   .command-palette-list {
     scrollbar-width: thin;
+  }
+
+  .command-palette-item[data-selected="true"] {
+    background-color: var(--admin-fluid-selected);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-primary) 16%, transparent);
+  }
+
+  .command-palette-item:hover {
+    background-color: color-mix(
+      in oklab,
+      var(--color-default-100) 75%,
+      var(--color-primary) 4%
+    );
   }
 }
 

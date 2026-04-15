@@ -18,7 +18,7 @@ export default function BrandMark({ compact = false }: BrandMarkProps) {
       />
       {!compact ? (
         <div className="flex min-w-0 flex-col leading-tight">
-          <span className="bg-linear-to-br from-(--pod-accent) to-(--pod-accent-2) bg-clip-text text-base font-bold tracking-tight text-transparent">
+          <span className="bg-linear-to-br from-primary to-secondary bg-clip-text text-base font-bold tracking-tight text-transparent">
             Synap
           </span>
           <span className="text-[10px] font-medium uppercase tracking-wider text-default-400">

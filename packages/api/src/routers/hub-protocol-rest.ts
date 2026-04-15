@@ -20,9 +20,12 @@ import type { MessageRole } from "@synap/database/schema";
 import { ChannelType } from "@synap/database/schema";
 import type { ProactiveMessageType } from "../services/DeliveryService.js";
 import { routeSignal } from "../utils/delivery-router.js";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
+import jwt from "jsonwebtoken";
+import { TrustedIssuerService } from "@synap/database";
 import {
   db,
+  getDb,
   messages,
   channels,
   knowledgeFacts,
@@ -47,10 +50,17 @@ import {
   EventRepository,
   eventRepository,
   ApiKeyRepository,
+  WorkspaceRepository,
   createWorkspaceFromDefinition,
   sql,
 } from "@synap/database";
-import { apiKeys } from "@synap/database/schema";
+import { z } from "zod";
+import {
+  integrationHubIdFromIssuerUrl,
+  mintHubInboundKey,
+  revokeActiveHubInboundKeysForUser,
+  SETUP_AGENT_HUB_SCOPES,
+} from "../services/hub-integration-registration.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -63,6 +73,30 @@ function extractBearerToken(authHeader: string | null): string | null {
 function hasScope(scopes: string[], required: string): boolean {
   return scopes.includes(required);
 }
+
+const eveProviderIdSchema = z.enum([
+  "ollama",
+  "openrouter",
+  "anthropic",
+  "openai",
+]);
+
+const eveProviderRoutingPolicySchema = z.object({
+  mode: z.enum(["local", "provider", "hybrid"]).optional(),
+  defaultProvider: eveProviderIdSchema.optional(),
+  fallbackProvider: eveProviderIdSchema.optional(),
+  providers: z
+    .array(
+      z.object({
+        id: eveProviderIdSchema,
+        enabled: z.boolean().optional(),
+        baseUrl: z.string().optional(),
+        defaultModel: z.string().optional(),
+      })
+    )
+    .optional(),
+  syncToSynap: z.boolean().optional(),
+});
 
 const app = new Hono<{
   Variables: {
@@ -177,6 +211,130 @@ app.use("/*", async (c, next) => {
     },
     401
   );
+});
+
+/**
+ * PATCH /workspaces/:workspaceId/eve-provider-routing
+ * Explicitly sync Eve provider routing policy (non-secret) into workspace settings.
+ *
+ * This endpoint is intentionally separate from Synap intelligence-service routing.
+ */
+app.patch("/workspaces/:workspaceId/eve-provider-routing", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+
+  const userId = c.get("userId") as string;
+  const workspaceId = c.req.param("workspaceId");
+  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { role: true },
+  });
+  if (!membership) return c.json({ error: "Access denied" }, 403);
+  if (membership.role !== "owner" && membership.role !== "admin") {
+    return c.json(
+      { error: "Owner/admin role required to sync provider routing" },
+      403
+    );
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const parsed = eveProviderRoutingPolicySchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: "Invalid provider routing payload",
+        details: parsed.error.issues,
+      },
+      400
+    );
+  }
+
+  try {
+    const dbConn = await getDb();
+    const eventRepo = new EventRepository(sql);
+    const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+    await workspaceRepo.mergeSettings(
+      workspaceId,
+      { eveProviderRouting: parsed.data },
+      userId
+    );
+
+    return c.json({
+      ok: true,
+      workspaceId,
+      eveProviderRouting: parsed.data,
+    });
+  } catch (err) {
+    logger.error(
+      { err, userId, workspaceId },
+      "PATCH /workspaces/:workspaceId/eve-provider-routing failed"
+    );
+    return c.json({ error: "Failed to sync provider routing" }, 500);
+  }
+});
+
+/**
+ * GET /workspaces/:workspaceId/eve-provider-routing
+ * Read synced Eve provider routing policy from workspace settings.
+ */
+app.get("/workspaces/:workspaceId/eve-provider-routing", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+
+  const userId = c.get("userId") as string;
+  const workspaceId = c.req.param("workspaceId");
+  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { role: true },
+  });
+  if (!membership) return c.json({ error: "Access denied" }, 403);
+
+  try {
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { settings: true },
+    });
+    if (!workspace) return c.json({ error: "Workspace not found" }, 404);
+    const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+    return c.json({
+      ok: true,
+      workspaceId,
+      eveProviderRouting:
+        (settings.eveProviderRouting as Record<string, unknown> | undefined) ??
+        null,
+    });
+  } catch (err) {
+    logger.error(
+      { err, userId, workspaceId },
+      "GET /workspaces/:workspaceId/eve-provider-routing failed"
+    );
+    return c.json({ error: "Failed to read provider routing" }, 500);
+  }
 });
 
 /**
@@ -4241,26 +4399,117 @@ app.post("/setup/agent", async (c) => {
     "provisioning_token";
   let jwtEmail: string | null = null;
   let jwtName: string | null = null;
+  let jwtIssuerUrl: string | null = null;
 
-  // Try 1: CP-signed JWT (for managed pods via CLI / CP relay)
-  const cpUrl = config.server.controlPlaneUrl;
+  // Try 1: CP-signed JWT verified against Trusted Issuers registry
+  const adminUrl = `${process.env.PUBLIC_URL ?? ""}/admin/trusted-issuers`;
   try {
-    const payload = await verifyCpJwt<{
-      type: string;
-      email?: string;
-      name?: string;
-    }>(token, cpUrl);
-    if (
-      payload &&
-      (payload.type === "agent_setup" || payload.type === "addon_activate")
-    ) {
-      authenticated = true;
-      authMethod = "jwt";
-      jwtEmail = typeof payload.email === "string" ? payload.email : null;
-      jwtName = typeof payload.name === "string" ? payload.name : null;
+    const decoded = jwt.decode(token);
+    if (decoded && typeof decoded === "object") {
+      const iss = (decoded as Record<string, unknown>).iss;
+      if (typeof iss === "string" && iss.startsWith("https://")) {
+        const issuerSvc = new TrustedIssuerService();
+        let issuer = await issuerSvc.getByUrl(iss);
+
+        if (!issuer) {
+          // Unknown issuer — register as pending and ask admin to approve
+          const derivedDisplayName = new URL(iss).hostname;
+          issuer = await issuerSvc.registerPending(
+            iss,
+            derivedDisplayName,
+            decoded
+          );
+          try {
+            const podAdminWorkspace = await db.query.workspaces.findFirst({
+              where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+              columns: { id: true },
+            });
+            if (podAdminWorkspace) {
+              const admins = await db.query.workspaceMembers.findMany({
+                where: and(
+                  eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+                  inArray(workspaceMembers.role, ["admin", "owner"])
+                ),
+                columns: { userId: true },
+              });
+              for (const admin of admins) {
+                await NotificationService.create({
+                  type: "system.issuer_pending_approval",
+                  workspaceId: podAdminWorkspace.id,
+                  userId: admin.userId,
+                  sourceType: "system",
+                  sourceId: issuer.id,
+                  data: {
+                    issuerUrl: iss,
+                    displayName: derivedDisplayName,
+                  },
+                });
+              }
+            }
+          } catch (notifyErr) {
+            logger.warn(
+              { err: notifyErr, issuerUrl: iss },
+              "setup/agent: failed to notify admins about pending issuer"
+            );
+          }
+          logger.warn(
+            { issuerUrl: iss, adminUrl },
+            "setup/agent: unknown JWT issuer registered as pending — admin approval required"
+          );
+          return c.json(
+            { code: "ISSUER_PENDING_APPROVAL", adminUrl, issuerUrl: iss },
+            202
+          );
+        }
+
+        if (issuer.status === "pending") {
+          return c.json(
+            { code: "ISSUER_PENDING_APPROVAL", adminUrl, issuerUrl: iss },
+            202
+          );
+        }
+
+        if (issuer.status === "rejected" || issuer.status === "revoked") {
+          return c.json(
+            { error: "This issuer is not authorized on this pod." },
+            403
+          );
+        }
+
+        if (issuer.status === "approved") {
+          if (!issuer.allowedScopes.includes("setup.agent")) {
+            return c.json(
+              { error: "This issuer is not authorized on this pod." },
+              403
+            );
+          }
+
+          try {
+            const payload = await verifyCpJwt<{
+              type: string;
+              email?: string;
+              name?: string;
+            }>(token, iss);
+            if (
+              payload &&
+              (payload.type === "agent_setup" ||
+                payload.type === "addon_activate")
+            ) {
+              authenticated = true;
+              authMethod = "jwt";
+              jwtIssuerUrl = iss;
+              jwtEmail =
+                typeof payload.email === "string" ? payload.email : null;
+              jwtName = typeof payload.name === "string" ? payload.name : null;
+            }
+          } catch {
+            // JWT verification failed — fall through to other auth methods
+          }
+        }
+      }
     }
   } catch {
-    // Not a valid JWT — fall through
+    // Not a valid JWT or issuer lookup failed — fall through
   }
 
   // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
@@ -4607,42 +4856,22 @@ app.post("/setup/agent", async (c) => {
     }
 
     // ── 3. Create Hub Protocol API key ──────────────────────────────────────
-    // Revoke any previously active key for this agent user first
-    await db
-      .update(apiKeys)
-      .set({
-        isActive: false,
-        revokedAt: new Date(),
-        revokedBy: agentUserId,
-        revokedReason: "Re-provisioning — replaced by new key via setup/agent",
-      })
-      .where(
-        and(
-          eq(apiKeys.userId, agentUserId),
-          eq(apiKeys.keyType, "hub_inbound"),
-          eq(apiKeys.isActive, true)
-        )
-      );
-
-    const keyPrefix =
-      process.env.NODE_ENV === "production"
-        ? "synap_hub_live_"
-        : "synap_hub_test_";
-    const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
+    await revokeActiveHubInboundKeysForUser(db, {
+      userId: agentUserId,
+      revokedBy: agentUserId,
+      revokedReason: "Re-provisioning — replaced by new key via setup/agent",
+    });
 
     const eventRepo = new EventRepository(sql);
     const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-    const apiKey = await apiKeyRepo.create(
+    const { apiKey, plainKey } = await mintHubInboundKey(
+      apiKeyRepo,
       {
         keyName: `${agentLabel} Hub Key`,
-        keyPrefix,
-        key: plainKey,
-        scope: [
-          "hub-protocol.read",
-          "hub-protocol.write",
-          "mcp.read",
-          "mcp.write",
-        ],
+        hubId: jwtIssuerUrl
+          ? integrationHubIdFromIssuerUrl(jwtIssuerUrl)
+          : undefined,
+        scope: [...SETUP_AGENT_HUB_SCOPES],
         userId: agentUserId,
         keyType: "hub_inbound",
         description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup`,

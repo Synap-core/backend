@@ -31,6 +31,13 @@ const FILTER_OPTIONS: { value: UserType; label: string }[] = [
 export default function UsersPage() {
   const [typeFilter, setTypeFilter] = useState<UserType>("all");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [passwordResetResult, setPasswordResetResult] = useState<{
+    mode: "single" | "all_humans";
+    resetCount: number;
+    failedCount: number;
+    results: Array<{ userId: string; email: string; tempPassword: string }>;
+    failures: Array<{ userId: string; email: string; error: string }>;
+  } | null>(null);
 
   const detailModal = useOverlayState({
     isOpen: !!selectedUserId,
@@ -42,6 +49,13 @@ export default function UsersPage() {
   const { data, isLoading } = trpc.system.listUsers.useQuery({
     type: typeFilter,
     limit: 100,
+  });
+  const utils = trpc.useUtils();
+  const resetPasswordMutation = trpc.system.resetUserPassword.useMutation({
+    onSuccess: (result) => {
+      setPasswordResetResult(result);
+      void utils.system.listUsers.invalidate();
+    },
   });
 
   const selectedUser = data?.users.find((u) => u.id === selectedUserId);
@@ -73,6 +87,17 @@ export default function UsersPage() {
             </Button>
           ))}
         </div>
+        <Button
+          color="warning"
+          variant="flat"
+          isLoading={resetPasswordMutation.isPending}
+          onPress={() => {
+            setPasswordResetResult(null);
+            resetPasswordMutation.mutate({ mode: "all_humans" });
+          }}
+        >
+          Reset All Human Passwords
+        </Button>
       </div>
 
       <Card
@@ -223,6 +248,75 @@ export default function UsersPage() {
                         : "—"}
                     </Text>
                   </div>
+                  <Card className="border border-divider bg-default-50/80 p-4">
+                    <Text className="mb-3 font-semibold text-sm">
+                      Password Management
+                    </Text>
+                    <div className="flex items-center justify-between gap-3">
+                      <Text className="text-xs text-default-500">
+                        Generates a temporary password and updates Kratos
+                        immediately.
+                      </Text>
+                      <Button
+                        size="sm"
+                        color="warning"
+                        variant="flat"
+                        isLoading={resetPasswordMutation.isPending}
+                        onPress={() => {
+                          if (!selectedUser?.id) return;
+                          setPasswordResetResult(null);
+                          resetPasswordMutation.mutate({
+                            mode: "single",
+                            userId: selectedUser.id,
+                          });
+                        }}
+                      >
+                        Reset Password
+                      </Button>
+                    </div>
+                  </Card>
+                  {passwordResetResult && (
+                    <Card className="border border-divider bg-default-50/80 p-4">
+                      <Text className="mb-2 font-semibold text-sm">
+                        Password Reset Result
+                      </Text>
+                      <Text className="mb-3 text-xs text-default-500">
+                        Resets: {passwordResetResult.resetCount} · Failures:{" "}
+                        {passwordResetResult.failedCount}
+                      </Text>
+                      <div className="flex flex-col gap-2">
+                        {passwordResetResult.results.map((item) => (
+                          <div
+                            key={`ok-${item.userId}`}
+                            className="rounded-md border border-divider bg-content1 px-3 py-2"
+                          >
+                            <Text className="text-xs text-default-500">
+                              {item.email}
+                            </Text>
+                            <Text
+                              className="font-mono text-sm"
+                              style={{ fontFamily: typography.fontFamily.mono }}
+                            >
+                              {item.tempPassword}
+                            </Text>
+                          </div>
+                        ))}
+                        {passwordResetResult.failures.map((failure) => (
+                          <div
+                            key={`fail-${failure.userId}`}
+                            className="rounded-md border border-danger-200 bg-danger-50 px-3 py-2"
+                          >
+                            <Text className="text-xs font-medium text-danger-700">
+                              {failure.email}
+                            </Text>
+                            <Text className="text-xs text-danger-600">
+                              {failure.error}
+                            </Text>
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  )}
                   {selectedUser.userType === "agent" &&
                     selectedUser.agentMetadata && (
                       <Card className="border border-divider bg-default-50/80 p-4">

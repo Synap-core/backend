@@ -9,7 +9,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import {
+  podAdminProcedure,
+  protectedProcedure,
+  router,
+  workspaceProcedure,
+} from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { storage } from "@synap/storage";
 import {
@@ -742,6 +747,120 @@ export const documentsRouter = router({
           language: document.language,
           mimeType: document.mimeType,
           updatedAt: document.updatedAt,
+        },
+        content,
+      };
+    }),
+
+  /**
+   * Pod-admin document listing across all workspaces.
+   * Markdown-safe mode focuses on markdown/text files.
+   */
+  listGlobal: podAdminProcedure
+    .input(
+      z.object({
+        markdownOnly: z.boolean().default(true),
+        limit: z.number().min(1).max(500).default(200),
+      })
+    )
+    .query(async ({ input }) => {
+      const base = and(
+        isNull(documents.deletedAt),
+        isNotNull(documents.storageKey)
+      );
+
+      const markdownish = or(
+        eq(documents.type, "markdown"),
+        eq(documents.type, "text"),
+        ilike(documents.title, "%.md"),
+        ilike(documents.title, "%.markdown")
+      );
+
+      const docs = await db
+        .select({
+          id: documents.id,
+          title: documents.title,
+          type: documents.type,
+          mimeType: documents.mimeType,
+          updatedAt: documents.updatedAt,
+          createdAt: documents.createdAt,
+          size: documents.size,
+          userId: documents.userId,
+          workspaceId: documents.workspaceId,
+        })
+        .from(documents)
+        .where(input.markdownOnly ? and(base, markdownish) : base)
+        .orderBy(desc(documents.updatedAt))
+        .limit(input.limit);
+
+      return { documents: docs, total: docs.length };
+    }),
+
+  /**
+   * Pod-admin text/markdown preview across all workspaces.
+   */
+  getGlobal: podAdminProcedure
+    .input(z.object({ documentId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const [document] = await db
+        .select()
+        .from(documents)
+        .where(
+          and(eq(documents.id, input.documentId), isNull(documents.deletedAt))
+        )
+        .limit(1);
+
+      if (!document) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found.",
+        });
+      }
+
+      if (!document.storageKey) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This document has no file storage (e.g. whiteboard). Open it in Synap Browser.",
+        });
+      }
+
+      if (document.type === "pdf" || document.type === "docx") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Admin preview does not support PDF or Word files.",
+        });
+      }
+
+      const title = document.title ?? "";
+      const allowedType =
+        document.type === "markdown" ||
+        document.type === "text" ||
+        document.type === "code" ||
+        /\.md$/i.test(title) ||
+        /\.markdown$/i.test(title);
+
+      if (!allowedType) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Admin preview supports markdown, plain text, and code files only.",
+        });
+      }
+
+      const contentBuffer = await storage.downloadBuffer(document.storageKey);
+      const content = contentBuffer.toString("utf-8");
+
+      return {
+        document: {
+          id: document.id,
+          title: document.title,
+          type: document.type,
+          language: document.language,
+          mimeType: document.mimeType,
+          updatedAt: document.updatedAt,
+          workspaceId: document.workspaceId,
+          userId: document.userId,
         },
         content,
       };

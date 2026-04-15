@@ -335,18 +335,29 @@ export default function InvestigatePage() {
                       ) : null}
                     </div>
                   </div>
-                  <select
-                    className={cn(inputClass, "w-[min(220px,100%)]")}
-                    value={eventTypeFilter ?? ""}
-                    onChange={(e) => setEventTypeFilter(e.target.value || null)}
-                  >
-                    <option value="">All types</option>
-                    {eventTypeOptions.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative w-[min(220px,100%)]">
+                    <select
+                      className={cn(
+                        inputClass,
+                        "appearance-none pr-8 text-ellipsis text-left"
+                      )}
+                      value={eventTypeFilter ?? ""}
+                      onChange={(e) =>
+                        setEventTypeFilter(e.target.value || null)
+                      }
+                    >
+                      <option value="">All types</option>
+                      {eventTypeOptions.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <IconChevronDown
+                      size={14}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-default-400"
+                    />
+                  </div>
                   <Button
                     variant={showAdvancedFilters ? "primary" : "ghost"}
                     size="sm"
@@ -702,19 +713,28 @@ export default function InvestigatePage() {
               <div className="flex flex-col gap-4">
                 <div>
                   <Label className="text-default-600">Event Type</Label>
-                  <select
-                    className={`${inputClass} mt-1`}
-                    value={publishEventType}
-                    onChange={(e) => setPublishEventType(e.target.value)}
-                    required
-                  >
-                    <option value="">Select event type</option>
-                    {eventTypeOptions.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative mt-1">
+                    <select
+                      className={cn(
+                        inputClass,
+                        "appearance-none pr-8 text-ellipsis text-left"
+                      )}
+                      value={publishEventType}
+                      onChange={(e) => setPublishEventType(e.target.value)}
+                      required
+                    >
+                      <option value="">Select event type</option>
+                      {eventTypeOptions.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <IconChevronDown
+                      size={14}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-default-400"
+                    />
+                  </div>
                 </div>
                 <div>
                   <Label className="text-default-600">User ID</Label>

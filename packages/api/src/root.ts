@@ -47,6 +47,7 @@ import { notifCenterRouter } from "./routers/notif-center.js";
 import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { feedsRouter } from "./routers/feeds.js";
+import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
 
 /**
  * Core API Router
@@ -101,6 +102,7 @@ export const coreRouter = router({
   proactive: proactiveRouter,
   sync: syncManagementRouter,
   feeds: feedsRouter,
+  trustedIssuers: trustedIssuersRouter,
 });
 
 export type AppRouter = typeof coreRouter;

@@ -90,6 +90,10 @@ export {
 
 // Export JWKS client for CP JWT verification
 export { verifyCpJwt, clearJwksCache } from "./utils/jwks-client.js";
+export {
+  setTrustedIssuerSeedHealth,
+  getTrustedIssuerSeedHealth,
+} from "./utils/startup-health.js";
 
 // Export split-brain detection service
 export {

@@ -423,6 +423,17 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
   },
   {
+    type: "system.issuer_pending_approval",
+    category: "system",
+    label: "Issuer Pending Approval",
+    icon: "shield-alert",
+    priority: "high",
+    titleTemplate: "New external issuer needs approval",
+    bodyTemplate: "{{displayName}} ({{issuerUrl}}) requested pod access.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+  },
+  {
     type: "workspace.invite",
     category: "system",
     label: "Workspace Invite",

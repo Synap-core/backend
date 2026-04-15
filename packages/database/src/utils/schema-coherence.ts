@@ -270,6 +270,18 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "split_brain_detected",
     addedBy: "0101_sync_generation_split_brain.sql",
   },
+
+  // trusted_issuers — pod-level registry of approved external services (0001)
+  {
+    table: "trusted_issuers",
+    column: "status",
+    addedBy: "0001_trusted_issuers.sql",
+  },
+  {
+    table: "trusted_issuers",
+    column: "issuer_url",
+    addedBy: "0001_trusted_issuers.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

@@ -1,14 +1,17 @@
 /**
- * JWKS Client — verifies ES256 JWTs issued by the Synap Control Plane.
+ * JWKS Client — verifies ES256 JWTs issued by any Control Plane.
  *
  * Flow:
- *   1. Fetch /.well-known/jwks.json from the Control Plane URL on first use.
- *   2. Cache the public key in memory (no rotation needed in the same process).
- *   3. Verify incoming JWT signature + issuer claim.
- *   4. Track used `jti` claims to prevent replay attacks (LRU, 15 min TTL).
+ *   1. Resolve issuer URL: use the pinned `cpUrl` if provided (allowlist mode),
+ *      or fall back to the `iss` claim in the JWT itself (OIDC-style discovery).
+ *   2. Fetch /.well-known/jwks.json from the resolved issuer URL on first use.
+ *   3. Cache the public key in memory (no rotation needed in the same process).
+ *   4. Verify incoming JWT signature + issuer claim.
+ *   5. Track used `jti` claims to prevent replay attacks (LRU, 15 min TTL).
  *
- * Self-hosted pods (no CONTROL_PLANE_URL) always skip verification and return
- * null from verifyCpJwt(), so callers must handle the absence of CP gracefully.
+ * Pods do NOT need CONTROL_PLANE_URL configured: any CP that signs JWTs with
+ * its own URL as `iss` can provision agents on this pod. Set CONTROL_PLANE_URL
+ * to restrict to a single trusted CP (allowlist mode).
  */
 
 import crypto, { type JsonWebKey as CryptoJsonWebKey } from "crypto";
@@ -165,13 +168,21 @@ function checkAndConsumeJti(jti: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Verify a JWT issued by the Synap Control Plane using ES256 (ECDSA P-256).
+ * Verify a JWT issued by a Control Plane using ES256 (ECDSA P-256).
  *
  * Returns the decoded payload if valid, or null if:
- *   - cpUrl is not configured (self-hosted pod, no CP)
+ *   - Issuer URL cannot be resolved (no cpUrl and no HTTPS iss claim)
  *   - JWKS fetch fails
  *   - Signature / issuer / expiry / audience check fails
  *   - jti has already been used (replay attack)
+ *
+ * Issuer resolution (OIDC-style):
+ *   - If `cpUrl` is provided: use it as the JWKS source AND enforce that the
+ *     token's `iss` matches it (allowlist / trust-pinning mode).
+ *   - If `cpUrl` is omitted/undefined: decode the JWT without verification,
+ *     extract the `iss` claim, and use it as the JWKS source. The `iss` must
+ *     be an HTTPS URL. Pods that set CONTROL_PLANE_URL get allowlist mode;
+ *     pods without it accept any properly-signed HTTPS issuer.
  *
  * Pass `audience` when the token was signed with an `aud` claim (e.g. handshake
  * tokens carry `aud: podUrl`). Omit for tokens that have no audience claim.
@@ -180,19 +191,40 @@ function checkAndConsumeJti(jti: string): boolean {
  */
 export async function verifyCpJwt<T extends object>(
   token: string,
-  cpUrl: string | undefined,
+  cpUrl?: string | undefined,
   audience?: string
 ): Promise<T | null> {
-  if (!cpUrl) {
-    logger.debug("verifyCpJwt: no cpUrl configured — skipping verification");
-    return null;
+  // ── Resolve issuer URL ────────────────────────────────────────────────────
+  let issuerUrl = cpUrl;
+
+  if (!issuerUrl) {
+    // Decode without verification to read the iss claim (standard OIDC pattern)
+    const decoded = jwt.decode(token);
+    if (!decoded || typeof decoded !== "object") {
+      logger.debug("verifyCpJwt: cannot decode token — skipping");
+      return null;
+    }
+    const iss = (decoded as Record<string, unknown>).iss;
+    if (typeof iss !== "string" || !iss.startsWith("https://")) {
+      logger.debug(
+        { iss },
+        "verifyCpJwt: iss is not an HTTPS URL and no cpUrl provided — cannot verify"
+      );
+      return null;
+    }
+    issuerUrl = iss;
+    logger.debug(
+      { issuerUrl },
+      "verifyCpJwt: resolved issuer URL from iss claim"
+    );
   }
 
+  // ── Verify signature ──────────────────────────────────────────────────────
   try {
-    const publicKeyPem = await getPublicKeyPem(cpUrl);
+    const publicKeyPem = await getPublicKeyPem(issuerUrl);
     const payload = jwt.verify(token, publicKeyPem, {
       algorithms: ["ES256"],
-      issuer: "synap-control-plane",
+      issuer: issuerUrl,
       ...(audience ? { audience } : {}),
     }) as T & { jti?: string };
 
@@ -216,11 +248,11 @@ export async function verifyCpJwt<T extends object>(
 
     return payload as T;
   } catch (err) {
-    logger.warn({ err }, "verifyCpJwt: token verification failed");
+    logger.warn({ err, issuerUrl }, "verifyCpJwt: token verification failed");
 
     // If JWKS fetch failed, clear cache so next attempt retries
     if (err instanceof Error && err.message.includes("JWKS fetch failed")) {
-      cache.delete(cpUrl);
+      cache.delete(issuerUrl);
     }
 
     return null;

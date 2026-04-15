@@ -35,10 +35,12 @@ import {
   workspaceMembers,
 } from "@synap/database/schema";
 import { count } from "@synap/database";
+import crypto from "node:crypto";
 import {
   getDynamicCorsOrigins,
   setDynamicCorsOrigins,
 } from "../utils/cors-cache.js";
+import { getTrustedIssuerSeedHealth } from "../utils/startup-health.js";
 
 /**
  * System Router
@@ -790,6 +792,16 @@ export const systemRouter = router({
       });
     }
 
+    // 6. Trusted issuers startup seed check
+    const issuerSeed = getTrustedIssuerSeedHealth();
+    services.push({
+      name: "TrustedIssuersSeed",
+      status: issuerSeed.ok ? "healthy" : "degraded",
+      message: issuerSeed.ok
+        ? `checkedAt=${issuerSeed.checkedAt}`
+        : `checkedAt=${issuerSeed.checkedAt}, error=${issuerSeed.error ?? "unknown"}`,
+    });
+
     return services;
   }),
 
@@ -885,6 +897,115 @@ export const systemRouter = router({
           offset: input.offset,
           hasMore: input.offset + userList.length < (totalResult?.value ?? 0),
         },
+      };
+    }),
+
+  /**
+   * Reset password for one user or all human users.
+   *
+   * Pod admin only. Returns generated temporary password(s) that can be shared
+   * through a secure channel.
+   */
+  resetUserPassword: podAdminProcedure
+    .input(
+      z.object({
+        mode: z.enum(["single", "all_humans"]).default("single"),
+        userId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const kratosAdminUrl = process.env.KRATOS_ADMIN_URL;
+      if (!kratosAdminUrl) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "KRATOS_ADMIN_URL is not configured on this pod",
+        });
+      }
+
+      const targets =
+        input.mode === "all_humans"
+          ? await db.query.users.findMany({
+              where: eq(users.userType, "human"),
+              columns: { id: true, email: true, name: true },
+            })
+          : input.userId
+            ? await db.query.users.findMany({
+                where: eq(users.id, input.userId),
+                columns: { id: true, email: true, name: true },
+              })
+            : [];
+
+      if (targets.length === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            input.mode === "all_humans"
+              ? "No human users found"
+              : "User not found",
+        });
+      }
+
+      const results: Array<{
+        userId: string;
+        email: string;
+        tempPassword: string;
+      }> = [];
+      const failures: Array<{ userId: string; email: string; error: string }> =
+        [];
+
+      for (const target of targets) {
+        const tempPassword = crypto.randomBytes(12).toString("base64url");
+        const updateResp = await fetch(
+          `${kratosAdminUrl}/admin/identities/${target.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              credentials: {
+                password: { config: { password: tempPassword } },
+              },
+            }),
+          }
+        ).catch((error: unknown) => {
+          failures.push({
+            userId: target.id,
+            email: target.email,
+            error: error instanceof Error ? error.message : "Network error",
+          });
+          return null;
+        });
+
+        if (!updateResp) continue;
+        if (!updateResp.ok) {
+          const body = await updateResp.text().catch(() => "");
+          failures.push({
+            userId: target.id,
+            email: target.email,
+            error: `Kratos ${updateResp.status}: ${body.slice(0, 240)}`,
+          });
+          continue;
+        }
+
+        results.push({
+          userId: target.id,
+          email: target.email,
+          tempPassword,
+        });
+      }
+
+      if (results.length === 0) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Password reset failed for all target users (${failures.length} failure(s))`,
+        });
+      }
+
+      return {
+        mode: input.mode,
+        resetCount: results.length,
+        failedCount: failures.length,
+        results,
+        failures,
       };
     }),
 

@@ -111,6 +111,28 @@ export interface McpServerConfig {
  */
 export type ProactiveNudgeDensity = "minimal" | "balanced" | "proactive";
 
+export type EveAiProviderId = "ollama" | "openrouter" | "anthropic" | "openai";
+
+/**
+ * Eve-side provider routing policy synced to a workspace (non-secret).
+ * This is distinct from Synap's internal intelligence service routing.
+ */
+export interface EveProviderRoutingPolicy {
+  mode?: "local" | "provider" | "hybrid";
+  defaultProvider?: EveAiProviderId;
+  fallbackProvider?: EveAiProviderId;
+  providers?: Array<{
+    id: EveAiProviderId;
+    enabled?: boolean;
+    /** Optional custom base URL for provider gateways (non-secret). */
+    baseUrl?: string;
+    /** Optional default model hint for clients (non-secret). */
+    defaultModel?: string;
+  }>;
+  /** Whether Eve intends this workspace to follow synced provider policy. */
+  syncToSynap?: boolean;
+}
+
 export interface ProactiveAiPreferences {
   /** Global kill switch for all proactive AI features. Default: true */
   enabled: boolean;
@@ -251,6 +273,11 @@ export interface WorkspaceSettings {
     chat?: string;
     analysis?: string;
   };
+  /**
+   * Eve provider routing policy (Brain-side model/provider selection).
+   * Kept separate from Synap internal intelligence service routing.
+   */
+  eveProviderRouting?: EveProviderRoutingPolicy;
 
   // Validation Policy Overrides
   // Allows workspace owners to customize which operations require validation

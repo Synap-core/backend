@@ -11,62 +11,62 @@
 export const colors = {
   // Semantic colors for system status
   semantic: {
-    success: "#10B981", // Green - Successful operations
-    warning: "#F59E0B", // Amber - Warnings, degraded state
-    error: "#EF4444", // Red - Errors, critical state
-    info: "#3B82F6", // Blue - Informational
+    success: "var(--color-success)", // Successful operations
+    warning: "var(--color-warning)", // Warnings, degraded state
+    error: "var(--color-danger)", // Errors, critical state
+    info: "var(--color-primary)", // Informational
   },
 
   // Health status colors
   health: {
-    healthy: "#10B981", // Green
-    degraded: "#F59E0B", // Amber
-    critical: "#EF4444", // Red
+    healthy: "var(--color-success)",
+    degraded: "var(--color-warning)",
+    critical: "var(--color-danger)",
   },
 
   // Event type colors for visual distinction
   eventTypes: {
-    created: "#8B5CF6", // Purple - Creation events
-    updated: "#3B82F6", // Blue - Update events
-    deleted: "#EF4444", // Red - Deletion events
-    ai: "#F59E0B", // Amber - AI-related events
-    system: "#6B7280", // Gray - System events
-    error: "#EF4444", // Red - Error events
+    created: "var(--color-secondary)", // Creation events
+    updated: "var(--color-primary)", // Update events
+    deleted: "var(--color-danger)", // Deletion events
+    ai: "var(--color-warning)", // AI-related events
+    system: "var(--color-default-500)", // System events
+    error: "var(--color-danger)", // Error events
   },
 
   // Background and surface colors
   background: {
-    primary: "#FFFFFF", // Main background
-    secondary: "#F9FAFB", // Gray 50 - Secondary backgrounds
-    elevated: "#FFFFFF", // Elevated surfaces (with shadow)
-    hover: "#F3F4F6", // Gray 100 - Hover states
-    active: "#E5E7EB", // Gray 200 - Active states
+    primary: "var(--color-background)", // Main background
+    secondary: "var(--color-content1)", // Secondary backgrounds
+    elevated: "var(--color-content1)", // Elevated surfaces
+    hover: "var(--color-default-100)", // Hover states
+    active: "var(--color-default-200)", // Active states
   },
 
   // Border colors
   border: {
-    light: "#F3F4F6", // Gray 100 - Subtle borders
-    default: "#E5E7EB", // Gray 200 - Default borders
-    strong: "#D1D5DB", // Gray 300 - Strong borders
-    interactive: "#3B82F6", // Blue - Interactive elements
+    light: "var(--color-divider)", // Subtle borders
+    default: "var(--color-divider)", // Default borders
+    strong: "var(--color-default-300)", // Strong borders
+    interactive: "var(--color-primary)", // Interactive elements
   },
 
   // Text colors
   text: {
-    primary: "#111827", // Gray 900 - Primary text
-    secondary: "#6B7280", // Gray 500 - Secondary text
-    tertiary: "#9CA3AF", // Gray 400 - Tertiary text
-    disabled: "#D1D5DB", // Gray 300 - Disabled text
-    inverse: "#FFFFFF", // White - Text on dark backgrounds
+    primary: "var(--color-foreground)", // Primary text
+    secondary: "var(--color-default-600)", // Secondary text
+    tertiary: "var(--color-default-500)", // Tertiary text
+    disabled: "var(--color-default-300)", // Disabled text
+    inverse: "var(--color-background)", // Text on dark backgrounds
   },
 
   // Interactive colors
   interactive: {
-    primary: "#3B82F6", // Blue 500
-    primaryHover: "#2563EB", // Blue 600
-    primaryActive: "#1D4ED8", // Blue 700
-    secondary: "#6B7280", // Gray 500
-    secondaryHover: "#4B5563", // Gray 600
+    primary: "var(--color-primary)",
+    primaryHover: "color-mix(in oklab, var(--color-primary) 88%, black 12%)",
+    primaryActive: "color-mix(in oklab, var(--color-primary) 80%, black 20%)",
+    secondary: "var(--color-default-500)",
+    secondaryHover: "var(--color-default-700)",
   },
 } as const;
 
@@ -219,6 +219,9 @@ export const iconSize = {
  * Helper function to get color with opacity
  */
 export function withOpacity(color: string, opacity: number): string {
+  if (color.startsWith("var(") || color.includes("color-mix(")) {
+    return `color-mix(in oklab, ${color} ${Math.round(opacity * 100)}%, transparent)`;
+  }
   // Convert hex to rgba
   const hex = color.replace("#", "");
   const r = parseInt(hex.substring(0, 2), 16);

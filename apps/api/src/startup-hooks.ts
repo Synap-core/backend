@@ -7,7 +7,7 @@
  * - Default integrations
  */
 
-import { createLogger } from "@synap-core/core";
+import { createLogger, config } from "@synap-core/core";
 import {
   db,
   webhookSubscriptions,
@@ -16,7 +16,7 @@ import {
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
-import { setDynamicCorsOrigins } from "@synap/api";
+import { setDynamicCorsOrigins, setTrustedIssuerSeedHealth } from "@synap/api";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -276,6 +276,37 @@ export async function runStartupHooks(): Promise<void> {
       { err },
       "Failed to seed system profiles on startup (non-fatal)"
     );
+  }
+
+  // Seed built-in trusted issuers (idempotent — safe to run on every boot)
+  try {
+    const { TrustedIssuerService } = await import("@synap/database");
+    const svc = new TrustedIssuerService();
+    const cpUrl = config.server.controlPlaneUrl ?? "https://api.synap.live";
+    await svc.seedBuiltIn([
+      {
+        issuerUrl: cpUrl,
+        displayName: "Synap Cloud",
+        description:
+          "Synap managed control plane — pre-approved at deploy time",
+        allowedScopes: [
+          "setup.agent",
+          "provision",
+          "tier_update",
+          "sync",
+          "hub-protocol.read",
+          "hub-protocol.write",
+        ],
+      },
+    ]);
+    setTrustedIssuerSeedHealth({ ok: true });
+    logger.info({ cpUrl }, "Trusted issuers seeded on startup");
+  } catch (err) {
+    setTrustedIssuerSeedHealth({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    logger.error({ err }, "Trusted issuers: seed failed");
   }
 
   logger.info("✅ Startup hooks complete");

@@ -132,3 +132,6 @@ export * from "./sync-generation.js";
 
 // NEW: Signal Feed (external content subscriptions, AI classifications, auto-links)
 export * from "./signals.js";
+
+// NEW: Trusted Issuers (pod-level registry of approved external services)
+export * from "./trusted-issuers.js";

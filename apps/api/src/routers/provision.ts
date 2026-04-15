@@ -69,53 +69,12 @@ provisionRouter.post("/connect", async (c) => {
   }
   const { token } = parsed.data;
 
-  // Resolve the CP URL for JWKS verification, in trust-priority order:
-  //   1. CONTROL_PLANE_URL env var — most trusted (operator-set)
-  //   2. Previously-stored workspace.settings.controlPlane.url — trusted from prior provision
-  //   3. controlPlaneUrl claim in the unverified JWT — bootstrapping only (first provision)
-  //      RISK: on first provision only, we fetch JWKS from an untrusted URL. This is a
-  //      bootstrapping necessity. Mitigated by: (a) signature verification follows immediately,
-  //      (b) the CP URL is persisted after first provision so subsequent calls use path 1 or 2.
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
-
-  if (!cpUrl) {
-    // Check previously stored CP URL from a successful prior provision
-    try {
-      const db = await getDb();
-      const [ws] = await db
-        .select({ settings: workspaces.settings })
-        .from(workspaces)
-        .limit(1);
-      const storedCp = (ws?.settings as Record<string, unknown>)
-        ?.controlPlane as { url?: string } | undefined;
-      if (storedCp?.url) {
-        cpUrl = storedCp.url;
-      }
-    } catch {
-      // DB may not be ready — continue to JWT fallback
-    }
-  }
-
-  if (!cpUrl) {
-    // Last resort: extract from unverified JWT (first-time provision only)
-    try {
-      const decoded = JSON.parse(
-        Buffer.from(token.split(".")[1], "base64url").toString("utf-8")
-      ) as { controlPlaneUrl?: string };
-      cpUrl = decoded.controlPlaneUrl;
-      if (cpUrl) {
-        logger.warn(
-          { cpUrl },
-          "provision/connect: CONTROL_PLANE_URL env var not set — using controlPlaneUrl " +
-            "from JWT claim for JWKS fetch. This is acceptable for first-time provisioning. " +
-            "Set CONTROL_PLANE_URL in .env to eliminate this trust dependency on future calls."
-        );
-      }
-    } catch {
-      // ignore
-    }
-  }
-
+  // JWT issuer verification uses the Trusted Issuers registry (trusted_issuers table).
+  // The setup/agent and provision endpoints go through TrustedIssuerService first.
+  // For other provisioning endpoints, verifyCpJwt resolves the issuer URL from:
+  //   - cpUrl param (CONTROL_PLANE_URL env) → allowlist mode
+  //   - JWT iss claim (OIDC-style) → any HTTPS issuer
+  // See hub-protocol-rest.ts setup/agent for the full trusted issuer flow.
   const payload = await verifyCpJwt<{
     type: string;
     podId: string;
@@ -127,10 +86,10 @@ provisionRouter.post("/connect", async (c) => {
     appUrl?: string;
     nangoHost?: string;
     nangoRecordsApiKey?: string;
-  }>(token, cpUrl);
+  }>(token, config.server.controlPlaneUrl);
 
   if (!payload) {
-    logger.warn({ cpUrl }, "Provision token verification failed");
+    logger.warn("Provision token verification failed");
     return c.json({ error: "Invalid or expired provision token" }, 401);
   }
 

@@ -923,13 +923,9 @@ async function verifyCpAuth<T extends object>(
   if (!match) return null;
 
   const token = match[1].trim();
-  const cpUrl = config.server.controlPlaneUrl;
-  if (!cpUrl) {
-    logger.warn("No controlPlaneUrl configured — cannot verify CP JWT");
-    return null;
-  }
-
-  return verifyCpJwt<T>(token, cpUrl);
+  // Pass cpUrl as optional allowlist — if set, only tokens from that issuer
+  // are accepted. If unset, verifyCpJwt reads the issuer from the token's iss claim.
+  return verifyCpJwt<T>(token, config.server.controlPlaneUrl);
 }
 
 /**

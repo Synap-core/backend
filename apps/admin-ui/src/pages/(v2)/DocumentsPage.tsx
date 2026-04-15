@@ -32,18 +32,18 @@ const trpcX = trpc as any;
 export default function DocumentsPage() {
   const { documentId } = useParams<{ documentId?: string }>();
   const navigate = useNavigate();
-  const { workspaceId, workspaceName } = useWorkspace();
+  const { workspaceName } = useWorkspace();
   const [markdownOnly, setMarkdownOnly] = useState(true);
   const [query, setQuery] = useState("");
 
-  const listQuery = trpcX.documents.listInWorkspace.useQuery(
+  const listQuery = trpcX.documents.listGlobal.useQuery(
     { markdownOnly, limit: 150 },
-    { enabled: !!workspaceId }
+    { retry: false }
   );
 
-  const detailQuery = trpcX.documents.getInWorkspace.useQuery(
+  const detailQuery = trpcX.documents.getGlobal.useQuery(
     { documentId: documentId! },
-    { enabled: !!workspaceId && !!documentId }
+    { enabled: !!documentId, retry: false }
   );
 
   const filtered = useMemo(() => {
@@ -59,23 +59,6 @@ export default function DocumentsPage() {
   }, [listQuery.data?.documents, query]);
 
   const activeTitle = detailQuery.data?.document.title;
-
-  if (!workspaceId) {
-    return (
-      <div className="mx-auto max-w-2xl p-8">
-        <Alert status="warning">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>Select a workspace</Alert.Title>
-            <Alert.Description>
-              Document browsing is scoped to your active workspace. Choose one
-              in the sidebar, then return here.
-            </Alert.Description>
-          </Alert.Content>
-        </Alert>
-      </div>
-    );
-  }
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 p-6 md:p-8">
@@ -106,10 +89,18 @@ export default function DocumentsPage() {
           </Text>
         </div>
         <Text className="max-w-3xl text-small text-default-500">
-          Browse file-backed notes in{" "}
-          <span className="font-medium text-default-700">{workspaceName}</span>.
-          Markdown and plain text open in the viewer; PDFs and other binaries
-          stay in Synap Browser.
+          Browse file-backed notes across this pod. Markdown and plain text open
+          in the viewer; PDFs and other binaries stay in Synap Browser.
+          {workspaceName ? (
+            <>
+              {" "}
+              Current workspace context:{" "}
+              <span className="font-medium text-default-700">
+                {workspaceName}
+              </span>
+              .
+            </>
+          ) : null}
         </Text>
       </header>
 

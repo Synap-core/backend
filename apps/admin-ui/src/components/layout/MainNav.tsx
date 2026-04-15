@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Button, cn, Separator, Text } from "@heroui/react";
+import { Button, cn, Separator } from "@heroui/react";
 import {
   IconHome,
   IconSearch,
@@ -11,13 +11,14 @@ import {
   IconPlug,
   IconPlugConnected,
   IconShieldLock,
+  IconShieldCheck,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconFileText,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
-import BrandMark from "./BrandMark";
 import SearchCommandButton from "./SearchCommandButton";
+import { NavListSectionBlock, type NavListSection } from "./NavList";
 
 interface MainNavProps {
   onNavigate?: () => void;
@@ -27,121 +28,58 @@ interface MainNavProps {
   onToggleCollapsed?: () => void;
 }
 
-interface NavItem {
-  path: string;
-  label: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-}
-
-interface NavSection {
-  label: string;
-  items: NavItem[];
-}
-
-const podSections: NavSection[] = [
+const podSections: NavListSection[] = [
   {
-    label: "Pod",
+    label: "Data pod",
     items: [
       { path: "/", label: "Pod overview", icon: IconHome },
       {
-        path: "/connections",
-        label: "Connections & services",
+        path: "/pod-services",
+        label: "Pod services",
         icon: IconPlugConnected,
       },
-      { path: "/secrets", label: "Secrets & keys", icon: IconShieldLock },
-      { path: "/users", label: "Users", icon: IconUsers },
+    ],
+  },
+  {
+    label: "Data",
+    items: [
+      { path: "/documents", label: "Documents", icon: IconFileText },
+      { path: "/events", label: "Events", icon: IconSearch },
       {
         path: "/workspaces",
         label: "Workspaces",
         icon: IconBuildingCommunity,
       },
-      { path: "/events", label: "Events", icon: IconSearch },
-      { path: "/documents", label: "Documents", icon: IconFileText },
+      { path: "/users", label: "Users", icon: IconUsers },
+    ],
+  },
+  {
+    label: "External",
+    items: [
+      { path: "/external-sources", label: "External sources", icon: IconPlug },
+    ],
+  },
+  {
+    label: "Governance",
+    items: [
+      { path: "/secrets", label: "Secrets & keys", icon: IconShieldLock },
+      {
+        path: "/trusted-issuers",
+        label: "Trusted issuers",
+        icon: IconShieldCheck,
+      },
     ],
   },
 ];
 
-const workspaceSection: NavSection = {
+const workspaceSection: NavListSection = {
   label: "Workspace",
   items: [
     { path: "/workspace", label: "Workspace home", icon: IconHome },
     { path: "/proposals", label: "Proposals", icon: IconCheckbox },
     { path: "/intelligence", label: "Intelligence", icon: IconTerminal2 },
-    { path: "/services", label: "External agents", icon: IconPlug },
   ],
 };
-
-function NavLinkRow({
-  item,
-  active,
-  collapsed,
-  onNavigate,
-}: {
-  item: NavItem;
-  active: boolean;
-  collapsed: boolean;
-  onNavigate?: () => void;
-}) {
-  const Icon = item.icon;
-  return (
-    <Link
-      to={item.path}
-      onClick={onNavigate}
-      title={collapsed ? item.label : undefined}
-      className={cn(
-        "group relative flex items-center rounded-lg text-sm transition-colors",
-        collapsed ? "justify-center p-2.5" : "gap-3 px-2.5 py-2",
-        active
-          ? "bg-default-100 font-medium text-foreground"
-          : "text-default-600 hover:bg-default-100/80 hover:text-foreground"
-      )}
-      aria-current={active ? "page" : undefined}
-    >
-      {!collapsed && active ? (
-        <span
-          className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary"
-          aria-hidden
-        />
-      ) : null}
-      <Icon
-        size={collapsed ? 20 : 18}
-        className={cn(
-          "shrink-0 transition-colors",
-          active
-            ? "text-primary"
-            : "text-default-400 group-hover:text-default-600"
-        )}
-        aria-hidden
-      />
-      {collapsed ? (
-        <span className="sr-only">{item.label}</span>
-      ) : (
-        <span className="min-w-0 flex-1 truncate leading-snug">
-          {item.label}
-        </span>
-      )}
-    </Link>
-  );
-}
-
-function SectionHeader({
-  label,
-  collapsed,
-}: {
-  label: string;
-  collapsed: boolean;
-}) {
-  if (collapsed) {
-    return null;
-  }
-  return (
-    <div className="mb-1.5 px-0.5 pt-1">
-      <Text className="text-[10px] font-semibold uppercase tracking-[0.12em] text-default-400">
-        {label}
-      </Text>
-    </div>
-  );
-}
 
 export default function MainNav({
   onNavigate,
@@ -158,9 +96,7 @@ export default function MainNav({
     ? podSections
     : podSections.map((s) => ({
         ...s,
-        items: s.items.filter(
-          (i) => i.path !== "/users" && i.path !== "/connections"
-        ),
+        items: s.items.filter((i) => i.path !== "/users"),
       }));
 
   const isActive = (path: string) => {
@@ -183,54 +119,48 @@ export default function MainNav({
 
   return (
     <nav
-      className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-background px-2 py-3"
+      className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-linear-to-b from-[var(--admin-fluid-surface)] to-[var(--admin-fluid-surface-soft)] px-3 py-3"
       aria-label="Main navigation"
     >
       <div
         className={cn(
-          "mb-3 flex shrink-0 flex-col gap-2",
+          "mb-4 flex shrink-0 flex-col gap-2",
           collapsed ? "items-center px-0" : "px-1"
         )}
       >
-        <div className={cn(!collapsed ? "" : "flex justify-center")}>
-          {/* <BrandMark compact /> */}
-        </div>
         <SearchCommandButton
           onPress={onCommandPaletteOpen}
           railOnly={collapsed}
         />
       </div>
 
-      <Separator className="mb-2 shrink-0" />
+      <Separator className="mb-4 shrink-0 opacity-60" />
 
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto",
+          collapsed
+            ? "space-y-2"
+            : "space-y-3 rounded-2xl border border-divider/70 bg-[var(--admin-fluid-surface)] p-2 shadow-sm"
+        )}
+      >
         {podNav.map((section) => (
           <div key={section.label}>
-            <SectionHeader label={section.label} collapsed={collapsed} />
-            <div
-              className="flex flex-col gap-0.5"
-              role="list"
-              aria-label={section.label}
-            >
-              {section.items.map((item) => (
-                <NavLinkRow
-                  key={item.path}
-                  item={item}
-                  active={isActive(item.path)}
-                  collapsed={collapsed}
-                  onNavigate={onNavigate}
-                />
-              ))}
-            </div>
+            <NavListSectionBlock
+              section={section}
+              collapsed={collapsed}
+              isActive={isActive}
+              onNavigate={onNavigate}
+            />
           </div>
         ))}
 
         {isAdmin ? (
           <>
-            <Separator className="my-2" />
+            <Separator className="my-2 opacity-60" />
             <div>
               {!collapsed && workspaces.length > 0 ? (
-                <div className="mb-2 px-0.5">
+                <div className="mb-3 px-1">
                   <label
                     className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-default-400"
                     htmlFor="admin-workspace-select"
@@ -255,38 +185,27 @@ export default function MainNav({
                 </div>
               ) : null}
 
-              <SectionHeader
-                label={workspaceSection.label}
+              <NavListSectionBlock
+                section={workspaceSection}
                 collapsed={collapsed}
+                isActive={isActive}
+                onNavigate={onNavigate}
               />
-              <div
-                className="flex flex-col gap-0.5"
-                role="list"
-                aria-label={workspaceSection.label}
-              >
-                {workspaceSection.items.map((item) => (
-                  <NavLinkRow
-                    key={item.path}
-                    item={item}
-                    active={isActive(item.path)}
-                    collapsed={collapsed}
-                    onNavigate={onNavigate}
-                  />
-                ))}
-              </div>
             </div>
           </>
         ) : null}
       </div>
 
-      <div className="mt-auto shrink-0 space-y-1 border-t border-divider pt-2">
+      <div className="mt-auto shrink-0 space-y-2 border-t border-divider pt-3">
         {onToggleCollapsed ? (
           <Button
             variant="ghost"
             size="sm"
             className={cn(
-              "w-full text-default-500",
-              collapsed ? "min-w-0 px-0" : "justify-start"
+              "w-full rounded-xl text-default-500",
+              collapsed
+                ? "mx-auto h-9 w-9 min-w-0 rounded-2xl border border-divider bg-default-50 px-0 shadow-sm"
+                : "justify-start"
             )}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-expanded={!collapsed}
@@ -309,28 +228,32 @@ export default function MainNav({
             onClick={onNavigate}
             title={collapsed ? "Hub API keys (full)" : undefined}
             className={cn(
-              "group relative flex items-center rounded-lg text-sm text-default-600 transition-colors hover:bg-default-100/80 hover:text-foreground",
-              collapsed ? "justify-center p-2.5" : "gap-3 px-2.5 py-2",
+              "group relative flex items-center text-sm text-default-600 transition-colors hover:bg-default-100/80 hover:text-foreground",
+              collapsed
+                ? "justify-center rounded-2xl p-2.5"
+                : "gap-3 rounded-xl px-3 py-2.5",
               isActive("/api-keys")
-                ? "bg-default-100 font-medium text-foreground"
+                ? "bg-[var(--admin-fluid-selected)] font-semibold text-foreground shadow-sm"
                 : undefined
             )}
           >
             {!collapsed && isActive("/api-keys") ? (
               <span
-                className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary"
+                className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-primary"
                 aria-hidden
               />
             ) : null}
-            <IconKey
-              size={collapsed ? 20 : 18}
+            <span
               className={cn(
-                "shrink-0",
+                "flex shrink-0 items-center justify-center",
+                collapsed ? "h-9 w-9 rounded-2xl" : "h-8 w-8 rounded-xl",
                 isActive("/api-keys")
-                  ? "text-primary"
-                  : "text-default-400 group-hover:text-default-600"
+                  ? "bg-primary/16 text-primary"
+                  : "bg-default-100 text-default-500 group-hover:bg-default-200 group-hover:text-default-700"
               )}
-            />
+            >
+              <IconKey size={collapsed ? 18 : 17} />
+            </span>
             {collapsed ? (
               <span className="sr-only">Hub API keys (full)</span>
             ) : (

@@ -55,7 +55,7 @@ export default function MainLayout() {
       : layout.navWidth;
 
   return (
-    <div className="min-h-screen bg-(--pod-surface-2)">
+    <div className="min-h-screen bg-background">
       <div
         className="fixed left-0 right-0 top-0 z-100"
         style={{ height: layout.topBarHeight }}
@@ -68,7 +68,7 @@ export default function MainLayout() {
 
       {!isMobile ? (
         <div
-          className="fixed bottom-0 left-0 z-99 overflow-y-auto border-r border-divider bg-background transition-[width] duration-200 ease-out"
+          className="fixed bottom-0 left-0 z-99 overflow-y-auto border-r border-divider bg-content1 transition-[width] duration-200 ease-out"
           style={{
             top: layout.topBarHeight,
             width: navWidth,
@@ -102,7 +102,7 @@ export default function MainLayout() {
             aria-label="Close navigation"
             onClick={() => setNavDrawerOpen(false)}
           />
-          <div className="fixed bottom-0 left-0 top-[60px] z-201 w-[min(280px,90vw)] overflow-y-auto border-r border-divider bg-background shadow-lg">
+          <div className="fixed bottom-0 left-0 top-[60px] z-201 w-[min(280px,90vw)] overflow-y-auto border-r border-divider bg-content1 shadow-lg">
             <MainNav
               onNavigate={() => setNavDrawerOpen(false)}
               onCommandPaletteOpen={() => {
