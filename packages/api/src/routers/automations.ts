@@ -95,7 +95,7 @@ export const automationsRouter = router({
         })
         .optional()
     )
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const database = await getDb();
       const conditions = [
         input?.workspaceId
@@ -129,7 +129,7 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const database = await getDb();
       const row = await database.query.automations.findFirst({
         where: and(
@@ -172,7 +172,7 @@ export const automationsRouter = router({
           .optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const database = await getDb();
       const createdBy = input.agentUserId ?? ctx.userId!;
 
@@ -241,7 +241,7 @@ export const automationsRouter = router({
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const database = await getDb();
 
       // Verify ownership
@@ -315,7 +315,7 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
@@ -348,7 +348,7 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
@@ -399,7 +399,7 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
@@ -436,7 +436,7 @@ export const automationsRouter = router({
         limit: z.number().min(1).max(100).optional(),
       })
     )
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const database = await getDb();
 
       // Verify automation belongs to workspace
@@ -475,7 +475,7 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const database = await getDb();
 
       const run = await database.query.automationRuns.findFirst({

@@ -1925,10 +1925,10 @@ app.get("/commands", async (c) => {
       whereClause = eq(intelligenceCommands.workspaceId, workspaceId);
     } else {
       const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      whereClause =
-        wsIds.length > 0
-          ? inArray(intelligenceCommands.workspaceId, wsIds)
-          : sql`false`;
+      if (wsIds.length === 0) {
+        return c.json([]);
+      }
+      whereClause = inArray(intelligenceCommands.workspaceId, wsIds);
     }
     const commands = await db.query.intelligenceCommands.findMany({
       where: whereClause,
@@ -2816,13 +2816,15 @@ app.get("/mcp-servers", async (c) => {
     );
   }
   const workspaceId = c.req.query("workspaceId");
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
   try {
     const rows = await db.query.mcpServers.findMany({
       where: and(
-        eq(mcpServers.workspaceId, workspaceId),
+        workspaceId
+          ? or(
+              eq(mcpServers.workspaceId, workspaceId),
+              isNull(mcpServers.workspaceId)
+            )
+          : isNull(mcpServers.workspaceId),
         eq(mcpServers.approved, true),
         eq(mcpServers.enabled, true)
       ),

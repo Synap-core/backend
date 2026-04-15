@@ -782,7 +782,7 @@ export const proposalsRouter = router({
           phase: "validated",
           subjectId,
           userId,
-          workspaceId: proposal.workspaceId,
+          workspaceId: proposal.workspaceId ?? undefined,
           correlationId: proposalCorrelationId,
           data: {
             ...eventPayload,
@@ -1013,7 +1013,7 @@ export const proposalsRouter = router({
               phase: "validated",
               subjectId,
               userId,
-              workspaceId: proposal.workspaceId,
+              workspaceId: proposal.workspaceId ?? undefined,
               correlationId: proposalCorrelationId,
               data: {
                 ...eventPayload,

@@ -113,7 +113,7 @@ export const hubViewsRouter = router({
       const caller = regularViewsRouter.createCaller(callerContext);
 
       const result = await caller.create({
-        workspaceId: input.workspaceId ?? null,
+        workspaceId: input.workspaceId ?? undefined,
         name: input.name,
         type: input.type,
         scopeProfileIds: input.profileId ? [input.profileId] : undefined,

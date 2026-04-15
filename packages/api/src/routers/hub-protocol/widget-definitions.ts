@@ -90,7 +90,7 @@ export const hubWidgetDefinitionsRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
         agentUserId: input.agentUserId,
-        workspaceId: input.workspaceId,
+        workspaceId: input.workspaceId ?? undefined,
         subjectType: "widget",
         action: "register",
         source: "intelligence",

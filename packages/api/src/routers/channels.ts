@@ -112,8 +112,10 @@ const mcpServerCache = new Map<
   { servers: McpServerEntry[]; expiresAt: number }
 >();
 
-export function invalidateMcpCache(workspaceId: string): void {
-  mcpServerCache.delete(workspaceId);
+const POD_WIDE_MCP_CACHE_KEY = "__pod_wide__";
+
+export function invalidateMcpCache(workspaceId?: string | null): void {
+  mcpServerCache.delete(workspaceId ?? POD_WIDE_MCP_CACHE_KEY);
 }
 
 async function getMcpServersForWorkspace(

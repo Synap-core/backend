@@ -10,10 +10,11 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and } from "@synap/database";
+import { db, eq, and, or, isNull } from "@synap/database";
 import { mcpServers } from "@synap/database/schema";
+import { workspaceMembers } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { invalidateMcpCache } from "./channels.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
@@ -43,27 +44,59 @@ const McpServerWriteSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
 });
 
+async function getWorkspaceRole(userId: string, workspaceId: string) {
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { role: true },
+  });
+  return membership?.role;
+}
+
 export const mcpServersRouter = router({
   /**
    * List all MCP servers for the current workspace.
    */
-  list: workspaceProcedure.query(async ({ ctx }) => {
-    const servers = await db.query.mcpServers.findMany({
-      where: eq(mcpServers.workspaceId, ctx.workspaceId!),
-      orderBy: (t, { asc }) => [asc(t.name)],
-    });
-    return { servers };
-  }),
+  list: protectedProcedure
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().nullable().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const workspaceId = input?.workspaceId ?? ctx.workspaceId ?? null;
+      const servers = await db.query.mcpServers.findMany({
+        where: workspaceId
+          ? or(
+              eq(mcpServers.workspaceId, workspaceId),
+              isNull(mcpServers.workspaceId)
+            )
+          : isNull(mcpServers.workspaceId),
+        orderBy: (t, { asc }) => [asc(t.name)],
+      });
+      return { servers };
+    }),
 
   /**
    * Add a new MCP server to the workspace.
    * Requires owner or admin.
    */
-  create: workspaceProcedure
-    .input(McpServerWriteSchema)
+  create: protectedProcedure
+    .input(
+      McpServerWriteSchema.extend({
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
-      requireUserId(ctx.userId);
-      requireAdminRole(ctx.workspaceRole);
+      const userId = requireUserId(ctx.userId);
+      if (input.workspaceId) {
+        const role = await getWorkspaceRole(userId, input.workspaceId);
+        requireAdminRole(role);
+      }
 
       // Validate transport-specific required fields
       if (input.transport === "stdio" && !input.command) {
@@ -82,7 +115,7 @@ export const mcpServersRouter = router({
       const [server] = await db
         .insert(mcpServers)
         .values({
-          workspaceId: ctx.workspaceId!,
+          workspaceId: input.workspaceId ?? null,
           slug: input.slug,
           name: input.name,
           description: input.description,
@@ -94,7 +127,7 @@ export const mcpServersRouter = router({
         })
         .returning();
 
-      invalidateMcpCache(ctx.workspaceId!);
+      invalidateMcpCache(input.workspaceId ?? null);
       return { server };
     }),
 
@@ -102,24 +135,21 @@ export const mcpServersRouter = router({
    * Update an MCP server's configuration.
    * Requires owner or admin.
    */
-  update: workspaceProcedure
+  update: protectedProcedure
     .input(
       z.object({
         id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         ...McpServerWriteSchema.partial().shape,
         enabled: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      requireAdminRole(ctx.workspaceRole);
-
-      const { id, ...fields } = input;
+      const userId = requireUserId(ctx.userId);
+      const { id, workspaceId, ...fields } = input;
 
       const existing = await db.query.mcpServers.findFirst({
-        where: and(
-          eq(mcpServers.id, id),
-          eq(mcpServers.workspaceId, ctx.workspaceId!)
-        ),
+        where: eq(mcpServers.id, id),
       });
 
       if (!existing) {
@@ -128,14 +158,31 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
+      if (existing.workspaceId) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        requireAdminRole(role);
+      }
+      if (
+        workspaceId !== undefined &&
+        workspaceId !== null &&
+        workspaceId !== existing.workspaceId
+      ) {
+        const targetRole = await getWorkspaceRole(userId, workspaceId);
+        requireAdminRole(targetRole);
+      }
 
       const [updated] = await db
         .update(mcpServers)
-        .set({ ...fields, updatedAt: new Date() })
+        .set({
+          ...fields,
+          ...(workspaceId !== undefined ? { workspaceId } : {}),
+          updatedAt: new Date(),
+        })
         .where(eq(mcpServers.id, id))
         .returning();
 
-      invalidateMcpCache(ctx.workspaceId!);
+      invalidateMcpCache(existing.workspaceId ?? null);
+      invalidateMcpCache(updated.workspaceId ?? null);
       return { server: updated };
     }),
 
@@ -143,21 +190,13 @@ export const mcpServersRouter = router({
    * Approve or revoke approval for an MCP server's tools to be injected into LLM requests.
    * Requires owner only (security-critical action).
    */
-  setApproved: workspaceProcedure
+  setApproved: protectedProcedure
     .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      if (ctx.workspaceRole !== "owner") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only workspace owners can approve MCP server tool access.",
-        });
-      }
+      const userId = requireUserId(ctx.userId);
 
       const existing = await db.query.mcpServers.findFirst({
-        where: and(
-          eq(mcpServers.id, input.id),
-          eq(mcpServers.workspaceId, ctx.workspaceId!)
-        ),
+        where: eq(mcpServers.id, input.id),
       });
 
       if (!existing) {
@@ -165,6 +204,16 @@ export const mcpServersRouter = router({
           code: "NOT_FOUND",
           message: "MCP server not found.",
         });
+      }
+      if (existing.workspaceId) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only workspace owners can approve MCP server tool access.",
+          });
+        }
       }
 
       const [updated] = await db
@@ -173,7 +222,7 @@ export const mcpServersRouter = router({
         .where(eq(mcpServers.id, input.id))
         .returning();
 
-      invalidateMcpCache(ctx.workspaceId!);
+      invalidateMcpCache(existing.workspaceId ?? null);
       return { server: updated };
     }),
 
@@ -181,16 +230,13 @@ export const mcpServersRouter = router({
    * Ping an MCP server to test connectivity and update its status.
    * Delegates to the Intelligence Hub which manages active MCP connections.
    */
-  ping: workspaceProcedure
+  ping: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      requireAdminRole(ctx.workspaceRole);
+      const userId = requireUserId(ctx.userId);
 
       const server = await db.query.mcpServers.findFirst({
-        where: and(
-          eq(mcpServers.id, input.id),
-          eq(mcpServers.workspaceId, ctx.workspaceId!)
-        ),
+        where: eq(mcpServers.id, input.id),
       });
 
       if (!server) {
@@ -199,11 +245,15 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
+      if (server.workspaceId) {
+        const role = await getWorkspaceRole(userId, server.workspaceId);
+        requireAdminRole(role);
+      }
 
       const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
         await resolveIntelligenceService({
           userId: ctx.userId!,
-          workspaceId: ctx.workspaceId!,
+          workspaceId: server.workspaceId ?? undefined,
         });
 
       let newStatus: "connected" | "error" = "connected";
@@ -252,14 +302,11 @@ export const mcpServersRouter = router({
    * Delegates to the Intelligence Hub which manages live connections.
    * Returns an empty array (not an error) when the Hub is unreachable or the server is offline.
    */
-  listTools: workspaceProcedure
+  listTools: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const server = await db.query.mcpServers.findFirst({
-        where: and(
-          eq(mcpServers.id, input.id),
-          eq(mcpServers.workspaceId, ctx.workspaceId!)
-        ),
+        where: eq(mcpServers.id, input.id),
       });
 
       if (!server) {
@@ -272,7 +319,7 @@ export const mcpServersRouter = router({
       const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
         await resolveIntelligenceService({
           userId: ctx.userId!,
-          workspaceId: ctx.workspaceId!,
+          workspaceId: server.workspaceId ?? undefined,
         });
 
       try {
@@ -311,16 +358,13 @@ export const mcpServersRouter = router({
    * Delete an MCP server from the workspace.
    * Requires owner or admin.
    */
-  delete: workspaceProcedure
+  delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      requireAdminRole(ctx.workspaceRole);
+      const userId = requireUserId(ctx.userId);
 
       const existing = await db.query.mcpServers.findFirst({
-        where: and(
-          eq(mcpServers.id, input.id),
-          eq(mcpServers.workspaceId, ctx.workspaceId!)
-        ),
+        where: eq(mcpServers.id, input.id),
       });
 
       if (!existing) {
@@ -329,10 +373,14 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
+      if (existing.workspaceId) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        requireAdminRole(role);
+      }
 
       await db.delete(mcpServers).where(eq(mcpServers.id, input.id));
 
-      invalidateMcpCache(ctx.workspaceId!);
+      invalidateMcpCache(existing.workspaceId ?? null);
       return { success: true };
     }),
 });

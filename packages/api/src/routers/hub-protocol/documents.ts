@@ -52,7 +52,7 @@ export const documentsRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: agentUserId,
         agentUserId,
-        workspaceId: input.workspaceId ?? null,
+        workspaceId: input.workspaceId ?? undefined,
         subjectType: "document",
         action: "create",
         source: "intelligence",
