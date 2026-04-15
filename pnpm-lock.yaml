@@ -92,8 +92,8 @@ importers:
         specifier: 3.0.2
         version: 3.0.2(tailwind-merge@3.4.0)(tailwindcss@4.2.2)
       '@synap-core/external-connect-client':
-        specifier: file:../../../synap-app/packages/core/external-connect-client
-        version: file:../synap-app/packages/core/external-connect-client
+        specifier: workspace:*
+        version: link:../../packages/external-connect-client
       '@tabler/icons-react':
         specifier: ^3.35.0
         version: 3.36.1(react@19.2.3)
@@ -641,6 +641,8 @@ importers:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
+
+  packages/external-connect-client: {}
 
   packages/feed-service:
     dependencies:
@@ -4204,9 +4206,6 @@ packages:
 
   '@swc/helpers@0.5.21':
     resolution: {integrity: sha512-jI/VAmtdjB/RnI8GTnokyX7Ug8c+g+ffD6QRLa6XQewtnGyukKkKSk3wLTM3b5cjt1jNh9x0jfVlagdN2gDKQg==}
-
-  '@synap-core/external-connect-client@file:../synap-app/packages/core/external-connect-client':
-    resolution: {directory: ../synap-app/packages/core/external-connect-client, type: directory}
 
   '@tabler/icons-react@3.36.1':
     resolution: {integrity: sha512-/8nOXeNeMoze9xY/QyEKG65wuvRhkT3q9aytaur6Gj8bYU2A98YVJyLc9MRmc5nVvpy+bRlrrwK/Ykr8WGyUWg==}
@@ -12423,8 +12422,6 @@ snapshots:
   '@swc/helpers@0.5.21':
     dependencies:
       tslib: 2.8.1
-
-  '@synap-core/external-connect-client@file:../synap-app/packages/core/external-connect-client': {}
 
   '@tabler/icons-react@3.36.1(react@19.2.3)':
     dependencies:
