@@ -19,6 +19,7 @@ import ExternalSourcesPage from "./pages/(v2)/ExternalSourcesPage";
 
 import TrustedIssuersPage from "./pages/(v2)/TrustedIssuersPage";
 import ConnectPage from "./pages/ConnectPage";
+import KratosSelfServicePage from "./pages/KratosSelfServicePage";
 
 import "./App.css";
 
@@ -27,6 +28,8 @@ function App() {
     <Routes>
       {/* Standalone — no nav/sidebar, used for OAuth-style deeplink callbacks */}
       <Route path="connect" element={<ConnectPage />} />
+      {/* Ory Kratos browser flows land here (see deploy kratos.yml ui_url) */}
+      <Route path="kratos" element={<KratosSelfServicePage />} />
 
       <Route path="/" element={<MainLayout />}>
         {/* Data Pod Routes */}

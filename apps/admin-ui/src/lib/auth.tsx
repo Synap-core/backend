@@ -119,6 +119,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (IS_DEV) return;
 
+    // Kratos browser flows redirect to /admin/kratos?flow=… — do not bounce back to /login/browser
+    const path = window.location.pathname;
+    if (path.endsWith("/kratos") || path.includes("/admin/kratos")) {
+      setIsLoading(false);
+      setUser(null);
+      return;
+    }
+
     let cancelled = false;
     let timedOut = false;
     const controller = new AbortController();

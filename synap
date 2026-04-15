@@ -214,11 +214,23 @@ generate_kratos_config() {
     if [ "$domain" = "localhost" ]; then
         is_localhost=true
     fi
+
+    # Browser-visible UI for Kratos flows — same origin as the Data Pod API + admin SPA.
+    # Older templates pointed at localhost:3000 (synap-app); the pod serves auth UI at /admin/kratos.
+    local web_ui=""
+    local kratos_ui=""
+    if [ "$is_localhost" = true ]; then
+        web_ui="http://localhost:4000"
+    else
+        web_ui="https://${domain}"
+    fi
+    kratos_ui="${web_ui}/admin/kratos"
     
     # Generate CORS origins
     local cors_origins="        - http://localhost:3000
         - http://localhost:5173
-        - http://localhost:3001"
+        - http://localhost:3001
+        - http://localhost:4000"
     
     if [ "$is_localhost" = false ]; then
         cors_origins="$cors_origins
@@ -227,7 +239,9 @@ generate_kratos_config() {
     
     # Generate allowed return URLs
     local return_urls="    - http://localhost:3000
-    - http://localhost:3000/*"
+    - http://localhost:3000/*
+    - http://localhost:4000
+    - http://localhost:4000/*"
     
     if [ "$is_localhost" = false ]; then
         return_urls="$return_urls
@@ -277,7 +291,7 @@ $cors_origins
   admin:
     base_url: http://localhost:4434
 selfservice:
-  default_browser_return_url: http://localhost:3000
+  default_browser_return_url: ${web_ui}/admin/
   allowed_return_urls:
 $return_urls
   methods:
@@ -288,25 +302,25 @@ $return_urls
       enabled: false
   flows:
     error:
-      ui_url: http://localhost:3000/error
+      ui_url: ${kratos_ui}
     settings:
-      ui_url: http://localhost:3000/settings
+      ui_url: ${kratos_ui}
       privileged_session_max_age: 15m
     recovery:
       enabled: true
-      ui_url: http://localhost:3000/recovery
+      ui_url: ${kratos_ui}
     verification:
       enabled: false # Disabled: mailslurper service not running
-      ui_url: http://localhost:3000/verification
+      ui_url: ${kratos_ui}
     logout:
       after:
-        default_browser_return_url: http://localhost:3000/auth
+        default_browser_return_url: ${web_ui}/admin/
     login:
-      ui_url: http://localhost:3000/auth
+      ui_url: ${kratos_ui}
       lifespan: 10m
     registration:
       lifespan: 10m
-      ui_url: http://localhost:3000/auth
+      ui_url: ${kratos_ui}
       after:
         password:
           hooks:

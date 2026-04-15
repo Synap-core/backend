@@ -174,9 +174,10 @@ serve:
     base_url: http://kratos:4434
 
 selfservice:
-  default_browser_return_url: https://$DOMAIN/
+  default_browser_return_url: https://$DOMAIN/admin/
   allowed_return_urls:
     - https://$DOMAIN
+    - https://$DOMAIN/*
 
   methods:
     password:
@@ -186,16 +187,16 @@ selfservice:
 
   flows:
     login:
-      ui_url: https://$DOMAIN/login
+      ui_url: https://$DOMAIN/admin/kratos
       lifespan: 10m
     registration:
-      ui_url: https://$DOMAIN/registration
+      ui_url: https://$DOMAIN/admin/kratos
       lifespan: 10m
     recovery:
       enabled: true
-      ui_url: https://$DOMAIN/recovery
+      ui_url: https://$DOMAIN/admin/kratos
     settings:
-      ui_url: https://$DOMAIN/settings
+      ui_url: https://$DOMAIN/admin/kratos
       privileged_session_max_age: 15m
       after:
         password:
@@ -209,7 +210,7 @@ selfservice:
       enabled: false
     logout:
       after:
-        default_browser_return_url: https://$DOMAIN/login
+        default_browser_return_url: https://$DOMAIN/admin/
 
 session:
   cookie:
