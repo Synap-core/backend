@@ -26,8 +26,8 @@ import { randomUUID, randomBytes } from "crypto";
 import {
   INTEGRATION_HUB_SCOPES,
   integrationHubId,
-  mintHubInboundKey,
 } from "../services/hub-integration-registration.js";
+import { createAndVerifyHubInboundKey } from "../services/external-registration.js";
 
 /**
  * Generate API key with proper prefix
@@ -436,7 +436,7 @@ export const apiKeysRouter = router({
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
 
-      const { apiKey, plainKey } = await mintHubInboundKey(
+      const registration = await createAndVerifyHubInboundKey(
         apiKeyRepo,
         {
           keyName,
@@ -445,8 +445,31 @@ export const apiKeysRouter = router({
           scope,
           userId: ctx.userId,
         },
+        ctx.userId,
         ctx.userId
       );
+      const { apiKey, plainKey } = registration;
+      if (registration.outcome !== "CONNECTED_VERIFIED") {
+        auditLog({
+          subjectType: "apiKey",
+          action: "create",
+          phase: "failed",
+          subjectId: apiKey.id,
+          userId: ctx.userId,
+          workspaceId: resolvedWorkspaceId,
+          data: {
+            keyName,
+            integration: input.integration,
+            outcome: registration.outcome,
+            verificationError: registration.verificationError,
+          },
+        });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Key was issued but verification failed. Please retry from pod admin.",
+        });
+      }
 
       auditLog({
         subjectType: "apiKey",

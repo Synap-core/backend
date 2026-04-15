@@ -57,10 +57,10 @@ import {
 import { z } from "zod";
 import {
   integrationHubIdFromIssuerUrl,
-  mintHubInboundKey,
   revokeActiveHubInboundKeysForUser,
   SETUP_AGENT_HUB_SCOPES,
 } from "../services/hub-integration-registration.js";
+import { createAndVerifyHubInboundKey } from "../services/external-registration.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -4866,7 +4866,7 @@ app.post("/setup/agent", async (c) => {
 
     const eventRepo = new EventRepository(sql);
     const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-    const { apiKey, plainKey } = await mintHubInboundKey(
+    const registration = await createAndVerifyHubInboundKey(
       apiKeyRepo,
       {
         keyName: `${agentLabel} Hub Key`,
@@ -4878,8 +4878,28 @@ app.post("/setup/agent", async (c) => {
         keyType: "hub_inbound",
         description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup`,
       },
+      agentUserId,
       agentUserId
     );
+    const { apiKey, plainKey } = registration;
+    if (registration.outcome !== "CONNECTED_VERIFIED") {
+      logger.error(
+        {
+          agentUserId,
+          agentType,
+          authMethod,
+          verificationError: registration.verificationError,
+        },
+        "setup/agent: key minted but verification failed"
+      );
+      return c.json(
+        {
+          error: "Key minted but verification failed",
+          code: "KEY_MINTED_BUT_VERIFICATION_FAILED",
+        },
+        500
+      );
+    }
 
     logger.info(
       {

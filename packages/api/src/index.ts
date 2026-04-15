@@ -113,6 +113,11 @@ export {
   resolveTelegramWebhookSecret,
   clearTelegramSecretCache,
 } from "./utils/telegram-bot-token.js";
+export {
+  createAndVerifyHubInboundKey,
+  type RegistrationOutcome,
+  type RegistrationResult,
+} from "./services/external-registration.js";
 
 // Export Telegram bot forwarding and link token utilities
 export {

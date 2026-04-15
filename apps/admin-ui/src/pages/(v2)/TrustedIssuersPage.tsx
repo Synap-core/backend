@@ -195,12 +195,12 @@ function ScopeBadges({ scopes, max = 4 }: { scopes: string[]; max?: number }) {
   return (
     <div className="flex flex-wrap gap-1">
       {visible.map((s) => (
-        <Chip key={s} size="sm" variant="soft" color="secondary">
+        <Chip key={s} size="sm" variant="soft" color="accent">
           {s}
         </Chip>
       ))}
       {overflow > 0 && (
-        <Chip size="sm" variant="flat" color="default">
+        <Chip size="sm" variant="soft" color="default">
           +{overflow}
         </Chip>
       )}
@@ -254,23 +254,13 @@ function PendingApprovalCard({
         </div>
       </div>
       <div className="flex shrink-0 gap-2 sm:self-center">
-        <Button
-          size="sm"
-          color="success"
-          variant="solid"
-          onPress={() => onApprove(issuer)}
-        >
+        <Button size="sm" variant="primary" onPress={() => onApprove(issuer)}>
           <span className="inline-flex items-center gap-1.5">
             <IconCheck size={14} />
             Approve
           </span>
         </Button>
-        <Button
-          size="sm"
-          color="danger"
-          variant="flat"
-          onPress={() => onReject(issuer)}
-        >
+        <Button size="sm" variant="danger" onPress={() => onReject(issuer)}>
           <span className="inline-flex items-center gap-1.5">
             <IconX size={14} />
             Reject
@@ -374,8 +364,8 @@ function ApproveModal({
             Cancel
           </Button>
           <Button
-            color="success"
             size="sm"
+            variant="primary"
             isDisabled={selectedScopes.length === 0 || isPending}
             onPress={() => onConfirm(selectedScopes)}
           >
@@ -448,8 +438,8 @@ function RejectModal({
             Cancel
           </Button>
           <Button
-            color="danger"
             size="sm"
+            variant="danger"
             isDisabled={!reason.trim() || isPending}
             onPress={() => onConfirm(reason.trim())}
           >
@@ -512,8 +502,7 @@ function RevokeModal({
             Cancel
           </Button>
           <Button
-            color="danger"
-            variant="flat"
+            variant="danger"
             size="sm"
             isDisabled={isPending}
             onPress={onConfirm}
@@ -780,8 +769,8 @@ export default function TrustedIssuersPage() {
                                   {issuer.isBuiltIn && (
                                     <Chip
                                       size="sm"
-                                      variant="flat"
-                                      color="primary"
+                                      variant="soft"
+                                      color="accent"
                                     >
                                       Built-in
                                     </Chip>
@@ -828,8 +817,7 @@ export default function TrustedIssuersPage() {
                                 <>
                                   <Button
                                     size="sm"
-                                    color="success"
-                                    variant="flat"
+                                    variant="primary"
                                     onPress={() => setApproveTarget(issuer)}
                                   >
                                     <span className="inline-flex items-center gap-1">
@@ -839,8 +827,7 @@ export default function TrustedIssuersPage() {
                                   </Button>
                                   <Button
                                     size="sm"
-                                    color="danger"
-                                    variant="ghost"
+                                    variant="danger-soft"
                                     onPress={() => setRejectTarget(issuer)}
                                   >
                                     <span className="inline-flex items-center gap-1">
@@ -852,26 +839,30 @@ export default function TrustedIssuersPage() {
                               )}
                               {issuer.status === "approved" &&
                                 (issuer.isBuiltIn ? (
-                                  <Tooltip content="Built-in issuers cannot be revoked">
-                                    <span>
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        isDisabled
-                                        aria-label="Cannot revoke built-in issuer"
-                                      >
-                                        <span className="inline-flex items-center gap-1 text-default-400">
-                                          <IconLock size={13} />
-                                          Cannot revoke
-                                        </span>
-                                      </Button>
-                                    </span>
+                                  <Tooltip>
+                                    <Tooltip.Trigger>
+                                      <span>
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          isDisabled
+                                          aria-label="Cannot revoke built-in issuer"
+                                        >
+                                          <span className="inline-flex items-center gap-1 text-default-400">
+                                            <IconLock size={13} />
+                                            Cannot revoke
+                                          </span>
+                                        </Button>
+                                      </span>
+                                    </Tooltip.Trigger>
+                                    <Tooltip.Content>
+                                      Built-in issuers cannot be revoked
+                                    </Tooltip.Content>
                                   </Tooltip>
                                 ) : (
                                   <Button
                                     size="sm"
-                                    color="danger"
-                                    variant="ghost"
+                                    variant="danger-soft"
                                     onPress={() => setRevokeTarget(issuer)}
                                   >
                                     <span className="inline-flex items-center gap-1">

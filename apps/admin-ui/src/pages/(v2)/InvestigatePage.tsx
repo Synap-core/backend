@@ -784,9 +784,15 @@ export default function InvestigatePage() {
       </div>
 
       <Drawer state={eventDrawer}>
-        <Drawer.Backdrop isDismissable />
-        <Drawer.Content placement="right" className="max-w-xl">
-          <Drawer.Dialog>
+        <Drawer.Backdrop
+          isDismissable
+          className="fixed inset-0 z-[2500] bg-black/50"
+        />
+        <Drawer.Content
+          placement="right"
+          className="fixed bottom-0 right-0 top-0 z-[2501] w-[min(520px,95vw)] max-w-none"
+        >
+          <Drawer.Dialog className="h-full rounded-none border-l border-divider bg-content1">
             <Drawer.Handle />
             <Drawer.Header className="border-b border-divider px-4 py-3">
               <div className="flex items-center gap-2 pr-8">

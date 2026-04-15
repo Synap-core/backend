@@ -57,7 +57,7 @@ export default function MainLayout() {
   return (
     <div className="min-h-screen bg-background">
       <div
-        className="fixed left-0 right-0 top-0 z-100"
+        className="fixed left-0 right-0 top-0 z-30"
         style={{ height: layout.topBarHeight }}
       >
         <TopNav
@@ -68,7 +68,7 @@ export default function MainLayout() {
 
       {!isMobile ? (
         <div
-          className="fixed bottom-0 left-0 z-99 overflow-y-auto border-r border-divider bg-content1 transition-[width] duration-200 ease-out"
+          className="fixed bottom-0 left-0 z-20 overflow-y-auto border-r border-divider bg-content1 transition-[width] duration-200 ease-out"
           style={{
             top: layout.topBarHeight,
             width: navWidth,
@@ -98,11 +98,11 @@ export default function MainLayout() {
         <>
           <button
             type="button"
-            className="fixed inset-0 z-200 bg-black/40"
+            className="fixed inset-0 z-40 bg-black/40"
             aria-label="Close navigation"
             onClick={() => setNavDrawerOpen(false)}
           />
-          <div className="fixed bottom-0 left-0 top-[60px] z-201 w-[min(280px,90vw)] overflow-y-auto border-r border-divider bg-content1 shadow-lg">
+          <div className="fixed bottom-0 left-0 top-[60px] z-50 w-[min(280px,90vw)] overflow-y-auto border-r border-divider bg-content1 shadow-lg">
             <MainNav
               onNavigate={() => setNavDrawerOpen(false)}
               onCommandPaletteOpen={() => {

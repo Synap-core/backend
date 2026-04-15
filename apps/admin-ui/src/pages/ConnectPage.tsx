@@ -69,11 +69,31 @@ const INTEGRATION_LABELS: Record<
   },
 };
 
+type ConnectIntegrationMutation = {
+  apiKeys: {
+    connectIntegration: {
+      useMutation: (opts?: {
+        onSuccess?: (data: {
+          apiKey: string;
+          podUrl: string;
+          workspaceId: string | null;
+        }) => void;
+        onError?: (err: { message: string }) => void;
+      }) => {
+        mutate: (input: {
+          integration: "raycast" | "cli" | "openclaw" | "custom";
+        }) => void;
+      };
+    };
+  };
+};
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ConnectPage() {
   const params = new URLSearchParams(window.location.search);
   const redirectUri = params.get("redirect_uri") ?? "";
+  const cpHandshakeToken = params.get("cp_handshake_token") ?? "";
   const integration = (params.get("integration") ?? "custom") as
     | "raycast"
     | "cli"
@@ -88,8 +108,15 @@ export default function ConnectPage() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [isBootstrappingSession, setIsBootstrappingSession] = useState(false);
+  const [sessionBootstrapped, setSessionBootstrapped] = useState(
+    cpHandshakeToken.length === 0
+  );
+  const [didAutoStartConnect, setDidAutoStartConnect] = useState(false);
 
-  const connectMutation = (trpc as any).apiKeys.connectIntegration.useMutation({
+  const connectMutation = (
+    trpc as unknown as ConnectIntegrationMutation
+  ).apiKeys.connectIntegration.useMutation({
     onSuccess: (data) => {
       setApiKey(data.apiKey);
       setPodUrl(data.podUrl);
@@ -134,6 +161,65 @@ export default function ConnectPage() {
     }
   }, [redirectUri]);
 
+  // If CP forwarded a handshake token, bootstrap a pod session first so
+  // connectIntegration has a valid Kratos cookie in this pod origin.
+  useEffect(() => {
+    if (!cpHandshakeToken || sessionBootstrapped || isBootstrappingSession)
+      return;
+    let cancelled = false;
+    setIsBootstrappingSession(true);
+    setError("");
+
+    void fetch("/api/handshake", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ token: cpHandshakeToken }),
+    })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `Handshake failed (${res.status})`);
+        }
+        setSessionBootstrapped(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setStep("error");
+        setError(
+          err instanceof Error
+            ? `Could not create pod session: ${err.message}`
+            : "Could not create pod session"
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setIsBootstrappingSession(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cpHandshakeToken, sessionBootstrapped, isBootstrappingSession]);
+
+  // Seamless managed UX: for deeplink-based flows, auto-start key generation
+  // once pod session is confirmed.
+  useEffect(() => {
+    if (didAutoStartConnect) return;
+    if (step !== "idle") return;
+    if (!redirectUri || !isAllowedRedirectUri(redirectUri)) return;
+    if (!sessionBootstrapped || isBootstrappingSession) return;
+    setDidAutoStartConnect(true);
+    handleGenerate();
+  }, [
+    didAutoStartConnect,
+    step,
+    redirectUri,
+    sessionBootstrapped,
+    isBootstrappingSession,
+    handleGenerate,
+  ]);
+
   function handleCopy() {
     if (!apiKey) return;
     void navigator.clipboard.writeText(apiKey).then(() => {
@@ -169,6 +255,12 @@ export default function ConnectPage() {
           {/* Idle — show generate button */}
           {step === "idle" && (
             <div className="flex flex-col gap-4">
+              {isBootstrappingSession && (
+                <div className="flex items-center gap-2 rounded-medium border border-divider bg-default-50 px-3 py-2 text-xs text-default-500">
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-default-400 border-t-transparent" />
+                  Verifying pod session…
+                </div>
+              )}
               <p className="text-small text-default-600">
                 This will generate a Hub Protocol API key scoped for{" "}
                 <strong>{integrationInfo.label}</strong> and{" "}
@@ -185,6 +277,7 @@ export default function ConnectPage() {
                 variant="primary"
                 className="w-full"
                 onPress={handleGenerate}
+                isDisabled={isBootstrappingSession || !sessionBootstrapped}
               >
                 Generate &amp; connect
               </Button>

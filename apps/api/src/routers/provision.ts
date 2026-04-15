@@ -21,7 +21,7 @@ import { z } from "zod";
 import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger, config } from "@synap-core/core";
-import { verifyCpJwt } from "@synap/api";
+import { createAndVerifyHubInboundKey, verifyCpJwt } from "@synap/api";
 import {
   getDb,
   eq,
@@ -42,6 +42,7 @@ import { encryptServiceKey, resolveServiceKey } from "@synap/api";
 import { getSyncGenerationState } from "@synap/api";
 
 const logger = createLogger({ module: "provision" });
+const OPENCLAW_HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
 
 export const provisionRouter = new Hono();
 
@@ -1323,27 +1324,40 @@ provisionRouter.post("/activate-addon", async (c) => {
         )
       );
 
-    const keyPrefix =
-      process.env.NODE_ENV === "production"
-        ? "synap_hub_live_"
-        : "synap_hub_test_";
-    const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
-
     const eventRepo = new EventRepository(sql);
     const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-    const apiKey = await apiKeyRepo.create(
+    const registration = await createAndVerifyHubInboundKey(
+      apiKeyRepo,
       {
         keyName: "OpenClaw Hub Key",
-        keyPrefix,
-        key: plainKey,
-        scope: ["hub-protocol.read", "hub-protocol.write"],
+        hubId: "integration:openclaw",
+        scope: OPENCLAW_HUB_SCOPES,
         userId: agentUserId,
         keyType: "hub_inbound",
         description:
           "Hub Protocol auth token for OpenClaw agent — revoked automatically on deprovisioning",
       },
+      agentUserId,
       agentUserId
     );
+    const { apiKey, plainKey } = registration;
+    if (registration.outcome !== "CONNECTED_VERIFIED") {
+      logger.error(
+        {
+          agentUserId,
+          addon: payload.addon,
+          verificationError: registration.verificationError,
+        },
+        "activate-addon: key minted but verification failed"
+      );
+      return c.json(
+        {
+          error: "Key minted but verification failed",
+          code: "KEY_MINTED_BUT_VERIFICATION_FAILED",
+        },
+        500
+      );
+    }
 
     logger.info(
       { agentUserId, keyId: apiKey.id, targetWorkspaceId },

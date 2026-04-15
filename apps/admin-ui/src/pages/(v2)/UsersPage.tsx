@@ -88,15 +88,21 @@ export default function UsersPage() {
           ))}
         </div>
         <Button
-          color="warning"
-          variant="flat"
-          isLoading={resetPasswordMutation.isPending}
+          variant="secondary"
+          isDisabled={resetPasswordMutation.isPending}
           onPress={() => {
             setPasswordResetResult(null);
             resetPasswordMutation.mutate({ mode: "all_humans" });
           }}
         >
-          Reset All Human Passwords
+          {resetPasswordMutation.isPending ? (
+            <span className="inline-flex items-center gap-2">
+              <Spinner size="sm" color="current" />
+              Resetting…
+            </span>
+          ) : (
+            "Reset All Human Passwords"
+          )}
         </Button>
       </div>
 
@@ -259,9 +265,8 @@ export default function UsersPage() {
                       </Text>
                       <Button
                         size="sm"
-                        color="warning"
-                        variant="flat"
-                        isLoading={resetPasswordMutation.isPending}
+                        variant="secondary"
+                        isDisabled={resetPasswordMutation.isPending}
                         onPress={() => {
                           if (!selectedUser?.id) return;
                           setPasswordResetResult(null);
@@ -271,7 +276,14 @@ export default function UsersPage() {
                           });
                         }}
                       >
-                        Reset Password
+                        {resetPasswordMutation.isPending ? (
+                          <span className="inline-flex items-center gap-2">
+                            <Spinner size="sm" color="current" />
+                            Resetting…
+                          </span>
+                        ) : (
+                          "Reset Password"
+                        )}
                       </Button>
                     </div>
                   </Card>
