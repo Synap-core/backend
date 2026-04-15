@@ -48,6 +48,7 @@ const BATCH_SIZE = 25;
 export async function handleLinkedInBulkImport(
   job: PgBoss.Job<LinkedInBulkImportJobData>
 ): Promise<void> {
+  const startedAt = Date.now();
   const { workspaceId, userId, contacts } = job.data;
 
   logger.info(
@@ -120,8 +121,18 @@ export async function handleLinkedInBulkImport(
   }
 
   logger.info(
-    { workspaceId, created, updated, matched, failed, total: contacts.length },
-    "LinkedIn bulk import complete"
+    {
+      source: "linkedin_archive",
+      status: failed === contacts.length ? "failed" : "completed",
+      durationMs: Date.now() - startedAt,
+      workspaceId,
+      created,
+      updated,
+      matched,
+      failed,
+      total: contacts.length,
+    },
+    "Import run telemetry"
   );
 
   // Emit connector_sync event — enables automation triggers + event log audit trail

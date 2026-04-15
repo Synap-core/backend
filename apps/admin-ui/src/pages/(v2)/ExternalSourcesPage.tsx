@@ -44,12 +44,12 @@ export default function ExternalSourcesPage() {
         <div className="flex items-center gap-2">
           <IconPlugConnected className="text-primary" size={24} />
           <Text className="text-2xl font-semibold tracking-tight text-foreground">
-            External sources
+            External sources (advanced)
           </Text>
         </div>
         <Text className="max-w-3xl text-small text-default-500">
-          What this pod can connect to and ingest from: connectors, feeds,
-          messaging gateways, and external agent runtimes.
+          Advanced source diagnostics. Use the External Connections page for
+          day-to-day connect/reconnect and key lifecycle operations.
         </Text>
       </header>
 

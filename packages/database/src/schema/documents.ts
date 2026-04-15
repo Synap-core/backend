@@ -25,7 +25,8 @@ export const documents = pgTable(
 
     // Context
     userId: text("user_id").notNull(),
-    workspaceId: uuid("workspace_id").notNull(), // Every document belongs to a workspace
+    // Nullable for pod-wide documents (workspace is optional).
+    workspaceId: uuid("workspace_id"),
     // Projects: Use relations table (if document is linked to entity) or remove projectIds
 
     // Document metadata

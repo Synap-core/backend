@@ -21,7 +21,7 @@ export interface CreateDocumentInput {
   projectId?: string;
   metadata?: Record<string, unknown>;
   userId: string;
-  workspaceId: string;
+  workspaceId?: string | null;
 }
 
 export interface UpdateDocumentInput {

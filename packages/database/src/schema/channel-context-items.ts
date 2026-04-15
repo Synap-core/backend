@@ -123,7 +123,7 @@ export const channelContextItems = pgTable(
 
     // Multi-tenant
     userId: text("user_id").notNull(),
-    workspaceId: uuid("workspace_id").notNull(),
+    workspaceId: uuid("workspace_id"),
 
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
@@ -163,7 +163,7 @@ export interface ChannelContextItem {
   sourceMessageId: string | null;
   relevanceScore: number | null;
   userId: string;
-  workspaceId: string;
+  workspaceId: string | null;
   createdAt: Date;
 }
 export type NewChannelContextItem = Partial<
@@ -174,7 +174,7 @@ export type NewChannelContextItem = Partial<
   objectId: string;
   relationshipType: ChannelContextRelationshipType;
   userId: string;
-  workspaceId: string;
+  workspaceId?: string | null;
 };
 
 /**

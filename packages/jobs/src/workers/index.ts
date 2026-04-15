@@ -54,6 +54,14 @@ import {
 import { handleFeedScheduler } from "./feed-scheduler.js";
 import { handleFeedRSSExecute } from "./feed-rss-executor.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
+import {
+  handleTelegramBulkImport,
+  TELEGRAM_BULK_IMPORT_QUEUE,
+} from "./telegram-bulk-import.js";
+import {
+  handleLinkedInBulkImport,
+  LINKEDIN_BULK_IMPORT_QUEUE,
+} from "./linkedin-bulk-import.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -93,6 +101,8 @@ const ALL_QUEUES = [
   "feed-scheduler",
   "feed-rss-execute",
   "feed-proactive-execute",
+  TELEGRAM_BULK_IMPORT_QUEUE,
+  LINKEDIN_BULK_IMPORT_QUEUE,
 ];
 
 /**
@@ -285,6 +295,15 @@ export async function registerAllWorkers(): Promise<void> {
     handleFeedProactiveExecute(job)
   );
   logger.info("Registered worker: feed-proactive-execute");
+
+  // Contacts archive imports (on-demand — heavy batch upserts)
+  await boss.work(TELEGRAM_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
+    handleTelegramBulkImport(job)
+  );
+  await boss.work(LINKEDIN_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
+    handleLinkedInBulkImport(job)
+  );
+  logger.info("Registered workers: telegram-bulk-import, linkedin-bulk-import");
 
   // Note: Delivery retry and dead letter workers removed to avoid circular dependency
   // (jobs → api → jobs). Retry functionality is handled inline in DeliveryService.

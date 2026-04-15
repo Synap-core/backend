@@ -28,26 +28,12 @@ import {
   showSuccessNotification,
   showErrorNotification,
 } from "../lib/notifications";
-
-// ─── Allowed deeplink prefixes ────────────────────────────────────────────────
-const ALLOWED_REDIRECT_PREFIXES = [
-  "raycast://extensions/synap-core/synap/",
-  "synap://", // future: desktop app deeplinks
-];
-
-function isAllowedRedirectUri(uri: string): boolean {
-  return ALLOWED_REDIRECT_PREFIXES.some((prefix) => uri.startsWith(prefix));
-}
-
-function buildDeeplink(
-  redirectUri: string,
-  apiKey: string,
-  podUrl: string,
-  workspaceId: string | null
-): string {
-  const context = JSON.stringify({ apiKey, podUrl, workspaceId });
-  return `${redirectUri}?context=${encodeURIComponent(context)}`;
-}
+import {
+  buildConnectDeeplink,
+  buildFlowTraceUrl,
+  extractFlowId,
+  isAllowedConnectRedirectUri,
+} from "@synap-core/external-connect-client";
 
 // ─── Integration label map ───────────────────────────────────────────────────
 const INTEGRATION_LABELS: Record<
@@ -69,25 +55,6 @@ const INTEGRATION_LABELS: Record<
   },
 };
 
-type ConnectIntegrationMutation = {
-  apiKeys: {
-    connectIntegration: {
-      useMutation: (opts?: {
-        onSuccess?: (data: {
-          apiKey: string;
-          podUrl: string;
-          workspaceId: string | null;
-        }) => void;
-        onError?: (err: { message: string }) => void;
-      }) => {
-        mutate: (input: {
-          integration: "raycast" | "cli" | "openclaw" | "custom";
-        }) => void;
-      };
-    };
-  };
-};
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ConnectPage() {
@@ -107,29 +74,38 @@ export default function ConnectPage() {
   const [podUrl, setPodUrl] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [flowId, setFlowId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isBootstrappingSession, setIsBootstrappingSession] = useState(false);
   const [sessionBootstrapped, setSessionBootstrapped] = useState(
     cpHandshakeToken.length === 0
   );
-  const [didAutoStartConnect, setDidAutoStartConnect] = useState(false);
+  const [strategy, setStrategy] = useState<"create_new" | "replace_existing">(
+    "create_new"
+  );
+  const { data: allKeys } = trpc.apiKeys.list.useQuery();
+  const integrationHub = `integration:${integration}`;
+  const existingActiveIntegrationKeys = (allKeys ?? []).filter(
+    (k) => k.isActive && k.hubId === integrationHub
+  );
 
-  const connectMutation = (
-    trpc as unknown as ConnectIntegrationMutation
-  ).apiKeys.connectIntegration.useMutation({
+  const connectMutation = trpc.apiKeys.connectIntegration.useMutation({
     onSuccess: (data) => {
+      // Use the current pod origin as canonical return URL for clients.
+      // Server env PUBLIC_URL can drift in some deployments.
+      const canonicalPodUrl = window.location.origin.replace(/\/$/, "");
       setApiKey(data.apiKey);
-      setPodUrl(data.podUrl);
+      setPodUrl(canonicalPodUrl);
       setWorkspaceId(data.workspaceId);
+      setFlowId(data.registration?.flowId ?? null);
 
-      if (redirectUri && isAllowedRedirectUri(redirectUri)) {
+      if (redirectUri && isAllowedConnectRedirectUri(redirectUri)) {
         setStep("redirecting");
-        const deeplink = buildDeeplink(
-          redirectUri,
-          data.apiKey,
-          data.podUrl,
-          data.workspaceId
-        );
+        const deeplink = buildConnectDeeplink(redirectUri, {
+          apiKey: data.apiKey,
+          podUrl: canonicalPodUrl,
+          workspaceId: data.workspaceId,
+        });
         // Small delay so the user sees the success state before the app switches
         setTimeout(() => {
           window.location.href = deeplink;
@@ -140,6 +116,7 @@ export default function ConnectPage() {
     },
     onError: (err) => {
       setError(err.message);
+      setFlowId(extractFlowId(err.message));
       setStep("error");
       showErrorNotification({ message: err.message });
     },
@@ -148,14 +125,15 @@ export default function ConnectPage() {
   const handleGenerate = useCallback(() => {
     setStep("generating");
     setError("");
-    connectMutation.mutate({ integration });
-  }, [integration, connectMutation]);
+    setFlowId(null);
+    connectMutation.mutate({ integration, strategy });
+  }, [integration, strategy, connectMutation]);
 
   // Validate redirect_uri on mount
   useEffect(() => {
-    if (redirectUri && !isAllowedRedirectUri(redirectUri)) {
+    if (redirectUri && !isAllowedConnectRedirectUri(redirectUri)) {
       setError(
-        `Invalid redirect_uri: must start with one of ${ALLOWED_REDIRECT_PREFIXES.join(", ")}`
+        "Invalid redirect_uri: must be an approved integration deeplink"
       );
       setStep("error");
     }
@@ -201,24 +179,6 @@ export default function ConnectPage() {
       cancelled = true;
     };
   }, [cpHandshakeToken, sessionBootstrapped, isBootstrappingSession]);
-
-  // Seamless managed UX: for deeplink-based flows, auto-start key generation
-  // once pod session is confirmed.
-  useEffect(() => {
-    if (didAutoStartConnect) return;
-    if (step !== "idle") return;
-    if (!redirectUri || !isAllowedRedirectUri(redirectUri)) return;
-    if (!sessionBootstrapped || isBootstrappingSession) return;
-    setDidAutoStartConnect(true);
-    handleGenerate();
-  }, [
-    didAutoStartConnect,
-    step,
-    redirectUri,
-    sessionBootstrapped,
-    isBootstrappingSession,
-    handleGenerate,
-  ]);
 
   function handleCopy() {
     if (!apiKey) return;
@@ -268,6 +228,36 @@ export default function ConnectPage() {
                   ? "send it directly to the app — no copy-paste needed."
                   : "display it here for you to copy."}
               </p>
+              {existingActiveIntegrationKeys.length > 0 && (
+                <div className="rounded-medium border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+                  Found {existingActiveIntegrationKeys.length} active{" "}
+                  {integrationInfo.label} key
+                  {existingActiveIntegrationKeys.length > 1 ? "s" : ""} for your
+                  account.
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant={strategy === "create_new" ? "primary" : "outline"}
+                  onPress={() => setStrategy("create_new")}
+                >
+                  Add new key
+                </Button>
+                <Button
+                  variant={
+                    strategy === "replace_existing" ? "primary" : "outline"
+                  }
+                  onPress={() => setStrategy("replace_existing")}
+                >
+                  Override existing
+                </Button>
+              </div>
+              {redirectUri && (
+                <div className="rounded-medium border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+                  You must explicitly approve key creation below before any
+                  credentials are issued.
+                </div>
+              )}
               {redirectUri && (
                 <div className="rounded-medium border border-divider bg-default-50 px-3 py-2 font-mono text-xs text-default-500 break-all">
                   {redirectUri}
@@ -350,6 +340,11 @@ export default function ConnectPage() {
                 <div>
                   <p className="text-small font-semibold">Connection failed</p>
                   <p className="text-xs opacity-90">{error}</p>
+                  {flowId && (
+                    <p className="mt-1 font-mono text-[11px] opacity-80">
+                      Flow ID: {flowId}
+                    </p>
+                  )}
                 </div>
               </div>
               <Button
@@ -358,6 +353,26 @@ export default function ConnectPage() {
                 onPress={() => setStep("idle")}
               >
                 Try again
+              </Button>
+              {flowId && (
+                <Button
+                  variant="tertiary"
+                  className="w-full"
+                  onPress={() => {
+                    window.location.href = buildFlowTraceUrl(flowId);
+                  }}
+                >
+                  Open flow trace
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                className="w-full"
+                onPress={() => {
+                  window.location.href = "/pod-services";
+                }}
+              >
+                Open pod monitoring
               </Button>
             </div>
           )}

@@ -61,6 +61,7 @@ import {
   SETUP_AGENT_HUB_SCOPES,
 } from "../services/hub-integration-registration.js";
 import { createAndVerifyHubInboundKey } from "../services/external-registration.js";
+import { toRegistrationTrace } from "../services/external-registration.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
@@ -109,46 +110,6 @@ const app = new Hono<{
  * GET /health (no auth)
  */
 app.get("/health", (c) => c.json({ status: "ok", service: "hub-protocol" }));
-
-/**
- * GET /users/me — return the authenticated agent/user identity.
- * Used by OpenClaw, CLI, and external agents to verify their API key.
- */
-app.get("/users/me", async (c) => {
-  const userId = c.get("userId") as string | undefined;
-  const scopes = c.get("scopes") as string[] | undefined;
-  if (!userId) return c.json({ error: "Unauthorized" }, 401);
-  return c.json({ id: userId, scopes: scopes ?? [] });
-});
-
-/**
- * GET /workspaces — list workspaces accessible to the authenticated user.
- * Used by IS agents and external clients to discover workspace context.
- */
-app.get("/workspaces", async (c) => {
-  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
-    return c.json(
-      { error: "Insufficient scope: hub-protocol.read required" },
-      403
-    );
-  }
-  const userId = c.get("userId") as string;
-  try {
-    const wsIds = await getUserAccessibleWorkspaceIds(userId);
-    // Direct DB query — workspaces router is on the app router, not hub-protocol router
-    const list =
-      wsIds.length > 0
-        ? await db
-            .select({ id: workspaces.id, name: workspaces.name })
-            .from(workspaces)
-            .where(inArray(workspaces.id, wsIds))
-        : [];
-    return c.json({ workspaces: list });
-  } catch (err) {
-    logger.error({ err }, "GET /workspaces failed");
-    return c.json({ error: "Failed to list workspaces" }, 500);
-  }
-});
 
 /**
  * Middleware: authenticate hub protocol requests.
@@ -211,6 +172,46 @@ app.use("/*", async (c, next) => {
     },
     401
   );
+});
+
+/**
+ * GET /users/me — return the authenticated agent/user identity.
+ * Used by OpenClaw, CLI, and external agents to verify their API key.
+ */
+app.get("/users/me", async (c) => {
+  const userId = c.get("userId") as string | undefined;
+  const scopes = c.get("scopes") as string[] | undefined;
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  return c.json({ id: userId, scopes: scopes ?? [] });
+});
+
+/**
+ * GET /workspaces — list workspaces accessible to the authenticated user.
+ * Used by IS agents and external clients to discover workspace context.
+ */
+app.get("/workspaces", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+  const userId = c.get("userId") as string;
+  try {
+    const wsIds = await getUserAccessibleWorkspaceIds(userId);
+    // Direct DB query — workspaces router is on the app router, not hub-protocol router
+    const list =
+      wsIds.length > 0
+        ? await db
+            .select({ id: workspaces.id, name: workspaces.name })
+            .from(workspaces)
+            .where(inArray(workspaces.id, wsIds))
+        : [];
+    return c.json({ workspaces: list });
+  } catch (err) {
+    logger.error({ err }, "GET /workspaces failed");
+    return c.json({ error: "Failed to list workspaces" }, 500);
+  }
 });
 
 /**
@@ -909,25 +910,19 @@ app.patch("/entities/:entityId", async (c) => {
   const body = (await c.req.json()) as {
     userId: string;
     agentUserId?: string;
-    workspaceId: string;
+    workspaceId?: string | null;
     title?: string;
     preview?: string;
     metadata?: Record<string, unknown>;
     sourceMessageId?: string;
   };
-  if (!body.workspaceId) {
-    return c.json(
-      { error: "workspaceId is required for entity update (event chain)" },
-      400
-    );
-  }
   try {
     const actorResolution = await resolveActorId(body.agentUserId, body.userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
     const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
-      workspaceId: body.workspaceId,
+      workspaceId: body.workspaceId ?? null,
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
@@ -1008,13 +1003,8 @@ app.get("/search", async (c) => {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    // When no workspaceId, resolve to user's first accessible workspace for context.
-    // Typesense already filters by userId, but adding workspace scope tightens it.
-    const effectiveWsId =
-      workspaceId ||
-      (await getUserAccessibleWorkspaceIds(userId))[0] ||
-      undefined;
-    const caller = await getCaller(c, { workspaceId: effectiveWsId });
+    const effectiveWsId = workspaceId || undefined;
+    const caller = await getCaller(c, { workspaceId: effectiveWsId ?? null });
     const result = await caller.search.search({
       userId,
       query,
@@ -1057,10 +1047,7 @@ app.get("/search/documents", async (c) => {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    // Scope document search to user's accessible workspaces
-    const effectiveWsId =
-      (await getUserAccessibleWorkspaceIds(userId))[0] || undefined;
-    const caller = await getCaller(c, { workspaceId: effectiveWsId });
+    const caller = await getCaller(c);
     const result = await caller.search.searchDocuments({
       userId,
       query,
@@ -1093,10 +1080,7 @@ app.get("/vector-search", async (c) => {
     return c.json({ error: "userId and query are required" }, 400);
   }
   try {
-    const effectiveWsId =
-      workspaceId ||
-      (await getUserAccessibleWorkspaceIds(userId))[0] ||
-      undefined;
+    const effectiveWsId = workspaceId || undefined;
     const caller = await getCaller(c, { workspaceId: effectiveWsId || null });
     const result = await caller.search.vectorSearch({
       userId,
@@ -1124,7 +1108,7 @@ app.post("/documents", async (c) => {
   }
   const body = (await c.req.json()) as {
     userId: string;
-    workspaceId: string;
+    workspaceId?: string | null;
     title: string;
     content?: string;
     type?: "text" | "markdown" | "code" | "pdf" | "docx";
@@ -1132,25 +1116,19 @@ app.post("/documents", async (c) => {
     agentUserId?: string;
     sourceMessageId?: string;
   };
-  if (!body.workspaceId) {
-    return c.json(
-      { error: "workspaceId is required for document creation" },
-      400
-    );
-  }
   try {
     const actorResolution = await resolveActorId(body.agentUserId, body.userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
     const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
-      workspaceId: body.workspaceId,
+      workspaceId: body.workspaceId ?? null,
       userId: actorId,
       sourceMessageId: body.sourceMessageId,
     });
     const result = await caller.documents.createDocument({
       userId: body.userId,
-      workspaceId: body.workspaceId,
+      workspaceId: body.workspaceId ?? null,
       title: body.title,
       content: body.content ?? "",
       type: body.type ?? "markdown",
@@ -1940,12 +1918,20 @@ app.get("/commands", async (c) => {
     );
   }
   const workspaceId = c.req.query("workspaceId");
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
+  const userId = c.get("userId") as string;
   try {
+    let whereClause;
+    if (workspaceId) {
+      whereClause = eq(intelligenceCommands.workspaceId, workspaceId);
+    } else {
+      const wsIds = await getUserAccessibleWorkspaceIds(userId);
+      whereClause =
+        wsIds.length > 0
+          ? inArray(intelligenceCommands.workspaceId, wsIds)
+          : sql`false`;
+    }
     const commands = await db.query.intelligenceCommands.findMany({
-      where: eq(intelligenceCommands.workspaceId, workspaceId),
+      where: whereClause,
       orderBy: [asc(intelligenceCommands.createdAt)],
     });
     return c.json(commands);
@@ -1997,11 +1983,13 @@ app.get("/agent-users", async (c) => {
     );
   }
   const workspaceId = c.req.query("workspaceId");
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
+  const userId = c.get("userId") as string;
   try {
     const { users, workspaceMembers } = await import("@synap/database/schema");
+    const accessibleWsIds = workspaceId
+      ? [workspaceId]
+      : await getUserAccessibleWorkspaceIds(userId);
+    if (accessibleWsIds.length === 0) return c.json([]);
     const results = await db
       .select({
         id: users.id,
@@ -2014,7 +2002,7 @@ app.get("/agent-users", async (c) => {
         workspaceMembers,
         and(
           eq(workspaceMembers.userId, users.id),
-          eq(workspaceMembers.workspaceId, workspaceId)
+          inArray(workspaceMembers.workspaceId, accessibleWsIds)
         )
       )
       .where(eq(users.userType, "agent"));
@@ -2044,14 +2032,17 @@ app.get("/views", async (c) => {
   }
   const userId = c.req.query("userId");
   const workspaceId = c.req.query("workspaceId");
-  if (!userId || !workspaceId) {
-    return c.json({ error: "userId and workspaceId are required" }, 400);
+  if (!userId) {
+    return c.json({ error: "userId is required" }, 400);
   }
   try {
-    const caller = await getCaller(c, { userId, workspaceId });
+    const caller = await getCaller(c, {
+      userId,
+      workspaceId: workspaceId ?? null,
+    });
     const result = await caller.views.listViews({
       userId,
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       type: c.req.query("type"),
       profileId: c.req.query("profileId"),
     });
@@ -2074,7 +2065,7 @@ app.post("/views", async (c) => {
   }
   const body = (await c.req.json()) as {
     userId: string;
-    workspaceId: string;
+    workspaceId?: string | null;
     name: string;
     type: string;
     profileId?: string;
@@ -2084,9 +2075,6 @@ app.post("/views", async (c) => {
     reasoning?: string;
     sourceMessageId?: string;
   };
-  if (!body.workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
   try {
     const actorResolution = await resolveActorId(body.agentUserId, body.userId);
     if ("error" in actorResolution)
@@ -2094,12 +2082,12 @@ app.post("/views", async (c) => {
     const actorId = actorResolution.actorId;
     const caller = await getCaller(c, {
       userId: actorId,
-      workspaceId: body.workspaceId,
+      workspaceId: body.workspaceId ?? null,
       sourceMessageId: body.sourceMessageId,
     });
     const result = await caller.views.createView({
       userId: body.userId,
-      workspaceId: body.workspaceId,
+      workspaceId: body.workspaceId ?? null,
       name: body.name,
       type: body.type,
       profileId: body.profileId,
@@ -2796,13 +2784,10 @@ app.get("/widget-definitions", async (c) => {
     return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
   }
   const workspaceId = c.req.query("workspaceId");
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
   try {
-    const caller = await getCaller(c, { workspaceId });
+    const caller = await getCaller(c, { workspaceId: workspaceId ?? null });
     const result = await caller.widgetDefinitions.listWidgetDefs({
-      workspaceId,
+      workspaceId: workspaceId ?? null,
     });
     return c.json(result);
   } catch (err) {
@@ -2952,10 +2937,7 @@ app.post("/widget-definitions", async (c) => {
   > | null;
   if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
   const userId = (body.userId as string) ?? (c.get("userId") as string);
-  const workspaceId = body.workspaceId as string;
-  if (!workspaceId) {
-    return c.json({ error: "workspaceId is required" }, 400);
-  }
+  const workspaceId = (body.workspaceId as string | null | undefined) ?? null;
   try {
     const caller = await getCaller(c, {
       userId,
@@ -3771,7 +3753,7 @@ app.post("/channels/by-context", async (c) => {
     userId: string;
     workspaceId?: string;
     contextObjectId: string;
-    contextObjectType: string;
+    contextObjectType: "entity" | "document" | "view";
   };
   if (!body.userId || !body.contextObjectId || !body.contextObjectType) {
     return c.json(
@@ -3780,60 +3762,23 @@ app.post("/channels/by-context", async (c) => {
     );
   }
   try {
-    // Try to find an existing channel with this context
-    const existing = await db
-      .select({ id: channels.id, title: channels.title })
-      .from(channels)
-      .where(
-        and(
-          eq(channels.userId, body.userId),
-          eq(channels.contextObjectId, body.contextObjectId),
-          eq(channels.contextObjectType, body.contextObjectType),
-          eq(channels.status, "active")
-        )
-      )
-      .orderBy(desc(channels.updatedAt))
-      .limit(1);
-
-    if (existing.length > 0) {
-      return c.json({
-        channelId: existing[0].id,
-        title: existing[0].title,
-        created: false,
-      });
-    }
-
-    // Create a new channel scoped to this entity
-    const { randomUUID } = await import("crypto");
-    const channelId = randomUUID();
-
-    // Try to get the entity title for a nice channel name
-    let title = `${body.contextObjectType} discussion`;
-    try {
-      const entity = await db.query.entities.findFirst({
-        where: eq(entities.id, body.contextObjectId),
-        columns: { title: true },
-      });
-      if (entity?.title) {
-        title = entity.title;
-      }
-    } catch {
-      // Non-fatal — use default title
-    }
-
-    await db.insert(channels).values({
-      id: channelId,
+    const caller = await getCaller(c, {
+      workspaceId: body.workspaceId,
       userId: body.userId,
-      workspaceId: body.workspaceId ?? null,
-      channelType: ChannelType.THREAD,
-      contextObjectType: body.contextObjectType,
-      contextObjectId: body.contextObjectId,
-      status: "active",
-      title,
-      agentType: "meta",
     });
-
-    return c.json({ channelId, title, created: true });
+    const result = await caller.channels.resolveAiChannel({
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+      family: "context",
+      contextObjectId: body.contextObjectId,
+      contextObjectType: body.contextObjectType,
+    });
+    return c.json({
+      channelId: result.channel.id,
+      title: result.channel.title,
+      created: true,
+      channel: result.channel,
+    });
   } catch (err) {
     logger.error({ err, body }, "channels/by-context failed");
     return c.json(
@@ -3862,12 +3807,12 @@ app.get("/channels/personal", async (c) => {
   }
   try {
     const caller = await getCaller(c, { workspaceId, userId });
-    const result = await caller.channels.ensurePersonal({
+    const result = await caller.channels.resolveAiChannel({
       userId,
       workspaceId,
+      family: "personal",
     });
-    // Unwrap { channel } wrapper — IS hub client expects { id, channelType } directly
-    return c.json(result?.channel ?? result);
+    return c.json(result?.channel);
   } catch (err) {
     logger.error(
       { err, userId, workspaceId },
@@ -4386,6 +4331,7 @@ app.post("/entity-share/deliver", async (c) => {
 //
 
 app.post("/setup/agent", async (c) => {
+  const flowId = randomUUID();
   // ── Auth: CP JWT (preferred) or PROVISIONING_TOKEN (self-hosted fallback) ──
   const authHeader = c.req.header("authorization") ?? "";
   const token = authHeader.startsWith("Bearer ")
@@ -4881,10 +4827,12 @@ app.post("/setup/agent", async (c) => {
       agentUserId,
       agentUserId
     );
+    const registrationTrace = toRegistrationTrace(flowId, registration);
     const { apiKey, plainKey } = registration;
     if (registration.outcome !== "CONNECTED_VERIFIED") {
       logger.error(
         {
+          flowId,
           agentUserId,
           agentType,
           authMethod,
@@ -4896,6 +4844,7 @@ app.post("/setup/agent", async (c) => {
         {
           error: "Key minted but verification failed",
           code: "KEY_MINTED_BUT_VERIFICATION_FAILED",
+          registration: registrationTrace,
         },
         500
       );
@@ -4908,6 +4857,7 @@ app.post("/setup/agent", async (c) => {
         workspaceId: ws.id,
         agentType,
         authMethod,
+        registration: registrationTrace,
       },
       "setup/agent: Hub API key created"
     );
@@ -4917,10 +4867,11 @@ app.post("/setup/agent", async (c) => {
       workspaceId: ws.id,
       hubApiKey: plainKey,
       keyId: apiKey.id,
+      registration: registrationTrace,
     });
   } catch (err) {
-    logger.error({ err, agentType }, "setup/agent: failed");
-    return c.json({ error: "Internal server error" }, 500);
+    logger.error({ err, agentType, flowId }, "setup/agent: failed");
+    return c.json({ error: "Internal server error", flowId }, 500);
   }
 });
 

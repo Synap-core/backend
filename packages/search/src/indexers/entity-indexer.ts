@@ -4,6 +4,7 @@
 
 import { BaseIndexer } from "./base-indexer.js";
 import type { SearchDocument } from "../types/index.js";
+import { toSearchWorkspaceScope } from "../utils/workspace-scope.js";
 
 interface Entity {
   id: string;
@@ -11,7 +12,7 @@ interface Entity {
   content: string | null;
   description: string | null;
   userId: string;
-  workspaceId: string;
+  workspaceId: string | null;
   projectId: string | null;
   type: string;
   tags: string[] | null;
@@ -30,7 +31,7 @@ export class EntityIndexer extends BaseIndexer<Entity> {
       content: entity.content || undefined,
       description: entity.description || undefined,
       userId: entity.userId,
-      workspaceId: entity.workspaceId,
+      workspaceId: toSearchWorkspaceScope(entity.workspaceId),
       projectId: entity.projectId || undefined,
       entityType: entity.type,
       tags: entity.tags || undefined,

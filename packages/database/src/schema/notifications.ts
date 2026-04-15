@@ -52,7 +52,7 @@ export const notifications = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
 
     // Scoping
-    workspaceId: text("workspace_id").notNull(),
+    workspaceId: text("workspace_id"),
     userId: text("user_id").notNull(), // recipient
 
     // Type (registry key — e.g. 'proposal.created', 'connector.sync.complete')
@@ -140,7 +140,7 @@ export const notificationPreferences = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
-    workspaceId: text("workspace_id").notNull(),
+    workspaceId: text("workspace_id"),
 
     // Global kill switch
     enabled: boolean("enabled").notNull().default(true),

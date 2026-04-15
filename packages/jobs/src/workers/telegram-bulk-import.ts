@@ -51,6 +51,7 @@ const BATCH_SIZE = 25;
 export async function handleTelegramBulkImport(
   job: PgBoss.Job<TelegramBulkImportJobData>
 ): Promise<void> {
+  const startedAt = Date.now();
   const { workspaceId, userId, people, taskId } = job.data;
 
   logger.info(
@@ -125,8 +126,18 @@ export async function handleTelegramBulkImport(
   }
 
   logger.info(
-    { workspaceId, created, updated, matched, failed, total: people.length },
-    "Telegram bulk import complete"
+    {
+      source: "telegram_archive",
+      status: failed === people.length ? "failed" : "completed",
+      durationMs: Date.now() - startedAt,
+      workspaceId,
+      created,
+      updated,
+      matched,
+      failed,
+      total: people.length,
+    },
+    "Import run telemetry"
   );
 
   // Emit connector_sync event — enables automation triggers + event log audit trail

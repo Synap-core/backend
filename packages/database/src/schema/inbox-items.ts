@@ -24,7 +24,8 @@ export const inboxItems = pgTable(
 
     // Context
     userId: text("user_id").notNull(),
-    workspaceId: uuid("workspace_id").notNull(), // Every inbox item belongs to a workspace
+    // Nullable for pod-wide inbox items.
+    workspaceId: uuid("workspace_id"),
     // Projects: Removed - use relations table if needed
 
     // External source (direct columns for queryability)

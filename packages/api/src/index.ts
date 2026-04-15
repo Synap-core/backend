@@ -115,8 +115,10 @@ export {
 } from "./utils/telegram-bot-token.js";
 export {
   createAndVerifyHubInboundKey,
+  toRegistrationTrace,
   type RegistrationOutcome,
   type RegistrationResult,
+  type RegistrationTrace,
 } from "./services/external-registration.js";
 
 // Export Telegram bot forwarding and link token utilities

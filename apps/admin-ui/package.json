@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@synap-core/external-connect-client": "file:../../../synap-app/packages/core/external-connect-client",
     "@heroui/react": "^3.0.2",
     "@heroui/styles": "3.0.2",
     "@tabler/icons-react": "^3.35.0",

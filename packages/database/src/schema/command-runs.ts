@@ -26,7 +26,7 @@ export const commandRuns = pgTable(
     commandId: uuid("command_id")
       .notNull()
       .references(() => intelligenceCommands.id, { onDelete: "cascade" }),
-    workspaceId: uuid("workspace_id").notNull(),
+    workspaceId: uuid("workspace_id"),
     userId: text("user_id").notNull(),
 
     /** Snapshot of command permissions at run time */

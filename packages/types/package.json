@@ -99,6 +99,14 @@
     "./feeds": {
       "types": "./dist/feeds/index.d.ts",
       "import": "./dist/feeds/index.js"
+    },
+    "./imports": {
+      "types": "./dist/imports/index.d.ts",
+      "import": "./dist/imports/index.js"
+    },
+    "./external-connect": {
+      "types": "./dist/external-connect/index.d.ts",
+      "import": "./dist/external-connect/index.js"
     }
   },
   "scripts": {

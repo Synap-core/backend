@@ -1344,6 +1344,22 @@ export interface ProactiveFeedConfig extends BaseFeedConfig {
 	/** AI summarization options */
 	summarization?: ProactiveFeedSummarizationConfig;
 }
+export interface ImportModelingSuggestion {
+	profileSlug: string;
+	profileLabel: string;
+	confidence: number;
+	suggestedProperties: Array<{
+		slug: string;
+		label: string;
+		valueType: "string" | "number" | "boolean" | "date" | "entity_id" | "array" | "object";
+		reason?: string;
+	}>;
+	suggestedViews: Array<{
+		type: "table" | "kanban" | "list" | "calendar";
+		title: string;
+		reason?: string;
+	}>;
+}
 /**
  * Node shape for the workspace branch tree response.
  * Defined at module scope so tsc can include it in declaration output.
@@ -2013,6 +2029,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		resolveAiChannel: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				family?: "context" | "personal" | "branch" | undefined;
+				contextObjectId?: string | undefined;
+				contextObjectType?: "entity" | "document" | "view" | undefined;
+				parentChannelId?: string | undefined;
+				branchPurpose?: string | undefined;
+				agentType?: string | undefined;
+			};
+			output: {
+				channel: Channel;
+			};
+			meta: object;
+		}>;
 		createChannel: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				parentChannelId?: string | undefined;
@@ -2124,6 +2155,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentChannelId?: string | undefined;
 				attachmentEntityIds?: string[] | undefined;
 				deepAnalysis?: boolean | undefined;
+				aiChannelFamily?: "context" | "personal" | "branch" | undefined;
+				contextObjectId?: string | undefined;
+				contextObjectType?: "entity" | "document" | "view" | undefined;
+				branchPurpose?: string | undefined;
 			};
 			output: {
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
@@ -3406,6 +3441,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				integration: "custom" | "cli" | "raycast" | "openclaw";
 				workspaceId?: string | undefined;
+				strategy?: "create_new" | "replace_existing" | undefined;
 			};
 			output: {
 				apiKey: string;
@@ -3413,6 +3449,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				podUrl: string;
 				workspaceId: string | null;
 				integration: "custom" | "cli" | "raycast" | "openclaw";
+				strategy: "create_new" | "replace_existing";
+				registration: {
+					flowId: string;
+					outcome: "CONNECTED_VERIFIED" | "KEY_MINTED_BUT_VERIFICATION_FAILED";
+					verificationError?: string | undefined;
+				};
 			};
 			meta: object;
 		}>;
@@ -8872,10 +8914,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelsCreated: number;
 				messagesCreated: number;
 				filesStoredOnly: number;
-				errors: Array<{
+				errors: {
 					path: string;
 					message: string;
-				}>;
+				}[];
 				batchId: `${string}-${string}-${string}-${string}-${string}`;
 			};
 			meta: object;
@@ -8893,6 +8935,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				jobId: string | null;
 				total: number;
+				status: "queued";
 			};
 			meta: object;
 		}>;
@@ -8910,6 +8953,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				jobId: string | null;
 				total: number;
+				status: "queued";
+			};
+			meta: object;
+		}>;
+		previewModeling: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				source: "json" | "markdown" | "csv" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "connector_sync" | "local_migration";
+				sampleRows: Record<string, unknown>[];
+			};
+			output: {
+				source: "json" | "markdown" | "csv" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "connector_sync" | "local_migration";
+				analyzedRows: number;
+				suggestions: ImportModelingSuggestion[];
 			};
 			meta: object;
 		}>;

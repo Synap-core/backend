@@ -59,6 +59,40 @@ export function parseCsv(content: string): ParsedCsv {
   }
 }
 
+// ─── Bookmarks HTML (Netscape format) ─────────────────────────────────────────
+
+export interface ParsedBookmark {
+  title: string;
+  url: string;
+  tags?: string;
+}
+
+/**
+ * Parse Netscape bookmarks HTML into bookmark records.
+ * This parser is intentionally lenient and regex-based to support exports
+ * from Chrome/Firefox/Safari without DOM dependencies on the backend.
+ */
+export function parseBookmarksHtml(content: string): ParsedBookmark[] {
+  if (typeof content !== "string" || content.trim().length === 0) return [];
+
+  const results: ParsedBookmark[] = [];
+  const anchorRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchorRegex.exec(content)) !== null) {
+    const href = match[1]?.trim();
+    const inner = match[2]?.replace(/<[^>]+>/g, "").trim();
+    const fullTag = match[0] ?? "";
+    const tagsMatch = fullTag.match(/\stags=["']([^"']*)["']/i);
+    if (!href) continue;
+    results.push({
+      title: inner || href,
+      url: href,
+      tags: tagsMatch?.[1]?.trim() || undefined,
+    });
+  }
+  return results;
+}
+
 // ─── JSON chat shape ─────────────────────────────────────────────────────────
 
 export interface ChatMessage {

@@ -4,13 +4,14 @@
 
 import { BaseIndexer } from "./base-indexer.js";
 import type { SearchDocument } from "../types/index.js";
+import { toSearchWorkspaceScope } from "../utils/workspace-scope.js";
 
 interface Document {
   id: string;
   title: string;
   content: string | null;
   userId: string;
-  workspaceId: string;
+  workspaceId: string | null;
   type: string | null;
   projectId: string | null;
   createdAt: Date;
@@ -26,7 +27,7 @@ export class DocumentIndexer extends BaseIndexer<Document> {
       title: document.title,
       content: document.content || undefined,
       userId: document.userId,
-      workspaceId: document.workspaceId,
+      workspaceId: toSearchWorkspaceScope(document.workspaceId),
       documentType: document.type || undefined,
       projectId: document.projectId || undefined,
       createdAt: this.toTimestamp(document.createdAt),

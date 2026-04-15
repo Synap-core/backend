@@ -264,6 +264,8 @@ chatStreamApp.post("/stream", async (c) => {
  * Query params:
  *   workspaceId  (optional) — UUID of the workspace. Defaults to the
  *                             user's first accessible workspace.
+ *   channelId    (optional) — explicit channel to read from. When omitted,
+ *                             the user's personal channel is used.
  *   limit        (optional) — Max messages to return (default 50, max 100).
  *
  * Response: { messages: Array<{ id, role, content, timestamp }> }
@@ -278,6 +280,7 @@ chatStreamApp.get("/history", async (c) => {
 
   // ── Resolve workspaceId ────────────────────────────────────────────────────
   const rawWorkspaceId = c.req.query("workspaceId");
+  const rawChannelId = c.req.query("channelId");
   let resolvedWorkspaceId: string;
 
   if (rawWorkspaceId) {
@@ -310,20 +313,43 @@ chatStreamApp.get("/history", async (c) => {
     Math.max(1, parseInt(rawLimit ?? "50", 10) || 50)
   );
 
-  // ── Get personal channel (idempotent — creates if missing) ────────────────
+  // ── Resolve channel ────────────────────────────────────────────────────────
   let channelId: string;
-  try {
-    const personalChannel = await ensurePersonalChannel(
-      userId,
-      resolvedWorkspaceId
-    );
-    channelId = personalChannel.id;
-  } catch (err) {
-    logger.error(
-      { err: err instanceof Error ? err.message : String(err) },
-      "Failed to ensure personal channel for history fetch"
-    );
-    return c.json({ error: "Failed to resolve chat channel" }, 500);
+  if (rawChannelId) {
+    const channel = await db.query.channels.findFirst({
+      where: and(eq(channels.id, rawChannelId), eq(channels.userId, userId)),
+      columns: { id: true, workspaceId: true },
+    });
+    if (!channel) {
+      return c.json({ error: "Channel not found" }, 404);
+    }
+    if (channel.workspaceId) {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, channel.workspaceId),
+          eq(workspaceMembers.userId, userId)
+        ),
+        columns: { workspaceId: true },
+      });
+      if (!membership) {
+        return c.json({ error: "Channel not found" }, 404);
+      }
+    }
+    channelId = channel.id;
+  } else {
+    try {
+      const personalChannel = await ensurePersonalChannel(
+        userId,
+        resolvedWorkspaceId
+      );
+      channelId = personalChannel.id;
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to ensure personal channel for history fetch"
+      );
+      return c.json({ error: "Failed to resolve chat channel" }, 500);
+    }
   }
 
   // ── Fetch messages (user + assistant only, newest first, then reverse) ─────

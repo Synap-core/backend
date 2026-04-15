@@ -21,7 +21,11 @@ import { z } from "zod";
 import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger, config } from "@synap-core/core";
-import { createAndVerifyHubInboundKey, verifyCpJwt } from "@synap/api";
+import {
+  createAndVerifyHubInboundKey,
+  toRegistrationTrace,
+  verifyCpJwt,
+} from "@synap/api";
 import {
   getDb,
   eq,
@@ -1152,6 +1156,7 @@ provisionRouter.get("/addon-status", async (c) => {
 //   - Hub API key is bcrypt-hashed before storage; scoped to hub-protocol only
 
 provisionRouter.post("/activate-addon", async (c) => {
+  const flowId = randomUUID();
   const authHeader = c.req.header("Authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
@@ -1340,10 +1345,12 @@ provisionRouter.post("/activate-addon", async (c) => {
       agentUserId,
       agentUserId
     );
+    const registrationTrace = toRegistrationTrace(flowId, registration);
     const { apiKey, plainKey } = registration;
     if (registration.outcome !== "CONNECTED_VERIFIED") {
       logger.error(
         {
+          flowId,
           agentUserId,
           addon: payload.addon,
           verificationError: registration.verificationError,
@@ -1354,13 +1361,19 @@ provisionRouter.post("/activate-addon", async (c) => {
         {
           error: "Key minted but verification failed",
           code: "KEY_MINTED_BUT_VERIFICATION_FAILED",
+          registration: registrationTrace,
         },
         500
       );
     }
 
     logger.info(
-      { agentUserId, keyId: apiKey.id, targetWorkspaceId },
+      {
+        agentUserId,
+        keyId: apiKey.id,
+        targetWorkspaceId,
+        registration: registrationTrace,
+      },
       "activate-addon: Hub API key created"
     );
 
@@ -1370,10 +1383,11 @@ provisionRouter.post("/activate-addon", async (c) => {
       hubApiKey: plainKey,
       keyId: apiKey.id,
       serviceId: payload.serviceId,
+      registration: registrationTrace,
     });
   } catch (err) {
-    logger.error({ err }, "activate-addon: failed");
-    return c.json({ error: "Internal server error" }, 500);
+    logger.error({ err, flowId }, "activate-addon: failed");
+    return c.json({ error: "Internal server error", flowId }, 500);
   }
 });
 

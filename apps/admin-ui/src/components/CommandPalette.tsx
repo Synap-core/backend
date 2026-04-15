@@ -218,17 +218,14 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   return (
     <Modal state={state}>
-      <Modal.Backdrop
-        isDismissable
-        className="fixed inset-0 z-[3000] bg-black/55"
-      />
+      <Modal.Backdrop isDismissable className="bg-black/45" />
       <Modal.Container
         size="lg"
         placement="center"
         scroll="inside"
-        className="fixed inset-0 z-[3001] flex w-full items-center justify-center p-3"
+        className="p-3"
       >
-        <Modal.Dialog className="command-palette-dialog relative flex h-[min(660px,88vh)] w-[min(760px,95vw)] max-w-[760px] flex-col overflow-hidden rounded-3xl border border-divider bg-content1 text-foreground opacity-100 shadow-2xl">
+        <Modal.Dialog className="relative flex h-[min(660px,88vh)] w-[min(760px,95vw)] max-w-[760px] flex-col overflow-hidden rounded-3xl border border-divider bg-content1 text-foreground shadow-2xl">
           <Command className="flex min-h-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center gap-2 border-b border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-3 pr-12">
               <IconSearch size={18} className="shrink-0 text-default-400" />

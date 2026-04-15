@@ -29,7 +29,7 @@ export const hubWidgetDefinitionsRouter = router({
   listWidgetDefs: scopedProcedure(["hub-protocol.read"])
     .input(
       z.object({
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
       })
     )
     .query(async ({ input }) => {
@@ -38,7 +38,9 @@ export const hubWidgetDefinitionsRouter = router({
         where: and(
           or(
             isNull(widgetDefinitions.workspaceId),
-            eq(widgetDefinitions.workspaceId, input.workspaceId)
+            input.workspaceId
+              ? eq(widgetDefinitions.workspaceId, input.workspaceId)
+              : undefined
           ),
           eq(widgetDefinitions.isActive, true)
         ),
@@ -57,7 +59,7 @@ export const hubWidgetDefinitionsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         typeKey: z
           .string()
           .min(1)

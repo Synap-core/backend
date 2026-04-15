@@ -21,9 +21,9 @@ export const intelligenceCommands = pgTable(
   "intelligence_commands",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
     createdBy: text("created_by").notNull(), // user_id
 
     title: text("title").notNull(),

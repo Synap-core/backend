@@ -21,7 +21,7 @@ export interface CreateMessageLinkInput {
   position?: { start: number; end: number };
   metadata?: Record<string, unknown>;
   userId: string;
-  workspaceId: string;
+  workspaceId?: string | null;
 }
 
 export interface QueryMessageLinksInput {
@@ -130,7 +130,7 @@ export class MessageLinksRepository {
   async getByTargetWithMessages(
     targetType: string,
     targetId: string,
-    workspaceId: string,
+    workspaceId?: string | null,
     options: GetByTargetWithMessagesOptions = {}
   ): Promise<{
     items: LinkedMessageItem[];
@@ -153,9 +153,11 @@ export class MessageLinksRepository {
     const conditions = [
       eq(messageLinks.targetType, targetType),
       eq(messageLinks.targetId, targetId),
-      eq(messageLinks.workspaceId, workspaceId),
       isNull(messages.deletedAt),
     ];
+    if (workspaceId) {
+      conditions.push(eq(messageLinks.workspaceId, workspaceId));
+    }
 
     if (cursor) {
       try {

@@ -77,7 +77,10 @@ export default function InvestigatePage() {
   const [activeTab, setActiveTab] = useState("search");
 
   const [searchTerm, setSearchTerm] = useState(
-    searchParams.get("userId") || searchParams.get("eventId") || ""
+    searchParams.get("correlationId") ||
+      searchParams.get("userId") ||
+      searchParams.get("eventId") ||
+      ""
   );
   const [eventTypeFilter, setEventTypeFilter] = useState<string | null>(
     searchParams.get("eventType")
@@ -784,13 +787,10 @@ export default function InvestigatePage() {
       </div>
 
       <Drawer state={eventDrawer}>
-        <Drawer.Backdrop
-          isDismissable
-          className="fixed inset-0 z-[2500] bg-black/50"
-        />
+        <Drawer.Backdrop isDismissable className="bg-black/50" />
         <Drawer.Content
           placement="right"
-          className="fixed bottom-0 right-0 top-0 z-[2501] w-[min(520px,95vw)] max-w-none"
+          className="w-[min(520px,95vw)] max-w-none"
         >
           <Drawer.Dialog className="h-full rounded-none border-l border-divider bg-content1">
             <Drawer.Handle />

@@ -32,9 +32,9 @@ export const skillTriggers = pgTable(
       .notNull()
       .references(() => skills.id, { onDelete: "cascade" }),
 
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
 
     userId: text("user_id").notNull(),
 

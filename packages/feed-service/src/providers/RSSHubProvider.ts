@@ -171,7 +171,7 @@ export class RSSHubProvider implements IFeedProvider {
   /**
    * Fetch with retry logic
    */
-  private async fetchWithRetry(url: string): Promise<Response> {
+  private async fetchWithRetry(url: string): Promise<globalThis.Response> {
     const maxAttempts = this.config.retryAttempts || 3;
     let lastError: Error | undefined;
 

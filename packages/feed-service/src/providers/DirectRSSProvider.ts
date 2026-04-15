@@ -138,7 +138,7 @@ export class DirectRSSProvider implements IFeedProvider {
   private async fetchWithRetry(
     url: string,
     config: FeedSourceConfig["provider"]
-  ): Promise<Response> {
+  ): Promise<globalThis.Response> {
     const maxAttempts = config.retryAttempts || 3;
     let lastError: Error | undefined;
 

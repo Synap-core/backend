@@ -1,16 +1,25 @@
 import type { ApiKeyRepository, CreateApiKeyInput } from "@synap/database";
+import type { RegistrationOutcome, RegistrationTrace } from "@synap-core/types";
+export type { RegistrationOutcome, RegistrationTrace } from "@synap-core/types";
 import { apiKeyService } from "./api-keys.js";
 import { mintHubInboundKey } from "./hub-integration-registration.js";
-
-export type RegistrationOutcome =
-  | "CONNECTED_VERIFIED"
-  | "KEY_MINTED_BUT_VERIFICATION_FAILED";
 
 export interface RegistrationResult {
   outcome: RegistrationOutcome;
   verificationError?: string;
   plainKey: string;
   apiKey: Awaited<ReturnType<ApiKeyRepository["create"]>>;
+}
+
+export function toRegistrationTrace(
+  flowId: string,
+  result: Pick<RegistrationResult, "outcome" | "verificationError">
+): RegistrationTrace {
+  return {
+    flowId,
+    outcome: result.outcome,
+    verificationError: result.verificationError,
+  };
 }
 
 /**

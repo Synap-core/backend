@@ -21,7 +21,8 @@ export const projects = pgTable(
 
     // Context
     userId: text("user_id").notNull(),
-    workspaceId: uuid("workspace_id").notNull(), // Every project belongs to a workspace
+    // Nullable for pod-wide projects.
+    workspaceId: uuid("workspace_id"),
 
     // Project info
     name: text("name").notNull(),

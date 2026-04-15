@@ -31,9 +31,9 @@ export const mcpServers = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
 
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
 
     /** Human-readable unique identifier within the workspace, e.g. 'playwright' */
     slug: text("slug").notNull(),

@@ -56,7 +56,7 @@ const podSections: NavListSection[] = [
   {
     label: "External",
     items: [
-      { path: "/external-sources", label: "External sources", icon: IconPlug },
+      { path: "/connections", label: "External connections", icon: IconPlug },
     ],
   },
   {

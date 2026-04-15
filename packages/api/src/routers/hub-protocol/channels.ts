@@ -33,7 +33,8 @@ import {
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
-import { ensurePersonalChannel } from "../../utils/personal-channel.js";
+import { AI_CHANNEL_FAMILY_VALUES } from "@synap-core/types";
+import { resolveAiChannelByFamily } from "../../utils/resolve-ai-channel-family.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
@@ -89,6 +90,37 @@ async function assertAgentInWorkspace(
 }
 
 export const channelsRouter = router({
+  /**
+   * Resolve or create an AI channel from structural family.
+   * Canonical contract used by hub/rest adapters.
+   */
+  resolveAiChannel: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid().optional(),
+        family: z.enum(AI_CHANNEL_FAMILY_VALUES).default("personal"),
+        contextObjectId: z.string().uuid().optional(),
+        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+        parentChannelId: z.string().uuid().optional(),
+        branchPurpose: z.string().max(500).optional(),
+        agentType: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const channel = await resolveAiChannelByFamily({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        family: input.family,
+        contextObjectId: input.contextObjectId,
+        contextObjectType: input.contextObjectType,
+        parentChannelId: input.parentChannelId,
+        branchPurpose: input.branchPurpose,
+        agentType: input.agentType,
+      });
+      return { channel };
+    }),
+
   /**
    * Propose creating an external-import channel.
    * Requires: hub-protocol.write scope
@@ -600,10 +632,11 @@ export const channelsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const channel = await ensurePersonalChannel(
-        input.userId,
-        input.workspaceId
-      );
+      const channel = await resolveAiChannelByFamily({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        family: "personal",
+      });
       return { channel };
     }),
 

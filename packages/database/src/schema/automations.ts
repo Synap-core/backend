@@ -285,9 +285,9 @@ export const automations = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
 
     // Ownership
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
     createdBy: text("created_by").notNull(),
 
     // Definition
@@ -370,7 +370,7 @@ export const automationRuns = pgTable(
     automationId: uuid("automation_id")
       .notNull()
       .references(() => automations.id, { onDelete: "cascade" }),
-    workspaceId: uuid("workspace_id").notNull(),
+    workspaceId: uuid("workspace_id"),
     triggeredBy: text("triggered_by"), // userId or "system"
 
     triggerPayload: jsonb("trigger_payload")

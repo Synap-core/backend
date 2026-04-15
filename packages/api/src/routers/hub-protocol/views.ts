@@ -49,7 +49,7 @@ export const hubViewsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         profileId: z.string().uuid().optional(),
         type: z.string().optional(),
       })
@@ -59,7 +59,9 @@ export const hubViewsRouter = router({
 
       const rows = await db.query.views.findMany({
         where: and(
-          eq(views.workspaceId, input.workspaceId),
+          input.workspaceId
+            ? eq(views.workspaceId, input.workspaceId)
+            : undefined,
           input.type ? eq(views.type, input.type) : undefined,
           input.profileId
             ? // views store scopeProfileIds as JSONB array — simple text match
@@ -90,7 +92,7 @@ export const hubViewsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         name: z.string().min(1).max(100),
         type: z.string().min(1),
         /** Required for structured views (list, kanban, table, etc.) */
@@ -105,13 +107,13 @@ export const hubViewsRouter = router({
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        input.workspaceId,
+        input.workspaceId ?? null,
         ctx.sourceMessageId ?? undefined
       );
       const caller = regularViewsRouter.createCaller(callerContext);
 
       const result = await caller.create({
-        workspaceId: input.workspaceId,
+        workspaceId: input.workspaceId ?? null,
         name: input.name,
         type: input.type,
         scopeProfileIds: input.profileId ? [input.profileId] : undefined,

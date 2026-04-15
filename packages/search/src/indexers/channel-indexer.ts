@@ -4,6 +4,7 @@
 
 import { BaseIndexer } from "./base-indexer.js";
 import type { SearchDocument } from "../types/index.js";
+import { toSearchWorkspaceScope } from "../utils/workspace-scope.js";
 
 interface Channel {
   id: string;
@@ -22,7 +23,7 @@ export class ChannelIndexer extends BaseIndexer<Channel> {
       id: channel.id,
       title: channel.title || "Untitled Channel",
       userId: channel.userId,
-      workspaceId: channel.workspaceId ?? "",
+      workspaceId: toSearchWorkspaceScope(channel.workspaceId),
       createdAt: this.toTimestamp(channel.createdAt),
       updatedAt: this.toTimestamp(channel.updatedAt),
       summary: undefined,

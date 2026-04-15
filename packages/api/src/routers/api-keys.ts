@@ -11,6 +11,7 @@ import { z } from "zod";
 import { API_KEY_SCOPES } from "@synap/database/schema";
 import {
   db,
+  and,
   eq,
   asc,
   getDb,
@@ -28,6 +29,7 @@ import {
   integrationHubId,
 } from "../services/hub-integration-registration.js";
 import { createAndVerifyHubInboundKey } from "../services/external-registration.js";
+import { toRegistrationTrace } from "../services/external-registration.js";
 
 /**
  * Generate API key with proper prefix
@@ -371,9 +373,13 @@ export const apiKeysRouter = router({
       z.object({
         integration: z.enum(["raycast", "cli", "openclaw", "custom"]),
         workspaceId: z.string().uuid().optional(),
+        strategy: z
+          .enum(["create_new", "replace_existing"])
+          .default("create_new"),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const flowId = randomUUID();
       const id = randomUUID();
 
       // Resolve workspace: use provided (verified) or fall back to user's first
@@ -427,10 +433,30 @@ export const apiKeysRouter = router({
         });
       }
 
+      const integrationHub = integrationHubId(input.integration);
       const scope =
         INTEGRATION_HUB_SCOPES[input.integration] ??
         INTEGRATION_HUB_SCOPES.custom;
       const keyName = `${input.integration.charAt(0).toUpperCase() + input.integration.slice(1)} — ${new Date().toISOString().slice(0, 10)}`;
+
+      if (input.strategy === "replace_existing") {
+        await db
+          .update(apiKeys)
+          .set({
+            isActive: false,
+            revokedAt: new Date(),
+            revokedBy: ctx.userId,
+            revokedReason: `Replaced by ${input.integration} reconnect`,
+          })
+          .where(
+            and(
+              eq(apiKeys.userId, ctx.userId),
+              eq(apiKeys.hubId, integrationHub),
+              eq(apiKeys.keyType, "hub_inbound"),
+              eq(apiKeys.isActive, true)
+            )
+          );
+      }
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -441,7 +467,7 @@ export const apiKeysRouter = router({
         {
           keyName,
           // hubId marks this as a Hub Protocol key (traceable in audit logs).
-          hubId: integrationHubId(input.integration),
+          hubId: integrationHub,
           scope,
           userId: ctx.userId,
         },
@@ -449,6 +475,7 @@ export const apiKeysRouter = router({
         ctx.userId
       );
       const { apiKey, plainKey } = registration;
+      const registrationTrace = toRegistrationTrace(flowId, registration);
       if (registration.outcome !== "CONNECTED_VERIFIED") {
         auditLog({
           subjectType: "apiKey",
@@ -460,14 +487,13 @@ export const apiKeysRouter = router({
           data: {
             keyName,
             integration: input.integration,
-            outcome: registration.outcome,
-            verificationError: registration.verificationError,
+            strategy: input.strategy,
+            ...registrationTrace,
           },
         });
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Key was issued but verification failed. Please retry from pod admin.",
+          message: `Key was issued but verification failed. Flow: ${flowId}`,
         });
       }
 
@@ -478,7 +504,12 @@ export const apiKeysRouter = router({
         subjectId: apiKey.id,
         userId: ctx.userId,
         workspaceId: resolvedWorkspaceId,
-        data: { keyName, integration: input.integration },
+        data: {
+          keyName,
+          integration: input.integration,
+          strategy: input.strategy,
+          ...registrationTrace,
+        },
       });
 
       emitSideEffects({
@@ -498,6 +529,8 @@ export const apiKeysRouter = router({
         podUrl,
         workspaceId: resolvedWorkspaceId ?? null,
         integration: input.integration,
+        strategy: input.strategy,
+        registration: registrationTrace,
       };
     }),
 

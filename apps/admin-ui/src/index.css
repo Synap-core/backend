@@ -64,13 +64,6 @@ body {
 
 /* Command palette (cmdk) — align with HeroUI semantic surfaces */
 @layer components {
-  .command-palette-dialog {
-    background-color: var(--color-content1) !important;
-    opacity: 1 !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-
   .command-palette-group [cmdk-group-heading] {
     @apply px-1 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em];
     color: color-mix(in oklab, var(--color-default-500) 75%, var(--color-primary) 25%);

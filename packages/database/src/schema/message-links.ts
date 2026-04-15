@@ -42,7 +42,7 @@ export const messageLinks = pgTable(
 
     // Multi-tenant
     userId: text("user_id").notNull(),
-    workspaceId: uuid("workspace_id").notNull(),
+    workspaceId: uuid("workspace_id"),
 
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

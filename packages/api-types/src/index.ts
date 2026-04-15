@@ -9,3 +9,13 @@
 
 // This will be generated during build from @synap/api
 export type { AppRouter } from "./generated.js";
+
+// External connect contracts are backend-owned and shared with clients.
+export type {
+  RegistrationOutcome,
+  RegistrationTrace,
+  ExternalConnectErrorCode,
+  ExternalConnectError,
+  SetupAgentSuccess,
+  ActivateAddonSuccess,
+} from "@synap-core/types";

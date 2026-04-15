@@ -21,3 +21,6 @@ export * from "./services/index.js";
 
 // Types
 export * from "./types/index.js";
+
+// Utils
+export * from "./utils/workspace-scope.js";

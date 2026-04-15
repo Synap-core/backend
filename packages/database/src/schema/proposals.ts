@@ -37,7 +37,7 @@ export const proposals = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
 
     // Scoping
-    workspaceId: text("workspace_id").notNull(),
+    workspaceId: text("workspace_id"),
 
     // Categorization (for filtering hooks)
     targetType: text("target_type").notNull(), // 'document', 'entity', 'whiteboard', etc.
@@ -131,7 +131,7 @@ export const proposals = pgTable(
 /** Proposal row — explicit interface so consumers don't need drizzle-orm to resolve it. */
 export interface Proposal {
   id: string;
-  workspaceId: string;
+  workspaceId: string | null;
   targetType: string;
   targetId: string;
   proposalType: string;
@@ -153,7 +153,7 @@ export interface Proposal {
 export type NewProposal = Partial<
   Omit<Proposal, "id" | "createdAt" | "updatedAt">
 > & {
-  workspaceId: string;
+  workspaceId?: string | null;
   targetType: string;
   targetId: string;
   proposalType: string;

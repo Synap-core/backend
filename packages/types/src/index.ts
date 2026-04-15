@@ -91,3 +91,9 @@ export * from "./proactive/index.js";
 
 // Feed Types (RSS and Proactive)
 export * from "./feeds/index.js";
+
+// Import domain contracts
+export * from "./imports/index.js";
+
+// External connect (integration registration/provision contracts)
+export * from "./external-connect/index.js";

@@ -39,7 +39,7 @@ export interface CreateViewInput {
   description?: string;
   documentId?: string | null;
   yjsRoomId?: string;
-  workspaceId: string;
+  workspaceId?: string | null;
   userId: string;
   // NEW: Scope profiles (required for structured views)
   scopeProfileIds?: string[];

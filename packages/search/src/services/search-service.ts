@@ -6,6 +6,7 @@
 import { getTypesenseAdminClient } from "../client.js";
 import type { SearchResult } from "../types/index.js";
 import type { MultiSearchRequestSchema } from "../types/index.js";
+import { POD_WIDE_WORKSPACE_SCOPE } from "../utils/workspace-scope.js";
 
 export interface UnifiedSearchOptions {
   query: string;
@@ -169,7 +170,10 @@ export class SearchService {
     const filters: string[] = [`userId:=\`${options.userId}\``];
 
     if (options.workspaceId) {
-      filters.push(`workspaceId:=\`${options.workspaceId}\``);
+      // Workspace-scoped search must also include pod-wide records.
+      filters.push(
+        `(workspaceId:=\`${options.workspaceId}\` || workspaceId:=\`${POD_WIDE_WORKSPACE_SCOPE}\`)`
+      );
     }
 
     return filters.join(" && ");

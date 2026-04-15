@@ -27,9 +27,9 @@ export const agentConfigs = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
 
     userId: text("user_id").notNull(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
 
     /** Free-form agent type string defined by the intelligence service */
     agentType: text("agent_type").notNull(),

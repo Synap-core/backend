@@ -14,7 +14,8 @@ export const relations = pgTable("relations", {
 
   // Context
   userId: text("user_id").notNull(),
-  workspaceId: uuid("workspace_id").notNull(), // Every relation belongs to a workspace
+  // Nullable for pod-wide relations.
+  workspaceId: uuid("workspace_id"),
   // Projects: Use relations table with type "belongs_to_project" (self-referencing)
 
   // The two entities being linked

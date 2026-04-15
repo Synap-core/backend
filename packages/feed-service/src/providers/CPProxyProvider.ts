@@ -213,7 +213,7 @@ export class CPProxyProvider implements IFeedProvider {
   /**
    * Update rate limit info from response headers
    */
-  private updateRateLimitInfo(response: Response): void {
+  private updateRateLimitInfo(response: globalThis.Response): void {
     const remaining = response.headers.get("X-RateLimit-Remaining");
     const reset = response.headers.get("X-RateLimit-Reset");
 
@@ -233,7 +233,9 @@ export class CPProxyProvider implements IFeedProvider {
   /**
    * Fetch with retry logic
    */
-  private async fetchWithRetry(source: FeedSourceConfig): Promise<Response> {
+  private async fetchWithRetry(
+    source: FeedSourceConfig
+  ): Promise<globalThis.Response> {
     const maxAttempts = this.config.retryAttempts || 3;
     let lastError: Error | undefined;
 

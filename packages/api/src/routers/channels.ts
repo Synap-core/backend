@@ -54,12 +54,13 @@ import {
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
-import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import { resolveAiChannelByFamily } from "../utils/resolve-ai-channel-family.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { MessageLinksRepository } from "@synap/database";
 import {
   MessageLinkTargetType,
   MessageLinkRelationshipType,
+  AI_CHANNEL_FAMILY_VALUES,
 } from "@synap-core/types";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -405,6 +406,40 @@ async function listChannelsWithFlags(params: {
 }
 
 export const channelsRouter = router({
+  /**
+   * Resolve AI channel by structural family.
+   */
+  resolveAiChannel: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        family: z.enum(AI_CHANNEL_FAMILY_VALUES).default("personal"),
+        contextObjectId: z.string().uuid().optional(),
+        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
+        parentChannelId: z.string().uuid().optional(),
+        branchPurpose: z.string().max(500).optional(),
+        agentType: z
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
+          .optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const channel = await resolveAiChannelByFamily({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
+        family: input.family,
+        contextObjectId: input.contextObjectId,
+        contextObjectType: input.contextObjectType,
+        parentChannelId: input.parentChannelId,
+        branchPurpose: input.branchPurpose,
+        agentType: input.agentType,
+      });
+      return { channel };
+    }),
+
   /**
    * Create a new channel.
    * When parentChannelId is provided, creates a branch channel.
@@ -827,6 +862,11 @@ export const channelsRouter = router({
         attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
         /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
         deepAnalysis: z.boolean().optional(),
+        /** Structural family for resolving default channel when channelId is omitted */
+        aiChannelFamily: z.enum(AI_CHANNEL_FAMILY_VALUES).optional(),
+        contextObjectId: z.string().uuid().optional(),
+        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
+        branchPurpose: z.string().max(500).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -874,9 +914,6 @@ export const channelsRouter = router({
             userId: userId,
           });
         } else {
-          // All other cases: route to the user's personal AI timeline.
-          // ensurePersonalChannel is idempotent — creates the channel on first call,
-          // returns the existing one on all subsequent calls.
           if (workspaceId) {
             const membership = await db.query.workspaceMembers.findFirst({
               where: and(
@@ -891,13 +928,17 @@ export const channelsRouter = router({
               });
             }
           }
-          const personalChannel = await ensurePersonalChannel(
+          const resolvedChannel = await resolveAiChannelByFamily({
             userId,
-            workspaceId!
-          );
-          channelId = personalChannel.id;
-          // No channel:created event — channel already exists (or was just created
-          // on workspace join). Either way the frontend already knows about it.
+            workspaceId,
+            family: input.aiChannelFamily ?? "personal",
+            contextObjectId: input.contextObjectId,
+            contextObjectType: input.contextObjectType,
+            parentChannelId: input.parentChannelId,
+            branchPurpose: input.branchPurpose,
+            agentType: requestedAgentType,
+          });
+          channelId = resolvedChannel.id;
         }
       }
 
@@ -2049,10 +2090,11 @@ export const channelsRouter = router({
   getPersonalThread: protectedProcedure
     .input(z.object({ workspaceId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const channel = await ensurePersonalChannel(
-        ctx.userId,
-        input.workspaceId
-      );
+      const channel = await resolveAiChannelByFamily({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        family: "personal",
+      });
       return { channel };
     }),
 

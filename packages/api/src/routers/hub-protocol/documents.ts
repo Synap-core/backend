@@ -32,7 +32,7 @@ export const documentsRouter = router({
     .input(
       z.object({
         userId: z.string(),
-        workspaceId: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
         title: z.string().min(1),
         content: z.string().default(""),
         type: z
@@ -52,7 +52,7 @@ export const documentsRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: agentUserId,
         agentUserId,
-        workspaceId: input.workspaceId,
+        workspaceId: input.workspaceId ?? null,
         subjectType: "document",
         action: "create",
         source: "intelligence",
@@ -64,7 +64,7 @@ export const documentsRouter = router({
           type: input.type,
           // Content stored inline — written to MinIO only when approved
           content: input.content,
-          workspaceId: input.workspaceId,
+          workspaceId: input.workspaceId ?? null,
           userId: input.userId,
         },
       });
@@ -112,7 +112,7 @@ export const documentsRouter = router({
           size: metadata.size,
           mimeType: "text/markdown",
           userId: input.userId,
-          workspaceId: input.workspaceId,
+          workspaceId: input.workspaceId ?? null,
           currentVersion: 1,
           lastSavedVersion: 1,
         })

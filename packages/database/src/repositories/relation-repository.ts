@@ -17,7 +17,7 @@ export interface CreateRelationInput {
   targetEntityId: string;
   /** Relation type slug (from workspace relation_defs or system types) */
   type: string;
-  workspaceId: string;
+  workspaceId?: string | null;
   userId: string;
   metadata?: Record<string, unknown>;
 }
