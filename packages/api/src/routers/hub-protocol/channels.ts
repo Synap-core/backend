@@ -10,9 +10,9 @@
  *   User approves
  *     → proposals.approve handler executes channelsRouter.createExternalChannel
  *
- * The "channel.create_external_import" action is NOT in the default autoApproveFor
+ * The "channel.create_external" action is NOT in the default autoApproveFor
  * whitelist — users must explicitly approve importing external conversations.
- * Workspaces can opt in by adding "channel.create_external_import" to autoApproveFor.
+ * Workspaces can opt in by adding "channel.create_external" to autoApproveFor.
  *
  * A2AI procedures are for agent-to-agent async communication. OpenClaw uses these
  * to post messages into shared A2AI channels and poll for Synap IS responses.
@@ -138,7 +138,7 @@ export const channelsRouter = router({
         userId: input.userId,
         workspaceId: input.workspaceId,
         subjectType: "channel",
-        action: "create_external_import",
+        action: "create_external",
         data: {
           id: proposalId,
           externalSource: input.externalSource,

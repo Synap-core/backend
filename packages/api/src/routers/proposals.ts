@@ -563,7 +563,7 @@ export const proposalsRouter = router({
       // Execute createExternalChannel now that the user approved.
       if (
         proposal.targetType === "channel" &&
-        proposal.proposalType === "create_external_import"
+        proposal.proposalType === "create_external"
       ) {
         const data = (proposal.data ?? {}) as Record<string, unknown>;
         const membership = await getWorkspaceMembership(

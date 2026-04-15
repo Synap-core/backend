@@ -55,7 +55,7 @@ export interface IntelligenceHubRequest {
   deepAnalysis?: boolean;
   /** Workspace settings JSONB — forwarded to IS for agentModelPreferences tier overrides */
   workspaceSettings?: Record<string, unknown>;
-  /** Entity context: channel is scoped to this entity (entity_comments channels) */
+  /** Entity context: channel is scoped to this entity (thread + contextObjectType='entity') */
   contextObjectType?: string;
   contextObjectId?: string;
   /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */

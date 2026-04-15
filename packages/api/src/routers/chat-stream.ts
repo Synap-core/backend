@@ -22,7 +22,7 @@
  *      the X-Session-Token header / session cookie and sets `userId` on
  *      the Hono context.
  *   2. Resolve the target channelId (either user-supplied or the personal
- *      ai_thread channel for this workspace).
+ *      thread channel for this workspace).
  *   3. Resolve the Intelligence Service endpoint for this workspace.
  *   4. Build the IS payload and proxy the SSE response bytes straight
  *      through to the client.

@@ -26,6 +26,9 @@ export type {
   Channel,
   NewChannel,
   ChannelType,
+  ThreadKind,
+  ChannelScope,
+  FeedScope,
   ChannelStatus,
   ChannelAgentType,
 } from "@synap/database";

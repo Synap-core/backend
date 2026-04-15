@@ -31,19 +31,43 @@ const trpcX = trpc as any;
 export default function DocumentsPage() {
   const { documentId } = useParams<{ documentId?: string }>();
   const navigate = useNavigate();
-  const { workspaceName } = useWorkspace();
+  const { workspaceName, workspaceId } = useWorkspace();
   const [markdownOnly, setMarkdownOnly] = useState(true);
   const [query, setQuery] = useState("");
 
-  const listQuery = trpcX.documents.listGlobal.useQuery(
+  const listGlobalQuery = trpcX.documents.listGlobal.useQuery(
     { markdownOnly, limit: 150 },
     { retry: false }
   );
 
-  const detailQuery = trpcX.documents.getGlobal.useQuery(
-    { documentId: documentId! },
-    { enabled: !!documentId, retry: false }
+  const isMissingPodAdminWorkspace =
+    listGlobalQuery.isError &&
+    /pod administration workspace not found/i.test(
+      listGlobalQuery.error.message ?? ""
+    );
+
+  const listWorkspaceQuery = trpc.documents.listInWorkspace.useQuery(
+    { markdownOnly, limit: 150 },
+    { retry: false, enabled: isMissingPodAdminWorkspace && !!workspaceId }
   );
+
+  const listQuery = isMissingPodAdminWorkspace
+    ? listWorkspaceQuery
+    : listGlobalQuery;
+
+  const detailGlobalQuery = trpcX.documents.getGlobal.useQuery(
+    { documentId: documentId! },
+    { enabled: !!documentId && !isMissingPodAdminWorkspace, retry: false }
+  );
+
+  const detailWorkspaceQuery = trpc.documents.getInWorkspace.useQuery(
+    { documentId: documentId! },
+    { enabled: !!documentId && isMissingPodAdminWorkspace, retry: false }
+  );
+
+  const detailQuery = isMissingPodAdminWorkspace
+    ? detailWorkspaceQuery
+    : detailGlobalQuery;
 
   const filtered = useMemo(() => {
     const rows = listQuery.data?.documents ?? [];
@@ -90,6 +114,13 @@ export default function DocumentsPage() {
         <Text className="max-w-3xl text-small text-default-500">
           Browse file-backed notes across this pod. Markdown and plain text open
           in the viewer; PDFs and other binaries stay in Synap Browser.
+          {isMissingPodAdminWorkspace ? (
+            <>
+              {" "}
+              Pod-admin workspace was not found, so documents are shown from the
+              active workspace scope.
+            </>
+          ) : null}
           {workspaceName ? (
             <>
               {" "}
