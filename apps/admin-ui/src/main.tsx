@@ -38,10 +38,8 @@ if (!rootEl) {
   const isPublicAdminPath =
     pathname.endsWith("/admin/kratos") ||
     pathname.endsWith("/admin/bootstrap") ||
-    pathname.endsWith("/admin/connect") ||
     pathname === "/admin/kratos" ||
-    pathname === "/admin/bootstrap" ||
-    pathname === "/admin/connect";
+    pathname === "/admin/bootstrap";
 
   try {
     createRoot(rootEl).render(

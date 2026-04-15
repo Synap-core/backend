@@ -1,11 +1,11 @@
 /**
- * CLI entry point for create-admin script
+ * CLI: create first admin inside the backend image (or locally with tsx + .env).
  *
- * Usage: ADMIN_EMAIL=user@example.com ADMIN_PASSWORD=secret pnpm tsx scripts/create-admin-cli.ts
+ *   ADMIN_EMAIL=... ADMIN_PASSWORD=... node dist/scripts/create-admin-cli.js
  */
 
 import "dotenv/config";
-import { createAdminUser } from "../packages/api/src/scripts/create-admin-user.ts";
+import { createAdminUser } from "./create-admin-user.js";
 
 const email = process.env.ADMIN_EMAIL;
 const password = process.env.ADMIN_PASSWORD;
@@ -18,7 +18,7 @@ if (!email || !password) {
   console.error("");
   console.error("Usage:");
   console.error(
-    "  ADMIN_EMAIL=user@example.com ADMIN_PASSWORD=secret pnpm tsx scripts/create-admin-cli.ts"
+    "  ADMIN_EMAIL=user@example.com ADMIN_PASSWORD=secret node dist/scripts/create-admin-cli.js"
   );
   process.exit(1);
 }

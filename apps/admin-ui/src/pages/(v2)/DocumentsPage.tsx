@@ -26,7 +26,6 @@ function isProbablyExternal(href: string) {
 }
 
 /** Routers present at runtime but not yet in published `@synap-core/api-types`. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcX = trpc as any;
 
 export default function DocumentsPage() {

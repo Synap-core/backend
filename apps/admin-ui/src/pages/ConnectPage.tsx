@@ -89,7 +89,6 @@ export default function ConnectPage() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const connectMutation = (trpc as any).apiKeys.connectIntegration.useMutation({
     onSuccess: (data) => {
       setApiKey(data.apiKey);

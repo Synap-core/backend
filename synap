@@ -368,6 +368,44 @@ EOF
     echo -e "${GREEN}✓ Generated kratos.yml for domain: ${domain}${NC}"
 }
 
+# Wait until Kratos accepts traffic (used before first-admin seed).
+wait_for_kratos_ready() {
+    local i=0
+    while [ "$i" -lt 45 ]; do
+        if docker compose exec -T kratos wget --spider -q http://127.0.0.1:4433/health/ready 2>/dev/null; then
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 2
+    done
+    return 1
+}
+
+# Create first admin via script bundled in backend image (dist/scripts/create-admin-cli.js).
+run_preseed_admin_in_container() {
+    local email="$1"
+    local password="$2"
+    local attempt=1
+    local max_attempts=6
+
+    if ! wait_for_kratos_ready; then
+        echo -e "${YELLOW}⚠️  Kratos did not report ready in time; still attempting admin creation.${NC}"
+    fi
+
+    while [ "$attempt" -le "$max_attempts" ]; do
+        if docker compose exec -T \
+            -e "ADMIN_EMAIL=${email}" \
+            -e "ADMIN_PASSWORD=${password}" \
+            backend node dist/scripts/create-admin-cli.js; then
+            return 0
+        fi
+        echo -e "${YELLOW}⚠️  Admin seed attempt ${attempt}/${max_attempts} failed, retrying...${NC}"
+        attempt=$((attempt + 1))
+        sleep 8
+    done
+    return 1
+}
+
 # ============================================================================
 # INSTALL COMMAND
 # ============================================================================
@@ -382,6 +420,9 @@ cmd_install() {
     local ANTHROPIC_API_KEY=""
     local GOOGLE_AI_API_KEY=""
     local ADMIN_EMAIL=""
+    local ADMIN_PASSWORD=""
+    local ADMIN_PASSWORD_GENERATED=""
+    local ADMIN_SEED_OK=""
     local ADMIN_BOOTSTRAP_MODE=""
     local ADMIN_BOOTSTRAP_TOKEN=""
     local INTELLIGENCE_URL=""
@@ -436,6 +477,10 @@ cmd_install() {
                 ADMIN_EMAIL="$2"
                 shift 2
                 ;;
+            --admin-password)
+                ADMIN_PASSWORD="$2"
+                shift 2
+                ;;
             --admin-bootstrap-mode)
                 ADMIN_BOOTSTRAP_MODE="$2"
                 shift 2
@@ -488,6 +533,8 @@ ${YELLOW}Options:${NC}
   ${GREEN}--email <email>${NC}     Email for SSL certificates (required for production)
   ${GREEN}--repo-url <url>${NC}    Repository URL (default: synap-core/backend)
   ${GREEN}--non-interactive${NC}   Automated mode (no prompts)
+  ${GREEN}--admin-email <email>${NC}       Admin email (required for preseed)
+  ${GREEN}--admin-password <secret>${NC} First admin password (required for non-interactive preseed)
   ${GREEN}--admin-bootstrap-mode <preseed|token>${NC}  First admin bootstrap strategy
   ${GREEN}--admin-bootstrap-token <token>${NC}         One-time token (when mode=token)
   
@@ -754,6 +801,37 @@ EOF
             GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-$DEFAULT_GOOGLE_KEY}
         fi
     fi
+
+    # Interactive pre-seed: password for first admin (never written to .env)
+    if [ "$INTERACTIVE" = true ] && [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ] && [ -z "$ADMIN_PASSWORD" ]; then
+        if [ -z "$ADMIN_EMAIL" ]; then
+            echo -e "${RED}Error: admin email is required for preseed mode.${NC}"
+            exit 1
+        fi
+        echo ""
+        echo -e "${BLUE}🔑 First admin password${NC}"
+        echo "Creates the Kratos account for ${ADMIN_EMAIL}. Not stored in .env."
+        echo "Leave both blank to auto-generate a strong password (shown once after install)."
+        local pw1=""
+        local pw2=""
+        while true; do
+            read -s -p "Password: " pw1
+            echo ""
+            read -s -p "Confirm:  " pw2
+            echo ""
+            if [ -z "$pw1" ] && [ -z "$pw2" ]; then
+                ADMIN_PASSWORD=$(openssl rand -hex 16)
+                ADMIN_PASSWORD_GENERATED=1
+                break
+            fi
+            if [ "$pw1" = "$pw2" ]; then
+                ADMIN_PASSWORD="$pw1"
+                break
+            fi
+            echo -e "${RED}Passwords do not match. Try again (or leave both empty to auto-generate).${NC}"
+        done
+        unset pw1 pw2 2>/dev/null || true
+    fi
     
     # Normalize bootstrap mode defaults in non-interactive runs
     if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
@@ -771,6 +849,17 @@ EOF
 
     if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ] && [ -z "$ADMIN_BOOTSTRAP_TOKEN" ]; then
         ADMIN_BOOTSTRAP_TOKEN=$(openssl rand -hex 24)
+    fi
+
+    if [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ]; then
+        if [ -z "$ADMIN_EMAIL" ]; then
+            echo -e "${RED}Error: admin email is required for preseed (use --admin-email or interactive install).${NC}"
+            exit 1
+        fi
+        if [ "$INTERACTIVE" != true ] && [ -z "$ADMIN_PASSWORD" ]; then
+            echo -e "${RED}Error: non-interactive preseed requires --admin-password or ADMIN_PASSWORD in the environment.${NC}"
+            exit 1
+        fi
     fi
 
     # Validate required parameters
@@ -935,6 +1024,25 @@ EOF
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
     docker compose up -d --remove-orphans
 
+    if [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ]; then
+        echo ""
+        echo -e "${BLUE}👤 Creating first admin (Kratos + database)...${NC}"
+        ADMIN_SEED_OK=false
+        if run_preseed_admin_in_container "$ADMIN_EMAIL" "$ADMIN_PASSWORD"; then
+            ADMIN_SEED_OK=true
+            echo -e "${GREEN}✅ First admin created.${NC}"
+            if [ "$ADMIN_PASSWORD_GENERATED" = "1" ]; then
+                echo -e "${YELLOW}Auto-generated admin password (save securely): ${NC}${ADMIN_PASSWORD}"
+            fi
+        else
+            echo -e "${RED}❌ Automatic admin creation failed.${NC}"
+            echo "After fixing services, run from this directory (deploy/):"
+            echo "  docker compose exec -T -e ADMIN_EMAIL='${ADMIN_EMAIL}' -e ADMIN_PASSWORD='<password>' backend node dist/scripts/create-admin-cli.js"
+            echo "Or from repo root with .env loaded: pnpm tsx scripts/create-admin-cli.ts"
+        fi
+        unset ADMIN_PASSWORD
+    fi
+
     # Provision agent services requested at install time
     if [ "$WITH_OPENCLAW" = "true" ]; then
         echo ""
@@ -969,12 +1077,14 @@ EOF
         echo "  2) Use token: ${ADMIN_BOOTSTRAP_TOKEN}"
         echo "  3) Continue to registration and set your password"
     else
-        echo "  1) Pre-seed with CLI/script:"
-        echo "     ADMIN_EMAIL=<admin@email> ADMIN_PASSWORD='<strong-password>' pnpm tsx scripts/create-admin-cli.ts"
-        if [ -n "$ADMIN_EMAIL" ]; then
-            echo "     (suggested email from install: ${ADMIN_EMAIL})"
+        if [ "${ADMIN_SEED_OK:-}" = "true" ]; then
+            echo "  Pre-seed finished. Sign in at /admin with ${ADMIN_EMAIL}"
+        else
+            echo "  Pre-seed manually:"
+            echo "    docker compose exec -T -e ADMIN_EMAIL='<email>' -e ADMIN_PASSWORD='<password>' backend node dist/scripts/create-admin-cli.js"
+            echo "  Or from repo: ADMIN_EMAIL=... ADMIN_PASSWORD=... pnpm tsx scripts/create-admin-cli.ts"
+            echo "  Then open /admin"
         fi
-        echo "  2) Login at /admin after pre-seed"
     fi
     if [ "$WITH_OPENCLAW" = "true" ]; then
         echo "  ./synap services status openclaw  # Check OpenClaw status"
@@ -2143,6 +2253,100 @@ EOF
     esac
 }
 
+cmd_users() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    cd "$deploy_dir"
+
+    local subcommand="${1:-help}"
+    shift || true
+
+    case "$subcommand" in
+        list)
+            local limit="${1:-200}"
+            echo -e "${BLUE}👥 Listing users (limit=${limit})...${NC}"
+            docker compose exec -T backend \
+                sh -c "ACTION=list LIMIT='${limit}' node dist/scripts/user-admin-cli.js"
+            ;;
+
+        add-admin)
+            local email="${1:-}"
+            local password="${2:-}"
+            local name="${3:-}"
+            if [ -z "$email" ] || [ -z "$password" ]; then
+                echo -e "${RED}Usage: synap users add-admin <email> <password> [name]${NC}"
+                exit 1
+            fi
+            echo -e "${BLUE}👤 Creating admin user ${email}...${NC}"
+            docker compose exec -T backend \
+                sh -c "ACTION=add-admin ADMIN_EMAIL='${email}' ADMIN_PASSWORD='${password}' ADMIN_NAME='${name}' node dist/scripts/user-admin-cli.js"
+            ;;
+
+        reset-password|passwd)
+            local email="${1:-}"
+            local password="${2:-}"
+            if [ -z "$email" ] || [ -z "$password" ]; then
+                echo -e "${RED}Usage: synap users reset-password <email> <new-password>${NC}"
+                exit 1
+            fi
+            echo -e "${BLUE}🔐 Resetting password for ${email}...${NC}"
+            docker compose exec -T backend \
+                sh -c "ACTION=reset-password USER_EMAIL='${email}' USER_PASSWORD='${password}' node dist/scripts/user-admin-cli.js"
+            ;;
+
+        delete)
+            local email="${1:-}"
+            local assume_yes="false"
+            if [ "$email" = "--yes" ] || [ "$email" = "-y" ]; then
+                assume_yes="true"
+                email="${2:-}"
+            fi
+            if [ -z "$email" ]; then
+                echo -e "${RED}Usage: synap users delete [--yes|-y] <email>${NC}"
+                exit 1
+            fi
+            if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
+                echo -e "${YELLOW}⚠️  This deletes the user identity for ${email}.${NC}"
+                read -p "Continue? (y/N): " confirm
+                if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+                    echo "Cancelled."
+                    exit 0
+                fi
+            fi
+            echo -e "${BLUE}🗑️  Deleting user ${email}...${NC}"
+            docker compose exec -T backend \
+                sh -c "ACTION=delete USER_EMAIL='${email}' node dist/scripts/user-admin-cli.js"
+            ;;
+
+        help|--help|-h|"")
+            cat << EOF
+${BLUE}Synap Users${NC} — Manage pod users and passwords
+
+${YELLOW}Usage:${NC}
+  synap users list [limit]
+  synap users add-admin <email> <password> [name]
+  synap users reset-password <email> <new-password>
+  synap users delete [--yes|-y] <email>
+
+${YELLOW}Examples:${NC}
+  synap users list
+  synap users add-admin admin@example.com 'StrongPassw0rd!'
+  synap users reset-password relay@example.com 'NewStrongPassw0rd!'
+  synap users delete --yes relay@example.com
+EOF
+            ;;
+
+        *)
+            echo -e "${RED}Unknown users subcommand: $subcommand${NC}"
+            echo "Run 'synap users help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
 cmd_reset() {
     local deploy_dir=$(get_deploy_dir)
     if [ -z "$deploy_dir" ]; then
@@ -2251,6 +2455,7 @@ ${YELLOW}Management:${NC}
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
   synap services <sub> [type]    Manage external agent services (OpenClaw, ZeroClaw, etc.)
+  synap users <sub>              Manage pod users (list, add-admin, reset-password, delete)
   synap profiles <sub> [name]  Enable/disable optional compose profiles (rsshub, openclaw, monitoring)
   synap reset                    Reset all workspace data (keeps Kratos identities)
 
@@ -2292,6 +2497,8 @@ ${YELLOW}Examples:${NC}
   synap services status openclaw # Check OpenClaw status
   synap services rotate openclaw # Rotate OpenClaw API key
   synap services remove openclaw # Remove OpenClaw agent
+  synap users list
+  synap users reset-password relay@example.com 'NewStrongPassw0rd!'
   synap profiles enable rsshub     # RSSHub + browserless (optional stack)
   synap profiles disable openclaw  # Stop OpenClaw container
 
@@ -2373,6 +2580,10 @@ case "${1:-help}" in
     services)
         shift
         cmd_services "$@"
+        ;;
+    users)
+        shift
+        cmd_users "$@"
         ;;
     profiles)
         shift
