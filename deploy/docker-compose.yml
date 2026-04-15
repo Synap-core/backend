@@ -410,9 +410,10 @@ services:
       - "443:443/udp"
     volumes:
       # IMPORTANT: Use absolute path or ensure docker compose is run from deploy/ directory
-      # Relative path ./Caddyfile requires running: cd deploy && docker compose up
-      # For production, consider using absolute path: /srv/synap/synap-backend/deploy/Caddyfile
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # CADDYFILE_PATH selects the Caddyfile variant:
+      #   (unset)              → ./Caddyfile        — direct deployment, Caddy manages Let's Encrypt
+      #   ./Caddyfile.local    → Cloudflare Tunnel  — auto_https off, serves plain HTTP on port 80
+      - ${CADDYFILE_PATH:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - ./openclaw_auth.snippet:/etc/caddy/openclaw_auth.snippet:ro
       - caddy_data:/data
       - caddy_config:/config
