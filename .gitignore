@@ -59,3 +59,7 @@ kratos/kratos.yml
 kratos/kratos.yml.template
 kratos/kratos.yml.backup
 kratos/kratos.yml.*
+
+# MinIO runtime data (never source-controlled)
+data/
+**/.minio.sys/

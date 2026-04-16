@@ -420,6 +420,7 @@ cmd_install() {
     local EMAIL=""
     local ADMIN_EMAIL=""
     local ADMIN_PASSWORD=""
+    local ADMIN_PASSWORD_FROM_ARG=false
     local ADMIN_PASSWORD_GENERATED=""
     local ADMIN_SEED_OK=""
     local ADMIN_BOOTSTRAP_MODE=""
@@ -471,6 +472,7 @@ cmd_install() {
                 ;;
             --admin-password)
                 ADMIN_PASSWORD="$2"
+                ADMIN_PASSWORD_FROM_ARG=true
                 shift 2
                 ;;
             --admin-bootstrap-mode)
@@ -692,6 +694,34 @@ EOF
                 read -p "$prompt" ADMIN_EMAIL
                 ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
             fi
+
+            # Prompt for first-admin password immediately in interactive preseed mode
+            # unless it was explicitly provided with --admin-password.
+            if [ "$INTERACTIVE" = true ] && [ "$ADMIN_PASSWORD_FROM_ARG" != true ]; then
+                echo ""
+                echo -e "${BLUE}🔑 First admin password${NC}"
+                echo "Creates the Kratos account for ${ADMIN_EMAIL}. Not stored in .env."
+                echo "Leave both blank to auto-generate a strong password (shown once after install)."
+                local pw1=""
+                local pw2=""
+                while true; do
+                    read -s -p "Password: " pw1
+                    echo ""
+                    read -s -p "Confirm:  " pw2
+                    echo ""
+                    if [ -z "$pw1" ] && [ -z "$pw2" ]; then
+                        ADMIN_PASSWORD=$(openssl rand -hex 16)
+                        ADMIN_PASSWORD_GENERATED=1
+                        break
+                    fi
+                    if [ "$pw1" = "$pw2" ]; then
+                        ADMIN_PASSWORD="$pw1"
+                        break
+                    fi
+                    echo -e "${RED}Passwords do not match. Try again (or leave both empty to auto-generate).${NC}"
+                done
+                unset pw1 pw2 2>/dev/null || true
+            fi
         else
             ADMIN_EMAIL=""
             if [ -z "$ADMIN_BOOTSTRAP_TOKEN" ]; then
@@ -755,37 +785,6 @@ EOF
         echo "Configure AI routing through Intelligence Service now or later."
     fi
 
-    # Interactive pre-seed: password for first admin (never written to .env)
-    if [ "$INTERACTIVE" = true ] && [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ] && [ -z "$ADMIN_PASSWORD" ]; then
-        if [ -z "$ADMIN_EMAIL" ]; then
-            echo -e "${RED}Error: admin email is required for preseed mode.${NC}"
-            exit 1
-        fi
-        echo ""
-        echo -e "${BLUE}🔑 First admin password${NC}"
-        echo "Creates the Kratos account for ${ADMIN_EMAIL}. Not stored in .env."
-        echo "Leave both blank to auto-generate a strong password (shown once after install)."
-        local pw1=""
-        local pw2=""
-        while true; do
-            read -s -p "Password: " pw1
-            echo ""
-            read -s -p "Confirm:  " pw2
-            echo ""
-            if [ -z "$pw1" ] && [ -z "$pw2" ]; then
-                ADMIN_PASSWORD=$(openssl rand -hex 16)
-                ADMIN_PASSWORD_GENERATED=1
-                break
-            fi
-            if [ "$pw1" = "$pw2" ]; then
-                ADMIN_PASSWORD="$pw1"
-                break
-            fi
-            echo -e "${RED}Passwords do not match. Try again (or leave both empty to auto-generate).${NC}"
-        done
-        unset pw1 pw2 2>/dev/null || true
-    fi
-    
     # Normalize bootstrap mode defaults in non-interactive runs
     if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
         if [ -n "$ADMIN_BOOTSTRAP_TOKEN" ]; then
@@ -826,26 +825,69 @@ EOF
         exit 1
     fi
     
-    # Create installation directory if cloning
+    # Create/use installation directory if cloning
     if [ "$NEEDS_CLONE" = true ]; then
-        echo -e "${BLUE}📁 Creating installation directory: ${INSTALL_DIR}${NC}"
+        echo -e "${BLUE}📁 Installation directory: ${INSTALL_DIR}${NC}"
+
+        # If directory exists, handle idempotently
         if [ -d "$INSTALL_DIR" ]; then
-            echo -e "${YELLOW}⚠️  Directory already exists: ${INSTALL_DIR}${NC}"
-            if [ "$INTERACTIVE" = true ]; then
-                read -p "Continue? (y/N): " CONTINUE
-                if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
-                    echo "Installation cancelled"
-                    exit 0
+            # Reuse if it already looks like a valid backend checkout
+            if [ -f "$INSTALL_DIR/deploy/docker-compose.yml" ]; then
+                echo -e "${GREEN}✓ Existing Synap backend directory detected — reusing${NC}"
+                NEEDS_CLONE=false
+            else
+                # Check whether directory is empty
+                if [ -z "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
+                    echo -e "${BLUE}ℹ️  Existing directory is empty — cloning into it${NC}"
+                else
+                    echo -e "${YELLOW}⚠️  Directory exists and is not empty: ${INSTALL_DIR}${NC}"
+                    if [ "$INTERACTIVE" = true ]; then
+                        echo "  1) Reset directory and clone fresh (destructive)"
+                        echo "  2) Choose a different install directory"
+                        echo "  3) Cancel"
+                        read -p "Choice [1/2/3] (3): " DIR_CHOICE
+                        DIR_CHOICE=${DIR_CHOICE:-3}
+                        case "$DIR_CHOICE" in
+                            1)
+                                echo -e "${BLUE}🧹 Resetting installation directory...${NC}"
+                                if ! rm -rf "$INSTALL_DIR" 2>/dev/null; then
+                                    echo -e "${RED}❌ Could not remove ${INSTALL_DIR}${NC}"
+                                    echo "Try one of:"
+                                    echo "  sudo rm -rf \"$INSTALL_DIR\""
+                                    echo "  or choose a different --dir"
+                                    exit 1
+                                fi
+                                ;;
+                            2)
+                                read -p "Enter new installation directory: " NEW_INSTALL_DIR
+                                if [ -z "$NEW_INSTALL_DIR" ]; then
+                                    echo -e "${RED}No directory entered. Installation cancelled.${NC}"
+                                    exit 1
+                                fi
+                                INSTALL_DIR="$NEW_INSTALL_DIR"
+                                ;;
+                            *)
+                                echo "Installation cancelled"
+                                exit 0
+                                ;;
+                        esac
+                    else
+                        echo -e "${RED}Error: target directory exists and is not empty: ${INSTALL_DIR}${NC}"
+                        echo "Use --dir to choose another directory, or remove it first."
+                        exit 1
+                    fi
                 fi
             fi
-        else
-            mkdir -p "$INSTALL_DIR"
         fi
+
+        if [ "$NEEDS_CLONE" = true ]; then
+            # Ensure parent exists; clone creates INSTALL_DIR itself.
+            mkdir -p "$(dirname "$INSTALL_DIR")"
+            echo -e "${BLUE}⬇️  Cloning repository...${NC}"
+            git clone "$REPO_URL" "$INSTALL_DIR"
+        fi
+
         cd "$INSTALL_DIR"
-        
-        # Clone repository
-        echo -e "${BLUE}⬇️  Cloning repository...${NC}"
-        git clone "$REPO_URL" .
     else
         # Use existing repo
         echo -e "${GREEN}✓ Using existing repository${NC}"
