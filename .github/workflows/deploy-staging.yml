@@ -34,6 +34,12 @@ jobs:
             echo "Staging secrets not configured — deployment skipped"
           fi
 
+          if [ -n "${{ secrets.STAGING_HUB_API_KEY }}" ]; then
+            echo "hub_api_key_configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "hub_api_key_configured=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Deploy to staging pod via CP API
         if: steps.check-secrets.outputs.staging_configured == 'true'
         run: |
@@ -59,7 +65,7 @@ jobs:
           exit 1
 
       - name: Run smoke tests against staging
-        if: steps.check-secrets.outputs.staging_configured == 'true' && secrets.STAGING_HUB_API_KEY != ''
+        if: steps.check-secrets.outputs.staging_configured == 'true' && steps.check-secrets.outputs.hub_api_key_configured == 'true'
         run: |
           chmod +x scripts/smoke-test.sh
           BASE_URL="${{ secrets.STAGING_POD_URL }}" \
@@ -70,7 +76,7 @@ jobs:
           HUB_API_KEY: ${{ secrets.STAGING_HUB_API_KEY }}
 
       - name: Run health-only smoke tests (no API key)
-        if: steps.check-secrets.outputs.staging_configured == 'true' && secrets.STAGING_HUB_API_KEY == ''
+        if: steps.check-secrets.outputs.staging_configured == 'true' && steps.check-secrets.outputs.hub_api_key_configured == 'false'
         run: |
           chmod +x scripts/smoke-test.sh
           BASE_URL="${{ secrets.STAGING_POD_URL }}" \
