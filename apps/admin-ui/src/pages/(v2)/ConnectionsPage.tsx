@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Alert, Button, Card, Chip, Spinner, Tabs, Text } from "@heroui/react";
 import {
   IconBrandTelegram,
@@ -27,13 +27,14 @@ import {
 
 export default function ConnectionsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { workspaceId } = useWorkspace();
-  const [activeTab, setActiveTab] = useState("integrations");
+  const [activeTab, setActiveTab] = useState(
+    searchParams.get("tab") === "advanced-sources"
+      ? "advanced-sources"
+      : "integrations"
+  );
   const [lastFlowId, setLastFlowId] = useState<string | null>(null);
-
-  const healthQuery = trpc.system.getServiceHealth.useQuery(undefined, {
-    refetchInterval: 60_000,
-  });
 
   const capabilitiesQuery = trpc.capabilities.list.useQuery(undefined, {
     refetchInterval: 30_000,
@@ -159,7 +160,17 @@ export default function ConnectionsPage() {
 
       <Tabs.Root
         selectedKey={activeTab}
-        onSelectionChange={(k) => setActiveTab(String(k))}
+        onSelectionChange={(k) => {
+          const next = String(k);
+          setActiveTab(next);
+          const nextParams = new URLSearchParams(searchParams);
+          if (next === "advanced-sources") {
+            nextParams.set("tab", "advanced-sources");
+          } else {
+            nextParams.delete("tab");
+          }
+          setSearchParams(nextParams, { replace: true });
+        }}
       >
         <Tabs.ListContainer>
           <Tabs.List>
@@ -345,61 +356,19 @@ export default function ConnectionsPage() {
             <Card.Header>
               <Card.Title className="inline-flex items-center gap-2">
                 <IconCloud size={18} />
-                Infrastructure & dependencies
+                Runtime dependencies
               </Card.Title>
               <Card.Description>
-                From <code className="text-xs">system.getServiceHealth</code>
+                Core infrastructure checks and logs are managed in Pod Services.
               </Card.Description>
             </Card.Header>
             <Card.Content>
-              {healthQuery.isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Spinner color="accent" />
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-medium border border-divider">
-                  <table className="w-full border-collapse text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-divider bg-default-50/80">
-                        <th className="px-3 py-2 font-medium">Service</th>
-                        <th className="px-3 py-2 font-medium">Status</th>
-                        <th className="px-3 py-2 font-medium">Detail</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(healthQuery.data ?? []).map((row) => (
-                        <tr
-                          key={row.name}
-                          className="border-b border-divider/60 odd:bg-default-50/20"
-                        >
-                          <td className="px-3 py-2 font-medium">{row.name}</td>
-                          <td className="px-3 py-2">
-                            <Chip
-                              size="sm"
-                              variant="soft"
-                              color={
-                                row.status === "healthy"
-                                  ? "success"
-                                  : row.status === "degraded"
-                                    ? "warning"
-                                    : "danger"
-                              }
-                            >
-                              {row.status}
-                            </Chip>
-                          </td>
-                          <td className="px-3 py-2 text-default-500">
-                            {row.message ?? "—"}
-                            {typeof row.latency === "number"
-                              ? ` · ${row.latency}ms`
-                              : ""}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <Button
+                variant="outline"
+                onPress={() => navigate("/pod-services")}
+              >
+                Open Pod Services
+              </Button>
             </Card.Content>
           </Card.Root>
 

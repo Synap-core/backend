@@ -36,11 +36,16 @@ import {
 } from "@synap/database/schema";
 import { count } from "@synap/database";
 import crypto from "node:crypto";
+import { exec as execCb } from "node:child_process";
+import { promisify } from "node:util";
+import { access, readFile } from "node:fs/promises";
 import {
   getDynamicCorsOrigins,
   setDynamicCorsOrigins,
 } from "../utils/cors-cache.js";
 import { getTrustedIssuerSeedHealth } from "../utils/startup-health.js";
+
+const execAsync = promisify(execCb);
 
 /**
  * System Router
@@ -806,6 +811,99 @@ export const systemRouter = router({
   }),
 
   /**
+   * Pod runtime config snapshot (sanitized) for admin diagnostics.
+   */
+  getPodRuntimeConfig: podAdminProcedure.query(async () => {
+    const envKeys = [
+      "DOMAIN",
+      "OPENCLAW_DOMAIN",
+      "PUBLIC_URL",
+      "INTELLIGENCE_HUB_URL",
+      "CONTROL_PLANE_URL",
+      "ALLOWED_ORIGINS",
+      "EMBEDDING_PROVIDER",
+      "NODE_ENV",
+    ] as const;
+
+    const env = envKeys.map((key) => ({
+      key,
+      value: process.env[key] ?? null,
+    }));
+
+    const deployCandidates = [
+      "/opt/synap/deploy",
+      process.cwd(),
+      `${process.cwd()}/deploy`,
+    ];
+
+    const caddy = await readFirstAvailableFile(
+      deployCandidates.map((dir) => `${dir}/Caddyfile`)
+    );
+    const openclawAuthSnippet = await readFirstAvailableFile(
+      deployCandidates.map((dir) => `${dir}/openclaw_auth.snippet`)
+    );
+
+    return {
+      env,
+      files: {
+        caddyfile: caddy,
+        openclawAuthSnippet,
+      },
+      notes: {
+        fileAccess:
+          "If file content is unavailable, the API container likely cannot read host deploy files in this environment.",
+      },
+    };
+  }),
+
+  /**
+   * Fetch service logs via docker compose (best effort).
+   */
+  getServiceLogs: podAdminProcedure
+    .input(
+      z.object({
+        service: z.string().regex(/^[a-z0-9-_]+$/i),
+        tail: z.number().min(20).max(1000).default(200),
+      })
+    )
+    .query(async ({ input }) => {
+      const composeFiles = [
+        "/opt/synap/deploy/docker-compose.yml",
+        `${process.cwd()}/docker-compose.yml`,
+        `${process.cwd()}/deploy/docker-compose.yml`,
+      ];
+
+      const composeFile =
+        (await firstExistingFile(composeFiles)) ?? "docker-compose.yml";
+
+      const cmd = `docker compose -f "${composeFile}" logs --tail=${input.tail} "${input.service}"`;
+      try {
+        const { stdout, stderr } = await execAsync(cmd, {
+          timeout: 15_000,
+          maxBuffer: 1024 * 1024 * 8,
+        });
+        const text = [stdout, stderr].filter(Boolean).join("\n").trim();
+        return {
+          service: input.service,
+          tail: input.tail,
+          logs: text || "No logs returned.",
+          command: cmd,
+        };
+      } catch (error) {
+        return {
+          service: input.service,
+          tail: input.tail,
+          logs: "",
+          command: cmd,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Unable to fetch logs in this runtime environment.",
+        };
+      }
+    }),
+
+  /**
    * Get Data Pod Stats
    *
    * Returns global counts for the Data Pod overview dashboard.
@@ -1086,3 +1184,28 @@ export const systemRouter = router({
       return { origins: input.origins, merged: getDynamicCorsOrigins() };
     }),
 });
+
+async function firstExistingFile(paths: string[]): Promise<string | null> {
+  for (const p of paths) {
+    try {
+      await access(p);
+      return p;
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
+async function readFirstAvailableFile(paths: string[]) {
+  const file = await firstExistingFile(paths);
+  if (!file) {
+    return { path: null, content: null };
+  }
+  try {
+    const content = await readFile(file, "utf-8");
+    return { path: file, content };
+  } catch {
+    return { path: file, content: null };
+  }
+}

@@ -160,7 +160,8 @@ services:
       HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
       NODE_ENV: production
     command: >
-      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
+      sh -c "node -e \"const fs=require('fs');const file='/app/migrations-drizzle/0000_broad_mathemanic.sql';if(fs.existsSync(file)){fs.writeFileSync(file,'-- patched: stale baseline disabled\\n');console.log('Patched stale migration:',file);}else{console.log('No stale migration to patch');}\" &&
+             node node_modules/@synap/database/dist/scripts/migrate.js &&
              node node_modules/@synap/database/dist/scripts/init-hub-keys.js"
     restart: "no"
     depends_on:

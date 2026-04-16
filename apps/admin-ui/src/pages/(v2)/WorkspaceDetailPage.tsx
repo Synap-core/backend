@@ -640,11 +640,14 @@ export default function WorkspaceDetailPage() {
               Provision Docker-based agent containers (OpenClaw, ZeroClaw, …)
               that connect to this workspace via Hub Protocol.
             </Text>
-            <Link to="/services" className="no-underline">
+            <Link
+              to="/connections?tab=advanced-sources"
+              className="no-underline"
+            >
               <Button variant="ghost" className="w-fit">
                 <span className="inline-flex items-center gap-2">
                   <IconPlug size={16} />
-                  Manage Services
+                  Manage Integrations
                 </span>
               </Button>
             </Link>

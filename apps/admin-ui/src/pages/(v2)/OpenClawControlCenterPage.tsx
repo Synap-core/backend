@@ -138,20 +138,20 @@ export default function OpenClawControlCenterPage() {
         <div className="flex items-center gap-2">
           <IconBrandOpenai size={24} className="text-primary" />
           <Text className="text-2xl font-semibold">
-            OpenClaw control center
+            OpenClaw add-on control center
           </Text>
         </div>
         <Text className="text-sm text-default-500">
-          Hybrid operations: infrastructure via Synap lifecycle, runtime via
-          OpenClaw-focused controls. Monitoring is pod-wide, activation is
-          workspace-scoped.
+          Monitoring add-on module: use this page for OpenClaw lifecycle and
+          diagnostics, and Pod Services for core runtime health/logs. Monitoring
+          is pod-wide, activation is workspace-scoped.
         </Text>
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Chip size="sm" variant="soft" color="default">
-            Scope: Pod-wide monitoring
+            Monitoring: Pod-wide
           </Chip>
           <Chip size="sm" variant="soft" color="accent">
-            Scope: Workspace activation
+            Activation: Workspace-scoped
           </Chip>
         </div>
       </header>

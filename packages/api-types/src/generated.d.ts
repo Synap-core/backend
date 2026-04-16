@@ -3179,6 +3179,61 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		getPodRuntimeConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				env: {
+					key: "NODE_ENV" | "PUBLIC_URL" | "DOMAIN" | "OPENCLAW_DOMAIN" | "INTELLIGENCE_HUB_URL" | "CONTROL_PLANE_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
+					value: string | null;
+				}[];
+				files: {
+					caddyfile: {
+						path: null;
+						content: null;
+					} | {
+						path: string;
+						content: string;
+					} | {
+						path: string;
+						content: null;
+					};
+					openclawAuthSnippet: {
+						path: null;
+						content: null;
+					} | {
+						path: string;
+						content: string;
+					} | {
+						path: string;
+						content: null;
+					};
+				};
+				notes: {
+					fileAccess: string;
+				};
+			};
+			meta: object;
+		}>;
+		getServiceLogs: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				service: string;
+				tail?: number | undefined;
+			};
+			output: {
+				service: string;
+				tail: number;
+				logs: string;
+				command: string;
+				error?: undefined;
+			} | {
+				service: string;
+				tail: number;
+				logs: string;
+				command: string;
+				error: string;
+			};
+			meta: object;
+		}>;
 		getDataPodStats: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {

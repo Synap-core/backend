@@ -4,17 +4,18 @@ import { Command } from "cmdk";
 import {
   IconHome,
   IconSearch,
-  IconUser,
-  IconTimeline,
-  IconRefresh,
   IconCopy,
+  IconRefresh,
+  IconTimeline,
+  IconUser,
   IconUsers,
   IconBuildingCommunity,
-  IconKey,
   IconCheckbox,
+  IconKey,
   IconTerminal2,
   IconPlug,
   IconPlugConnected,
+  IconShieldCheck,
   IconShieldLock,
   IconFileText,
   IconRobot,
@@ -80,7 +81,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   const sections: CommandSection[] = [
     {
-      heading: "Modules",
+      heading: "Data & Search",
       entries: [
         {
           icon: <IconHome size={18} />,
@@ -88,48 +89,6 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           description: "Pod health & activity",
           keywords: ["home", "overview", "health", "dashboard"],
           onSelect: () => handleNavigate("/"),
-        },
-        {
-          icon: <IconPlugConnected size={18} />,
-          label: "Pod services",
-          description: "Runtime health for core pod services",
-          keywords: ["pod", "services", "runtime", "health", "docker"],
-          onSelect: () => handleNavigate("/pod-services"),
-        },
-        {
-          icon: <IconPlug size={18} />,
-          label: "External sources",
-          description: "RSS, Telegram, connectors, external agents",
-          keywords: ["connectors", "rss", "telegram", "sources", "external"],
-          onSelect: () => handleNavigate("/external-sources"),
-        },
-        {
-          icon: <IconRobot size={18} />,
-          label: "OpenClaw",
-          description: "Instantiate, monitor, and operate OpenClaw",
-          keywords: ["openclaw", "agent", "operations", "monitoring", "debug"],
-          onSelect: () => handleNavigate("/openclaw"),
-        },
-        {
-          icon: <IconShieldLock size={18} />,
-          label: "Secrets & keys",
-          description: "API keys overview and vault metadata",
-          keywords: ["secrets", "vault", "keys", "security"],
-          onSelect: () => handleNavigate("/secrets"),
-        },
-        {
-          icon: <IconUsers size={18} />,
-          label: "Users",
-          description: "Humans and agents on this pod",
-          keywords: ["users", "people", "agents"],
-          onSelect: () => handleNavigate("/users"),
-        },
-        {
-          icon: <IconBuildingCommunity size={18} />,
-          label: "Workspaces",
-          description: "Workspaces and membership",
-          keywords: ["workspaces", "spaces", "teams"],
-          onSelect: () => handleNavigate("/workspaces"),
         },
         {
           icon: <IconFileText size={18} />,
@@ -146,12 +105,76 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           onSelect: () => handleNavigate("/events"),
         },
         {
+          icon: <IconBuildingCommunity size={18} />,
+          label: "Workspaces",
+          description: "Workspaces and membership",
+          keywords: ["workspaces", "spaces", "teams"],
+          onSelect: () => handleNavigate("/workspaces"),
+        },
+        {
+          icon: <IconUsers size={18} />,
+          label: "Users",
+          description: "Humans and agents on this pod",
+          keywords: ["users", "people", "agents"],
+          onSelect: () => handleNavigate("/users"),
+        },
+      ],
+    },
+    {
+      heading: "Monitoring",
+      entries: [
+        {
+          icon: <IconPlugConnected size={18} />,
+          label: "Pod services",
+          description: "Runtime health, logs, and runtime config",
+          keywords: ["pod", "services", "runtime", "health", "docker", "logs"],
+          onSelect: () => handleNavigate("/pod-services"),
+        },
+        {
+          icon: <IconPlug size={18} />,
+          label: "Integrations",
+          description: "External systems, connectors, and advanced sources",
+          keywords: ["connectors", "rss", "telegram", "sources", "external"],
+          onSelect: () => handleNavigate("/connections"),
+        },
+        {
+          icon: <IconRobot size={18} />,
+          label: "Add-ons (OpenClaw)",
+          description: "Manage OpenClaw lifecycle and troubleshooting",
+          keywords: ["openclaw", "addon", "operations", "monitoring", "debug"],
+          onSelect: () => handleNavigate("/openclaw"),
+        },
+      ],
+    },
+    {
+      heading: "Governance",
+      entries: [
+        {
+          icon: <IconShieldLock size={18} />,
+          label: "Secrets",
+          description: "Vault metadata and key inventories",
+          keywords: ["secrets", "vault", "keys", "security"],
+          onSelect: () => handleNavigate("/secrets"),
+        },
+        {
           icon: <IconKey size={18} />,
           label: "API keys",
           description: "Hub protocol keys and scopes",
           keywords: ["api", "keys", "token", "integration", "hub"],
           onSelect: () => handleNavigate("/api-keys"),
         },
+        {
+          icon: <IconShieldCheck size={18} />,
+          label: "Trusted issuers",
+          description: "Manage issuer approvals and trust",
+          keywords: ["issuer", "trust", "security", "approval"],
+          onSelect: () => handleNavigate("/trusted-issuers"),
+        },
+      ],
+    },
+    {
+      heading: "Workspace",
+      entries: [
         {
           icon: <IconHome size={18} />,
           label: "Workspace home",

@@ -1,9 +1,8 @@
-import { Link, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { Button, cn, Separator } from "@heroui/react";
 import {
   IconHome,
   IconSearch,
-  IconKey,
   IconTerminal2,
   IconCheckbox,
   IconUsers,
@@ -31,18 +30,11 @@ interface MainNavProps {
 
 const podSections: NavListSection[] = [
   {
-    label: "Data pod",
-    items: [
-      { path: "/", label: "Pod overview", icon: IconHome },
-      {
-        path: "/pod-services",
-        label: "Pod services",
-        icon: IconPlugConnected,
-      },
-    ],
+    label: "Overview",
+    items: [{ path: "/", label: "Pod overview", icon: IconHome }],
   },
   {
-    label: "Data",
+    label: "Data & search",
     items: [
       { path: "/documents", label: "Documents", icon: IconFileText },
       { path: "/events", label: "Events", icon: IconSearch },
@@ -55,16 +47,26 @@ const podSections: NavListSection[] = [
     ],
   },
   {
-    label: "External",
+    label: "Monitoring",
     items: [
-      { path: "/connections", label: "External connections", icon: IconPlug },
-      { path: "/openclaw", label: "OpenClaw", icon: IconRobot },
+      {
+        path: "/pod-services",
+        label: "Pod services",
+        icon: IconPlugConnected,
+      },
+      {
+        path: "/connections",
+        label: "Integrations",
+        icon: IconPlug,
+      },
+      { path: "/openclaw", label: "Add-ons (OpenClaw)", icon: IconRobot },
     ],
   },
   {
     label: "Governance",
     items: [
       { path: "/secrets", label: "Secrets & keys", icon: IconShieldLock },
+      { path: "/api-keys", label: "API keys", icon: IconShieldLock },
       {
         path: "/trusted-issuers",
         label: "Trusted issuers",
@@ -224,45 +226,7 @@ export default function MainNav({
           </Button>
         ) : null}
 
-        {isAdmin ? (
-          <Link
-            to="/api-keys"
-            onClick={onNavigate}
-            title={collapsed ? "Hub API keys (full)" : undefined}
-            className={cn(
-              "group relative flex items-center text-sm text-default-600 transition-colors hover:bg-default-100/80 hover:text-foreground",
-              collapsed
-                ? "justify-center rounded-2xl p-2.5"
-                : "gap-3 rounded-xl px-3 py-2.5",
-              isActive("/api-keys")
-                ? "bg-[var(--admin-fluid-selected)] font-semibold text-foreground shadow-sm"
-                : undefined
-            )}
-          >
-            {!collapsed && isActive("/api-keys") ? (
-              <span
-                className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-primary"
-                aria-hidden
-              />
-            ) : null}
-            <span
-              className={cn(
-                "flex shrink-0 items-center justify-center",
-                collapsed ? "h-9 w-9 rounded-2xl" : "h-8 w-8 rounded-xl",
-                isActive("/api-keys")
-                  ? "bg-primary/16 text-primary"
-                  : "bg-default-100 text-default-500 group-hover:bg-default-200 group-hover:text-default-700"
-              )}
-            >
-              <IconKey size={collapsed ? 18 : 17} />
-            </span>
-            {collapsed ? (
-              <span className="sr-only">Hub API keys (full)</span>
-            ) : (
-              <span className="truncate">Hub API keys (full)</span>
-            )}
-          </Link>
-        ) : null}
+        {/* Footer intentionally reserved for layout controls only. */}
       </div>
     </nav>
   );

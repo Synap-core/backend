@@ -15,7 +15,6 @@ import SecretsPage from "./pages/(v2)/SecretsPage";
 import DocumentsPage from "./pages/(v2)/DocumentsPage";
 import PodServicesPage from "./pages/(v2)/PodServicesPage";
 import ConnectionsPage from "./pages/(v2)/ConnectionsPage";
-import ExternalSourcesPage from "./pages/(v2)/ExternalSourcesPage";
 import ConnectionDetailPage from "./pages/(v2)/ConnectionDetailPage";
 import OpenClawControlCenterPage from "./pages/(v2)/OpenClawControlCenterPage";
 
@@ -37,30 +36,23 @@ function App() {
       <Route path="bootstrap" element={<BootstrapAdminPage />} />
 
       <Route path="/" element={<MainLayout />}>
-        {/* Data Pod Routes */}
+        {/* Shared overview */}
         <Route index element={<DashboardPage />} />
-        <Route path="users" element={<UsersPage />} />
+
+        {/* Data & Search */}
+        <Route path="documents/:documentId?" element={<DocumentsPage />} />
         <Route path="events" element={<InvestigatePage />} />
-        <Route path="api-keys" element={<ApiKeysPage />} />
+        <Route path="workspaces/:id" element={<WorkspaceDetailPage />} />
+        <Route path="workspaces" element={<WorkspacesPage />} />
+        <Route path="users" element={<UsersPage />} />
+
+        {/* Monitoring */}
         <Route path="pod-services" element={<PodServicesPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
         <Route
           path="connections/:integrationId"
           element={<ConnectionDetailPage />}
         />
-        <Route path="secrets" element={<SecretsPage />} />
-        <Route path="documents/:documentId?" element={<DocumentsPage />} />
-
-        <Route path="workspace" element={<WorkspaceDashboardPage />} />
-        <Route path="workspaces" element={<WorkspacesPage />} />
-        <Route path="workspaces/:id" element={<WorkspaceDetailPage />} />
-        <Route path="proposals" element={<ProposalsPage />} />
-        <Route path="intelligence" element={<IntelligencePage />} />
-        <Route
-          path="external-sources"
-          element={<Navigate to="/connections?tab=advanced-sources" replace />}
-        />
-        <Route path="services" element={<ExternalSourcesPage />} />
         <Route path="openclaw" element={<OpenClawControlCenterPage />} />
         <Route
           path="openclaw/onboarding"
@@ -78,7 +70,26 @@ function App() {
           path="openclaw/troubleshooting"
           element={<OpenClawControlCenterPage />}
         />
+
+        {/* Governance */}
+        <Route path="secrets" element={<SecretsPage />} />
+        <Route path="api-keys" element={<ApiKeysPage />} />
         <Route path="trusted-issuers" element={<TrustedIssuersPage />} />
+
+        {/* Workspace scope */}
+        <Route path="workspace" element={<WorkspaceDashboardPage />} />
+        <Route path="proposals" element={<ProposalsPage />} />
+        <Route path="intelligence" element={<IntelligencePage />} />
+
+        {/* Legacy aliases */}
+        <Route
+          path="external-sources"
+          element={<Navigate to="/connections?tab=advanced-sources" replace />}
+        />
+        <Route
+          path="services"
+          element={<Navigate to="/connections?tab=advanced-sources" replace />}
+        />
       </Route>
     </Routes>
   );

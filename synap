@@ -98,6 +98,7 @@ generate_and_create_env() {
     local TYPESENSE_KEY=$(openssl rand -hex 24)
     local TYPESENSE_ADMIN_KEY=$(openssl rand -hex 24)
     local HYDRA_SECRETS_SYSTEM=$(openssl rand -hex 24)
+    local SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)
     
     local backend_version="latest"
     if [ "$from_source" = "true" ]; then
@@ -128,8 +129,8 @@ OPENAI_API_KEY=${openai_key}
 ANTHROPIC_API_KEY=${anthropic_key}
 GOOGLE_AI_API_KEY=${google_key}
 
-# Embeddings: use 'openai' (requires OPENAI_API_KEY) or 'deterministic' (no key needed)
-EMBEDDING_PROVIDER=$([ -n "${openai_key}" ] && echo "openai" || echo "deterministic")
+# Embeddings are deterministic by default (no provider key required)
+EMBEDDING_PROVIDER=deterministic
 
 # Admin Configuration
 ADMIN_EMAIL=${admin_email}
@@ -147,6 +148,7 @@ MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
 TYPESENSE_API_KEY=${TYPESENSE_KEY}
 TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
 ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
+SYNAP_SERVICE_ENCRYPTION_KEY=${SYNAP_SERVICE_ENCRYPTION_KEY}
 
 # Allowed CORS origins (comma-separated frontend URLs)
 # Add your Electron app origin or web client URL here
@@ -416,9 +418,6 @@ cmd_install() {
     local INSTALL_DIR=""
     local DOMAIN=""
     local EMAIL=""
-    local OPENAI_API_KEY=""
-    local ANTHROPIC_API_KEY=""
-    local GOOGLE_AI_API_KEY=""
     local ADMIN_EMAIL=""
     local ADMIN_PASSWORD=""
     local ADMIN_PASSWORD_GENERATED=""
@@ -464,18 +463,6 @@ cmd_install() {
                 ;;
             --email)
                 EMAIL="$2"
-                shift 2
-                ;;
-            --openai-key)
-                OPENAI_API_KEY="$2"
-                shift 2
-                ;;
-            --anthropic-key)
-                ANTHROPIC_API_KEY="$2"
-                shift 2
-                ;;
-            --google-key)
-                GOOGLE_AI_API_KEY="$2"
                 shift 2
                 ;;
             --admin-email)
@@ -640,9 +627,6 @@ EOF
     # Load existing .env values as defaults (if .env exists)
     local DEFAULT_DOMAIN=""
     local DEFAULT_EMAIL=""
-    local DEFAULT_OPENAI_KEY=""
-    local DEFAULT_ANTHROPIC_KEY=""
-    local DEFAULT_GOOGLE_KEY=""
     local DEFAULT_ADMIN_EMAIL=""
     local DEFAULT_ADMIN_BOOTSTRAP_MODE=""
     local DEFAULT_INTEL_URL=""
@@ -651,9 +635,6 @@ EOF
     if [ -n "$deploy_env_path" ] && [ -f "$deploy_env_path" ]; then
         DEFAULT_DOMAIN=$(grep "^DOMAIN=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_EMAIL=$(grep "^LETSENCRYPT_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
-        DEFAULT_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
-        DEFAULT_ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
-        DEFAULT_GOOGLE_KEY=$(grep "^GOOGLE_AI_API_KEY=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_ADMIN_EMAIL=$(grep "^ADMIN_EMAIL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_ADMIN_BOOTSTRAP_MODE=$(grep "^ADMIN_BOOTSTRAP_MODE=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
         DEFAULT_INTEL_URL=$(grep "^INTELLIGENCE_HUB_URL=" "$deploy_env_path" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
@@ -768,51 +749,10 @@ EOF
             esac
         fi
         
-        # AI Configuration
         echo ""
-        echo -e "${BLUE}🤖 AI Configuration (optional)${NC}"
-        echo "OpenAI API key enables vector embeddings and semantic search."
-        echo "Leave blank to use deterministic embeddings (works without any API key)."
-        echo ""
-
-        # Ask for OpenAI API key (OPTIONAL)
-        if [ -z "$OPENAI_API_KEY" ]; then
-            local prompt="Enter OpenAI API key (or press Enter to skip)"
-            if [ -n "$DEFAULT_OPENAI_KEY" ]; then
-                prompt="$prompt [${DEFAULT_OPENAI_KEY:0:10}...]: "
-            else
-                prompt="$prompt: "
-            fi
-            read -p "$prompt" OPENAI_API_KEY
-            OPENAI_API_KEY=${OPENAI_API_KEY:-$DEFAULT_OPENAI_KEY}
-
-            if [ -z "$OPENAI_API_KEY" ]; then
-                echo -e "${YELLOW}  No OpenAI key provided — using deterministic embeddings (no semantic search)${NC}"
-            fi
-        fi
-        
-        # Ask for optional AI providers
-        if [ -z "$ANTHROPIC_API_KEY" ]; then
-            local prompt="Enter Anthropic API key"
-            if [ -n "$DEFAULT_ANTHROPIC_KEY" ]; then
-                prompt="$prompt [${DEFAULT_ANTHROPIC_KEY:0:10}...] (optional, press Enter to skip): "
-            else
-                prompt="$prompt (optional, press Enter to skip): "
-            fi
-            read -p "$prompt" ANTHROPIC_API_KEY
-            ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-$DEFAULT_ANTHROPIC_KEY}
-        fi
-        
-        if [ -z "$GOOGLE_AI_API_KEY" ]; then
-            local prompt="Enter Google AI API key"
-            if [ -n "$DEFAULT_GOOGLE_KEY" ]; then
-                prompt="$prompt [${DEFAULT_GOOGLE_KEY:0:10}...] (optional, press Enter to skip): "
-            else
-                prompt="$prompt (optional, press Enter to skip): "
-            fi
-            read -p "$prompt" GOOGLE_AI_API_KEY
-            GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-$DEFAULT_GOOGLE_KEY}
-        fi
+        echo -e "${BLUE}🤖 Intelligence Service${NC}"
+        echo "Provider API keys (OpenAI/Anthropic/Google) are not prompted here."
+        echo "Configure AI routing through Intelligence Service now or later."
     fi
 
     # Interactive pre-seed: password for first admin (never written to .env)
@@ -936,18 +876,12 @@ EOF
                 # Just update domain/email/keys if needed
                 update_env_value "DOMAIN" "$DOMAIN"
                 update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
-                update_env_value "OPENAI_API_KEY" "$OPENAI_API_KEY"
-                update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
-                update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
                 update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
                 update_env_value "ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_MODE"
                 update_env_value "ADMIN_BOOTSTRAP_TOKEN" "$ADMIN_BOOTSTRAP_TOKEN"
                 update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
                 update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
-                # Set embedding provider based on whether OpenAI key is present
-                local embedding_provider="deterministic"
-                if [ -n "$OPENAI_API_KEY" ]; then embedding_provider="openai"; fi
-                update_env_value "EMBEDDING_PROVIDER" "$embedding_provider"
+                update_env_value "EMBEDDING_PROVIDER" "deterministic"
                 # Update backend version based on method
                 local backend_version="latest"
                 if [ "$FROM_SOURCE" = true ]; then
@@ -958,7 +892,7 @@ EOF
             else
                 # Overwrite .env
                 echo -e "${BLUE}📝 Creating new configuration...${NC}"
-                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
+                generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "" "" "" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
             fi
         else
             # Non-interactive: preserve existing
@@ -966,18 +900,12 @@ EOF
             # Just update values if provided
             update_env_value "DOMAIN" "$DOMAIN"
             update_env_value "LETSENCRYPT_EMAIL" "$EMAIL"
-            update_env_value "OPENAI_API_KEY" "$OPENAI_API_KEY"
-            update_env_value "ANTHROPIC_API_KEY" "$ANTHROPIC_API_KEY"
-            update_env_value "GOOGLE_AI_API_KEY" "$GOOGLE_AI_API_KEY"
             update_env_value "ADMIN_EMAIL" "$ADMIN_EMAIL"
             update_env_value "ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_MODE"
             update_env_value "ADMIN_BOOTSTRAP_TOKEN" "$ADMIN_BOOTSTRAP_TOKEN"
             update_env_value "INTELLIGENCE_HUB_URL" "$INTELLIGENCE_URL"
             update_env_value "INTELLIGENCE_HUB_API_KEY" "$INTELLIGENCE_KEY"
-            # Set embedding provider based on whether OpenAI key is present
-            local embedding_provider="deterministic"
-            if [ -n "$OPENAI_API_KEY" ]; then embedding_provider="openai"; fi
-            update_env_value "EMBEDDING_PROVIDER" "$embedding_provider"
+            update_env_value "EMBEDDING_PROVIDER" "deterministic"
             local backend_version="latest"
             if [ "$FROM_SOURCE" = true ]; then
                 backend_version="local"
@@ -988,7 +916,7 @@ EOF
     else
         # No .env file, create new
         echo -e "${BLUE}📝 Creating configuration...${NC}"
-        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "$OPENAI_API_KEY" "$ANTHROPIC_API_KEY" "$GOOGLE_AI_API_KEY" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
+        generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "" "" "" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
     fi
     
     # Generate kratos.yml with actual domain values
@@ -1379,6 +1307,12 @@ cmd_update() {
             echo "BACKEND_VERSION=${version}" >> .env
         fi
         
+        # Ensure required encryption key exists for service credential crypto
+        if ! grep -q "^SYNAP_SERVICE_ENCRYPTION_KEY=" .env; then
+            echo "SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+            echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
+        fi
+
         # Read DOMAIN from .env for kratos config regeneration
         local domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- || echo "localhost")
     else

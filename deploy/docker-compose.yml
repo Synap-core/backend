@@ -189,7 +189,8 @@ services:
     # Run migrations then seed hub protocol API keys in one shot
     # (Merged from former backend-init service to avoid orphaned container issues)
     command: >
-      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
+      sh -c "node -e \"const fs=require('fs');const file='/app/migrations-drizzle/0000_broad_mathemanic.sql';if(fs.existsSync(file)){fs.writeFileSync(file,'-- patched: stale baseline disabled\\n');console.log('Patched stale migration:',file);}else{console.log('No stale migration to patch');}\" &&
+             node node_modules/@synap/database/dist/scripts/migrate.js &&
              node node_modules/@synap/database/dist/scripts/init-hub-keys.js"
     # One-shot service — runs once and exits. 'no' is correct for standalone Compose
     # (deploy.restart_policy is Docker Swarm only and is ignored here)
