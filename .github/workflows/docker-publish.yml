@@ -120,7 +120,7 @@ jobs:
             -e DATABASE_URL=postgresql://synap:testpass@localhost:5432/synap \
             --entrypoint sh \
             synap-backend:smoke-test \
-            -c "node node_modules/@synap/database/dist/scripts/migrate.js"
+            -c "cd /app/api && test -f node_modules/@synap/database/dist/scripts/migrate.js && node node_modules/@synap/database/dist/scripts/migrate.js"
 
       - name: Smoke test — verify container starts
         run: |

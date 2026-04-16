@@ -181,6 +181,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    working_dir: /app/api
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
@@ -189,30 +190,8 @@ services:
     # Run migrations then seed hub protocol API keys in one shot
     # (Merged from former backend-init service to avoid orphaned container issues)
     command: >
-      sh -c "node -e \"const fs=require('fs');const file='/app/migrations-drizzle/0000_broad_mathemanic.sql';if(fs.existsSync(file)){fs.writeFileSync(file,'-- patched: stale baseline disabled\\n');console.log('Patched stale migration:',file);}else{console.log('No stale migration to patch');}\" &&
-             MIGRATE_SCRIPT='' &&
-             for p in \
-               /app/api/node_modules/@synap/database/dist/scripts/migrate.js \
-               /app/node_modules/@synap/database/dist/scripts/migrate.js \
-               node_modules/@synap/database/dist/scripts/migrate.js; do
-               if [ -f \"$p\" ]; then MIGRATE_SCRIPT=\"$p\"; break; fi;
-             done &&
-             if [ -z \"$MIGRATE_SCRIPT\" ]; then echo '❌ migrate.js not found in known paths'; exit 1; fi &&
-             echo \"Using migration runner: $MIGRATE_SCRIPT\" &&
-             node \"$MIGRATE_SCRIPT\" &&
-             INIT_SCRIPT='' &&
-             for p in \
-               /app/api/node_modules/@synap/database/dist/scripts/init-hub-keys.js \
-               /app/node_modules/@synap/database/dist/scripts/init-hub-keys.js \
-               node_modules/@synap/database/dist/scripts/init-hub-keys.js; do
-               if [ -f \"$p\" ]; then INIT_SCRIPT=\"$p\"; break; fi;
-             done &&
-             if [ -z \"$INIT_SCRIPT\" ]; then
-               echo '⚠️ init-hub-keys.js not found; skipping key seeding';
-             else
-               echo \"Using hub key init script: $INIT_SCRIPT\" &&
-               node \"$INIT_SCRIPT\";
-             fi"
+      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
+             node node_modules/@synap/database/dist/scripts/init-hub-keys.js"
     # One-shot service — runs once and exits. 'no' is correct for standalone Compose
     # (deploy.restart_policy is Docker Swarm only and is ignored here)
     restart: "no"
