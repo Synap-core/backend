@@ -100,6 +100,12 @@ export const searchRouter = router({
       z.object({
         userId: z.string(),
         query: z.string(),
+        /** Profile slug filter (canonical) — any system or workspace profile. */
+        profileSlug: z.string().optional(),
+        /**
+         * @deprecated Narrow enum filter; use profileSlug for custom profiles.
+         * If both are set, profileSlug wins.
+         */
         type: z
           .enum([
             "note",
@@ -129,11 +135,12 @@ export const searchRouter = router({
         }
       );
 
-      // Filter by type if specified
+      const slug = input.profileSlug ?? input.type ?? undefined;
+
       let filteredResults = results.results;
-      if (input.type) {
+      if (slug) {
         filteredResults = results.results.filter(
-          (r) => r.document?.entityType === input.type
+          (r) => r.document?.entityType === slug
         );
       }
 

@@ -29,6 +29,10 @@ import type {
   UpdateEntityInput,
   StoreMemoryInput,
   SendToChannelInput,
+  CaptureProposal,
+  CaptureStructureResponse,
+  CaptureExecuteInput,
+  CaptureExecuteResponse,
 } from "./types.js";
 
 export interface HubRestClientConfig {
@@ -44,6 +48,24 @@ export interface HubRestClientConfig {
 
 function normalizeUrl(url: string): string {
   return url.replace(/\/$/, "");
+}
+
+function formatHubErrorMessage(
+  status: number,
+  statusText: string,
+  errorBody: unknown
+): string {
+  let detail = "";
+  if (errorBody && typeof errorBody === "object" && "error" in errorBody) {
+    detail = String((errorBody as { error: unknown }).error);
+  }
+  const base = `Hub API error: ${status} ${statusText}`;
+  let msg = detail ? `${base} — ${detail}` : base;
+  if (status === 403 && /hub-protocol\.write/i.test(detail)) {
+    msg +=
+      " Create or reconnect an API key that includes the hub-protocol.write scope (Settings → API keys on your pod).";
+  }
+  return msg;
 }
 
 function unwrapList<T>(result: T[] | HubListResponse<T>): T[] {
@@ -121,7 +143,7 @@ export class HubRestClient {
     if (!res.ok) {
       const errorBody = await res.json().catch(() => ({}));
       throw new HubApiError(
-        `Hub API error: ${res.status} ${res.statusText}`,
+        formatHubErrorMessage(res.status, res.statusText, errorBody),
         res.status,
         errorBody
       );
@@ -212,9 +234,13 @@ export class HubRestClient {
 
   async storeMemory(input: StoreMemoryInput): Promise<{ id: string }> {
     const userId = await this.resolveUserId();
+    const fact =
+      input.context && String(input.context).trim().length > 0
+        ? `[${String(input.context).trim()}] ${input.fact}`
+        : input.fact;
     return this.request<{ id: string }>("POST", "/api/hub/memory", {
       userId,
-      fact: input.fact,
+      fact,
     });
   }
 
@@ -263,6 +289,44 @@ export class HubRestClient {
         ...(input.autoRespond !== undefined
           ? { autoRespond: input.autoRespond }
           : {}),
+      }
+    );
+  }
+
+  // ─── Capture pipeline ─────────────────────────────────────────────────────
+
+  async captureStructure(input: {
+    text: string;
+    url?: string;
+    workspaceId?: string;
+    previousEntities?: CaptureProposal[];
+  }): Promise<CaptureStructureResponse> {
+    const userId = await this.resolveUserId();
+    return this.request<CaptureStructureResponse>(
+      "POST",
+      "/api/hub/capture/structure",
+      {
+        userId,
+        text: input.text,
+        url: input.url,
+        workspaceId: input.workspaceId ?? this.workspaceId,
+        previousEntities: input.previousEntities,
+      }
+    );
+  }
+
+  async captureExecute(
+    input: CaptureExecuteInput & { workspaceId?: string }
+  ): Promise<CaptureExecuteResponse> {
+    const userId = await this.resolveUserId();
+    return this.request<CaptureExecuteResponse>(
+      "POST",
+      "/api/hub/capture/execute",
+      {
+        userId,
+        entities: input.entities,
+        relations: input.relations ?? [],
+        workspaceId: input.workspaceId ?? this.workspaceId,
       }
     );
   }

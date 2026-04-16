@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { Button, Card, Chip } from "@heroui/react";
+import {
+  Button,
+  Checkbox,
+  Card,
+  Chip,
+  Input,
+  Label,
+  Modal,
+  useOverlayState,
+} from "@heroui/react";
 import {
   IconKey,
   IconPlus,
@@ -123,6 +132,10 @@ export default function ApiKeysPage() {
   const [keyName, setKeyName] = useState("");
   const [scopes, setScopes] = useState<string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState("");
+  const createModal = useOverlayState({
+    isOpen: createOpen,
+    onOpenChange: setCreateOpen,
+  });
 
   const {
     data: myKeys,
@@ -441,133 +454,130 @@ export default function ApiKeysPage() {
         </div>
       )}
 
-      {createOpen ? (
-        <div
-          className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 p-4"
-          role="presentation"
-          onClick={handleCloseCreate}
-        >
-          <div
-            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-divider bg-content1 p-0 shadow-xl"
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="border-b border-divider px-5 py-4">
-              <h2 className="text-lg font-semibold">Create API key</h2>
-            </div>
-            <div className="px-5 py-4">
-              {newKey ? (
-                <div className="flex flex-col gap-4">
-                  <div className="flex gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
-                    <IconAlertCircle size={18} className="shrink-0" />
-                    <div>
-                      <p className="font-semibold">Save this key now</p>
-                      <p className="text-xs opacity-90">
-                        This key is shown only once. Copy it before you close.
-                      </p>
+      <Modal state={createModal}>
+        <Modal.Backdrop isDismissable>
+          <Modal.Container size="md" placement="center">
+            <Modal.Dialog>
+              <Modal.Header className="border-b border-divider px-5 py-4">
+                <Modal.Heading className="text-lg font-semibold">
+                  Create API key
+                </Modal.Heading>
+                <Modal.CloseTrigger className="absolute right-3 top-3" />
+              </Modal.Header>
+              <Modal.Body className="px-5 py-4">
+                {newKey ? (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
+                      <IconAlertCircle size={18} className="shrink-0" />
+                      <div>
+                        <p className="font-semibold">Save this key now</p>
+                        <p className="text-xs opacity-90">
+                          This key is shown only once. Copy it before you close.
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  <pre
-                    className="overflow-x-auto rounded-medium border border-warning-200 bg-warning-50 p-4 font-mono text-sm text-warning-700"
-                    style={{ fontFamily: typography.fontFamily.mono }}
-                  >
-                    {newKey}
-                  </pre>
-                  <Button
-                    variant="outline"
-                    onPress={() => {
-                      void navigator.clipboard.writeText(newKey);
-                      showSuccessNotification({
-                        message: "Key copied to clipboard",
-                      });
-                    }}
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <IconCopy size={16} />
-                      Copy key
-                    </span>
-                  </Button>
-                  <Button variant="primary" onPress={handleCloseCreate}>
-                    Done
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-4">
-                  <div>
-                    <label className="mb-1 block text-small font-medium">
-                      Key name
-                    </label>
-                    <input
-                      className="w-full rounded-medium border border-divider bg-default-100 px-3 py-2 text-small outline-none focus:border-primary focus:ring-2"
-                      value={keyName}
-                      onChange={(e) => setKeyName(e.target.value)}
-                      placeholder="e.g. Production Hub Key"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-small font-medium">
-                      Scopes
-                    </label>
-                    <input type="hidden" value={scopes.join(",")} readOnly />
-                    <div className="max-h-48 space-y-1 overflow-y-auto rounded-medium border border-divider p-2">
-                      {HUB_SCOPES.map((s) => (
-                        <label
-                          key={s.value}
-                          className="flex cursor-pointer items-center gap-2 rounded-small px-2 py-1.5 hover:bg-default-100"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={scopes.includes(s.value)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setScopes([...scopes, s.value]);
-                              } else {
-                                setScopes(scopes.filter((x) => x !== s.value));
-                              }
-                            }}
-                          />
-                          <span className="text-small">{s.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-small font-medium">
-                      Expires in days (optional)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={3650}
-                      className="w-full rounded-medium border border-divider bg-default-100 px-3 py-2 text-small"
-                      value={expiresInDays}
-                      onChange={(e) => setExpiresInDays(e.target.value)}
-                      placeholder="No expiry"
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="ghost" onPress={handleCloseCreate}>
-                      Cancel
-                    </Button>
-                    <Button
-                      variant="primary"
-                      isDisabled={
-                        !keyName.trim() ||
-                        scopes.length === 0 ||
-                        createMutation.isPending
-                      }
-                      onPress={handleCreate}
+                    <pre
+                      className="overflow-x-auto rounded-medium border border-warning-200 bg-warning-50 p-4 font-mono text-sm text-warning-700"
+                      style={{ fontFamily: typography.fontFamily.mono }}
                     >
-                      {createMutation.isPending ? "Creating…" : "Create key"}
+                      {newKey}
+                    </pre>
+                    <Button
+                      variant="outline"
+                      onPress={() => {
+                        void navigator.clipboard.writeText(newKey);
+                        showSuccessNotification({
+                          message: "Key copied to clipboard",
+                        });
+                      }}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <IconCopy size={16} />
+                        Copy key
+                      </span>
+                    </Button>
+                    <Button variant="primary" onPress={handleCloseCreate}>
+                      Done
                     </Button>
                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    <div>
+                      <Label className="mb-1 block text-small font-medium">
+                        Key name
+                      </Label>
+                      <Input
+                        className="w-full"
+                        value={keyName}
+                        onChange={(e) => setKeyName(e.target.value)}
+                        placeholder="e.g. Production Hub Key"
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-1 block text-small font-medium">
+                        Scopes
+                      </Label>
+                      <div className="max-h-48 space-y-1 overflow-y-auto rounded-medium border border-divider p-2">
+                        {HUB_SCOPES.map((s) => (
+                          <div
+                            key={s.value}
+                            className="rounded-small px-2 py-1.5 hover:bg-default-100"
+                          >
+                            <Checkbox
+                              isSelected={scopes.includes(s.value)}
+                              onChange={(e) => {
+                                if (e) {
+                                  setScopes([...scopes, s.value]);
+                                } else {
+                                  setScopes(
+                                    scopes.filter((x) => x !== s.value)
+                                  );
+                                }
+                              }}
+                            >
+                              <span className="text-small">{s.label}</span>
+                            </Checkbox>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="mb-1 block text-small font-medium">
+                        Expires in days (optional)
+                      </Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={3650}
+                        className="w-full"
+                        value={expiresInDays}
+                        onChange={(e) => setExpiresInDays(e.target.value)}
+                        placeholder="No expiry"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="ghost" onPress={handleCloseCreate}>
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="primary"
+                        isDisabled={
+                          !keyName.trim() ||
+                          scopes.length === 0 ||
+                          createMutation.isPending
+                        }
+                        onPress={handleCreate}
+                      >
+                        {createMutation.isPending ? "Creating…" : "Create key"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </div>
   );
 }

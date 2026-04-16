@@ -175,63 +175,64 @@ export default function WorkspacesPage() {
       )}
 
       <Modal state={createModal}>
-        <Modal.Backdrop isDismissable />
-        <Modal.Container size="md" placement="center">
-          <Modal.Dialog>
-            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
-              <Modal.Heading className="text-lg font-semibold">
-                Create Workspace
-              </Modal.Heading>
-              <Modal.CloseTrigger className="absolute right-3 top-3" />
-            </Modal.Header>
-            <Modal.Body className="gap-4 px-6 py-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="ws-name">Name</Label>
-                <Input
-                  id="ws-name"
-                  placeholder="My Team Workspace"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="ws-desc">Description</Label>
-                <TextArea
-                  id="ws-desc"
-                  placeholder="Optional description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={3}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="ws-type">Type</Label>
-                <select
-                  id="ws-type"
-                  className="border-default-200 bg-background text-foreground focus:border-accent focus:ring-accent w-full rounded-lg border px-3 py-2 text-sm outline-none"
-                  value={type}
-                  onChange={(e) => setType(e.target.value as typeof type)}
+        <Modal.Backdrop isDismissable>
+          <Modal.Container size="md" placement="center">
+            <Modal.Dialog>
+              <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+                <Modal.Heading className="text-lg font-semibold">
+                  Create Workspace
+                </Modal.Heading>
+                <Modal.CloseTrigger className="absolute right-3 top-3" />
+              </Modal.Header>
+              <Modal.Body className="gap-4 px-6 py-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="ws-name">Name</Label>
+                  <Input
+                    id="ws-name"
+                    placeholder="My Team Workspace"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="ws-desc">Description</Label>
+                  <TextArea
+                    id="ws-desc"
+                    placeholder="Optional description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="ws-type">Type</Label>
+                  <select
+                    id="ws-type"
+                    className="border-default-200 bg-background text-foreground focus:border-accent focus:ring-accent w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                    value={type}
+                    onChange={(e) => setType(e.target.value as typeof type)}
+                  >
+                    <option value="personal">Personal</option>
+                    <option value="team">Team</option>
+                    <option value="enterprise">Enterprise</option>
+                  </select>
+                </div>
+                <Button
+                  variant="primary"
+                  fullWidth
+                  onPress={handleCreate}
+                  isDisabled={!name.trim() || createMutation.isPending}
                 >
-                  <option value="personal">Personal</option>
-                  <option value="team">Team</option>
-                  <option value="enterprise">Enterprise</option>
-                </select>
-              </div>
-              <Button
-                variant="primary"
-                fullWidth
-                onPress={handleCreate}
-                isDisabled={!name.trim() || createMutation.isPending}
-              >
-                {createMutation.isPending ? (
-                  <Spinner size="sm" color="current" />
-                ) : (
-                  "Create"
-                )}
-              </Button>
-            </Modal.Body>
-          </Modal.Dialog>
-        </Modal.Container>
+                  {createMutation.isPending ? (
+                    <Spinner size="sm" color="current" />
+                  ) : (
+                    "Create"
+                  )}
+                </Button>
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
       </Modal>
     </div>
   );

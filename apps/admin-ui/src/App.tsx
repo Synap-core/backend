@@ -17,6 +17,7 @@ import PodServicesPage from "./pages/(v2)/PodServicesPage";
 import ConnectionsPage from "./pages/(v2)/ConnectionsPage";
 import ExternalSourcesPage from "./pages/(v2)/ExternalSourcesPage";
 import ConnectionDetailPage from "./pages/(v2)/ConnectionDetailPage";
+import OpenClawControlCenterPage from "./pages/(v2)/OpenClawControlCenterPage";
 
 import TrustedIssuersPage from "./pages/(v2)/TrustedIssuersPage";
 import ConnectPage from "./pages/ConnectPage";
@@ -60,6 +61,23 @@ function App() {
           element={<Navigate to="/connections?tab=advanced-sources" replace />}
         />
         <Route path="services" element={<ExternalSourcesPage />} />
+        <Route path="openclaw" element={<OpenClawControlCenterPage />} />
+        <Route
+          path="openclaw/onboarding"
+          element={<OpenClawControlCenterPage />}
+        />
+        <Route
+          path="openclaw/operations"
+          element={<OpenClawControlCenterPage />}
+        />
+        <Route
+          path="openclaw/monitoring"
+          element={<OpenClawControlCenterPage />}
+        />
+        <Route
+          path="openclaw/troubleshooting"
+          element={<OpenClawControlCenterPage />}
+        />
         <Route path="trusted-issuers" element={<TrustedIssuersPage />} />
       </Route>
     </Routes>

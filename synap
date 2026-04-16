@@ -437,7 +437,12 @@ cmd_install() {
     if is_git_repo; then
         IN_GIT_REPO=true
     fi
-    
+    # Archive/tarball extract (e.g. codeload) has no .git but is still a valid backend root when cwd is SYNAP_REPO_ROOT
+    local BACKEND_TREE_IN_CWD=false
+    if [ -f "$(pwd)/deploy/docker-compose.yml" ]; then
+        BACKEND_TREE_IN_CWD=true
+    fi
+
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -570,21 +575,23 @@ EOF
         esac
     done
     
-    # Determine if we need to clone
+    # Determine if we need to clone (no .git and no existing deploy/ tree in cwd → clone under pwd/synap-backend)
     local NEEDS_CLONE=false
-    if [ "$IN_GIT_REPO" = false ]; then
+    if [ "$IN_GIT_REPO" = true ]; then
+        echo -e "${GREEN}✓ Detected git repository, using existing repo${NC}"
+    elif [ "$BACKEND_TREE_IN_CWD" = true ]; then
+        echo -e "${GREEN}✓ Synap backend tree present (deploy/), no .git — using current directory (no nested clone)${NC}"
+    else
         NEEDS_CLONE=true
         echo -e "${BLUE}ℹ️  Not in git repository, will clone${NC}"
-    else
-        echo -e "${GREEN}✓ Detected git repository, using existing repo${NC}"
     fi
-    
+
     # Determine installation directory
     if [ -z "$INSTALL_DIR" ]; then
         if [ "$NEEDS_CLONE" = true ]; then
             # Default to current directory + "synap-backend"
             INSTALL_DIR="$(pwd)/synap-backend"
-            
+
             # Propose to change if interactive
             if [ "$INTERACTIVE" = true ]; then
                 echo -e "${BLUE}📁 Installation directory: ${INSTALL_DIR}${NC}"
@@ -596,7 +603,13 @@ EOF
             fi
         else
             # Use repo root as install directory
-            INSTALL_DIR=$(get_repo_root)
+            if [ "$IN_GIT_REPO" = true ]; then
+                INSTALL_DIR=$(get_repo_root)
+            elif [ "$BACKEND_TREE_IN_CWD" = true ]; then
+                INSTALL_DIR=$(pwd)
+            else
+                INSTALL_DIR=""
+            fi
             if [ -z "$INSTALL_DIR" ]; then
                 echo -e "${RED}Error: Could not determine repository root${NC}"
                 exit 1

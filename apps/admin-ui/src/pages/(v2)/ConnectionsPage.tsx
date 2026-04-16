@@ -25,8 +25,6 @@ import {
   extractFlowId,
 } from "@synap-core/external-connect-client";
 
-const AGENT_TYPES = ["openclaw", "zeroclaw"] as const;
-
 export default function ConnectionsPage() {
   const navigate = useNavigate();
   const { workspaceId } = useWorkspace();
@@ -68,15 +66,6 @@ export default function ConnectionsPage() {
     },
     onError: (err) => showErrorNotification({ message: err.message }),
   });
-
-  const openclawStatus = trpc.intelligenceRegistry.getAgentStatus.useQuery(
-    { serviceType: "openclaw" },
-    { enabled: !!workspaceId, retry: false }
-  );
-  const zeroclawStatus = trpc.intelligenceRegistry.getAgentStatus.useQuery(
-    { serviceType: "zeroclaw" },
-    { enabled: !!workspaceId, retry: false }
-  );
 
   const keysQuery = trpc.apiKeys.list.useQuery();
   const rotateMutation = trpc.apiKeys.rotate.useMutation({
@@ -355,7 +344,7 @@ export default function ConnectionsPage() {
           <Card.Root className="border border-divider">
             <Card.Header>
               <Card.Title className="inline-flex items-center gap-2">
-                <IconServer size={18} />
+                <IconCloud size={18} />
                 Infrastructure & dependencies
               </Card.Title>
               <Card.Description>
@@ -504,52 +493,16 @@ export default function ConnectionsPage() {
 
           <Card.Root className="border border-divider">
             <Card.Header>
-              <Card.Title>External agents (workspace)</Card.Title>
+              <Card.Title>OpenClaw runtime</Card.Title>
               <Card.Description>
-                OpenClaw / ZeroClaw provisioning state for the active workspace
+                Instantiation, key lifecycle, diagnostics, and troubleshooting
+                are now in the dedicated OpenClaw control center.
               </Card.Description>
             </Card.Header>
-            <Card.Content
-              className="grid gap-4"
-              style={{
-                gap: spacing[4],
-                gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
-              }}
-            >
-              {AGENT_TYPES.map((type) => {
-                const q = type === "openclaw" ? openclawStatus : zeroclawStatus;
-                const d = q.data;
-                return (
-                  <div
-                    key={type}
-                    className="rounded-medium border border-divider bg-default-50/40 p-4"
-                  >
-                    <Text className="text-sm font-semibold capitalize">
-                      {type}
-                    </Text>
-                    {q.isLoading ? (
-                      <Spinner className="mt-2" size="sm" color="accent" />
-                    ) : (
-                      <div className="mt-2 space-y-1 text-xs text-default-600">
-                        <div>
-                          Provisioned:{" "}
-                          <strong>{d?.provisioned ? "yes" : "no"}</strong>
-                        </div>
-                        <div>
-                          Registered:{" "}
-                          <strong>
-                            {d &&
-                            "serviceRegistered" in d &&
-                            d.serviceRegistered
-                              ? "yes"
-                              : "no"}
-                          </strong>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <Card.Content>
+              <Button variant="outline" onPress={() => navigate("/openclaw")}>
+                Open OpenClaw control center
+              </Button>
             </Card.Content>
           </Card.Root>
 

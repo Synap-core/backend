@@ -676,184 +676,188 @@ export default function WorkspaceDetailPage() {
       </Tabs.Root>
 
       <Modal state={inviteModal}>
-        <Modal.Backdrop isDismissable />
-        <Modal.Container size="sm" placement="center">
-          <Modal.Dialog>
-            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
-              <Modal.Heading className="text-lg font-semibold">
-                Invite Member
-              </Modal.Heading>
-              <Modal.CloseTrigger className="absolute right-3 top-3" />
-            </Modal.Header>
-            <Modal.Body className="gap-4 px-6 py-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="invite-email">Email</Label>
-                <Input
-                  id="invite-email"
-                  className={inputClass}
-                  placeholder="colleague@example.com"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="invite-role">Role</Label>
-                <select
-                  id="invite-role"
-                  className={inputClass}
-                  value={inviteRole}
-                  onChange={(e) =>
-                    setInviteRole(
-                      (e.target.value as typeof inviteRole) ?? "editor"
-                    )
+        <Modal.Backdrop isDismissable>
+          <Modal.Container size="sm" placement="center">
+            <Modal.Dialog>
+              <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+                <Modal.Heading className="text-lg font-semibold">
+                  Invite Member
+                </Modal.Heading>
+                <Modal.CloseTrigger className="absolute right-3 top-3" />
+              </Modal.Header>
+              <Modal.Body className="gap-4 px-6 py-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="invite-email">Email</Label>
+                  <Input
+                    id="invite-email"
+                    className={inputClass}
+                    placeholder="colleague@example.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="invite-role">Role</Label>
+                  <select
+                    id="invite-role"
+                    className={inputClass}
+                    value={inviteRole}
+                    onChange={(e) =>
+                      setInviteRole(
+                        (e.target.value as typeof inviteRole) ?? "editor"
+                      )
+                    }
+                  >
+                    {ROLE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Button
+                  variant="primary"
+                  fullWidth
+                  isDisabled={
+                    !inviteEmail.trim() || createInviteMutation.isPending
+                  }
+                  onPress={() =>
+                    createInviteMutation.mutate({
+                      type: "workspace",
+                      workspaceId,
+                      email: inviteEmail,
+                      role: inviteRole,
+                    })
                   }
                 >
-                  {ROLE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <Button
-                variant="primary"
-                fullWidth
-                isDisabled={
-                  !inviteEmail.trim() || createInviteMutation.isPending
-                }
-                onPress={() =>
-                  createInviteMutation.mutate({
-                    type: "workspace",
-                    workspaceId,
-                    email: inviteEmail,
-                    role: inviteRole,
-                  })
-                }
-              >
-                {createInviteMutation.isPending ? (
-                  <Spinner size="sm" color="current" />
-                ) : (
-                  "Send Invitation"
-                )}
-              </Button>
-            </Modal.Body>
-          </Modal.Dialog>
-        </Modal.Container>
+                  {createInviteMutation.isPending ? (
+                    <Spinner size="sm" color="current" />
+                  ) : (
+                    "Send Invitation"
+                  )}
+                </Button>
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
       </Modal>
 
       <Modal state={agentModal}>
-        <Modal.Backdrop isDismissable />
-        <Modal.Container size="md" placement="center">
-          <Modal.Dialog>
-            <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
-              <Modal.Heading className="text-lg font-semibold">
-                Create AI Agent
-              </Modal.Heading>
-              <Modal.CloseTrigger className="absolute right-3 top-3" />
-            </Modal.Header>
-            <Modal.Body className="gap-4 px-6 py-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="agent-name">Agent Name</Label>
-                <Input
-                  id="agent-name"
-                  className={inputClass}
-                  placeholder="e.g. Research Assistant"
-                  value={agentName}
-                  onChange={(e) => setAgentName(e.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="agent-type">Agent Type</Label>
-                <select
-                  id="agent-type"
-                  className={inputClass}
-                  value={agentType}
-                  onChange={(e) => setAgentType(e.target.value)}
-                >
-                  {AGENT_TYPE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="agent-role">Workspace Role</Label>
-                <Text className="text-xs text-default-500">
-                  Determines what the agent can do in this workspace
-                </Text>
-                <select
-                  id="agent-role"
-                  className={inputClass}
-                  value={agentRole}
-                  onChange={(e) =>
-                    setAgentRole(
-                      (e.target.value as typeof agentRole) ?? "editor"
-                    )
+        <Modal.Backdrop isDismissable>
+          <Modal.Container size="md" placement="center">
+            <Modal.Dialog>
+              <Modal.Header className="flex flex-col gap-1 border-b border-divider px-6 py-4">
+                <Modal.Heading className="text-lg font-semibold">
+                  Create AI Agent
+                </Modal.Heading>
+                <Modal.CloseTrigger className="absolute right-3 top-3" />
+              </Modal.Header>
+              <Modal.Body className="gap-4 px-6 py-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="agent-name">Agent Name</Label>
+                  <Input
+                    id="agent-name"
+                    className={inputClass}
+                    placeholder="e.g. Research Assistant"
+                    value={agentName}
+                    onChange={(e) => setAgentName(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="agent-type">Agent Type</Label>
+                  <select
+                    id="agent-type"
+                    className={inputClass}
+                    value={agentType}
+                    onChange={(e) => setAgentType(e.target.value)}
+                  >
+                    {AGENT_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="agent-role">Workspace Role</Label>
+                  <Text className="text-xs text-default-500">
+                    Determines what the agent can do in this workspace
+                  </Text>
+                  <select
+                    id="agent-role"
+                    className={inputClass}
+                    value={agentRole}
+                    onChange={(e) =>
+                      setAgentRole(
+                        (e.target.value as typeof agentRole) ?? "editor"
+                      )
+                    }
+                  >
+                    {ROLE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="agent-desc">Description</Label>
+                  <TextArea
+                    id="agent-desc"
+                    className={inputClass}
+                    placeholder="What does this agent do?"
+                    value={agentDescription}
+                    onChange={(e) => setAgentDescription(e.target.value)}
+                    rows={2}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="agent-caps">Capabilities</Label>
+                  <Text className="text-xs text-default-500">
+                    One per line (e.g. read_entities, write_documents, search)
+                  </Text>
+                  <TextArea
+                    id="agent-caps"
+                    className={inputClass}
+                    placeholder={"read_entities\nwrite_documents"}
+                    value={agentCapabilitiesText}
+                    onChange={(e) => setAgentCapabilitiesText(e.target.value)}
+                    rows={4}
+                  />
+                </div>
+                <Button
+                  variant="primary"
+                  fullWidth
+                  isDisabled={
+                    !agentName.trim() || createAgentMutation.isPending
+                  }
+                  onPress={() =>
+                    createAgentMutation.mutate({
+                      workspaceId,
+                      name: agentName,
+                      agentType,
+                      role: agentRole,
+                      description: agentDescription || undefined,
+                      capabilities:
+                        agentCapabilities.length > 0
+                          ? agentCapabilities
+                          : undefined,
+                    })
                   }
                 >
-                  {ROLE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="agent-desc">Description</Label>
-                <TextArea
-                  id="agent-desc"
-                  className={inputClass}
-                  placeholder="What does this agent do?"
-                  value={agentDescription}
-                  onChange={(e) => setAgentDescription(e.target.value)}
-                  rows={2}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="agent-caps">Capabilities</Label>
-                <Text className="text-xs text-default-500">
-                  One per line (e.g. read_entities, write_documents, search)
-                </Text>
-                <TextArea
-                  id="agent-caps"
-                  className={inputClass}
-                  placeholder={"read_entities\nwrite_documents"}
-                  value={agentCapabilitiesText}
-                  onChange={(e) => setAgentCapabilitiesText(e.target.value)}
-                  rows={4}
-                />
-              </div>
-              <Button
-                variant="primary"
-                fullWidth
-                isDisabled={!agentName.trim() || createAgentMutation.isPending}
-                onPress={() =>
-                  createAgentMutation.mutate({
-                    workspaceId,
-                    name: agentName,
-                    agentType,
-                    role: agentRole,
-                    description: agentDescription || undefined,
-                    capabilities:
-                      agentCapabilities.length > 0
-                        ? agentCapabilities
-                        : undefined,
-                  })
-                }
-              >
-                {createAgentMutation.isPending ? (
-                  <Spinner size="sm" color="current" />
-                ) : (
-                  <span className="inline-flex items-center gap-2">
-                    <IconRobot size={18} />
-                    Create Agent
-                  </span>
-                )}
-              </Button>
-            </Modal.Body>
-          </Modal.Dialog>
-        </Modal.Container>
+                  {createAgentMutation.isPending ? (
+                    <Spinner size="sm" color="current" />
+                  ) : (
+                    <span className="inline-flex items-center gap-2">
+                      <IconRobot size={18} />
+                      Create Agent
+                    </span>
+                  )}
+                </Button>
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
       </Modal>
     </div>
   );

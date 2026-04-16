@@ -15,6 +15,7 @@ import { getBoss } from "@synap/jobs";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
+import { captureRouter } from "./capture.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
 import { ChannelType, ThreadKind } from "@synap/database/schema";
@@ -651,7 +652,8 @@ app.get("/users/:userId/entities", async (c) => {
     return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
   }
   const userId = c.req.param("userId");
-  const type = c.req.query("type");
+  const profileSlug =
+    c.req.query("profileSlug") || c.req.query("type") || undefined;
   const limit = c.req.query("limit");
   const workspaceId = c.req.query("workspaceId") || null;
   try {
@@ -670,7 +672,7 @@ app.get("/users/:userId/entities", async (c) => {
     const result = await caller.entities.getEntities({
       userId,
       workspaceId: workspaceId || undefined,
-      type: type || undefined,
+      profileSlug: profileSlug || undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
     return c.json(result);
@@ -775,7 +777,7 @@ app.get("/entities", async (c) => {
     const listed = await caller.entities.getEntities({
       userId,
       workspaceId: workspaceIdParam || undefined,
-      type: profileSlug,
+      profileSlug: profileSlug || undefined,
       limit,
     });
 
@@ -1017,6 +1019,204 @@ app.post("/capture/cluster-tabs", async (c) => {
   } catch (err) {
     logger.error({ err }, "POST /capture/cluster-tabs failed");
     return c.json({ error: "Clustering service unavailable" }, 503);
+  }
+});
+
+/**
+ * POST /capture/structure
+ *
+ * Multi-entity extraction + dedup search (AI pipeline step 1).
+ * Mirrors capture.structure tRPC procedure for external clients
+ * (Raycast, browser extension) that cannot reach tRPC directly.
+ *
+ * Requires: hub-protocol.read OR mcp.read scope
+ */
+app.post("/capture/structure", async (c) => {
+  if (
+    !hasScope(c.get("scopes") as string[], "hub-protocol.read") &&
+    !hasScope(c.get("scopes") as string[], "mcp.read")
+  ) {
+    return c.json(
+      { error: "Missing scope: hub-protocol.read or mcp.read" },
+      403
+    );
+  }
+
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const bodySchema = z.object({
+    userId: z.string().min(1),
+    text: z.string().min(1).max(8000),
+    url: z.string().url().optional(),
+    html: z.string().max(50_000).optional(),
+    context: z.string().optional(),
+    workspaceId: z.string().uuid().optional(),
+    previousEntities: z
+      .array(
+        z.object({
+          tempId: z.string(),
+          profileSlug: z.string(),
+          title: z.string(),
+          description: z.string().optional(),
+          properties: z.record(z.string(), z.unknown()).optional(),
+        })
+      )
+      .optional(),
+  });
+
+  const parsed = bodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json(
+      { error: "Invalid request body", details: parsed.error.issues },
+      400
+    );
+  }
+
+  const body = parsed.data;
+  const userId = body.userId;
+
+  // Resolve workspaceId — capture.structure uses workspaceProcedure (non-null required)
+  let workspaceId = body.workspaceId;
+  if (!workspaceId) {
+    const wsIds = await getUserAccessibleWorkspaceIds(userId);
+    workspaceId = wsIds[0];
+    if (!workspaceId) {
+      return c.json(
+        { error: "No accessible workspace found for this user" },
+        400
+      );
+    }
+  }
+
+  try {
+    const scopes = c.get("scopes") as string[];
+    const ctx = await createHubProtocolCallerContext(
+      userId,
+      scopes,
+      workspaceId
+    );
+    const caller = captureRouter.createCaller(
+      ctx as Parameters<typeof captureRouter.createCaller>[0]
+    );
+    const result = await caller.structure({
+      text: body.text,
+      url: body.url,
+      html: body.html,
+      context: body.context,
+      previousEntities: body.previousEntities,
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, userId }, "POST /capture/structure failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /capture/execute
+ *
+ * Batch-create entities and relations from confirmed proposals (AI pipeline step 2).
+ * Mirrors capture.execute tRPC procedure for external clients
+ * (Raycast, browser extension) that cannot reach tRPC directly.
+ *
+ * Requires: hub-protocol.write OR mcp.write scope
+ */
+app.post("/capture/execute", async (c) => {
+  if (
+    !hasScope(c.get("scopes") as string[], "hub-protocol.write") &&
+    !hasScope(c.get("scopes") as string[], "mcp.write")
+  ) {
+    return c.json(
+      { error: "Missing scope: hub-protocol.write or mcp.write" },
+      403
+    );
+  }
+
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const bodySchema = z.object({
+    userId: z.string().min(1),
+    workspaceId: z.string().uuid().optional(),
+    entities: z.array(
+      z.object({
+        tempId: z.string(),
+        profileSlug: z.string(),
+        title: z.string(),
+        description: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        /** Link to an existing entity instead of creating a new one */
+        existingEntityId: z.string().uuid().optional(),
+      })
+    ),
+    relations: z
+      .array(
+        z.object({
+          sourceTempId: z.string(),
+          targetTempId: z.string(),
+          relationType: z.string(),
+        })
+      )
+      .optional(),
+  });
+
+  const parsed = bodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json(
+      { error: "Invalid request body", details: parsed.error.issues },
+      400
+    );
+  }
+
+  const body = parsed.data;
+  const userId = body.userId;
+
+  // Resolve workspaceId — capture.execute uses workspaceProcedure (non-null required)
+  let workspaceId = body.workspaceId;
+  if (!workspaceId) {
+    const wsIds = await getUserAccessibleWorkspaceIds(userId);
+    workspaceId = wsIds[0];
+    if (!workspaceId) {
+      return c.json(
+        { error: "No accessible workspace found for this user" },
+        400
+      );
+    }
+  }
+
+  try {
+    const scopes = c.get("scopes") as string[];
+    const ctx = await createHubProtocolCallerContext(
+      userId,
+      scopes,
+      workspaceId
+    );
+    const caller = captureRouter.createCaller(
+      ctx as Parameters<typeof captureRouter.createCaller>[0]
+    );
+    const result = await caller.execute({
+      entities: body.entities,
+      relations: body.relations ?? [],
+    });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, userId }, "POST /capture/execute failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
   }
 });
 

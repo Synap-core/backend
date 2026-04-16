@@ -61,4 +61,9 @@ export type {
   SendToChannelInput,
   AgentSetupResult,
   PodStatus,
+  CaptureProposal,
+  CaptureRelation,
+  CaptureStructureResponse,
+  CaptureExecuteInput,
+  CaptureExecuteResponse,
 } from "./types.js";

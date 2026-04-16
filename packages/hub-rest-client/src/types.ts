@@ -157,3 +157,67 @@ export interface PodStatus {
   healthy: boolean;
   version?: string;
 }
+
+// ─── Capture pipeline types ───────────────────────────────────────────────────
+
+export interface CaptureProposal {
+  tempId: string;
+  profileSlug: string;
+  title: string;
+  description?: string;
+  properties?: Record<string, unknown>;
+  confidence: number;
+  action: "create" | "link" | "dismiss";
+  linkedEntityId?: string;
+  linkedEntityTitle?: string;
+  dedupCandidates?: Array<{
+    entityId: string;
+    title: string;
+    profileSlug: string;
+    score: number;
+  }>;
+}
+
+export interface CaptureRelation {
+  sourceTempId: string;
+  targetTempId: string;
+  relationType: string;
+}
+
+export interface CaptureStructureResponse {
+  proposals: CaptureProposal[];
+  relations: CaptureRelation[];
+  followUp: string | null;
+  dedupCandidates?: Record<
+    string,
+    Array<{ entityId: string; title: string; score: number }>
+  >;
+}
+
+export interface CaptureExecuteInput {
+  entities: Array<{
+    tempId: string;
+    profileSlug: string;
+    title: string;
+    description?: string;
+    properties?: Record<string, unknown>;
+    action: "create" | "link" | "dismiss";
+    linkedEntityId?: string;
+    confidence?: number;
+  }>;
+  relations?: CaptureRelation[];
+}
+
+export interface CaptureExecuteResponse {
+  created: Array<{
+    tempId: string;
+    entityId: string;
+    profileSlug: string;
+    linked: boolean;
+  }>;
+  relations: Array<{
+    sourceTempId: string;
+    targetTempId: string;
+    relationType: string;
+  }>;
+}

@@ -5,9 +5,9 @@ import {
   Card,
   Chip,
   cn,
-  Drawer,
   Input,
   Label,
+  Modal,
   Separator,
   Skeleton,
   Spinner,
@@ -786,184 +786,184 @@ export default function InvestigatePage() {
         </Tabs.Root>
       </div>
 
-      <Drawer state={eventDrawer}>
-        <Drawer.Backdrop isDismissable className="bg-black/50" />
-        <Drawer.Content
-          placement="right"
-          className="w-[min(520px,95vw)] max-w-none"
-        >
-          <Drawer.Dialog className="h-full rounded-none border-l border-divider bg-content1">
-            <Drawer.Handle />
-            <Drawer.Header className="border-b border-divider px-4 py-3">
-              <div className="flex items-center gap-2 pr-8">
+      <Modal state={eventDrawer}>
+        <Modal.Backdrop isDismissable>
+          <Modal.Container size="lg" placement="center" scroll="inside">
+            <Modal.Dialog>
+              <Modal.Header className="flex items-center gap-2 border-b border-divider px-4 py-3">
                 <IconTimeline size={20} className="text-accent" />
-                <Drawer.Heading className="text-lg font-semibold">
+                <Modal.Heading className="text-lg font-semibold">
                   Event Details & Trace
-                </Drawer.Heading>
-              </div>
-              <Drawer.CloseTrigger />
-            </Drawer.Header>
-            <Drawer.Body className="gap-4 px-4 py-4">
-              {traceData?.event ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-fit"
-                  isDisabled={republishMutation.isPending}
-                  onPress={handleRepublish}
-                >
-                  {republishMutation.isPending ? (
-                    <Spinner size="sm" color="current" />
-                  ) : (
-                    <span className="inline-flex items-center gap-2">
-                      <IconRefresh size={14} />
-                      Republish Event
-                    </span>
-                  )}
-                </Button>
-              ) : null}
+                </Modal.Heading>
+                <Modal.CloseTrigger className="absolute right-3 top-3" />
+              </Modal.Header>
+              <Modal.Body className="max-h-[calc(90vh-64px)] gap-4 overflow-y-auto px-4 py-4">
+                {traceData?.event ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-fit"
+                    isDisabled={republishMutation.isPending}
+                    onPress={handleRepublish}
+                  >
+                    {republishMutation.isPending ? (
+                      <Spinner size="sm" color="current" />
+                    ) : (
+                      <span className="inline-flex items-center gap-2">
+                        <IconRefresh size={14} />
+                        Republish Event
+                      </span>
+                    )}
+                  </Button>
+                ) : null}
 
-              {isLoadingTrace ? (
-                <div className="flex flex-col gap-3">
-                  <Skeleton className="h-36 rounded-md" />
-                  <Skeleton className="h-24 rounded-md" />
-                  <Skeleton className="h-40 rounded-md" />
-                </div>
-              ) : traceData ? (
-                <div className="flex flex-col gap-6">
-                  <div>
-                    <Text className="mb-2 text-sm font-semibold">
-                      Main Event
-                    </Text>
-                    <Card className="border border-divider bg-default-50 p-3">
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-2">
-                          <IconTag size={15} className="text-default-400" />
-                          <Chip
-                            size="sm"
-                            variant="soft"
-                            color="accent"
-                            className="font-mono text-xs"
-                          >
-                            {traceData.event.eventType}
-                          </Chip>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <IconClock size={15} className="text-default-400" />
-                          <Text className="text-xs text-default-500">
-                            {new Date(
-                              traceData.event.timestamp
-                            ).toLocaleString()}
-                          </Text>
-                        </div>
-                        {traceData.event.userId ? (
+                {isLoadingTrace ? (
+                  <div className="flex flex-col gap-3">
+                    <Skeleton className="h-36 rounded-md" />
+                    <Skeleton className="h-24 rounded-md" />
+                    <Skeleton className="h-40 rounded-md" />
+                  </div>
+                ) : traceData ? (
+                  <div className="flex flex-col gap-6">
+                    <div>
+                      <Text className="mb-2 text-sm font-semibold">
+                        Main Event
+                      </Text>
+                      <Card className="border border-divider bg-default-50 p-3">
+                        <div className="flex flex-col gap-2">
                           <div className="flex items-center gap-2">
-                            <IconUser size={15} className="text-default-400" />
+                            <IconTag size={15} className="text-default-400" />
+                            <Chip
+                              size="sm"
+                              variant="soft"
+                              color="accent"
+                              className="font-mono text-xs"
+                            >
+                              {traceData.event.eventType}
+                            </Chip>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <IconClock size={15} className="text-default-400" />
                             <Text className="text-xs text-default-500">
-                              {traceData.event.userId}
+                              {new Date(
+                                traceData.event.timestamp
+                              ).toLocaleString()}
                             </Text>
                           </div>
-                        ) : null}
-                        <div className="flex items-center gap-2">
-                          <IconCode size={15} className="text-default-400" />
-                          <Text className="font-mono text-xs text-default-500">
-                            {traceData.event.eventId}
-                          </Text>
-                        </div>
-                        {traceData.event.correlationId ? (
-                          <div className="flex items-center gap-2">
-                            <IconTimeline
-                              size={15}
-                              className="text-default-400"
-                            />
-                            <Text className="font-mono text-xs text-default-500">
-                              corr: {traceData.event.correlationId}
-                            </Text>
-                          </div>
-                        ) : null}
-                      </div>
-                    </Card>
-                  </div>
-
-                  <Separator />
-
-                  <div>
-                    <Text className="mb-2 text-sm font-semibold">
-                      Event Data
-                    </Text>
-                    <pre className="max-h-[220px] overflow-y-auto rounded-md border border-divider bg-default-50 p-3 font-mono text-xs">
-                      {JSON.stringify(traceData.event.data, null, 2)}
-                    </pre>
-                  </div>
-
-                  {traceData.relatedEvents &&
-                  traceData.relatedEvents.length > 0 ? (
-                    <>
-                      <Separator />
-                      <div>
-                        <div className="mb-2 flex items-center justify-between">
-                          <Text className="text-sm font-semibold">
-                            Correlated Events
-                          </Text>
-                          <Chip size="sm" variant="soft" color="accent">
-                            {traceData.relatedEvents.length}
-                          </Chip>
-                        </div>
-                        <div className="flex flex-col gap-4 border-l-2 border-divider pl-4">
-                          {traceData.relatedEvents.map((relEvent) => (
-                            <div key={relEvent.eventId} className="relative">
-                              <div className="absolute -left-[21px] top-1 flex h-5 w-5 items-center justify-center rounded-full border border-divider bg-background">
-                                <IconTimeline size={11} />
-                              </div>
-                              <Chip
-                                size="sm"
-                                variant="soft"
-                                color="accent"
-                                className="font-mono text-xs"
-                              >
-                                {relEvent.eventType}
-                              </Chip>
-                              <Text className="mt-1 text-xs text-default-500">
-                                {new Date(relEvent.timestamp).toLocaleString()}
+                          {traceData.event.userId ? (
+                            <div className="flex items-center gap-2">
+                              <IconUser
+                                size={15}
+                                className="text-default-400"
+                              />
+                              <Text className="text-xs text-default-500">
+                                {traceData.event.userId}
                               </Text>
-                              <Text className="mt-1 font-mono text-xs text-default-500">
-                                {relEvent.eventId}
-                              </Text>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="mt-2 h-auto p-0"
-                                onPress={() =>
-                                  handleEventClick(relEvent.eventId)
-                                }
-                              >
-                                <span className="inline-flex items-center gap-1 text-xs">
-                                  <IconArrowRight size={12} />
-                                  View details
-                                </span>
-                              </Button>
                             </div>
-                          ))}
+                          ) : null}
+                          <div className="flex items-center gap-2">
+                            <IconCode size={15} className="text-default-400" />
+                            <Text className="font-mono text-xs text-default-500">
+                              {traceData.event.eventId}
+                            </Text>
+                          </div>
+                          {traceData.event.correlationId ? (
+                            <div className="flex items-center gap-2">
+                              <IconTimeline
+                                size={15}
+                                className="text-default-400"
+                              />
+                              <Text className="font-mono text-xs text-default-500">
+                                corr: {traceData.event.correlationId}
+                              </Text>
+                            </div>
+                          ) : null}
                         </div>
-                      </div>
-                    </>
-                  ) : null}
+                      </Card>
+                    </div>
 
-                  {traceData.relatedEvents?.length === 0 ? (
-                    <Text className="text-center text-xs text-default-500">
-                      No correlated events — this event has no correlation ID.
-                    </Text>
-                  ) : null}
-                </div>
-              ) : (
-                <Text className="py-10 text-center text-sm text-default-500">
-                  Event not found.
-                </Text>
-              )}
-            </Drawer.Body>
-          </Drawer.Dialog>
-        </Drawer.Content>
-      </Drawer>
+                    <Separator />
+
+                    <div>
+                      <Text className="mb-2 text-sm font-semibold">
+                        Event Data
+                      </Text>
+                      <pre className="max-h-[220px] overflow-y-auto rounded-md border border-divider bg-default-50 p-3 font-mono text-xs">
+                        {JSON.stringify(traceData.event.data, null, 2)}
+                      </pre>
+                    </div>
+
+                    {traceData.relatedEvents &&
+                    traceData.relatedEvents.length > 0 ? (
+                      <>
+                        <Separator />
+                        <div>
+                          <div className="mb-2 flex items-center justify-between">
+                            <Text className="text-sm font-semibold">
+                              Correlated Events
+                            </Text>
+                            <Chip size="sm" variant="soft" color="accent">
+                              {traceData.relatedEvents.length}
+                            </Chip>
+                          </div>
+                          <div className="flex flex-col gap-4 border-l-2 border-divider pl-4">
+                            {traceData.relatedEvents.map((relEvent) => (
+                              <div key={relEvent.eventId} className="relative">
+                                <div className="absolute -left-[21px] top-1 flex h-5 w-5 items-center justify-center rounded-full border border-divider bg-background">
+                                  <IconTimeline size={11} />
+                                </div>
+                                <Chip
+                                  size="sm"
+                                  variant="soft"
+                                  color="accent"
+                                  className="font-mono text-xs"
+                                >
+                                  {relEvent.eventType}
+                                </Chip>
+                                <Text className="mt-1 text-xs text-default-500">
+                                  {new Date(
+                                    relEvent.timestamp
+                                  ).toLocaleString()}
+                                </Text>
+                                <Text className="mt-1 font-mono text-xs text-default-500">
+                                  {relEvent.eventId}
+                                </Text>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="mt-2 h-auto p-0"
+                                  onPress={() =>
+                                    handleEventClick(relEvent.eventId)
+                                  }
+                                >
+                                  <span className="inline-flex items-center gap-1 text-xs">
+                                    <IconArrowRight size={12} />
+                                    View details
+                                  </span>
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {traceData.relatedEvents?.length === 0 ? (
+                      <Text className="text-center text-xs text-default-500">
+                        No correlated events — this event has no correlation ID.
+                      </Text>
+                    ) : null}
+                  </div>
+                ) : (
+                  <Text className="py-10 text-center text-sm text-default-500">
+                    Event not found.
+                  </Text>
+                )}
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </div>
   );
 }

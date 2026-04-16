@@ -1,4 +1,4 @@
-import { Card, Chip, Spinner, Text } from "@heroui/react";
+import { Card, Chip, Spinner, Table, Text } from "@heroui/react";
 import {
   IconServer2,
   IconHeartbeat,
@@ -104,48 +104,49 @@ export default function PodServicesPage() {
               <Spinner color="accent" />
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-medium border border-divider">
-              <table className="w-full border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-divider bg-default-50/80">
-                    <th className="px-3 py-2 font-medium">Service</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
-                    <th className="px-3 py-2 font-medium">Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(healthQuery.data ?? []).map((row) => (
-                    <tr
-                      key={row.name}
-                      className="border-b border-divider/60 odd:bg-default-50/20"
-                    >
-                      <td className="px-3 py-2 font-medium">{row.name}</td>
-                      <td className="px-3 py-2">
-                        <Chip
-                          size="sm"
-                          variant="soft"
-                          color={
-                            row.status === "healthy"
-                              ? "success"
-                              : row.status === "degraded"
-                                ? "warning"
-                                : "danger"
-                          }
-                        >
-                          {row.status}
-                        </Chip>
-                      </td>
-                      <td className="px-3 py-2 text-default-500">
-                        {row.message ?? "—"}
-                        {typeof row.latency === "number"
-                          ? ` · ${row.latency}ms`
-                          : ""}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table variant="secondary">
+              <Table.ScrollContainer>
+                <Table.Content aria-label="Runtime service checks">
+                  <Table.Header>
+                    <Table.Column>Service</Table.Column>
+                    <Table.Column>Status</Table.Column>
+                    <Table.Column>Detail</Table.Column>
+                  </Table.Header>
+                  <Table.Body>
+                    {(healthQuery.data ?? []).map((row) => (
+                      <Table.Row key={row.name} id={row.name}>
+                        <Table.Cell>
+                          <span className="font-medium">{row.name}</span>
+                        </Table.Cell>
+                        <Table.Cell>
+                          <Chip
+                            size="sm"
+                            variant="soft"
+                            color={
+                              row.status === "healthy"
+                                ? "success"
+                                : row.status === "degraded"
+                                  ? "warning"
+                                  : "danger"
+                            }
+                          >
+                            {row.status}
+                          </Chip>
+                        </Table.Cell>
+                        <Table.Cell>
+                          <span className="text-default-500">
+                            {row.message ?? "—"}
+                            {typeof row.latency === "number"
+                              ? ` · ${row.latency}ms`
+                              : ""}
+                          </span>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Content>
+              </Table.ScrollContainer>
+            </Table>
           )}
         </Card.Content>
       </Card.Root>

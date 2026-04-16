@@ -2,16 +2,17 @@ import { Alert, Card, Chip, Spinner, Text } from "@heroui/react";
 import {
   IconBrandTelegram,
   IconCloud,
+  IconExternalLink,
   IconPlugConnected,
-  IconRobot,
   IconRss,
 } from "@tabler/icons-react";
+import { Button } from "@heroui/react";
 import { trpc } from "../../lib/trpc";
 import { useWorkspace } from "../../lib/workspace";
-
-const AGENT_TYPES = ["openclaw", "zeroclaw"] as const;
+import { useNavigate } from "react-router-dom";
 
 export default function ExternalSourcesPage() {
+  const navigate = useNavigate();
   const { workspaceId } = useWorkspace();
 
   const connectorsQuery = trpc.connectors.status.useQuery(undefined, {
@@ -27,15 +28,6 @@ export default function ExternalSourcesPage() {
   const feedsQuery = trpc.feeds.listFeeds.useQuery(
     { workspaceId: workspaceId ?? undefined, limit: 25, offset: 0 },
     { enabled: !!workspaceId, refetchInterval: 60_000 }
-  );
-
-  const openclawStatus = trpc.intelligenceRegistry.getAgentStatus.useQuery(
-    { serviceType: "openclaw" },
-    { enabled: !!workspaceId, retry: false }
-  );
-  const zeroclawStatus = trpc.intelligenceRegistry.getAgentStatus.useQuery(
-    { serviceType: "zeroclaw" },
-    { enabled: !!workspaceId, retry: false }
   );
 
   return (
@@ -98,20 +90,23 @@ export default function ExternalSourcesPage() {
           </Card.Content>
         </Card.Root>
         <Card.Root className="border border-divider">
-          <Card.Content className="space-y-1 p-4">
-            <div className="inline-flex items-center gap-2 text-default-500">
-              <IconRobot size={16} />
-              <Text className="text-xs uppercase tracking-wider">
-                External agents
-              </Text>
-            </div>
-            <Text className="text-2xl font-semibold">
-              {(openclawStatus.data?.provisioned ? 1 : 0) +
-                (zeroclawStatus.data?.provisioned ? 1 : 0)}
+          <Card.Content className="space-y-2 p-4">
+            <Text className="text-xs uppercase tracking-wider text-default-500">
+              OpenClaw
             </Text>
-            <Text className="text-xs text-default-500">
-              Provisioned in workspace
+            <Text className="text-sm text-default-600">
+              Runtime lifecycle now lives in dedicated control center.
             </Text>
+            <Button
+              size="sm"
+              variant="outline"
+              onPress={() => navigate("/openclaw")}
+            >
+              <span className="inline-flex items-center gap-1">
+                <IconExternalLink size={14} />
+                Open control center
+              </span>
+            </Button>
           </Card.Content>
         </Card.Root>
       </div>
@@ -198,15 +193,12 @@ export default function ExternalSourcesPage() {
 
       <Card.Root className="border border-divider">
         <Card.Header>
-          <Card.Title className="inline-flex items-center gap-2">
-            <IconRobot size={18} />
-            Intelligence & external agents
-          </Card.Title>
+          <Card.Title>Intelligence registry</Card.Title>
           <Card.Description>
-            Registered intelligence services and workspace provisioning status.
+            Registered intelligence services available on this pod.
           </Card.Description>
         </Card.Header>
-        <Card.Content className="space-y-3">
+        <Card.Content>
           <div className="flex flex-wrap gap-2">
             {(capabilitiesQuery.data?.intelligenceServices ?? []).map((svc) => (
               <Chip key={svc.id} size="sm" variant="soft" color="default">
@@ -214,43 +206,6 @@ export default function ExternalSourcesPage() {
               </Chip>
             ))}
           </div>
-          {!workspaceId ? null : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {AGENT_TYPES.map((type) => {
-                const q = type === "openclaw" ? openclawStatus : zeroclawStatus;
-                return (
-                  <div
-                    key={type}
-                    className="rounded-medium border border-divider bg-default-50/40 p-3"
-                  >
-                    <Text className="text-sm font-semibold capitalize">
-                      {type}
-                    </Text>
-                    {q.isLoading ? (
-                      <Spinner className="mt-2" size="sm" color="accent" />
-                    ) : (
-                      <div className="mt-1 space-y-1 text-xs text-default-600">
-                        <div>
-                          Provisioned:{" "}
-                          <strong>{q.data?.provisioned ? "yes" : "no"}</strong>
-                        </div>
-                        <div>
-                          Registered:{" "}
-                          <strong>
-                            {q.data &&
-                            "serviceRegistered" in q.data &&
-                            q.data.serviceRegistered
-                              ? "yes"
-                              : "no"}
-                          </strong>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </Card.Content>
       </Card.Root>
     </div>

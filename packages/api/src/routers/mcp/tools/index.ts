@@ -49,15 +49,19 @@ export const tools = {
       {
         name: "synap_search_entities",
         description:
-          "Search for entities in Synap by query and optional type filter.",
+          "Search for entities in Synap by query and optional profile slug filter.",
         inputSchema: {
           type: "object",
           properties: {
             query: { type: "string", description: "Search query" },
-            type: {
+            profileSlug: {
               type: "string",
               description:
-                "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types.",
+                "Profile slug to filter by (e.g. note, task, bookmark, or a custom profile). Prefer this over `type`.",
+            },
+            type: {
+              type: "string",
+              description: "Deprecated alias for profileSlug — same meaning.",
             },
             workspaceId: {
               type: "string",
@@ -71,14 +75,18 @@ export const tools = {
       {
         name: "synap_get_entities",
         description:
-          "List entities of a specific type (tasks, contacts, projects, etc.)",
+          "List entities, optionally filtered by profile slug (tasks, contacts, custom profiles, etc.)",
         inputSchema: {
           type: "object",
           properties: {
-            type: {
+            profileSlug: {
               type: "string",
               description:
-                "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types.",
+                "Profile slug filter (e.g. note, task, bookmark). Prefer this over `type`.",
+            },
+            type: {
+              type: "string",
+              description: "Deprecated alias for profileSlug.",
             },
             workspaceId: {
               type: "string",

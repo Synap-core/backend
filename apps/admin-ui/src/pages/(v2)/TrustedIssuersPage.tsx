@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { Button, Chip, Tooltip } from "@heroui/react";
+import {
+  Button,
+  Checkbox,
+  Chip,
+  Modal,
+  TextArea,
+  Text,
+  Tooltip,
+  useOverlayState,
+} from "@heroui/react";
 import {
   IconShieldCheck,
   IconAlertTriangle,
@@ -284,6 +293,12 @@ function ApproveModal({
   onConfirm: (scopes: string[]) => void;
   isPending: boolean;
 }) {
+  const overlay = useOverlayState({
+    isOpen: true,
+    onOpenChange: (open) => {
+      if (!open) onClose();
+    },
+  });
   const [selectedScopes, setSelectedScopes] =
     useState<string[]>(DEFAULT_SCOPES);
 
@@ -294,86 +309,79 @@ function ApproveModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 p-4"
-      role="presentation"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-divider bg-content1 p-0 shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="approve-modal-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="border-b border-divider px-5 py-4">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-success-100 text-success-600 dark:bg-success-900/30 dark:text-success-400">
-              <IconCheck size={16} />
-            </span>
-            <h2 id="approve-modal-title" className="text-base font-semibold">
-              Approve connection from{" "}
-              <span className="text-primary">{issuer.displayName}</span>
-            </h2>
-          </div>
-          <p className="mt-1.5 text-xs text-default-500">
-            <span className="font-mono">{issuer.issuerUrl}</span>
-          </p>
-        </div>
-
-        <div className="px-5 py-4">
-          <label className="mb-2 block text-small font-medium">
-            Allowed scopes
-          </label>
-          <p className="mb-3 text-xs text-default-500">
-            Select which operations this issuer is allowed to perform on this
-            pod.
-          </p>
-          <div className="max-h-64 space-y-1 overflow-y-auto rounded-xl border border-divider p-2">
-            {ISSUER_SCOPES.map((s) => (
-              <label
-                key={s.value}
-                className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-2 hover:bg-default-100"
-              >
-                <input
-                  type="checkbox"
-                  className="mt-0.5 shrink-0 accent-current"
-                  checked={selectedScopes.includes(s.value)}
-                  onChange={() => toggleScope(s.value)}
-                />
-                <div className="min-w-0">
-                  <span className="block text-small font-medium">
-                    {s.label}
-                  </span>
-                  <span className="block text-xs text-default-500">
-                    {s.description}
-                  </span>
-                </div>
+    <Modal state={overlay}>
+      <Modal.Backdrop isDismissable>
+        <Modal.Container size="md" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="border-b border-divider px-5 py-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-success-100 text-success-600 dark:bg-success-900/30 dark:text-success-400">
+                  <IconCheck size={16} />
+                </span>
+                <Modal.Heading
+                  id="approve-modal-title"
+                  className="text-base font-semibold"
+                >
+                  Approve connection from{" "}
+                  <span className="text-primary">{issuer.displayName}</span>
+                </Modal.Heading>
+              </div>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="px-5 py-4">
+              <Text className="mt-1.5 text-xs text-default-500">
+                <span className="font-mono">{issuer.issuerUrl}</span>
+              </Text>
+              <label className="mb-2 block text-small font-medium">
+                Allowed scopes
               </label>
-            ))}
-          </div>
-          {selectedScopes.length === 0 && (
-            <p className="mt-2 text-xs text-danger-500">
-              Select at least one scope to approve.
-            </p>
-          )}
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-divider px-5 py-4">
-          <Button variant="ghost" size="sm" onPress={onClose}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            isDisabled={selectedScopes.length === 0 || isPending}
-            onPress={() => onConfirm(selectedScopes)}
-          >
-            {isPending ? "Approving…" : "Approve & allow access"}
-          </Button>
-        </div>
-      </div>
-    </div>
+              <p className="mb-3 text-xs text-default-500">
+                Select which operations this issuer is allowed to perform on
+                this pod.
+              </p>
+              <div className="max-h-64 space-y-1 overflow-y-auto rounded-xl border border-divider p-2">
+                {ISSUER_SCOPES.map((s) => (
+                  <div
+                    key={s.value}
+                    className="rounded-lg px-2 py-2 hover:bg-default-100"
+                  >
+                    <Checkbox
+                      isSelected={selectedScopes.includes(s.value)}
+                      onChange={() => toggleScope(s.value)}
+                    >
+                      <span className="block text-small font-medium">
+                        {s.label}
+                      </span>
+                      <span className="block text-xs text-default-500">
+                        {s.description}
+                      </span>
+                    </Checkbox>
+                  </div>
+                ))}
+              </div>
+              {selectedScopes.length === 0 && (
+                <p className="mt-2 text-xs text-danger-500">
+                  Select at least one scope to approve.
+                </p>
+              )}
+            </Modal.Body>
+            <Modal.Footer className="flex justify-end gap-2 border-t border-divider px-5 py-4">
+              <Button variant="ghost" size="sm" onPress={onClose}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                isDisabled={selectedScopes.length === 0 || isPending}
+                onPress={() => onConfirm(selectedScopes)}
+              >
+                {isPending ? "Approving…" : "Approve & allow access"}
+              </Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
   );
 }
 
@@ -390,64 +398,66 @@ function RejectModal({
   onConfirm: (reason: string) => void;
   isPending: boolean;
 }) {
+  const overlay = useOverlayState({
+    isOpen: true,
+    onOpenChange: (open) => {
+      if (!open) onClose();
+    },
+  });
   const [reason, setReason] = useState("");
 
   return (
-    <div
-      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 p-4"
-      role="presentation"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl border border-divider bg-content1 p-0 shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reject-modal-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="border-b border-divider px-5 py-4">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-danger-100 text-danger-600 dark:bg-danger-900/30 dark:text-danger-400">
-              <IconX size={16} />
-            </span>
-            <h2 id="reject-modal-title" className="text-base font-semibold">
-              Reject connection from{" "}
-              <span className="text-danger">{issuer.displayName}</span>
-            </h2>
-          </div>
-          <p className="mt-1.5 text-xs text-default-500">
-            <span className="font-mono">{issuer.issuerUrl}</span>
-          </p>
-        </div>
-
-        <div className="px-5 py-4">
-          <label className="mb-1.5 block text-small font-medium">
-            Reason <span className="text-danger">*</span>
-          </label>
-          <textarea
-            className="w-full rounded-xl border border-divider bg-default-100 px-3 py-2 text-small outline-none focus:border-danger focus:ring-2 focus:ring-danger/20"
-            rows={3}
-            placeholder="Why is this connection being rejected?"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-divider px-5 py-4">
-          <Button variant="ghost" size="sm" onPress={onClose}>
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            isDisabled={!reason.trim() || isPending}
-            onPress={() => onConfirm(reason.trim())}
-          >
-            {isPending ? "Rejecting…" : "Reject"}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <Modal state={overlay}>
+      <Modal.Backdrop isDismissable>
+        <Modal.Container size="md" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="border-b border-divider px-5 py-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-danger-100 text-danger-600 dark:bg-danger-900/30 dark:text-danger-400">
+                  <IconX size={16} />
+                </span>
+                <Modal.Heading
+                  id="reject-modal-title"
+                  className="text-base font-semibold"
+                >
+                  Reject connection from{" "}
+                  <span className="text-danger">{issuer.displayName}</span>
+                </Modal.Heading>
+              </div>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="px-5 py-4">
+              <p className="text-xs text-default-500">
+                <span className="font-mono">{issuer.issuerUrl}</span>
+              </p>
+              <label className="mb-1.5 block text-small font-medium">
+                Reason <span className="text-danger">*</span>
+              </label>
+              <TextArea
+                className="w-full"
+                rows={3}
+                placeholder="Why is this connection being rejected?"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </Modal.Body>
+            <Modal.Footer className="flex justify-end gap-2 border-t border-divider px-5 py-4">
+              <Button variant="ghost" size="sm" onPress={onClose}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                isDisabled={!reason.trim() || isPending}
+                onPress={() => onConfirm(reason.trim())}
+              >
+                {isPending ? "Rejecting…" : "Reject"}
+              </Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
   );
 }
 
@@ -464,54 +474,58 @@ function RevokeModal({
   onConfirm: () => void;
   isPending: boolean;
 }) {
+  const overlay = useOverlayState({
+    isOpen: true,
+    onOpenChange: (open) => {
+      if (!open) onClose();
+    },
+  });
   return (
-    <div
-      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 p-4"
-      role="presentation"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-sm rounded-2xl border border-divider bg-content1 p-0 shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="revoke-modal-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="border-b border-divider px-5 py-4">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-default-100 text-default-600">
-              <IconBan size={16} />
-            </span>
-            <h2 id="revoke-modal-title" className="text-base font-semibold">
-              Revoke access
-            </h2>
-          </div>
-        </div>
-        <div className="px-5 py-4 text-small text-default-600">
-          <p>
-            Revoke access for{" "}
-            <span className="font-semibold">{issuer.displayName}</span>?
-          </p>
-          <p className="mt-1 text-xs text-default-500">
-            Signed JWTs from this issuer will no longer be accepted. This cannot
-            be undone without re-approving.
-          </p>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-divider px-5 py-4">
-          <Button variant="ghost" size="sm" onPress={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            isDisabled={isPending}
-            onPress={onConfirm}
-          >
-            {isPending ? "Revoking…" : "Revoke access"}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <Modal state={overlay}>
+      <Modal.Backdrop isDismissable>
+        <Modal.Container size="sm" placement="center">
+          <Modal.Dialog>
+            <Modal.Header className="border-b border-divider px-5 py-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-default-100 text-default-600">
+                  <IconBan size={16} />
+                </span>
+                <Modal.Heading
+                  id="revoke-modal-title"
+                  className="text-base font-semibold"
+                >
+                  Revoke access
+                </Modal.Heading>
+              </div>
+              <Modal.CloseTrigger className="absolute right-3 top-3" />
+            </Modal.Header>
+            <Modal.Body className="px-5 py-4 text-small text-default-600">
+              <p>
+                Revoke access for{" "}
+                <span className="font-semibold">{issuer.displayName}</span>?
+              </p>
+              <p className="mt-1 text-xs text-default-500">
+                Signed JWTs from this issuer will no longer be accepted. This
+                cannot be undone without re-approving.
+              </p>
+            </Modal.Body>
+            <Modal.Footer className="flex justify-end gap-2 border-t border-divider px-5 py-4">
+              <Button variant="ghost" size="sm" onPress={onClose}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                isDisabled={isPending}
+                onPress={onConfirm}
+              >
+                {isPending ? "Revoking…" : "Revoke access"}
+              </Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
   );
 }
 
@@ -678,10 +692,11 @@ export default function TrustedIssuersPage() {
         isAllowedRedirectUri(redirectUri) && (
           <div className="mb-4 rounded-xl border border-danger-200 bg-danger-50 p-3 text-xs text-danger-800 dark:border-danger-700/40 dark:bg-danger-950/30 dark:text-danger-300">
             This issuer is <strong>{redirectIssuer.status}</strong>.{" "}
-            <button
-              type="button"
-              className="ml-1 underline"
-              onClick={() => {
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-1 h-auto p-0 align-baseline underline"
+              onPress={() => {
                 const deeplink = buildErrorDeeplink(
                   redirectUri,
                   redirectIssuer.status === "revoked"
@@ -693,7 +708,7 @@ export default function TrustedIssuersPage() {
               }}
             >
               Return to integration with error
-            </button>
+            </Button>
           </div>
         )}
       {pendingIssuers.length > 0 && (

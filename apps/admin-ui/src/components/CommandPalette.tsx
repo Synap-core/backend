@@ -17,6 +17,7 @@ import {
   IconPlugConnected,
   IconShieldLock,
   IconFileText,
+  IconRobot,
 } from "@tabler/icons-react";
 import { Modal, Separator, Text, useOverlayState } from "@heroui/react";
 import { showInfoNotification } from "../lib/notifications";
@@ -101,6 +102,13 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           description: "RSS, Telegram, connectors, external agents",
           keywords: ["connectors", "rss", "telegram", "sources", "external"],
           onSelect: () => handleNavigate("/external-sources"),
+        },
+        {
+          icon: <IconRobot size={18} />,
+          label: "OpenClaw",
+          description: "Instantiate, monitor, and operate OpenClaw",
+          keywords: ["openclaw", "agent", "operations", "monitoring", "debug"],
+          onSelect: () => handleNavigate("/openclaw"),
         },
         {
           icon: <IconShieldLock size={18} />,
@@ -218,75 +226,76 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   return (
     <Modal state={state}>
-      <Modal.Backdrop isDismissable className="bg-black/45" />
-      <Modal.Container
-        size="lg"
-        placement="center"
-        scroll="inside"
-        className="p-3"
-      >
-        <Modal.Dialog className="relative flex h-[min(660px,88vh)] w-[min(760px,95vw)] max-w-[760px] flex-col overflow-hidden rounded-3xl border border-divider bg-content1 text-foreground shadow-2xl">
-          <Command className="flex min-h-0 flex-1 flex-col">
-            <div className="flex shrink-0 items-center gap-2 border-b border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-3 pr-12">
-              <IconSearch size={18} className="shrink-0 text-default-400" />
-              <Command.Input
-                ref={inputRef}
-                placeholder="Search pages, actions, or paste an ID…"
-                className="min-w-0 flex-1 border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-default-400 focus-visible:ring-0"
-              />
-              <Modal.CloseTrigger className="absolute right-3 top-3 text-default-500 hover:text-foreground" />
-            </div>
+      <Modal.Backdrop isDismissable>
+        <Modal.Container size="lg" placement="center" scroll="inside">
+          <Modal.Dialog>
+            <Command className="flex min-h-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center gap-2 border-b border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-3 pr-12">
+                <IconSearch size={18} className="shrink-0 text-default-400" />
+                <Command.Input
+                  ref={inputRef}
+                  placeholder="Search pages, actions, or paste an ID…"
+                  className="min-w-0 flex-1 border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-default-400 focus-visible:ring-0"
+                />
+                <Modal.CloseTrigger className="absolute right-3 top-3 text-default-500 hover:text-foreground" />
+              </div>
 
-            <Command.List className="command-palette-list min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
-              <Command.Empty className="px-4 py-8 text-center text-sm text-default-500">
-                No results found.
-              </Command.Empty>
+              <Command.List className="command-palette-list min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
+                <Command.Empty className="px-4 py-8 text-center text-sm text-default-500">
+                  No results found.
+                </Command.Empty>
 
-              {sections.map((section, index) => (
-                <div key={section.heading} className="command-palette-section">
-                  {index > 0 ? <Separator className="my-2 opacity-60" /> : null}
-                  <Command.Group
-                    heading={section.heading}
-                    className="command-palette-group px-2 py-1"
+                {sections.map((section, index) => (
+                  <div
+                    key={section.heading}
+                    className="command-palette-section"
                   >
-                    {section.entries.map((entry) => (
-                      <CommandItem
-                        key={`${section.heading}-${entry.label}`}
-                        icon={entry.icon}
-                        label={entry.label}
-                        description={entry.description}
-                        keywords={entry.keywords}
-                        onSelect={entry.onSelect}
-                      />
-                    ))}
-                  </Command.Group>
-                </div>
-              ))}
-            </Command.List>
+                    {index > 0 ? (
+                      <Separator className="my-2 opacity-60" />
+                    ) : null}
+                    <Command.Group
+                      heading={section.heading}
+                      className="command-palette-group px-2 py-1"
+                    >
+                      {section.entries.map((entry) => (
+                        <CommandItem
+                          key={`${section.heading}-${entry.label}`}
+                          icon={entry.icon}
+                          label={entry.label}
+                          description={entry.description}
+                          keywords={entry.keywords}
+                          onSelect={entry.onSelect}
+                        />
+                      ))}
+                    </Command.Group>
+                  </div>
+                ))}
+              </Command.List>
 
-            <div className="flex shrink-0 flex-wrap gap-4 border-t border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs text-default-500">
-                <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
-                  ↑↓
-                </kbd>
-                <span>Navigate</span>
+              <div className="flex shrink-0 flex-wrap gap-4 border-t border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs text-default-500">
+                  <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
+                    ↑↓
+                  </kbd>
+                  <span>Navigate</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs text-default-500">
+                  <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
+                    ↵
+                  </kbd>
+                  <span>Select</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs text-default-500">
+                  <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
+                    Esc
+                  </kbd>
+                  <span>Close</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-default-500">
-                <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
-                  ↵
-                </kbd>
-                <span>Select</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs text-default-500">
-                <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
-                  Esc
-                </kbd>
-                <span>Close</span>
-              </div>
-            </div>
-          </Command>
-        </Modal.Dialog>
-      </Modal.Container>
+            </Command>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
     </Modal>
   );
 }

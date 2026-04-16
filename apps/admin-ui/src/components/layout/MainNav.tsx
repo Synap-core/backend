@@ -12,6 +12,7 @@ import {
   IconPlugConnected,
   IconShieldLock,
   IconShieldCheck,
+  IconRobot,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconFileText,
@@ -57,6 +58,7 @@ const podSections: NavListSection[] = [
     label: "External",
     items: [
       { path: "/connections", label: "External connections", icon: IconPlug },
+      { path: "/openclaw", label: "OpenClaw", icon: IconRobot },
     ],
   },
   {

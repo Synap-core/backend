@@ -26,6 +26,12 @@ export const entitiesRouter = router({
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid().optional(),
+        /** Profile slug filter (canonical). */
+        profileSlug: z.string().optional(),
+        /**
+         * @deprecated Same as profileSlug — legacy query param name from when
+         * entities used a `type` field before profiles were slug-based.
+         */
         type: z.string().optional(),
         limit: z.number().optional(),
       })
@@ -43,9 +49,10 @@ export const entitiesRouter = router({
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
-      // Call regular API's list endpoint
+      const profileSlug = input.profileSlug ?? input.type;
+
       const result = await caller.list({
-        profileSlug: input.type, // Map type to profileSlug
+        profileSlug: profileSlug ?? undefined,
         limit: input.limit || 50,
       });
 

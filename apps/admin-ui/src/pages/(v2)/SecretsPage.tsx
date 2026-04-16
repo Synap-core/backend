@@ -1,5 +1,14 @@
 import { useNavigate } from "react-router-dom";
-import { Alert, Button, Card, Chip, Spinner, Tabs, Text } from "@heroui/react";
+import {
+  Alert,
+  Button,
+  Card,
+  Chip,
+  Spinner,
+  Table,
+  Tabs,
+  Text,
+} from "@heroui/react";
 import { IconKey, IconShieldLock } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
 
@@ -87,43 +96,46 @@ export default function SecretsPage() {
               </Alert.Content>
             </Alert>
           ) : (
-            <div className="overflow-x-auto rounded-medium border border-divider">
-              <table className="w-full border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-divider bg-default-50/80">
-                    <th className="px-3 py-2 font-medium">Name</th>
-                    <th className="px-3 py-2 font-medium">Prefix</th>
-                    <th className="px-3 py-2 font-medium">Owner</th>
-                    <th className="px-3 py-2 font-medium">Active</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(systemKeysQuery.data ?? []).map((k) => (
-                    <tr
-                      key={k.id}
-                      className="border-b border-divider/60 odd:bg-default-50/20"
-                    >
-                      <td className="px-3 py-2 font-medium">{k.keyName}</td>
-                      <td className="px-3 py-2 font-mono text-xs">
-                        {k.keyPrefix}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-default-600">
-                        {k.user.email}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Chip
-                          size="sm"
-                          variant="soft"
-                          color={k.isActive ? "success" : "default"}
-                        >
-                          {k.isActive ? "active" : "inactive"}
-                        </Chip>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table variant="secondary">
+              <Table.ScrollContainer>
+                <Table.Content aria-label="System keys table">
+                  <Table.Header>
+                    <Table.Column>Name</Table.Column>
+                    <Table.Column>Prefix</Table.Column>
+                    <Table.Column>Owner</Table.Column>
+                    <Table.Column>Active</Table.Column>
+                  </Table.Header>
+                  <Table.Body>
+                    {(systemKeysQuery.data ?? []).map((k) => (
+                      <Table.Row key={k.id} id={k.id}>
+                        <Table.Cell>
+                          <span className="font-medium">{k.keyName}</span>
+                        </Table.Cell>
+                        <Table.Cell>
+                          <span className="font-mono text-xs">
+                            {k.keyPrefix}
+                          </span>
+                        </Table.Cell>
+                        <Table.Cell>
+                          <span className="text-xs text-default-600">
+                            {k.user.email}
+                          </span>
+                        </Table.Cell>
+                        <Table.Cell>
+                          <Chip
+                            size="sm"
+                            variant="soft"
+                            color={k.isActive ? "success" : "default"}
+                          >
+                            {k.isActive ? "active" : "inactive"}
+                          </Chip>
+                        </Table.Cell>
+                      </Table.Row>
+                    ))}
+                  </Table.Body>
+                </Table.Content>
+              </Table.ScrollContainer>
+            </Table>
           )}
         </Tabs.Panel>
 

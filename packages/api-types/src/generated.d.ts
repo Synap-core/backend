@@ -9571,6 +9571,124 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	openclawAdmin: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		getOverview: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				workspace: {
+					id: string;
+					name: string;
+				};
+				deploymentModel: "hybrid-explicit";
+				lifecycleDomains: {
+					infra: "synap-cli";
+					runtime: "openclaw-cli";
+				};
+				openclaw: {
+					provisioned: boolean;
+					registered: boolean;
+					serviceType: string;
+					agentUserId: string | null;
+					agentEmail: string | null;
+					activeHubKeys: number;
+					serviceId: string | null;
+					displayName: string;
+					version: string | null;
+					webhookUrl: string | null;
+					mcpEndpoint: string | null;
+					mcpApproved: boolean;
+					health: {
+						lastCheckAt: Date | null;
+						status: string;
+					};
+					links: {
+						hostedUiUrl: string | null;
+						docsUrl: string;
+					};
+				};
+				controlPlane: {
+					url: string | null;
+					podId: string | null;
+					tier: string | null;
+				};
+				operations: {
+					supportsManagedOps: boolean;
+					notes: string;
+					commands: string[];
+				};
+			};
+			meta: object;
+		}>;
+		validateConnection: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				ok: boolean;
+				status: "not_registered";
+				checkedAt: string;
+				message: string;
+				serviceId?: undefined;
+			} | {
+				ok: boolean;
+				status: "healthy" | "unhealthy";
+				checkedAt: string;
+				serviceId: string;
+				message: string;
+			};
+			meta: object;
+		}>;
+		runDiagnostics: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				checkedAt: string;
+				checks: {
+					agentProvisioned: boolean;
+					serviceRegistered: boolean;
+					webhookReachable: boolean;
+					mcpEndpointPresent: boolean;
+					mcpApproved: boolean;
+				};
+				metadata: {
+					serviceId: string | null;
+					version: string | null;
+					webhookUrl: string | null;
+					lastHealthStatus: string | null;
+					lastHealthCheck: Date | null;
+				};
+				message: string;
+			};
+			meta: object;
+		}>;
+		getHostedUiLink: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				url: string | null;
+				available: boolean;
+				fallback: string;
+			};
+			meta: object;
+		}>;
+		runRuntimeAction: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				action: "restart" | "safe_update" | "rollback";
+			};
+			output: {
+				automated: boolean;
+				action: "restart" | "safe_update" | "rollback";
+				commands: string[];
+				message: string;
+			};
+			meta: object;
+		}>;
+	}>>;
 }>>;
 export type AppRouter = typeof coreRouter;
 

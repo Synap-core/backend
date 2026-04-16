@@ -84,18 +84,13 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_search_entities": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
+      const slug =
+        (args.profileSlug as string | undefined) ||
+        (args.type as string | undefined);
       const result = await caller.search.searchEntities({
         userId,
         query: args.query as string,
-        type:
-          (args.type as
-            | "note"
-            | "task"
-            | "document"
-            | "project"
-            | "contact"
-            | "meeting"
-            | "idea") || undefined,
+        ...(slug ? { profileSlug: slug } : {}),
         limit: (args.limit as number) || 20,
       });
       return ok(result);
@@ -103,9 +98,12 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_get_entities": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
+      const profileSlug =
+        (args.profileSlug as string | undefined) ||
+        (args.type as string | undefined);
       const result = await caller.entities.getEntities({
         userId,
-        type: (args.type as string) || undefined,
+        profileSlug: profileSlug || undefined,
         limit: (args.limit as number) || 50,
       });
       return ok(result);
@@ -347,7 +345,7 @@ export async function readMCPResourceViaHubProtocol(
 
     const entities = await caller.entities.getEntities({
       userId,
-      type: entityType || undefined,
+      profileSlug: entityType || undefined,
       limit: 100,
     });
     return {
