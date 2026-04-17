@@ -20,7 +20,7 @@ export const tools = {
       {
         name: "synap_search",
         description:
-          "Unified search across all Synap data (entities, documents, channels, agents). Use for broad queries.",
+          "Unified full-text search across entities, documents, and views. Use for open-ended queries when you don't know the content type. Filter by collections: ['entities','documents','views']. ALWAYS call this or synap_search_entities before creating anything — check for duplicates first.",
         inputSchema: {
           type: "object",
           properties: {
@@ -49,7 +49,7 @@ export const tools = {
       {
         name: "synap_search_entities",
         description:
-          "Search for entities in Synap by query and optional profile slug filter.",
+          "Search entities by keywords or natural language, filtered by profileSlug (entity type). Use when you want entities specifically. ALWAYS call before synap_create_entity to avoid duplicates. If a result matches with high confidence, link to it instead of creating new. Returns id, title, profileSlug, status, priority, properties.",
         inputSchema: {
           type: "object",
           properties: {
@@ -75,7 +75,7 @@ export const tools = {
       {
         name: "synap_get_entities",
         description:
-          "List entities, optionally filtered by profile slug (tasks, contacts, custom profiles, etc.)",
+          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content search use synap_search_entities. Supports limit (default 50).",
         inputSchema: {
           type: "object",
           properties: {
@@ -99,7 +99,8 @@ export const tools = {
       },
       {
         name: "synap_get_document",
-        description: "Retrieve the full content of a document by ID.",
+        description:
+          "Get a document by ID, returning full markdown content. Documents are long-form content (meeting notes, research, writeups) attached to entities. Get documentId from entity.documentId or search results.",
         inputSchema: {
           type: "object",
           properties: {
@@ -111,7 +112,7 @@ export const tools = {
       {
         name: "synap_recall_facts",
         description:
-          "Search long-term memory (knowledge facts) for information relevant to a query. userId is auto-injected from the API key if not provided.",
+          "Search memory facts by keyword. Memory stores loose atomic knowledge: preferences, context, facts that don't fit structured entities. Use for 'user prefers X', 'standup is 10am'. For meaning-based search call POST /api/hub/memory/search. Complement with synap_search_entities for structured data. userId is auto-injected from the API key if not provided.",
         inputSchema: {
           type: "object",
           properties: {
@@ -130,7 +131,7 @@ export const tools = {
       {
         name: "synap_get_thread_context",
         description:
-          "Get the context of a channel/thread (messages, linked entities, linked documents).",
+          "Get full context for a thread: all messages plus linked entities and documents. Call before sending a message to orient yourself with conversation history and in-scope data. threadId from synap_send_message or the user's personal channel.",
         inputSchema: {
           type: "object",
           properties: {
@@ -142,7 +143,7 @@ export const tools = {
       {
         name: "synap_list_proposals",
         description:
-          "List pending AI proposals awaiting user approval. userId is auto-injected from the API key if not provided.",
+          "List proposals — pending AI writes awaiting human review. AI writes return status 'proposed' when they require human approval — this is NOT an error. Filter by status: 'pending' (needs review), 'approved', 'rejected'. Use to show the user their pending changes. userId is auto-injected from the API key if not provided.",
         inputSchema: {
           type: "object",
           properties: {
@@ -165,7 +166,7 @@ export const tools = {
       {
         name: "synap_get_entity",
         description:
-          "Get a single entity by its ID, including all properties and metadata.",
+          "Get a single entity by ID with full details: all properties and metadata. Use after synap_search_entities to get complete data on a result. The id comes from search results or synap_create_entity responses.",
         inputSchema: {
           type: "object",
           properties: {
@@ -181,7 +182,7 @@ export const tools = {
       {
         name: "synap_list_profiles",
         description:
-          "List all available entity profiles (types) in the workspace. Use this to discover what entity types exist before creating entities.",
+          "List all available entity types in the workspace — system profiles (always present) plus custom types. ALWAYS call at session start before creating entities. Never assume 'deal' or custom types exist — workspaces differ. Returns slug, displayName, entityScope (pod-wide vs workspace-scoped), and property definitions.",
         inputSchema: {
           type: "object",
           properties: {
@@ -196,7 +197,7 @@ export const tools = {
       {
         name: "synap_get_relations",
         description:
-          "Get all relations (links) for an entity. Returns connected entities and relationship types.",
+          "Get all relations for an entity — inbound and outbound. Returns typed edges with sourceEntityId, targetEntityId, and relation type. Check before synap_link_entities to avoid duplicates. Use to understand an entity's connections.",
         inputSchema: {
           type: "object",
           properties: {
@@ -217,7 +218,7 @@ export const tools = {
       {
         name: "synap_create_entity",
         description:
-          "Create a new entity in Synap (task, contact, project, note, etc.). Requires mcp.write scope. May create a proposal for user approval depending on workspace AI governance policy.",
+          "Create a new entity. Use synap_list_profiles to discover available profileSlugs first. ALWAYS call synap_search_entities before creating to avoid duplicates. Response may be 'approved' (entity created, id returned) or 'proposed' (awaiting human review, proposalId returned). NEVER treat 'proposed' as an error — store proposalId and tell the user to review it in Synap.",
         inputSchema: {
           type: "object",
           properties: {
@@ -236,7 +237,7 @@ export const tools = {
       {
         name: "synap_update_entity",
         description:
-          "Update an existing entity. Requires mcp.write scope. May create a proposal.",
+          "Update an entity's title, description, or properties. Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, corrections.",
         inputSchema: {
           type: "object",
           properties: {
@@ -251,7 +252,7 @@ export const tools = {
       {
         name: "synap_create_document",
         description:
-          "Create a new document in a workspace. Requires mcp.write scope. May create a proposal.",
+          "Create a long-form markdown document, optionally attached to an entity. Use for meeting notes, research, plans — content that doesn't fit entity properties. Content is full markdown. May return 'proposed'.",
         inputSchema: {
           type: "object",
           properties: {
@@ -267,7 +268,8 @@ export const tools = {
       },
       {
         name: "synap_remember_fact",
-        description: "Store a fact in long-term memory for a user.",
+        description:
+          "Store a loose fact or knowledge fragment in persistent memory. Use for preferences, context, and facts recalled by keyword. Always auto-approved (never proposed). For structured objects use synap_create_entity.",
         inputSchema: {
           type: "object",
           properties: {
@@ -285,7 +287,7 @@ export const tools = {
       {
         name: "synap_send_message",
         description:
-          "Send a message to a Synap channel. Use for agent-to-channel communication. Requires mcp.write scope.",
+          "Send a message to a Synap channel/thread. Omit channelId to post to the user's personal AI thread. Set autoRespond: true to trigger AI response. Use for summaries, channel discussions, and content the user wants to find in Synap chat. Pass the real user's ID — not the API key owner's.",
         inputSchema: {
           type: "object",
           properties: {
@@ -302,7 +304,7 @@ export const tools = {
       {
         name: "synap_link_entities",
         description:
-          "Create a relation (link) between two entities. Use to build the knowledge graph. Requires mcp.write scope. May create a proposal.",
+          "Create a typed relation between two entities. Type is a free string — use conventions: 'related_to', 'parent_of', 'child_of', 'belongs_to', 'authored_by', 'depends_on', 'references', 'mentions'. Check synap_get_relations first to avoid duplicates. May return 'proposed'. Builds the knowledge graph.",
         inputSchema: {
           type: "object",
           properties: {

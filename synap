@@ -50,6 +50,31 @@ synap_assume_yes() {
     [ "${SYNAP_ASSUME_YES:-}" = "1" ] || [ "${SYNAP_YES:-}" = "1" ] || [ "${SYNAP_NON_INTERACTIVE:-}" = "1" ]
 }
 
+# Remove known stale artifacts from older installers/flows.
+# Safe-by-default: only removes known files/containers that should never hold source-of-truth data.
+cleanup_stale_synap_state() {
+    local deploy_dir="$1"
+    if [ -z "$deploy_dir" ] || [ ! -d "$deploy_dir" ]; then
+        return 0
+    fi
+
+    echo -e "${BLUE}🧹 Cleaning known stale install artifacts...${NC}"
+
+    # Legacy install.sh artifacts that can override backend-migrate behavior.
+    rm -f "$deploy_dir/patch_migration.js"
+
+    if [ -f "$deploy_dir/docker-compose.override.yml" ] && grep -q "patch_migration.js" "$deploy_dir/docker-compose.override.yml" 2>/dev/null; then
+        rm -f "$deploy_dir/docker-compose.override.yml"
+        echo -e "${YELLOW}  Removed legacy docker-compose.override.yml (patch_migration hook)${NC}"
+    fi
+
+    # Legacy Eve fallback container (removed path): can create confusing health/readiness state.
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^eve-brain-synap$'; then
+        docker rm -f eve-brain-synap >/dev/null 2>&1 || true
+        echo -e "${YELLOW}  Removed legacy container: eve-brain-synap${NC}"
+    fi
+}
+
 # ============================================================================
 # HELPER: Update env value
 # ============================================================================
@@ -901,6 +926,8 @@ EOF
     fi
     
     cd deploy
+
+    cleanup_stale_synap_state "$(pwd)"
     
     # If we loaded defaults earlier and they were used, we're done with prompts
     # Otherwise, if .env exists now, show a message
@@ -1265,6 +1292,7 @@ cmd_update() {
     fi
     
     cd "$deploy_dir"
+    cleanup_stale_synap_state "$deploy_dir"
     
     # Auto-detect if we're in a git repo (for smart defaults)
     local IN_GIT_REPO=false
@@ -2354,7 +2382,76 @@ cmd_reset() {
 
     cd "$deploy_dir"
 
-    local keep_kratos="${1:-}"
+    local mode="data"
+    local assume_yes="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --full|-f)
+                mode="full"
+                ;;
+            --yes|-y)
+                assume_yes="true"
+                ;;
+            --help|-h)
+                echo "Usage: synap reset [--full|-f] [--yes|-y]"
+                echo "  default: wipe workspace/application data only (keeps infra)"
+                echo "  --full : wipe stack state + stale docker resources and optionally rerun install"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}Unknown option for reset: $1${NC}"
+                echo "Usage: synap reset [--full|-f] [--yes|-y]"
+                return 1
+                ;;
+        esac
+        shift
+    done
+
+    if [ "$mode" = "full" ]; then
+        echo -e "${RED}⚠️  WARNING: FULL RESET will destroy this installation state.${NC}"
+        echo ""
+        echo "What will be deleted:"
+        echo "  - All application data (Postgres + MinIO bucket)"
+        echo "  - All project containers, networks, and compose volumes"
+        echo "  - Stale Docker resources (system prune --volumes)"
+        echo ""
+        echo "What will be kept:"
+        echo "  - deploy/.env (unless you manually remove it)"
+        echo "  - Repository files"
+        echo ""
+        if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
+            read -p "Type 'recreate' to confirm full reset: " confirm
+            if [ "$confirm" != "recreate" ]; then
+                echo "Cancelled."
+                exit 0
+            fi
+        fi
+
+        echo ""
+        echo -e "${BLUE}🧨 Full cleanup in progress...${NC}"
+        echo "  Stopping and removing compose resources..."
+        docker compose down --volumes --remove-orphans 2>/dev/null || true
+
+        echo "  Pruning stale Docker resources..."
+        docker system prune -a -f --volumes 2>/dev/null || true
+
+        echo ""
+        echo -e "${GREEN}✅ Full cleanup complete.${NC}"
+        echo ""
+        if [ "$assume_yes" = "true" ] || synap_assume_yes; then
+            echo -e "${BLUE}🚀 Re-running install in non-interactive mode...${NC}"
+            cmd_install --non-interactive
+            return $?
+        fi
+
+        read -p "Run fresh install now? (y/N): " rerun
+        if [ "$rerun" = "y" ] || [ "$rerun" = "Y" ]; then
+            cmd_install
+            return $?
+        fi
+        echo "Run 'synap install' when ready."
+        return 0
+    fi
 
     echo -e "${RED}⚠️  WARNING: This will permanently delete all workspace data!${NC}"
     echo ""
@@ -2369,10 +2466,12 @@ cmd_reset() {
     echo "  - Database schema and migrations"
     echo "  - Configuration (.env)"
     echo ""
-    read -p "Type 'yes' to confirm data reset: " confirm
-    if [ "$confirm" != "yes" ]; then
-        echo "Cancelled."
-        exit 0
+    if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
+        read -p "Type 'yes' to confirm data reset: " confirm
+        if [ "$confirm" != "yes" ]; then
+            echo "Cancelled."
+            exit 0
+        fi
     fi
 
     echo ""
@@ -2455,7 +2554,7 @@ ${YELLOW}Management:${NC}
   synap services <sub> [type]    Manage external agent services (OpenClaw, ZeroClaw, etc.)
   synap users <sub>              Manage pod users (list, add-admin, reset-password, delete)
   synap profiles <sub> [name]  Enable/disable optional compose profiles (rsshub, openclaw, monitoring)
-  synap reset                    Reset all workspace data (keeps Kratos identities)
+  synap reset [--full]           Reset workspace data or full cleanup + recreate
 
 ${YELLOW}Examples:${NC}
   # Install (auto-detects: clone if not in repo, use image by default)
@@ -2499,6 +2598,8 @@ ${YELLOW}Examples:${NC}
   synap users reset-password relay@example.com 'NewStrongPassw0rd!'
   synap profiles enable rsshub     # RSSHub + browserless (optional stack)
   synap profiles disable openclaw  # Stop OpenClaw container
+  synap reset                      # Reset workspace/application data only
+  synap reset --full               # Full cleanup (docker stale data) + fresh install option
 
 ${YELLOW}For detailed help:${NC}
   synap install --help

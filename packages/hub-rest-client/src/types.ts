@@ -221,3 +221,246 @@ export interface CaptureExecuteResponse {
     relationType: string;
   }>;
 }
+
+// ─── Relations & Graph ───────────────────────────────────────────────────────
+
+export interface HubRelation {
+  id: string;
+  sourceEntityId: string;
+  targetEntityId: string;
+  type: string;
+  label?: string;
+  createdAt: string;
+}
+
+export interface HubGraphNode extends HubEntity {
+  depth: number;
+}
+
+export interface HubGraphEdge {
+  sourceId: string;
+  targetId: string;
+  type: string;
+  label?: string;
+}
+
+export interface HubGraphResult {
+  nodes: HubGraphNode[];
+  edges: HubGraphEdge[];
+}
+
+/**
+ * A single link returned by getConnections() — unified view across three sources:
+ *  - `"graph"` : an explicit row in the relations table
+ *  - `"property"` : derived from another entity's `entity_id` property pointing here
+ *  - `"thread"` : a chat thread created, updated, or referenced this entity
+ */
+export interface HubConnection {
+  entityId: string;
+  entity: HubEntity | null;
+  label: string;
+  direction: "outgoing" | "incoming" | "structural";
+  source: "graph" | "property" | "thread";
+  relationType?: string;
+  propertySlug?: string;
+  propertyLabel?: string;
+  channelId?: string;
+  channelRelationshipType?: string;
+  createdAt?: string | null;
+}
+
+export interface HubConnectionsResult {
+  connections: HubConnection[];
+  counts: {
+    total: number;
+    graph: number;
+    structural: number;
+    threads: number;
+  };
+}
+
+// ─── Profiles & Property Defs ────────────────────────────────────────────────
+
+export interface HubProfile {
+  id: string;
+  slug: string;
+  displayName: string;
+  description?: string;
+  entityScope: "pod" | "workspace";
+  parentSlug?: string;
+  icon?: string;
+  color?: string;
+  properties?: HubPropertyDef[];
+}
+
+export interface HubPropertyDef {
+  id: string;
+  slug: string;
+  displayName: string;
+  type:
+    | "string"
+    | "number"
+    | "boolean"
+    | "date"
+    | "entity_id"
+    | "array"
+    | "object"
+    | "secret";
+  required?: boolean;
+  options?: string[];
+}
+
+// ─── Threads & Channels ──────────────────────────────────────────────────────
+
+export interface HubThread {
+  id: string;
+  name?: string;
+  type:
+    | "ai_thread"
+    | "branch"
+    | "entity_comments"
+    | "document_review"
+    | "view_discussion"
+    | "direct"
+    | "external_import";
+  threadKind?: "personal" | "workspace" | "external";
+  workspaceId?: string;
+  agentType?: string;
+  linkedEntityIds?: string[];
+  linkedDocumentIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HubMessage {
+  id: string;
+  content: string;
+  role: "user" | "assistant" | "system";
+  userId?: string;
+  createdAt: string;
+}
+
+export interface HubThreadContext {
+  thread: HubThread;
+  messages: HubMessage[];
+  linkedEntities: HubEntity[];
+  linkedDocuments: HubDocument[];
+}
+
+// ─── Proposals ───────────────────────────────────────────────────────────────
+
+export interface HubProposal {
+  id: string;
+  status: "pending" | "approved" | "rejected";
+  action: "create" | "update" | "delete";
+  subjectType: string;
+  data: Record<string, unknown>;
+  reason?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+// ─── Views ───────────────────────────────────────────────────────────────────
+
+export interface HubView {
+  id: string;
+  name: string;
+  type:
+    | "table"
+    | "kanban"
+    | "list"
+    | "grid"
+    | "gallery"
+    | "calendar"
+    | "timeline"
+    | "graph"
+    | "bento"
+    | string;
+  profileSlug?: string;
+  workspaceId?: string;
+  config?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+
+export interface HubSearchResult {
+  entities: HubEntity[];
+  documents: HubDocument[];
+  total: number;
+}
+
+// ─── Commands ────────────────────────────────────────────────────────────────
+
+export interface HubCommand {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  workspaceId?: string;
+}
+
+// ─── Agent Users ─────────────────────────────────────────────────────────────
+
+export interface HubAgentUser {
+  id: string;
+  name: string;
+  agentType?: string;
+  workspaceId?: string;
+}
+
+// ─── User Context ─────────────────────────────────────────────────────────────
+
+export interface HubUserContext {
+  recentEntities: HubEntity[];
+  activeThreads: HubThread[];
+  workspaceSummary?: Record<string, unknown>;
+}
+
+// ─── Governance ───────────────────────────────────────────────────────────────
+
+export interface HubGovernanceResult {
+  status: "approved" | "proposed" | "denied";
+  id?: string;
+  proposalId?: string;
+  reason?: string;
+  message?: string;
+}
+
+// ─── Write input types ────────────────────────────────────────────────────────
+
+export interface CreateThreadInput {
+  name?: string;
+  type?: HubThread["type"];
+  workspaceId?: string;
+  agentType?: string;
+  entityId?: string;
+  documentId?: string;
+  userId?: string;
+}
+
+export interface CreateRelationInput {
+  sourceEntityId: string;
+  targetEntityId: string;
+  type: string;
+  label?: string;
+  workspaceId?: string;
+  userId?: string;
+}
+
+export interface CreateViewInput {
+  name: string;
+  type: HubView["type"];
+  profileSlug?: string;
+  workspaceId: string;
+  config?: Record<string, unknown>;
+  userId?: string;
+}
+
+export interface ExecuteCommandInput {
+  slug: string;
+  workspaceId?: string;
+  parameters?: Record<string, unknown>;
+  userId?: string;
+}

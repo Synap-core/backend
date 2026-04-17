@@ -123,6 +123,15 @@ fi
 
 success "Directories ready at $INSTALL_DIR"
 
+# ─── Cleanup known stale artifacts from older installers ──────────────────────
+heading "Cleaning stale install artifacts"
+rm -f "$INSTALL_DIR/patch_migration.js"
+if [[ -f "$INSTALL_DIR/docker-compose.override.yml" ]] && grep -q "patch_migration.js" "$INSTALL_DIR/docker-compose.override.yml" 2>/dev/null; then
+  rm -f "$INSTALL_DIR/docker-compose.override.yml"
+  info "Removed legacy docker-compose.override.yml with patch_migration hook"
+fi
+success "Stale artifact cleanup complete"
+
 # ─── Download config files ─────────────────────────────────────────────────────
 heading "Downloading configuration files"
 

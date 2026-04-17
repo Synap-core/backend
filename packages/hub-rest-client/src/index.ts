@@ -45,6 +45,7 @@ export { checkPodHealth, setupAgent } from "./setup.js";
 
 // Types
 export type {
+  // Core entity types
   HubEntity,
   HubDocument,
   HubChannel,
@@ -54,13 +55,51 @@ export type {
   HubMemoryResult,
   HubListResponse,
   HubSingleResponse,
+  // Relations & Graph
+  HubRelation,
+  HubGraphNode,
+  HubGraphEdge,
+  HubGraphResult,
+  HubConnection,
+  HubConnectionsResult,
+  // Profiles & Schema
+  HubProfile,
+  HubPropertyDef,
+  // Threads & Channels
+  HubThread,
+  HubMessage,
+  HubThreadContext,
+  // Proposals
+  HubProposal,
+  // Views
+  HubView,
+  // Search
+  HubSearchResult,
+  // Commands & Agents
+  HubCommand,
+  HubAgentUser,
+  // User Context
+  HubUserContext,
+  // Governance
+  HubGovernanceResult,
+  // Input types — Entity
   CreateEntityInput,
   UpdateEntityInput,
+  // Input types — Documents
   CreateDocumentInput,
+  // Input types — Memory
   StoreMemoryInput,
+  // Input types — Channels
   SendToChannelInput,
+  // Input types — Relations, Threads, Views, Commands
+  CreateRelationInput,
+  CreateThreadInput,
+  CreateViewInput,
+  ExecuteCommandInput,
+  // Setup
   AgentSetupResult,
   PodStatus,
+  // Capture pipeline
   CaptureProposal,
   CaptureRelation,
   CaptureStructureResponse,

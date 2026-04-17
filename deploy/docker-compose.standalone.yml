@@ -154,15 +154,28 @@ services:
   # ============================================================================
   backend-migrate:
     image: ghcr.io/synap-core/backend:${BACKEND_VERSION:-latest}
-    working_dir: /app/api
+    working_dir: /app
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
       HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
       NODE_ENV: production
     command: >
-      sh -c "node node_modules/@synap/database/dist/scripts/migrate.js &&
-             node node_modules/@synap/database/dist/scripts/init-hub-keys.js"
+      sh -c "DB_SCRIPTS='' &&
+             for p in \
+               /app/node_modules/@synap/database/dist/scripts \
+               /app/api/node_modules/@synap/database/dist/scripts \
+               node_modules/@synap/database/dist/scripts; do
+               if [ -f \"$p/migrate.js\" ]; then DB_SCRIPTS=\"$p\"; break; fi;
+             done &&
+             if [ -z \"$DB_SCRIPTS\" ]; then
+               echo '❌ Could not locate @synap/database migration scripts in known paths';
+               echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules';
+               exit 1;
+             fi &&
+             echo \"Using database scripts: $DB_SCRIPTS\" &&
+             node \"$DB_SCRIPTS/migrate.js\" &&
+             node \"$DB_SCRIPTS/init-hub-keys.js\""
     restart: "no"
     depends_on:
       postgres:
@@ -228,7 +241,11 @@ services:
       - "9000:9000"
       - "9001:9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test:
+        [
+          "CMD-SHELL",
+          "if command -v curl >/dev/null 2>&1; then curl -f http://localhost:9000/minio/health/live >/dev/null; elif command -v wget >/dev/null 2>&1; then wget -q -O - http://localhost:9000/minio/health/live >/dev/null; else exit 0; fi",
+        ]
       interval: 30s
       timeout: 20s
       retries: 3

@@ -16,6 +16,7 @@ import { NotificationService } from "../notifications/NotificationService.js";
 import { hubProtocolRouter } from "./hub-protocol/index.js";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 import { captureRouter } from "./capture.js";
+import { relationsRouter } from "./relations.js";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import type { MessageRole } from "@synap/database/schema";
 import { ChannelType, ThreadKind } from "@synap/database/schema";
@@ -800,6 +801,57 @@ app.get("/entities", async (c) => {
     return c.json(rows);
   } catch (err) {
     logger.error({ err, userId }, "GET /entities failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /entities/:id/connections?userId=...&workspaceId=...&limit=...
+ *
+ * Unified view of everything connected to an entity. Returns:
+ *   1. Graph relations — explicit rows from the relations table (both directions)
+ *   2. Structural links — entities whose `entity_id` properties point to this entity
+ *   3. Thread connections — AI threads that created, updated, or referenced this entity
+ *
+ * Prefer this over GET /relations and GET /graph/traverse when you want the full
+ * picture — those endpoints only see the relations table and miss property-based
+ * links that haven't been synced (notably custom profiles without a relationDefId).
+ *
+ * Declared BEFORE /entities/:id so Hono routes this static-prefix segment first.
+ */
+app.get("/entities/:id/connections", async (c) => {
+  if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+    return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+  }
+  const entityId = c.req.param("id");
+  const userId = c.req.query("userId") || (c.get("userId") as string);
+  const workspaceId = c.req.query("workspaceId");
+  const limitParam = c.req.query("limit");
+  const limit = limitParam
+    ? Math.min(200, Math.max(1, Number(limitParam)))
+    : 50;
+
+  if (!userId) {
+    return c.json({ error: "userId is required" }, 400);
+  }
+
+  try {
+    const scopes = c.get("scopes") as string[];
+    const ctx = await createHubProtocolCallerContext(
+      userId,
+      scopes,
+      workspaceId ?? undefined
+    );
+    const caller = relationsRouter.createCaller(
+      ctx as Parameters<typeof relationsRouter.createCaller>[0]
+    );
+    const result = await caller.getConnections({ entityId, limit });
+    return c.json(result);
+  } catch (err) {
+    logger.error({ err, entityId }, "getConnections failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500
