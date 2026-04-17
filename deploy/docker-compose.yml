@@ -189,22 +189,27 @@ services:
       NODE_ENV: production
     # Run migrations then seed hub protocol API keys in one shot
     # (Merged from former backend-init service to avoid orphaned container issues)
+    #
+    # NOTE: `$$` escapes the dollar so docker-compose passes it through to the shell.
+    # Bare `$p` / `$DB_SCRIPTS` would be interpolated as compose variables (to empty
+    # strings) at parse time, breaking the `for` loop with
+    # `sh: syntax error: unexpected word (expecting "do")` at runtime.
     command: >
       sh -c "DB_SCRIPTS='' &&
              for p in \
                /app/node_modules/@synap/database/dist/scripts \
                /app/api/node_modules/@synap/database/dist/scripts \
                node_modules/@synap/database/dist/scripts; do
-               if [ -f \"$p/migrate.js\" ]; then DB_SCRIPTS=\"$p\"; break; fi;
+               if [ -f \"$$p/migrate.js\" ]; then DB_SCRIPTS=\"$$p\"; break; fi;
              done &&
-             if [ -z \"$DB_SCRIPTS\" ]; then
+             if [ -z \"$$DB_SCRIPTS\" ]; then
                echo '❌ Could not locate @synap/database migration scripts in known paths';
                echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules';
                exit 1;
              fi &&
-             echo \"Using database scripts: $DB_SCRIPTS\" &&
-             node \"$DB_SCRIPTS/migrate.js\" &&
-             node \"$DB_SCRIPTS/init-hub-keys.js\""
+             echo \"Using database scripts: $$DB_SCRIPTS\" &&
+             node \"$$DB_SCRIPTS/migrate.js\" &&
+             node \"$$DB_SCRIPTS/init-hub-keys.js\""
     # One-shot service — runs once and exits. 'no' is correct for standalone Compose
     # (deploy.restart_policy is Docker Swarm only and is ignored here)
     restart: "no"

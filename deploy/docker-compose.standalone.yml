@@ -160,22 +160,26 @@ services:
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
       HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
       NODE_ENV: production
+    # NOTE: `$$` escapes the dollar so docker-compose passes it through to the shell.
+    # Bare `$p` / `$DB_SCRIPTS` would be interpolated as compose variables (to empty
+    # strings) at parse time, breaking the `for` loop with
+    # `sh: syntax error: unexpected word (expecting "do")` at runtime.
     command: >
       sh -c "DB_SCRIPTS='' &&
              for p in \
                /app/node_modules/@synap/database/dist/scripts \
                /app/api/node_modules/@synap/database/dist/scripts \
                node_modules/@synap/database/dist/scripts; do
-               if [ -f \"$p/migrate.js\" ]; then DB_SCRIPTS=\"$p\"; break; fi;
+               if [ -f \"$$p/migrate.js\" ]; then DB_SCRIPTS=\"$$p\"; break; fi;
              done &&
-             if [ -z \"$DB_SCRIPTS\" ]; then
+             if [ -z \"$$DB_SCRIPTS\" ]; then
                echo '❌ Could not locate @synap/database migration scripts in known paths';
                echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules';
                exit 1;
              fi &&
-             echo \"Using database scripts: $DB_SCRIPTS\" &&
-             node \"$DB_SCRIPTS/migrate.js\" &&
-             node \"$DB_SCRIPTS/init-hub-keys.js\""
+             echo \"Using database scripts: $$DB_SCRIPTS\" &&
+             node \"$$DB_SCRIPTS/migrate.js\" &&
+             node \"$$DB_SCRIPTS/init-hub-keys.js\""
     restart: "no"
     depends_on:
       postgres:
