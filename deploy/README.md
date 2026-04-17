@@ -148,6 +148,17 @@ Useful when:
 - Testing local changes
 - Development workflow
 
+## Single Operational Path
+
+Synap now uses one controlled execution path for pod lifecycle operations:
+
+- CP-managed pods: Control Plane command -> pod-agent -> canonical callback packet
+- Operator-managed pods: `synap` CLI only (no legacy fallback installers)
+- Terminal failures emit a structured packet (`phase`, `step`, `correlationId`, `errorSummary`, `logsSnippet`)
+- Control Plane auto-creates or reuses a deduped ticket per failure fingerprint
+
+If provisioning/update fails, inspect packet metadata first in pod diagnostics, then follow the linked ticket.
+
 ## 💾 Backups
 
 ### Create Backup

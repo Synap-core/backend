@@ -225,6 +225,21 @@ Expected response:
 
 Look for any errors or warnings.
 
+## Failure Triage Flow
+
+Provisioning and update failures use one terminal failure path:
+
+1. Pod command finishes with terminal failure.
+2. Pod-agent sends a canonical failure packet callback.
+3. Control Plane persists the failure packet and links it to pod diagnostics.
+4. Control Plane auto-creates (or dedupes) a ticket using packet fingerprint + pod.
+
+Operator runbook:
+
+- Open pod detail in Control Plane and review the latest failure packet.
+- Use `correlationId`, `phase`, `step`, and `logsSnippet` from the packet as primary debug context.
+- Continue triage in the linked auto-ticket (or existing deduped open ticket).
+
 ## Troubleshooting
 
 ### Services Won't Start

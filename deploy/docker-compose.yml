@@ -190,26 +190,38 @@ services:
     # Run migrations then seed hub protocol API keys in one shot
     # (Merged from former backend-init service to avoid orphaned container issues)
     #
-    # NOTE: `$$` escapes the dollar so docker-compose passes it through to the shell.
-    # Bare `$p` / `$DB_SCRIPTS` would be interpolated as compose variables (to empty
-    # strings) at parse time, breaking the `for` loop with
-    # `sh: syntax error: unexpected word (expecting "do")` at runtime.
-    command: >
-      sh -c "DB_SCRIPTS='' &&
-             for p in \
-               /app/node_modules/@synap/database/dist/scripts \
-               /app/api/node_modules/@synap/database/dist/scripts \
-               node_modules/@synap/database/dist/scripts; do
-               if [ -f \"$$p/migrate.js\" ]; then DB_SCRIPTS=\"$$p\"; break; fi;
-             done &&
-             if [ -z \"$$DB_SCRIPTS\" ]; then
-               echo '❌ Could not locate @synap/database migration scripts in known paths';
-               echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules';
-               exit 1;
-             fi &&
-             echo \"Using database scripts: $$DB_SCRIPTS\" &&
-             node \"$$DB_SCRIPTS/migrate.js\" &&
-             node \"$$DB_SCRIPTS/init-hub-keys.js\""
+    # IMPORTANT — do not convert this back to a `command: >` string form.
+    # A string-form command runs as `/bin/sh -c "<string>"`, and if the string
+    # itself is `sh -c "INNER"`, there are TWO shells. The outer shell expands
+    # `$p` / `$DB_SCRIPTS` to empty strings (they aren't set in its env) BEFORE
+    # the inner shell ever sees them — producing `sh: syntax error: unexpected
+    # word (expecting "do")` because the `for` loop body references a variable
+    # that has been erased.
+    #
+    # The exec-form list below bypasses Docker's wrapping shell: only ONE `sh`
+    # runs (the one we invoke explicitly), and `$$p` / `$$DB_SCRIPTS` become
+    # `$p` / `$DB_SCRIPTS` (after docker-compose processes `$$` → `$`) when
+    # that single shell reads its script. Shell variable expansion then works
+    # normally.
+    command:
+      - sh
+      - -c
+      - |
+        DB_SCRIPTS=''
+        for p in \
+          /app/node_modules/@synap/database/dist/scripts \
+          /app/api/node_modules/@synap/database/dist/scripts \
+          node_modules/@synap/database/dist/scripts; do
+          if [ -f "$$p/migrate.js" ]; then DB_SCRIPTS="$$p"; break; fi
+        done
+        if [ -z "$$DB_SCRIPTS" ]; then
+          echo '❌ Could not locate @synap/database migration scripts in known paths'
+          echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules'
+          exit 1
+        fi
+        echo "Using database scripts: $$DB_SCRIPTS"
+        node "$$DB_SCRIPTS/migrate.js"
+        node "$$DB_SCRIPTS/init-hub-keys.js"
     # One-shot service — runs once and exits. 'no' is correct for standalone Compose
     # (deploy.restart_policy is Docker Swarm only and is ignored here)
     restart: "no"
@@ -559,6 +571,35 @@ services:
       - synap-net
     profiles:
       - monitoring
+
+  # ============================================================================
+  # CLOUDFLARE TUNNEL (optional, exposure provider profile)
+  # Activated by pod-agent configure with profile: cloudflare-tunnel
+  # ============================================================================
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TUNNEL_TOKEN:-}
+    networks:
+      - synap-net
+    profiles:
+      - cloudflare-tunnel
+
+  # ============================================================================
+  # PANGOLIN TUNNEL (optional, exposure provider profile)
+  # Placeholder runtime profile; concrete provider wiring is feature-flagged.
+  # ============================================================================
+  pangolin-tunnel:
+    image: alpine:3.20
+    restart: unless-stopped
+    command:
+      ["/bin/sh", "-c", "echo 'pangolin tunnel profile active'; sleep infinity"]
+    networks:
+      - synap-net
+    profiles:
+      - pangolin-tunnel
 
   # ============================================================================
   # POD AGENT (always-running command receiver for CP-initiated operations)

@@ -160,26 +160,36 @@ services:
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
       HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
       NODE_ENV: production
-    # NOTE: `$$` escapes the dollar so docker-compose passes it through to the shell.
-    # Bare `$p` / `$DB_SCRIPTS` would be interpolated as compose variables (to empty
-    # strings) at parse time, breaking the `for` loop with
-    # `sh: syntax error: unexpected word (expecting "do")` at runtime.
-    command: >
-      sh -c "DB_SCRIPTS='' &&
-             for p in \
-               /app/node_modules/@synap/database/dist/scripts \
-               /app/api/node_modules/@synap/database/dist/scripts \
-               node_modules/@synap/database/dist/scripts; do
-               if [ -f \"$$p/migrate.js\" ]; then DB_SCRIPTS=\"$$p\"; break; fi;
-             done &&
-             if [ -z \"$$DB_SCRIPTS\" ]; then
-               echo '❌ Could not locate @synap/database migration scripts in known paths';
-               echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules';
-               exit 1;
-             fi &&
-             echo \"Using database scripts: $$DB_SCRIPTS\" &&
-             node \"$$DB_SCRIPTS/migrate.js\" &&
-             node \"$$DB_SCRIPTS/init-hub-keys.js\""
+    # IMPORTANT — do not convert this back to a `command: >` string form.
+    # A string-form command runs as `/bin/sh -c "<string>"`, and if the string
+    # itself is `sh -c "INNER"`, there are TWO shells. The outer shell expands
+    # `$p` / `$DB_SCRIPTS` to empty strings BEFORE the inner shell sees them,
+    # breaking the `for` loop with `sh: syntax error: unexpected word
+    # (expecting "do")`.
+    #
+    # Exec-form (YAML list) bypasses Docker's wrapping shell: only ONE `sh`
+    # runs (the one we invoke explicitly). `$$p` / `$$DB_SCRIPTS` become
+    # `$p` / `$DB_SCRIPTS` after docker-compose processes `$$` → `$`, and the
+    # single shell then expands them normally.
+    command:
+      - sh
+      - -c
+      - |
+        DB_SCRIPTS=''
+        for p in \
+          /app/node_modules/@synap/database/dist/scripts \
+          /app/api/node_modules/@synap/database/dist/scripts \
+          node_modules/@synap/database/dist/scripts; do
+          if [ -f "$$p/migrate.js" ]; then DB_SCRIPTS="$$p"; break; fi
+        done
+        if [ -z "$$DB_SCRIPTS" ]; then
+          echo '❌ Could not locate @synap/database migration scripts in known paths'
+          echo 'Checked: /app/node_modules, /app/api/node_modules, ./node_modules'
+          exit 1
+        fi
+        echo "Using database scripts: $$DB_SCRIPTS"
+        node "$$DB_SCRIPTS/migrate.js"
+        node "$$DB_SCRIPTS/init-hub-keys.js"
     restart: "no"
     depends_on:
       postgres:

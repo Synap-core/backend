@@ -117,7 +117,19 @@ const COMMANDS = {
   },
   configure: {
     script: "configure-pod.sh",
-    args: (p) => [p.callbackUrl || "", p.callbackJwt || "", ...(p.envVars || []), ...(p.profiles || []).map((pr) => `--profile ${pr}`)],
+    args: (p) => {
+      const envVars = Array.isArray(p.envVars)
+        ? p.envVars
+        : p.envVars && typeof p.envVars === "object"
+          ? Object.entries(p.envVars).map(([k, v]) => `${k}=${String(v)}`)
+          : [];
+      return [
+        p.callbackUrl || "",
+        p.callbackJwt || "",
+        ...envVars,
+        ...(p.profiles || []).map((pr) => `--profile ${pr}`),
+      ];
+    },
   },
   "agent-update": {
     script: "update-agent.sh",
@@ -138,6 +150,26 @@ function log(msg) {
 function respond(res, code, body) {
   res.writeHead(code, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function buildResultPacket(payload, status, err, extra = {}) {
+  const errorSummary = err ? err.message : null;
+  const base = {
+    phase: payload.type === "update" ? "update" : "operation",
+    step: "terminal",
+    status,
+    commandType: payload.type,
+    operationId: payload.updateId || payload.nonce || null,
+    correlationId: payload.correlationId || payload.nonce || null,
+    errorSummary,
+    logsSnippet: errorSummary,
+    metadata: {
+      targetVersion: payload.targetVersion || null,
+      podAgent: "v1",
+      ...extra,
+    },
+  };
+  return base;
 }
 
 http
@@ -248,11 +280,20 @@ http
 
           // Callback with output if callbackUrl is provided
           if (payload.callbackUrl && payload.callbackJwt) {
+            const packet = buildResultPacket(payload, err ? "failed" : "completed", err, {
+              execContainer: container,
+            });
             const body = JSON.stringify({
               type: "exec",
               success: !err,
               output: output.slice(0, 50_000),
               error: err ? err.message : null,
+              correlationId: packet.correlationId,
+              step: packet.step,
+              commandType: packet.commandType,
+              errorSummary: packet.errorSummary,
+              logsSnippet: output.slice(0, 2000),
+              packet: { ...packet, logsSnippet: output.slice(0, 2000) },
             });
             const cbReq = https.request(payload.callbackUrl, {
               method: "POST",
@@ -279,11 +320,18 @@ http
 
         // Callback to CP with result (Node.js https, not shell wget)
         if (payload.callbackUrl && payload.callbackJwt) {
+          const packet = buildResultPacket(payload, status, err);
           const cbBody = JSON.stringify({
             updateId: payload.updateId,
             status,
             version: payload.targetVersion || payload.type,
             error: err ? err.message : null,
+            correlationId: packet.correlationId,
+            step: packet.step,
+            commandType: packet.commandType,
+            errorSummary: packet.errorSummary,
+            logsSnippet: packet.logsSnippet,
+            packet,
           });
           const cbUrl = new URL(payload.callbackUrl);
           const cbReq = https.request(cbUrl, {
