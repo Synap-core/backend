@@ -24,6 +24,7 @@ COPY packages/auth/package.json          ./packages/auth/
 COPY packages/core/package.json          ./packages/core/
 COPY packages/database/package.json      ./packages/database/
 COPY packages/events/package.json        ./packages/events/
+COPY packages/feed-service/package.json  ./packages/feed-service/
 COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
 COPY packages/intelligence-client/package.json ./packages/intelligence-client/
 COPY packages/jobs/package.json          ./packages/jobs/
