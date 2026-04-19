@@ -219,12 +219,35 @@ export interface SubmitFlowResult {
   flow?: KratosFlow;
   /** Kratos returned a session — auth succeeded. */
   session?: KratosSession;
+  /**
+   * Kratos returned a structural error (no flow body) — e.g. CSRF violation,
+   * expired flow. Caller should typically recreate the flow.
+   */
+  structuralError?: {
+    id?: string;
+    code?: number;
+    message?: string;
+    reason?: string;
+  };
 }
+
+/** Kratos error ids that indicate the current flow is unrecoverable and a new
+ *  flow must be created. */
+export const FLOW_RESET_ERROR_IDS = new Set([
+  "security_csrf_violation",
+  "security_identity_mismatch",
+  "self_service_flow_expired",
+  "self_service_flow_return_to_forbidden",
+  "session_already_available",
+]);
 
 /**
  * Submit a Kratos flow. Posts to the action URL from the flow (normalized to
- * same-origin via `resolveActionUrl`). Returns either a refreshed flow (when
- * validation failed or more steps are required) or a session (on success).
+ * same-origin via `resolveActionUrl`). Returns one of:
+ *   - `session`  → auth succeeded
+ *   - `flow`     → validation failed (e.g. bad credentials) — re-render form
+ *   - `structuralError` → CSRF / expired / session-already-available, caller
+ *                         should recreate the flow
  */
 export async function submitFlow(
   flow: KratosFlow,
@@ -246,6 +269,14 @@ export async function submitFlow(
   const data = (await res.json().catch(() => null)) as
     | (KratosFlow & { session?: KratosSession })
     | { session?: KratosSession; identity?: KratosSession["identity"] }
+    | {
+        error: {
+          id?: string;
+          code?: number;
+          message?: string;
+          reason?: string;
+        };
+      }
     | null;
 
   if (res.ok && data && "session" in data && data.session) {
@@ -265,8 +296,17 @@ export async function submitFlow(
     };
   }
 
+  // Validation error — Kratos returned the flow with per-node messages.
   if (data && "ui" in data && data.ui?.nodes) {
     return { flow: data as KratosFlow };
+  }
+
+  // Structural error — no flow body, just {error: {...}}. Common shapes:
+  //   CSRF:     {id:"security_csrf_violation", code:403, message:"…"}
+  //   Expired:  {id:"self_service_flow_expired", code:410, message:"…"}
+  //   Session:  {id:"session_already_available", code:400, message:"…"}
+  if (data && "error" in data && data.error) {
+    return { structuralError: data.error };
   }
 
   throw makeError(`Flow submission failed (${res.status})`, res.status);

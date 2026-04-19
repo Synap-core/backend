@@ -20,6 +20,7 @@ import {
   extractInitialValues,
   fetchFlowById,
   submitFlow,
+  FLOW_RESET_ERROR_IDS,
   type FlowKind,
   type KratosFlow,
   type KratosSession,
@@ -104,7 +105,11 @@ export default function KratosSelfServicePage({
       setSubmitting(true);
       setError(null);
       try {
-        const { flow: nextFlow, session } = await submitFlow(flow, values);
+        const {
+          flow: nextFlow,
+          session,
+          structuralError,
+        } = await submitFlow(flow, values);
         if (session) {
           (onSuccess ?? defaultOnSuccess)(session);
           return;
@@ -116,6 +121,44 @@ export default function KratosSelfServicePage({
           setError(
             msgs.length ? msgs.join(" ") : "Check the form and try again."
           );
+          return;
+        }
+        if (structuralError) {
+          // Kratos rejected with a structural error (no flow body). For
+          // unrecoverable ones (CSRF drift, expired flow) we transparently
+          // recreate the flow and keep the user's entered credentials so they
+          // can retry without friction.
+          if (
+            structuralError.id &&
+            FLOW_RESET_ERROR_IDS.has(structuralError.id)
+          ) {
+            if (structuralError.id === "session_already_available") {
+              // We're already logged in — reload to land authenticated.
+              (onSuccess ?? defaultOnSuccess)({
+                id: "existing",
+                active: true,
+                identity: { id: "existing" },
+              } as KratosSession);
+              return;
+            }
+            try {
+              const { flow: fresh } = await createFlow(kind);
+              if (fresh) {
+                setFlow(fresh);
+                setValues((prev) => mergeHiddenValues(prev, fresh));
+                setError("Session expired — please sign in again.");
+                return;
+              }
+            } catch {
+              /* fall through to error display */
+            }
+          }
+          setError(
+            structuralError.message ||
+              structuralError.reason ||
+              `Kratos error: ${structuralError.id ?? "unknown"}`
+          );
+          return;
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Submit failed");
@@ -123,7 +166,7 @@ export default function KratosSelfServicePage({
         setSubmitting(false);
       }
     },
-    [flow, values, onSuccess]
+    [flow, values, kind, onSuccess]
   );
 
   if (loading) {
