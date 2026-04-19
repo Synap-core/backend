@@ -141,8 +141,9 @@ _download() {
   curl -fsSL "$RAW_BASE/$src" -o "$dst" || error "Failed to download $src"
 }
 
-_download "deploy/docker-compose.standalone.yml"           "$INSTALL_DIR/docker-compose.yml"
+_download "deploy/docker-compose.yml"                      "$INSTALL_DIR/docker-compose.yml"
 _download "deploy/Caddyfile"                               "$INSTALL_DIR/Caddyfile"
+_download "deploy/openclaw_auth.snippet"                   "$INSTALL_DIR/openclaw_auth.snippet"
 _download "kratos/identity.schema.json"                    "$INSTALL_DIR/config/kratos/identity.schema.json"
 _download "kratos/oidc.github.jsonnet"                     "$INSTALL_DIR/config/kratos/oidc.github.jsonnet"
 _download "kratos/oidc.google.jsonnet"                     "$INSTALL_DIR/config/kratos/oidc.google.jsonnet"
@@ -314,6 +315,12 @@ SECRETS_EOF
 # ── Domain ────────────────────────────────────────────────────────────────────
 DOMAIN=$DOMAIN
 LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL
+
+# ── Deploy layout (install.sh downloads config next to docker-compose.yml) ────
+# These point docker-compose.yml at the install-flow locations instead of the
+# source-repo relative paths (../kratos, ../docker/postgres/...).
+KRATOS_CONFIG_DIR=./config/kratos
+POSTGRES_INIT_SCRIPT=./config/postgres/init-databases.sh
 
 # ── Image versions ─────────────────────────────────────────────────────────────
 BACKEND_VERSION=latest

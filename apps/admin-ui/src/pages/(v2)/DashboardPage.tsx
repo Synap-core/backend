@@ -23,6 +23,7 @@ import {
 import VirtualizedEventList from "../../components/events/VirtualizedEventList";
 import { showInfoNotification } from "../../lib/notifications";
 import SearchCommandButton from "../../components/layout/SearchCommandButton";
+import PostBootstrapOpenClawBanner from "../../components/PostBootstrapOpenClawBanner";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -94,6 +95,8 @@ export default function DashboardPage() {
             operations. Workspace editing stays in Synap Browser.
           </p>
         </header>
+
+        <PostBootstrapOpenClawBanner />
 
         <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-4">
           {isLoadingPodStats ? (

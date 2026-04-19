@@ -4,7 +4,7 @@ export const openclawEntry: ServiceCatalogEntry = {
   serviceType: "openclaw",
   displayName: "OpenClaw",
   description:
-    "OpenClaw world-interface agent (shell, browser, filesystem, messaging)",
+    "OpenClaw world-interface agent (shell, browser, filesystem, messaging). Hub scopes are pod-wide; SYNAP_WORKSPACE_ID is a membership anchor for the agent user in Postgres.",
   dockerImage: "ghcr.io/openclaw/openclaw:latest",
   agentRole: "editor",
   defaultScopes: [

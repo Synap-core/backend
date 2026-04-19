@@ -186,6 +186,28 @@ Add to crontab for daily backups:
 0 2 * * * cd /opt/synap-backend && ./synap backup >> /var/log/synap-backup.log 2>&1
 ```
 
+## Docker Compose profiles
+
+All optional services are gated behind Compose profiles. Enable with `--profile NAME`:
+
+| Profile             | Services                                  | When to use                                             |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `monitoring`        | dozzle, prometheus, grafana, alertmanager | Full observability stack (logs UI + metrics + alerts)   |
+| `canary`            | backend-canary                            | Pre-production image validation (used by update-pod.sh) |
+| `openclaw`          | openclaw                                  | Self-hosted AI agent                                    |
+| `rsshub`            | rsshub, browserless                       | RSS aggregation                                         |
+| `cloudflare-tunnel` | cloudflared                               | Expose pod via Cloudflare Tunnel                        |
+| `pangolin-tunnel`   | pangolin-tunnel                           | Expose pod via Pangolin                                 |
+| `updater`           | updater                                   | One-shot self-update (triggered by update-pod.sh)       |
+
+Example:
+
+```bash
+docker compose --profile monitoring --profile openclaw up -d
+```
+
+Services with `restart: always` (backend, postgres, etc.) always start by default.
+
 ## 📚 Documentation
 
 - **[Installation Guide](./docs/installation.md)** - Detailed installation steps

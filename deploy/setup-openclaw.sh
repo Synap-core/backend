@@ -20,7 +20,7 @@
 #   SYNAP_POD_URL          Pod URL (default: http://localhost:4000)
 #   PROVISIONING_TOKEN     Admin provisioning token
 #   ENV_FILE               Path to .env file (default: .env)
-#   COMPOSE_FILE           Docker compose file (default: docker-compose.standalone.yml)
+#   COMPOSE_FILE           Docker compose file (default: docker-compose.yml)
 #
 # ==============================================================================
 
@@ -31,7 +31,7 @@ set -euo pipefail
 POD_URL="${SYNAP_POD_URL:-http://localhost:4000}"
 TOKEN="${PROVISIONING_TOKEN:-}"
 ENV_FILE="${ENV_FILE:-.env}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.standalone.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
 

@@ -1,7 +1,9 @@
 /**
  * Provision Agent Script
  *
- * Directly provisions an agent service user + Hub Protocol API key in a workspace.
+ * Directly provisions an agent service user + Hub Protocol API key.
+ * Workspace membership is an **RBAC anchor** for the agent user (required by schema);
+ * Hub key scopes (see SERVICE_CATALOG) define what the agent can call on the pod.
  * Bypasses tRPC — talks to the DB directly via @synap/database.
  * Idempotent: prints existing agent info if already provisioned.
  *
@@ -70,7 +72,8 @@ if (action !== "list") {
   }
 }
 
-// WORKSPACE_ID or ADMIN_EMAIL are optional — falls back to first workspace in DB
+// WORKSPACE_ID or ADMIN_EMAIL are optional — falls back to first workspace in DB.
+// Fresh installs using token bootstrap have **no workspace** until /admin/bootstrap completes.
 
 async function resolveWorkspaceId(
   db: Awaited<ReturnType<typeof getDb>>
@@ -107,9 +110,25 @@ async function resolveWorkspaceId(
     .limit(1);
 
   if (!first) {
-    console.error(
-      "❌ ERROR: No workspaces found in database. Run the backend at least once to create the default workspace."
+    const base = (process.env.PUBLIC_URL || "http://localhost:4000").replace(
+      /\/$/,
+      ""
     );
+    console.error(
+      "❌ ERROR: No workspaces found in the database yet — cannot attach the agent user."
+    );
+    console.error("");
+    console.error("Typical causes:");
+    console.error(
+      "  • Admin bootstrap is still on token mode — finish the UI flow first, then retry."
+    );
+    console.error(`    Open: ${base}/admin/bootstrap`);
+    console.error(
+      "  • Or switch to pre-seed install (synap install …) so a first admin + workspace is created during install."
+    );
+    console.error("");
+    console.error("After at least one workspace exists, run again:");
+    console.error("  synap services add openclaw");
     process.exit(1);
   }
   console.log(

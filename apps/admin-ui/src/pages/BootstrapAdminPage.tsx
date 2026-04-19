@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 import { API_URL } from "../lib/trpc";
+import { POST_BOOTSTRAP_OPENCLAW_SESSION_KEY } from "../components/PostBootstrapOpenClawBanner";
 
 function registrationBrowserUrl(): string {
   const base = API_URL.replace(/\/$/, "");
@@ -46,6 +47,11 @@ export default function BootstrapAdminPage() {
       if (!res.ok) {
         setError(data.error ?? `Bootstrap failed (${res.status})`);
         return;
+      }
+      try {
+        sessionStorage.setItem(POST_BOOTSTRAP_OPENCLAW_SESSION_KEY, "1");
+      } catch {
+        // ignore (blocked storage)
       }
       window.location.assign(registrationBrowserUrl());
     } catch (err) {

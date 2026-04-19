@@ -243,7 +243,10 @@ services:
       POSTGRES_DB: synap
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh
+      # POSTGRES_INIT_SCRIPT selects the init script source:
+      #   (unset)   → ../docker/postgres/init-databases.sh  — source-repo deploy
+      #   ./config/postgres/init-databases.sh               — install.sh/standalone deploy
+      - ${POSTGRES_INIT_SCRIPT:-../docker/postgres/init-databases.sh}:/docker-entrypoint-initdb.d/init-databases.sh
     ports:
       - "5432:5432"
     networks:
@@ -363,7 +366,10 @@ services:
     # Note: --dev flag removed for production security
     # Add --dev back only for local development
     volumes:
-      - ../kratos:/etc/config/kratos
+      # KRATOS_CONFIG_DIR selects the kratos config source:
+      #   (unset)          → ../kratos          — source-repo deploy
+      #   ./config/kratos  → install.sh/standalone deploy
+      - ${KRATOS_CONFIG_DIR:-../kratos}:/etc/config/kratos
     depends_on:
       kratos-migrate:
         condition: service_completed_successfully
@@ -557,7 +563,8 @@ services:
       retries: 3
 
   # ============================================================================
-  # MONITORING (Dozzle)
+  # MONITORING — Dozzle log viewer (optional)
+  # Enable with: docker compose --profile monitoring up -d
   # ============================================================================
   dozzle:
     container_name: dozzle
@@ -571,6 +578,59 @@ services:
       - synap-net
     profiles:
       - monitoring
+
+  # ============================================================================
+  # PROMETHEUS — Metrics scraping + alerting rules (optional)
+  # Enable with: docker compose --profile monitoring up -d
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9090:9090"
+    networks:
+      - synap-net
+    restart: unless-stopped
+
+  # ============================================================================
+  # GRAFANA — Metrics dashboards (optional)
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.4.0
+    profiles: ["monitoring"]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/synap.json:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3333:3000"
+    networks:
+      - synap-net
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  # ============================================================================
+  # ALERTMANAGER — Alert routing (Slack, PagerDuty, etc.) (optional)
+  # ============================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    networks:
+      - synap-net
+    restart: unless-stopped
 
   # ============================================================================
   # CLOUDFLARE TUNNEL (optional, exposure provider profile)
@@ -588,14 +648,30 @@ services:
       - cloudflare-tunnel
 
   # ============================================================================
-  # PANGOLIN TUNNEL (optional, exposure provider profile)
-  # Placeholder runtime profile; concrete provider wiring is feature-flagged.
+  # PANGOLIN TUNNEL (optional, SELF-HOSTED ONLY)
+  #
+  # Unlike the cloudflare-tunnel profile above, this is NOT driven by the Synap
+  # Control Plane. Pangolin is self-hosted only: the operator runs their own
+  # Pangolin server (github.com/fosrl/pangolin) and pastes a Newt site-
+  # connector token (PANGOLIN_ENDPOINT / NEWT_ID / NEWT_SECRET) into this pod's
+  # .env. There is no CP-side `pangolin_tunnel` exposure mode — see migration
+  # drizzle/0026_remove_pangolin_exposure_mode.sql on the control plane side.
+  #
+  # This profile is intentionally a placeholder until the self-hosted CLI work
+  # (`./synap tunnel enable pangolin --token <NEWT_TOKEN>`) swaps in a real
+  # `fosrl/newt` container. Activating the profile today just keeps the
+  # compose profile name stable so existing .env files and install scripts
+  # don't break.
   # ============================================================================
   pangolin-tunnel:
     image: alpine:3.20
     restart: unless-stopped
     command:
-      ["/bin/sh", "-c", "echo 'pangolin tunnel profile active'; sleep infinity"]
+      [
+        "/bin/sh",
+        "-c",
+        "echo 'pangolin tunnel profile active (self-hosted placeholder)'; sleep infinity",
+      ]
     networks:
       - synap-net
     profiles:
@@ -658,6 +734,8 @@ volumes:
   caddy_config:
   openclaw_config:
   openclaw_workspace:
+  prometheus-data:
+  grafana-data:
 
 networks:
   synap-net:

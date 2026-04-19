@@ -456,7 +456,10 @@ cmd_install() {
     local INTERACTIVE=true
     local WITH_OPENCLAW=false
     local WITH_RSSHUB=false
-    
+    local TUNNEL_PROVIDER=""
+    local TUNNEL_TOKEN_ARG=""
+    local TUNNEL_TOKEN_FILE=""
+
     # Auto-detect if we're in a git repo
     local IN_GIT_REPO=false
     if is_git_repo; then
@@ -532,6 +535,18 @@ cmd_install() {
                 WITH_RSSHUB=true
                 shift
                 ;;
+            --tunnel)
+                TUNNEL_PROVIDER="$2"
+                shift 2
+                ;;
+            --tunnel-token)
+                TUNNEL_TOKEN_ARG="$2"
+                shift 2
+                ;;
+            --tunnel-token-file)
+                TUNNEL_TOKEN_FILE="$2"
+                shift 2
+                ;;
             --help|-h)
                 cat << EOF
 ${BLUE}Synap Install${NC}
@@ -561,6 +576,9 @@ ${YELLOW}Options:${NC}
   ${GREEN}--intelligence-key <key>${NC} Hub Protocol API Key for Intelligence Service
   ${GREEN}--with-openclaw${NC}        Provision OpenClaw agent automatically after install
   ${GREEN}--with-rsshub${NC}          Start RSSHub + browserless (compose profile rsshub)
+  ${GREEN}--tunnel <provider>${NC}    Enable tunnel after install (cloudflare | pangolin)
+  ${GREEN}--tunnel-token <TOKEN>${NC}        Tunnel token (pairs with --tunnel)
+  ${GREEN}--tunnel-token-file <PATH>${NC}   Read tunnel token from file (safer than --tunnel-token)
 
 ${YELLOW}Examples:${NC}
   # In git repo: build from source (default)
@@ -577,6 +595,18 @@ ${YELLOW}Examples:${NC}
 
   # Enable RSS aggregation (RSSHub + browserless)
   synap install --domain localhost --with-rsshub
+
+  # Expose via Cloudflare Tunnel (bring your own token)
+  synap install --domain example.com --tunnel cloudflare --tunnel-token <TOKEN>
+  synap install --domain example.com --tunnel cloudflare --tunnel-token-file /path/to/token
+
+${YELLOW}After install:${NC}
+  This script installs the pod only. Agent connections (OpenClaw, Raycast,
+  other MCP clients) are handled from your laptop with @synap-core/cli:
+    npm install -g @synap-core/cli
+    npx @synap-core/cli init --pod-url https://<your-pod>
+
+  ./synap itself stays on this server for ops (health, logs, backups, updates).
 
 EOF
                 exit 0
@@ -1054,12 +1084,22 @@ EOF
     fi
 
     # Provision agent services requested at install time
+    # OpenClaw provisioning needs at least one workspace row (workspace_members for the agent).
+    # Token bootstrap creates the first workspace only AFTER /admin/bootstrap — so defer here.
     if [ "$WITH_OPENCLAW" = "true" ]; then
         echo ""
-        echo -e "${BLUE}🤖 Provisioning OpenClaw agent...${NC}"
-        cmd_services add "openclaw" || {
-            echo -e "${YELLOW}⚠️  OpenClaw provisioning failed. Run 'synap services add openclaw' manually after startup.${NC}"
-        }
+        if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
+            echo -e "${YELLOW}🤖 OpenClaw: deferred (token bootstrap has no workspace yet).${NC}"
+            echo "  After you finish admin bootstrap and can sign in, run from this directory:"
+            echo "    ./synap services add openclaw"
+            echo "  Optional: check public reachability first:"
+            echo "    ./synap connectivity"
+        else
+            echo -e "${BLUE}🤖 Provisioning OpenClaw agent...${NC}"
+            cmd_services add "openclaw" || {
+                echo -e "${YELLOW}⚠️  OpenClaw provisioning failed. Run 'synap services add openclaw' manually after startup.${NC}"
+            }
+        fi
     fi
 
     if [ "$WITH_RSSHUB" = "true" ]; then
@@ -1068,6 +1108,31 @@ EOF
         docker compose --profile rsshub up -d rsshub browserless || {
             echo -e "${YELLOW}⚠️  RSSHub profile failed. Run 'synap profiles enable rsshub' after fixing compose.${NC}"
         }
+    fi
+
+    # Tunnel activation — self-hosted operator brings their own token.
+    local TUNNEL_ENABLED=""
+    if [ -n "$TUNNEL_PROVIDER" ]; then
+        echo ""
+        case "$TUNNEL_PROVIDER" in
+            cloudflare|pangolin) ;;
+            *)
+                echo -e "${YELLOW}⚠️  Unknown --tunnel provider '${TUNNEL_PROVIDER}' — skipping. Known: cloudflare, pangolin${NC}"
+                TUNNEL_PROVIDER=""
+                ;;
+        esac
+    fi
+    if [ -n "$TUNNEL_PROVIDER" ]; then
+        if _tunnel_read_token "$TUNNEL_TOKEN_ARG" "$TUNNEL_TOKEN_FILE"; then
+            echo -e "${BLUE}🌐 Enabling ${TUNNEL_PROVIDER} tunnel...${NC}"
+            if _tunnel_enable_provider "$TUNNEL_PROVIDER" "$TUNNEL_TOKEN_VALUE"; then
+                TUNNEL_ENABLED="$TUNNEL_PROVIDER"
+            else
+                echo -e "${YELLOW}⚠️  Tunnel activation failed. Run 'synap tunnel enable ${TUNNEL_PROVIDER} --token <TOKEN>' manually.${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⚠️  --tunnel ${TUNNEL_PROVIDER} specified but no valid token provided. Run 'synap tunnel enable ${TUNNEL_PROVIDER} --token <TOKEN>' later.${NC}"
+        fi
     fi
 
     echo -e "${GREEN}✅ Installation complete!${NC}"
@@ -1097,10 +1162,72 @@ EOF
         fi
     fi
     if [ "$WITH_OPENCLAW" = "true" ]; then
-        echo "  ./synap services status openclaw  # Check OpenClaw status"
+        if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
+            echo "  ./synap services add openclaw   # After bootstrap (OpenClaw was deferred)"
+            echo "  ./synap connectivity              # If your public domain does not load"
+        else
+            echo "  ./synap services status openclaw  # Check OpenClaw status"
+        fi
     fi
     if [ "$WITH_RSSHUB" = "true" ]; then
         echo "  ./synap profiles status rsshub   # RSSHub + browserless"
+    fi
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Final handoff: pod is running here. Agent connections happen elsewhere.
+    # Keep laptop-side work (MCP clients, skill install, provider wiring)
+    # out of the bash script — point users at @synap-core/cli explicitly.
+    # ──────────────────────────────────────────────────────────────────────
+    local PUBLIC_URL_HINT
+    if [ "$DOMAIN" = "localhost" ]; then
+        PUBLIC_URL_HINT="http://localhost:4000"
+    else
+        PUBLIC_URL_HINT="https://${DOMAIN}"
+    fi
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo -e "${GREEN}✅ Synap pod is running at: ${PUBLIC_URL_HINT}${NC}"
+    echo "════════════════════════════════════════════════════════════════"
+    echo ""
+    echo "Next steps — run these on YOUR LAPTOP (not on this server):"
+    echo ""
+    echo "  1. Install the user CLI:"
+    echo "     npm install -g @synap-core/cli"
+    echo ""
+    echo "  2. Connect your workspace and any AI agents (OpenClaw, Raycast, MCP clients):"
+    echo "     npx @synap-core/cli init --pod-url ${PUBLIC_URL_HINT}"
+    echo ""
+    echo "  3. Optional — install OpenClaw on this server (self-hosted):"
+    echo "     ./synap services add openclaw"
+    echo ""
+    echo "For ops (health, logs, backups, updates) — keep using ./synap on this server."
+    echo "════════════════════════════════════════════════════════════════"
+
+    if [ "$WITH_OPENCLAW" = "true" ]; then
+        echo ""
+        echo -e "${BLUE}🤖 OpenClaw is running on this server.${NC}"
+        echo "   To connect OpenClaw on your laptop:"
+        echo "     npx @synap-core/cli oc connect --pod-url ${PUBLIC_URL_HINT}"
+        echo ""
+    fi
+
+    if [ -n "$TUNNEL_ENABLED" ]; then
+        echo ""
+        case "$TUNNEL_ENABLED" in
+            cloudflare)
+                echo -e "${BLUE}🌐 Your pod is reachable via the Cloudflare Tunnel you configured.${NC}"
+                echo "   Finish setup in the Cloudflare dashboard: route the tunnel's public"
+                echo "   hostname to http://backend:4000 (or whichever service you want to expose)."
+                ;;
+            pangolin)
+                echo -e "${BLUE}🌐 Pangolin tunnel container started.${NC}"
+                echo "   Confirm the compose profile points at your real newt image (the shipped"
+                echo "   profile is a placeholder) and verify connectivity in Pangolin's dashboard."
+                ;;
+        esac
+        echo "   Check status anytime: ./synap tunnel status"
+        echo ""
     fi
 }
 
@@ -1147,6 +1274,72 @@ cmd_health() {
     
     echo ""
     echo -e "${GREEN}✅ System healthy${NC}"
+}
+
+# Quick checks for "why doesn't my domain work?" (DNS, TLS, /health through the edge)
+cmd_connectivity() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    cd "$deploy_dir"
+
+    local domain=""
+    local public_url=""
+    if [ -f ".env" ]; then
+        domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+        public_url=$(grep "^PUBLIC_URL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+    fi
+
+    echo -e "${BLUE}🌐 Connectivity / domain checks${NC}"
+    echo ""
+    echo "  DOMAIN:      ${domain:-<not set in .env>}"
+    echo "  PUBLIC_URL:  ${public_url:-<not set — will assume https://\$DOMAIN>}"
+    echo ""
+
+    if [ -z "$domain" ]; then
+        echo -e "${YELLOW}⚠️  No DOMAIN in deploy/.env — cannot run external checks.${NC}"
+        exit 1
+    fi
+
+    local probe_url="${public_url}"
+    if [ -z "$probe_url" ]; then
+        if [ "$domain" = "localhost" ]; then
+            probe_url="http://localhost:4000"
+        else
+            probe_url="https://${domain}"
+        fi
+    fi
+
+    echo -e "${BLUE}1) DNS resolution${NC}"
+    if command -v getent >/dev/null 2>&1; then
+        getent hosts "$domain" || echo -e "  ${YELLOW}getent hosts failed (no libc hosts entry?)${NC}"
+    elif command -v dig >/dev/null 2>&1; then
+        dig +short "$domain" || true
+    else
+        echo -e "  ${YELLOW}Install 'bind9-host' or 'bind9-dnsutils' for dig, or use getent.${NC}"
+    fi
+    echo ""
+
+    echo -e "${BLUE}2) HTTP /health (via PUBLIC_URL or inferred URL)${NC}"
+    echo "  GET ${probe_url}/health"
+    if curl -fsS -m 20 -o /tmp/synap-health.body -w "  HTTP %{http_code}  time_total=%{time_total}s\n" "${probe_url}/health"; then
+        head -c 200 /tmp/synap-health.body 2>/dev/null | tr -d '\r' | sed 's/^/  body: /' || true
+        echo ""
+    else
+        echo -e "  ${RED}curl failed${NC} — check Caddy logs: ./synap logs caddy --no-follow --tail 80"
+        echo "  If you use a tunnel (Pangolin / Cloudflare), verify the tunnel points to this host:80 or :443."
+    fi
+    rm -f /tmp/synap-health.body 2>/dev/null || true
+    echo ""
+
+    echo -e "${BLUE}3) Docker edge (Caddy)${NC}"
+    if docker compose ps caddy 2>/dev/null | grep -q "Up"; then
+        echo -e "  ${GREEN}✅ Caddy container is Up${NC}"
+    else
+        echo -e "  ${RED}❌ Caddy not Up${NC} — run: ./synap start"
+    fi
 }
 
 cmd_logs() {
@@ -2123,6 +2316,405 @@ EOF
 }
 
 # ============================================================================
+# TUNNEL COMMAND
+# Self-hosted operators expose their pod via Cloudflare Tunnel or Pangolin.
+# This is the "bring your own token" path — the operator pastes a token and
+# we wire it into .env + activate the matching compose profile.
+# CP-managed tunnels follow a different flow (pod-agent /configure).
+# ============================================================================
+
+# Resolve a tunnel provider's env var name. Keep this the single source of truth.
+_tunnel_env_var_for() {
+    case "$1" in
+        cloudflare) echo "CLOUDFLARED_TUNNEL_TOKEN" ;;
+        pangolin)   echo "PANGOLIN_NEWT_TOKEN" ;;
+        *)          echo "" ;;
+    esac
+}
+
+_tunnel_profile_for() {
+    case "$1" in
+        cloudflare) echo "cloudflare-tunnel" ;;
+        pangolin)   echo "pangolin-tunnel" ;;
+        *)          echo "" ;;
+    esac
+}
+
+_tunnel_service_for() {
+    case "$1" in
+        cloudflare) echo "cloudflared" ;;
+        pangolin)   echo "pangolin-tunnel" ;;
+        *)          echo "" ;;
+    esac
+}
+
+# Read a token from --token or --token-file, with basic sanity checks.
+# Sets the global TUNNEL_TOKEN_VALUE on success, empties it on failure.
+_tunnel_read_token() {
+    local token_arg="$1"
+    local token_file="$2"
+    TUNNEL_TOKEN_VALUE=""
+
+    if [ -n "$token_arg" ] && [ -n "$token_file" ]; then
+        echo -e "${RED}Error: pass either --token or --token-file, not both${NC}"
+        return 1
+    fi
+    if [ -n "$token_file" ]; then
+        if [ ! -f "$token_file" ]; then
+            echo -e "${RED}Error: token file not found: ${token_file}${NC}"
+            return 1
+        fi
+        # Strip leading/trailing whitespace + any stray newline
+        TUNNEL_TOKEN_VALUE=$(tr -d '\r\n' < "$token_file" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    else
+        TUNNEL_TOKEN_VALUE="$token_arg"
+    fi
+    if [ -z "$TUNNEL_TOKEN_VALUE" ]; then
+        echo -e "${RED}Error: tunnel token is empty${NC}"
+        return 1
+    fi
+    return 0
+}
+
+# Comment out a key in .env (preserve for easy re-enable); idempotent.
+_comment_env_value() {
+    local key="$1"
+    local reason="${2:-disabled}"
+    if [ ! -f ".env" ]; then
+        return 0
+    fi
+    if grep -q "^${key}=" .env; then
+        sed -i.bak "s|^${key}=\(.*\)$|# ${key}=\1  # ${reason} on $(date -u +%Y-%m-%d)|" .env
+    fi
+}
+
+# Remove a key entirely from .env; idempotent.
+_remove_env_value() {
+    local key="$1"
+    if [ ! -f ".env" ]; then
+        return 0
+    fi
+    # Remove both active and already-commented variants, and our disabled marker.
+    sed -i.bak "/^${key}=/d" .env
+    sed -i.bak "/^# ${key}=.*disabled on /d" .env
+}
+
+# Internal helper: wire up a tunnel provider (write token, start compose profile,
+# tail logs, print handoff). Shared by `tunnel enable` and install --tunnel.
+_tunnel_enable_provider() {
+    local provider="$1"
+    local token="$2"
+
+    local env_var
+    env_var=$(_tunnel_env_var_for "$provider")
+    local profile
+    profile=$(_tunnel_profile_for "$provider")
+    local service
+    service=$(_tunnel_service_for "$provider")
+
+    if [ -z "$env_var" ] || [ -z "$profile" ] || [ -z "$service" ]; then
+        echo -e "${RED}Error: unknown tunnel provider: ${provider}${NC}"
+        echo "Known providers: cloudflare, pangolin"
+        return 1
+    fi
+
+    # .env must exist (install writes it); if missing, the pod isn't set up.
+    if [ ! -f ".env" ]; then
+        echo -e "${RED}Error: .env not found in ${PWD}. Run 'synap install' first.${NC}"
+        return 1
+    fi
+
+    # Compose file must exist.
+    if [ ! -f "docker-compose.yml" ]; then
+        echo -e "${RED}Error: docker-compose.yml not found in ${PWD}${NC}"
+        return 1
+    fi
+
+    # Pod must be running — tunnel alone without a backend is pointless.
+    if ! docker compose ps --services --filter "status=running" 2>/dev/null | grep -q '^backend$'; then
+        echo -e "${RED}Error: backend service is not running.${NC}"
+        echo "  Start it first: ${GREEN}./synap start${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}🔐 Writing ${env_var} to .env...${NC}"
+    update_env_value "$env_var" "$token"
+
+    echo -e "${BLUE}🚀 Starting ${provider} tunnel (compose profile: ${profile})...${NC}"
+    if ! docker compose --profile "$profile" up -d "$service"; then
+        echo -e "${RED}Error: failed to start ${service}${NC}"
+        return 1
+    fi
+
+    # Give cloudflared/newt a few seconds to register before tailing logs.
+    echo -e "${BLUE}⏳ Waiting for tunnel to connect (5s)...${NC}"
+    sleep 5
+    echo ""
+    echo -e "${YELLOW}Recent ${service} logs:${NC}"
+    docker compose logs --tail 20 "$service" 2>/dev/null || true
+    echo ""
+
+    case "$provider" in
+        cloudflare)
+            echo -e "${GREEN}✅ Cloudflare tunnel active.${NC}"
+            echo ""
+            echo "Next: in your Cloudflare dashboard, configure the tunnel's public hostname"
+            echo "to route traffic to http://backend:4000 (or the service you want to expose)."
+            echo ""
+            echo "Check status anytime: ./synap tunnel status"
+            ;;
+        pangolin)
+            echo -e "${GREEN}✅ Pangolin tunnel container started.${NC}"
+            echo ""
+            echo -e "${YELLOW}Note:${NC} the pangolin-tunnel compose profile is a placeholder in this"
+            echo "repo. Replace the image/command in docker-compose.yml with your actual"
+            echo "newt runtime before relying on it for exposure. Env var: ${env_var}."
+            echo ""
+            echo "Check status anytime: ./synap tunnel status"
+            ;;
+    esac
+    return 0
+}
+
+cmd_tunnel() {
+    local deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory (set SYNAP_DEPLOY_DIR or run from repo/deploy)${NC}"
+        exit 1
+    fi
+    cd "$deploy_dir"
+
+    local action="${1:-help}"
+    shift || true
+
+    case "$action" in
+        enable)
+            # Allow `synap tunnel enable --help` without forcing a provider.
+            case "${1:-}" in
+                --help|-h|"")
+                    if [ -z "${1:-}" ]; then
+                        echo -e "${RED}Usage: synap tunnel enable <cloudflare|pangolin> --token <TOKEN>${NC}"
+                        echo "   or: synap tunnel enable <cloudflare|pangolin> --token-file <PATH>"
+                        echo "Run 'synap tunnel enable --help' for details"
+                        exit 1
+                    fi
+                    cat << EOF
+${BLUE}synap tunnel enable${NC} — wire a tunnel provider into this pod
+
+${YELLOW}Usage:${NC}
+  synap tunnel enable cloudflare --token <TOKEN>
+  synap tunnel enable cloudflare --token-file <PATH>
+  synap tunnel enable pangolin   --token <TOKEN>
+  synap tunnel enable pangolin   --token-file <PATH>
+
+${YELLOW}What it does:${NC}
+  1. Writes the provider's token to deploy/.env
+  2. Starts the matching docker compose profile
+  3. Tails the tunnel container logs so you can see the handshake
+  4. Prints next-step guidance (dashboard config)
+
+${YELLOW}Env vars written:${NC}
+  cloudflare → CLOUDFLARED_TUNNEL_TOKEN
+  pangolin   → PANGOLIN_NEWT_TOKEN
+
+${YELLOW}Tip:${NC} prefer --token-file for long tokens — avoids shell history leaks.
+EOF
+                    exit 0
+                    ;;
+            esac
+
+            local provider="$1"
+            shift
+
+            local token_arg=""
+            local token_file=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --token)      token_arg="$2"; shift 2 ;;
+                    --token-file) token_file="$2"; shift 2 ;;
+                    --help|-h)
+                        cat << EOF
+${BLUE}synap tunnel enable${NC} — wire a tunnel provider into this pod
+
+${YELLOW}Usage:${NC}
+  synap tunnel enable cloudflare --token <TOKEN>
+  synap tunnel enable cloudflare --token-file <PATH>
+  synap tunnel enable pangolin   --token <TOKEN>
+  synap tunnel enable pangolin   --token-file <PATH>
+
+${YELLOW}What it does:${NC}
+  1. Writes the provider's token to deploy/.env
+  2. Starts the matching docker compose profile
+  3. Tails the tunnel container logs so you can see the handshake
+  4. Prints next-step guidance (dashboard config)
+
+${YELLOW}Env vars written:${NC}
+  cloudflare → CLOUDFLARED_TUNNEL_TOKEN
+  pangolin   → PANGOLIN_NEWT_TOKEN
+
+${YELLOW}Tip:${NC} prefer --token-file for long tokens — avoids shell history leaks.
+EOF
+                        exit 0
+                        ;;
+                    *)
+                        echo -e "${RED}Unknown option: $1${NC}"
+                        echo "Run 'synap tunnel enable --help'"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            if ! _tunnel_read_token "$token_arg" "$token_file"; then
+                exit 1
+            fi
+
+            case "$provider" in
+                cloudflare|pangolin) ;;
+                *)
+                    echo -e "${RED}Unknown tunnel provider: ${provider}${NC}"
+                    echo "Known providers: cloudflare, pangolin"
+                    exit 1
+                    ;;
+            esac
+
+            _tunnel_enable_provider "$provider" "$TUNNEL_TOKEN_VALUE" || exit 1
+            ;;
+
+        disable)
+            local provider=""
+            local clear_token=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --provider)    provider="$2"; shift 2 ;;
+                    --clear-token) clear_token=true; shift ;;
+                    --help|-h)
+                        cat << EOF
+${BLUE}synap tunnel disable${NC} — stop tunnel containers
+
+${YELLOW}Usage:${NC}
+  synap tunnel disable                       Disable all tunnels
+  synap tunnel disable --provider cloudflare Disable just Cloudflare
+  synap tunnel disable --provider pangolin   Disable just Pangolin
+
+${YELLOW}Options:${NC}
+  --clear-token    Remove the token from .env (default: comment it out so re-enable
+                   is one command)
+EOF
+                        exit 0
+                        ;;
+                    *)
+                        echo -e "${RED}Unknown option: $1${NC}"
+                        echo "Run 'synap tunnel disable --help'"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            if [ ! -f "docker-compose.yml" ]; then
+                echo -e "${RED}Error: docker-compose.yml not found in ${PWD}${NC}"
+                exit 1
+            fi
+
+            local providers_to_disable=""
+            if [ -z "$provider" ]; then
+                providers_to_disable="cloudflare pangolin"
+            else
+                case "$provider" in
+                    cloudflare|pangolin) providers_to_disable="$provider" ;;
+                    *)
+                        echo -e "${RED}Unknown provider: ${provider}${NC}"
+                        echo "Known: cloudflare, pangolin"
+                        exit 1
+                        ;;
+                esac
+            fi
+
+            for p in $providers_to_disable; do
+                local svc env_var
+                svc=$(_tunnel_service_for "$p")
+                env_var=$(_tunnel_env_var_for "$p")
+                echo -e "${BLUE}🛑 Stopping ${p} tunnel (${svc})...${NC}"
+                docker compose stop "$svc" 2>/dev/null || true
+                docker compose rm -f "$svc" 2>/dev/null || true
+                if [ "$clear_token" = "true" ]; then
+                    _remove_env_value "$env_var"
+                    echo -e "${YELLOW}  Removed ${env_var} from .env${NC}"
+                else
+                    _comment_env_value "$env_var" "disabled"
+                fi
+            done
+
+            echo ""
+            echo -e "${GREEN}✅ Tunnel disabled.${NC}"
+            echo "Re-enable anytime: ${GREEN}./synap tunnel enable <cloudflare|pangolin> --token <TOKEN>${NC}"
+            ;;
+
+        status)
+            if [ ! -f "docker-compose.yml" ]; then
+                echo -e "${RED}Error: docker-compose.yml not found in ${PWD}${NC}"
+                exit 1
+            fi
+
+            local running
+            running=$(docker compose ps --services --filter "status=running" 2>/dev/null || true)
+
+            local any_active=false
+            for p in cloudflare pangolin; do
+                local svc
+                svc=$(_tunnel_service_for "$p")
+                if echo "$running" | grep -q "^${svc}$"; then
+                    any_active=true
+                    echo -e "${GREEN}✅ ${p} tunnel active (${svc})${NC}"
+                    echo -e "${YELLOW}  Recent logs:${NC}"
+                    docker compose logs --tail 5 "$svc" 2>/dev/null || true
+                    echo ""
+                fi
+            done
+
+            if [ "$any_active" = "false" ]; then
+                echo "No tunnel active. Your pod is exposed via direct DNS (or not exposed — check \`./synap health\`)."
+            fi
+            ;;
+
+        help|--help|-h|"")
+            cat << EOF
+${BLUE}Synap Tunnel${NC} — Expose your pod via Cloudflare or Pangolin
+
+${YELLOW}Usage:${NC}
+  synap tunnel enable <provider> --token <TOKEN>         Enable a tunnel
+  synap tunnel enable <provider> --token-file <PATH>     Enable from a file
+  synap tunnel disable [--provider <p>] [--clear-token]  Stop tunnel(s)
+  synap tunnel status                                    Show active tunnel(s)
+
+${YELLOW}Providers:${NC}
+  cloudflare   Cloudflare Tunnel (uses CLOUDFLARED_TUNNEL_TOKEN)
+  pangolin     Pangolin/newt tunnel (uses PANGOLIN_NEWT_TOKEN)
+
+${YELLOW}Examples:${NC}
+  synap tunnel enable cloudflare --token eyJhIjoiX...
+  synap tunnel enable cloudflare --token-file ~/secrets/cf-tunnel.token
+  synap tunnel status
+  synap tunnel disable --provider cloudflare
+  synap tunnel disable --clear-token
+
+${YELLOW}Note:${NC} this is the ${GREEN}self-hosted${NC} path — you bring your own token from the
+provider's dashboard. CP-managed tunnels follow a different flow.
+
+${YELLOW}At install time:${NC}
+  synap install --domain example.com --tunnel cloudflare --tunnel-token <TOKEN>
+  synap install --domain example.com --tunnel cloudflare --tunnel-token-file <PATH>
+EOF
+            ;;
+
+        *)
+            echo -e "${RED}Unknown tunnel action: ${action}${NC}"
+            echo "Run 'synap tunnel help'"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================================
 # SERVICES COMMAND
 # Manages external agent service provisioning (OpenClaw, ZeroClaw, etc.)
 # ============================================================================
@@ -2240,6 +2832,9 @@ cmd_services() {
         help|--help|-h|"")
             cat << EOF
 ${BLUE}Synap Services${NC} — Manage external agent service provisioning
+
+${YELLOW}Note:${NC} ${GREEN}synap services add openclaw${NC} needs at least one workspace in Postgres.
+If you used ${GREEN}ADMIN_BOOTSTRAP_MODE=token${NC}, finish ${GREEN}/admin/bootstrap${NC} first (install defers OpenClaw in that mode).
 
 ${YELLOW}Usage:${NC}
   synap services list              List all provisioned agent users
@@ -2535,8 +3130,9 @@ ${YELLOW}Installation:${NC}
   synap install [options]        Install Synap
 
 ${YELLOW}Management:${NC}
-  synap health                   Check system health
-  synap ps                       List all services and their status
+  synap health                   Canonical local health check (docker + services)
+  synap connectivity             DNS + /health probe for DOMAIN / PUBLIC_URL (domain debugging)
+  synap ps                       List all services and their status (status is an alias)
   synap logs [service] [options] View logs (interactive if no service)
   synap errors [service] [lines] Search for errors in logs
   synap diagnose                 Run comprehensive diagnostics
@@ -2554,6 +3150,7 @@ ${YELLOW}Management:${NC}
   synap services <sub> [type]    Manage external agent services (OpenClaw, ZeroClaw, etc.)
   synap users <sub>              Manage pod users (list, add-admin, reset-password, delete)
   synap profiles <sub> [name]  Enable/disable optional compose profiles (rsshub, openclaw, monitoring)
+  synap tunnel <sub>             Enable/disable Cloudflare or Pangolin tunnels (alternative to direct DNS)
   synap reset [--full]           Reset workspace data or full cleanup + recreate
 
 ${YELLOW}Examples:${NC}
@@ -2574,6 +3171,7 @@ ${YELLOW}Examples:${NC}
 
   # Management
   synap health
+  synap connectivity
   synap logs                    # Interactive service selection
   synap logs backend            # View backend logs
   synap logs backend --tail 100 # Last 100 lines
@@ -2598,6 +3196,9 @@ ${YELLOW}Examples:${NC}
   synap users reset-password relay@example.com 'NewStrongPassw0rd!'
   synap profiles enable rsshub     # RSSHub + browserless (optional stack)
   synap profiles disable openclaw  # Stop OpenClaw container
+  synap tunnel enable cloudflare --token <TOKEN>   # Expose via Cloudflare Tunnel
+  synap tunnel status                              # Show active tunnel(s)
+  synap tunnel disable                             # Stop all tunnels
   synap reset                      # Reset workspace/application data only
   synap reset --full               # Full cleanup (docker stale data) + fresh install option
 
@@ -2619,6 +3220,9 @@ case "${1:-help}" in
         ;;
     health)
         cmd_health
+        ;;
+    connectivity|connect)
+        cmd_connectivity
         ;;
     ps|status)
         cmd_ps
@@ -2687,6 +3291,10 @@ case "${1:-help}" in
     profiles)
         shift
         cmd_profiles "$@"
+        ;;
+    tunnel)
+        shift
+        cmd_tunnel "$@"
         ;;
     reset)
         shift
