@@ -4,19 +4,16 @@
  * Flow:
  * 1) User enters bootstrap token + admin email
  * 2) API creates a one-time pod invite for that email
- * 3) User is redirected to Kratos registration browser flow
+ * 3) User is navigated client-side to /admin/kratos?kind=registration which
+ *    creates the Kratos registration flow inline (no full-page redirect).
  */
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { API_URL } from "../lib/trpc";
 import { POST_BOOTSTRAP_OPENCLAW_SESSION_KEY } from "../components/PostBootstrapOpenClawBanner";
 
-function registrationBrowserUrl(): string {
-  const base = API_URL.replace(/\/$/, "");
-  const returnTo = encodeURIComponent(`${window.location.origin}/admin/`);
-  return `${base}/.ory/kratos/public/self-service/registration/browser?return_to=${returnTo}`;
-}
-
 export default function BootstrapAdminPage() {
+  const navigate = useNavigate();
   const [token, setToken] = useState("");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,7 +50,7 @@ export default function BootstrapAdminPage() {
       } catch {
         // ignore (blocked storage)
       }
-      window.location.assign(registrationBrowserUrl());
+      navigate("/kratos?kind=registration");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bootstrap failed");
     } finally {

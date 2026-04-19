@@ -1,27 +1,20 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
-  useCallback,
   type CSSProperties,
   type ReactNode,
 } from "react";
+import KratosSelfServicePage from "../pages/KratosSelfServicePage";
+import { logout as kratosLogout, whoami } from "./kratos";
 
 const IS_DEV = import.meta.env.DEV;
-// In production, admin-ui is same-origin with the backend — use relative paths.
-// In dev, VITE_API_URL points to the backend.
-const API_URL = import.meta.env.VITE_API_URL || "";
-
-/** Kratos browser login URL (same-origin in production). */
-function loginBrowserUrl(): string {
-  const returnTo = encodeURIComponent(window.location.href);
-  return `${API_URL}/.ory/kratos/public/self-service/login/browser?return_to=${returnTo}`;
-}
 
 const WHOAMI_TIMEOUT_MS = 20_000;
 
-/** No HeroUI/Tailwind — always visible even if design-system CSS fails. */
+// No HeroUI/Tailwind — always visible even if design-system CSS fails.
 const bootShell: CSSProperties = {
   minHeight: "100vh",
   display: "flex",
@@ -106,13 +99,17 @@ function AuthBootShell({ message }: { message: string }) {
   );
 }
 
+type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "error";
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() =>
     IS_DEV
       ? { id: "admin-ui-dev-user", email: "dev@synap.local", name: "Dev User" }
       : null
   );
-  const [isLoading, setIsLoading] = useState(() => !IS_DEV);
+  const [status, setStatus] = useState<AuthStatus>(() =>
+    IS_DEV ? "authenticated" : "loading"
+  );
   const [bootError, setBootError] = useState<string | null>(null);
   const [sessionCheckKey, setSessionCheckKey] = useState(0);
 
@@ -127,31 +124,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       controller.abort();
     }, WHOAMI_TIMEOUT_MS);
 
-    fetch(`${API_URL}/.ory/kratos/public/sessions/whoami`, {
-      credentials: "include",
-      signal: controller.signal,
-    })
-      .then(async (res) => {
+    void (async () => {
+      try {
+        const session = await whoami(controller.signal);
         if (cancelled) return;
         window.clearTimeout(timeoutId);
-        if (!res.ok) {
-          window.location.assign(loginBrowserUrl());
+        if (!session) {
+          setStatus("unauthenticated");
           return;
         }
-        const session = (await res.json()) as {
-          identity?: { id: string; traits?: { email?: string; name?: string } };
-        };
         const identity = session.identity;
-        if (identity && !cancelled) {
-          setUser({
-            id: identity.id,
-            email: identity.traits?.email ?? "",
-            name: identity.traits?.name,
-          });
-        }
-        if (!cancelled) setIsLoading(false);
-      })
-      .catch((err: unknown) => {
+        setUser({
+          id: identity.id,
+          email: identity.traits?.email ?? "",
+          name: identity.traits?.name,
+        });
+        setStatus("authenticated");
+      } catch (err: unknown) {
         if (cancelled) return;
         window.clearTimeout(timeoutId);
         const name =
@@ -162,12 +151,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setBootError(
             "Could not verify your session in time. Usually this means Ory Kratos is not reachable at `/.ory/kratos/public/` on this host, or the reverse proxy is misconfigured."
           );
-          setIsLoading(false);
+          setStatus("error");
           return;
         }
         if (name === "AbortError") return;
-        window.location.assign(loginBrowserUrl());
-      });
+        // Any other error (e.g. network) — treat as unauthenticated and let
+        // the inline Kratos UI surface a clearer retry path.
+        setStatus("unauthenticated");
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -179,34 +171,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const retrySessionCheck = useCallback(() => {
     setBootError(null);
     setUser(null);
-    setIsLoading(true);
+    setStatus("loading");
     setSessionCheckKey((k) => k + 1);
   }, []);
 
-  const logout = useCallback(() => {
-    fetch(`${API_URL}/.ory/kratos/public/self-service/logout/browser`, {
-      credentials: "include",
-    })
-      .then(async (res) => {
-        if (res.ok) {
-          const data = (await res.json()) as { logout_url?: string };
-          if (data.logout_url) {
-            window.location.href = data.logout_url;
-            return;
-          }
-        }
-        setUser(null);
-        window.location.href = loginBrowserUrl();
-      })
-      .catch(() => {
-        setUser(null);
-        window.location.href = loginBrowserUrl();
-      });
+  const logout = useCallback(async () => {
+    const ok = await kratosLogout();
+    if (!ok) {
+      setUser(null);
+      setStatus("unauthenticated");
+    }
   }, []);
 
   const body = (() => {
     if (IS_DEV) return children;
-    if (bootError) {
+    if (status === "error" && bootError) {
       return (
         <div style={bootShell}>
           <p
@@ -228,21 +207,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             >
               Try again
             </button>
-            <button
-              type="button"
-              style={btnStyle}
-              onClick={() => window.location.assign(loginBrowserUrl())}
-            >
-              Open sign-in
-            </button>
           </div>
         </div>
       );
     }
-    if (isLoading) {
-      return (
-        <AuthBootShell message="Checking your session… If you are not signed in, you will be redirected to the login page." />
-      );
+    if (status === "loading") {
+      return <AuthBootShell message="Checking your session…" />;
+    }
+    if (status === "unauthenticated") {
+      // Render the Kratos login form inline — no full-page redirect through
+      // Kratos's /browser endpoint. KratosSelfServicePage creates a fresh
+      // login flow via JSON API and reloads on success so whoami succeeds.
+      return <KratosSelfServicePage initialKind="login" />;
     }
     return children;
   })();
@@ -251,7 +227,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        isLoading,
+        isLoading: status === "loading",
         isAuthenticated: !!user,
         logout,
       }}
