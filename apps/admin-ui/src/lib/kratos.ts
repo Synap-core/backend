@@ -156,9 +156,10 @@ export interface CreateFlowResult {
  * Kratos v1.3+ returns the flow JSON directly (200) in this case and sets
  * any required cookies. Same-origin keeps cookies automatic.
  *
- * When a session already exists, Kratos returns 400 with code
- * `session_already_available` — we surface the existing session so the caller
- * can short-circuit.
+ * Handles edge cases:
+ * - 400 "session_already_available" → user has existing session
+ * - 400 "flow expired" → try again
+ * - 503 Kratos unavailable
  */
 export async function createFlow(kind: FlowKind): Promise<CreateFlowResult> {
   const res = await fetch(`${kratosPublic()}/self-service/${kind}/browser`, {
@@ -172,40 +173,115 @@ export async function createFlow(kind: FlowKind): Promise<CreateFlowResult> {
     return { flow };
   }
 
-  if (res.status === 400) {
-    const body = (await res.json().catch(() => ({}))) as {
-      error?: { id?: string };
-    };
-    if (body?.error?.id === "session_already_available") {
-      const session = await whoami().catch(() => null);
-      if (session) return { existingSession: session };
+  // Parse error response
+  let errorInfo: { id?: string; message?: string; reason?: string } = {};
+  try {
+    errorInfo = (await res.json()) as typeof errorInfo;
+  } catch {
+    // Not JSON
+  }
+
+  // Session already exists - get existing session
+  if (res.status === 400 && errorInfo?.id === "session_already_available") {
+    const session = await whoami().catch(() => null);
+    if (session) {
+      return { existingSession: session };
     }
+    // Can't get session - might be transient, try again
+  }
+
+  // Flow expired or invalid - suggest recreating
+  if (res.status === 400 && (errorInfo?.reason?.includes("flow") || errorInfo?.message?.includes("flow"))) {
     throw makeError(
-      `Failed to create ${kind} flow (400)`,
+      errorInfo.message || "Flow expired. Please try again.",
       400,
-      body?.error?.id
+      "flow_expired"
     );
   }
 
-  throw makeError(`Failed to create ${kind} flow (${res.status})`, res.status);
+  // Service unavailable
+  if (res.status === 503) {
+    throw makeError(
+      errorInfo.message || "Authentication service temporarily unavailable",
+      503,
+      "service_unavailable"
+    );
+  }
+
+  // Generic error
+  throw makeError(
+    errorInfo?.message 
+      ? `${errorInfo.message}${errorInfo.reason ? `: ${errorInfo.reason}` : ''}`
+      : `Failed to create ${kind} flow (${res.status})`,
+    res.status,
+    errorInfo?.id
+  );
 }
 
 /**
  * Fetch an existing flow by ID. Kratos's `/flows` endpoint is per-kind, so we
  * try each kind until one matches — the flow ID alone doesn't reveal its kind.
+ * 
+ * Handles edge cases:
+ * - 400 with "flow query parameter is missing or malformed" → flow expired/invalid
+ * - 404 → flow not found
+ * - 410 → flow expired
  */
 export async function fetchFlowById(flowId: string): Promise<KratosFlow> {
   let lastStatus = 0;
+  let lastError: string | undefined;
+
   for (const kind of FLOW_KINDS) {
     const res = await fetch(
       `${kratosPublic()}/self-service/${kind}/flows?id=${encodeURIComponent(flowId)}`,
-      { credentials: "include", headers: { Accept: "application/json" } }
+      { 
+        credentials: "include", 
+        headers: { Accept: "application/json" }
+      }
     );
-    if (res.ok) return (await res.json()) as KratosFlow;
+    
+    if (res.ok) {
+      const flow = (await res.json()) as KratosFlow;
+      // Verify the flow type matches to avoid confusion
+      if (!flow.type || flow.type === kind) {
+        return flow;
+      }
+      // Type mismatch - continue searching
+    }
+    
     lastStatus = res.status;
+    
+    // Capture error message for better diagnostics
+    if (res.status >= 400) {
+      try {
+        const errBody = await res.json().catch(() => ({}));
+        lastError = errBody?.error?.message || errBody?.error?.reason;
+      } catch {
+        lastError = undefined;
+      }
+    }
   }
+
+  // If we get here, flow wasn't found in any kind
+  // Provide specific error messages for common cases
+  if (lastStatus === 400) {
+    throw makeError(
+      lastError || `Flow expired or invalid (400)`,
+      400,
+      "flow_expired_or_invalid"
+    );
+  }
+  
+  if (lastStatus === 404 || lastStatus === 410) {
+    throw makeError(
+      lastError || `Flow not found (${lastStatus})`,
+      lastStatus,
+      "flow_not_found"
+    );
+  }
+
   throw makeError(
-    `Could not load flow ${flowId} (last status ${lastStatus})`,
+    `Could not load flow ${flowId} (last status ${lastStatus})${lastError ? `: ${lastError}` : ''}`,
     lastStatus
   );
 }
@@ -248,6 +324,11 @@ export const FLOW_RESET_ERROR_IDS = new Set([
  *   - `flow`     → validation failed (e.g. bad credentials) — re-render form
  *   - `structuralError` → CSRF / expired / session-already-available, caller
  *                         should recreate the flow
+ * 
+ * Handles edge cases:
+ * - 400 "flow query parameter is missing or malformed" → flow expired
+ * - 403 CSRF → need new flow
+ * - 410 Gone → flow expired
  */
 export async function submitFlow(
   flow: KratosFlow,
@@ -266,29 +347,46 @@ export async function submitFlow(
     body: JSON.stringify(body),
   });
 
-  const data = (await res.json().catch(() => null)) as
-    | (KratosFlow & { session?: KratosSession })
-    | { session?: KratosSession; identity?: KratosSession["identity"] }
-    | {
-        error: {
-          id?: string;
-          code?: number;
-          message?: string;
-          reason?: string;
-        };
-      }
-    | null;
+  const contentType = res.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  
+  let data: unknown = null;
+  if (isJson) {
+    try {
+      data = await res.json();
+    } catch {
+      // Not valid JSON
+    }
+  }
 
-  if (res.ok && data && "session" in data && data.session) {
+  // Type guard helpers
+  const isFlowWithSession = (d: unknown): d is KratosFlow & { session?: KratosSession } => {
+    return typeof d === "object" && d !== null && "session" in d;
+  };
+  
+  const isFlowWithIdentity = (d: unknown): d is { identity?: unknown; id?: string } => {
+    return typeof d === "object" && d !== null && "identity" in d;
+  };
+  
+  const isFlowWithUi = (d: unknown): d is KratosFlow => {
+    return typeof d === "object" && d !== null && "ui" in d && typeof (d as KratosFlow).ui === "object";
+  };
+  
+  const isErrorResponse = (d: unknown): d is { error?: { id?: string; code?: number; message?: string; reason?: string } } => {
+    return typeof d === "object" && d !== null && "error" in d;
+  };
+
+  // Success: session returned
+  if (isJson && res.ok && isFlowWithSession(data) && data.session) {
     return { session: data.session };
   }
 
-  // Some Kratos versions return 200 with just `identity` for registration.
+  // Success for registration: identity returned
   if (
+    isJson &&
     res.ok &&
-    data &&
-    "identity" in data &&
-    (data as { identity?: unknown }).identity
+    isFlowWithIdentity(data) &&
+    isFlowWithIdentity(data).identity
   ) {
     const d = data as { identity: KratosSession["identity"]; id?: string };
     return {
@@ -297,19 +395,83 @@ export async function submitFlow(
   }
 
   // Validation error — Kratos returned the flow with per-node messages.
-  if (data && "ui" in data && data.ui?.nodes) {
+  if (isJson && isFlowWithUi(data)) {
     return { flow: data as KratosFlow };
   }
 
-  // Structural error — no flow body, just {error: {...}}. Common shapes:
-  //   CSRF:     {id:"security_csrf_violation", code:403, message:"…"}
-  //   Expired:  {id:"self_service_flow_expired", code:410, message:"…"}
-  //   Session:  {id:"session_already_available", code:400, message:"…"}
-  if (data && "error" in data && data.error) {
-    return { structuralError: data.error };
+  // Check for specific error conditions
+  if (isJson && isErrorResponse(data)) {
+    const err = data.error;
+    
+    // Check for flow expired/invalid conditions
+    if (err?.reason?.includes("flow query parameter")) {
+      return { 
+        structuralError: {
+          id: "flow_expired",
+          code: 400,
+          message: "Flow expired or invalid. Please try again.",
+          reason: err.reason
+        }
+      };
+    }
+    
+    // CSRF or other unrecoverable errors
+    if (err?.id === "security_csrf_violation") {
+      return { 
+        structuralError: {
+          id: err.id,
+          code: err.code || 403,
+          message: err.message || "Security check failed. Please try again.",
+          reason: err.reason
+        }
+      };
+    }
+    
+    if (err?.id === "self_service_flow_expired") {
+      return { 
+        structuralError: {
+          id: err.id,
+          code: err.code || 410,
+          message: err.message || "Flow expired. Please try again.",
+          reason: err.reason
+        }
+      };
+    }
+
+    // Session already available - user is already logged in
+    if (err?.id === "session_already_available") {
+      // Try to get the existing session
+      const session = await whoami().catch(() => null);
+      if (session) {
+        return { session };
+      }
+      // If we can't get session, return structural error
+      return { 
+        structuralError: {
+          id: err.id,
+          code: err.code || 400,
+          message: err.message || "Already logged in",
+          reason: err.reason
+        }
+      };
+    }
+
+    // Return the structural error for caller to handle
+    return { 
+      structuralError: {
+        id: err?.id,
+        code: err?.code || res.status,
+        message: err?.message || `Error (${res.status})`,
+        reason: err?.reason
+      }
+    };
   }
 
-  throw makeError(`Flow submission failed (${res.status})`, res.status);
+  // Non-JSON or unexpected response
+  throw makeError(
+    `Flow submission failed (${res.status}): ${isJson ? JSON.stringify(data).slice(0, 200) : 'Non-JSON response'}`,
+    res.status
+  );
 }
 
 // ---------------------------------------------------------------------------
