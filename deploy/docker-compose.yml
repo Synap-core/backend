@@ -357,7 +357,7 @@ services:
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
-      # Post-success return URL — must be a route the pod actually serves.
+# Post-success return URL — must be a route the pod actually serves.
       # The pod admin SPA mounts /admin/ (see apps/admin-ui/src/App.tsx) and
       # Kratos flows are rendered inline at /admin/kratos. There is NO /login
       # route on the pod, so pointing this at /login 404s after every flow.
@@ -367,7 +367,6 @@ services:
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
       KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
-      KRATOS_PUBLIC_CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://localhost:3001,http://localhost:4000,https://${DOMAIN}
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     # Note: --dev flag removed for production security
     # Add --dev back only for local development
