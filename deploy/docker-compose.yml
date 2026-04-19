@@ -363,12 +363,6 @@ services:
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
       KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
-      # Note: Kratos v1 serves UI via /self-service/* endpoints, not /ui/*
-      SELFSERVICE_FLOWS_LOGIN_UI_URL: https://${DOMAIN}/.ory/kratos/public/self-service/login
-      SELFSERVICE_FLOWS_REGISTRATION_UI_URL: https://${DOMAIN}/.ory/kratos/public/self-service/registration
-      SELFSERVICE_FLOWS_SETTINGS_UI_URL: https://${DOMAIN}/.ory/kratos/public/self-service/settings
-      SELFSERVICE_FLOWS_RECOVERY_UI_URL: https://${DOMAIN}/.ory/kratos/public/self-service/recovery
-      SELFSERVICE_FLOWS_ERROR_UI_URL: https://${DOMAIN}/.ory/kratos/public/self-service/error
       KRATOS_PUBLIC_CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://localhost:3001,http://localhost:4000,https://${DOMAIN}
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     # Note: --dev flag removed for production security
