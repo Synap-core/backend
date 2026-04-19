@@ -12,15 +12,30 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Setup mocks using hoisted pattern
-const { mockBossSend, mockDbQuery, mockDbUpdate, mockEq, mockAnd } = vi.hoisted(
-  () => ({
-    mockBossSend: vi.fn(),
-    mockDbQuery: vi.fn(),
-    mockDbUpdate: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
-    mockEq: vi.fn((field: any, value: any) => ({ type: "eq", field, value })),
-    mockAnd: vi.fn((...conditions: any[]) => ({ type: "and", conditions })),
-  })
-);
+const {
+  mockBossSend,
+  mockDbQuery,
+  mockDbUpdate,
+  mockDbSelect,
+  mockEq,
+  mockAnd,
+} = vi.hoisted(() => ({
+  mockBossSend: vi.fn(),
+  mockDbQuery: vi.fn(),
+  mockDbUpdate: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
+  // `db.select().from(...).innerJoin(...).where(...)` returns a promise that
+  // resolves to rows. Every call here returns an empty list by default so the
+  // new source-subscription scheduler path is a no-op in legacy tests.
+  mockDbSelect: vi.fn(() => ({
+    from: vi.fn(() => ({
+      innerJoin: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    })),
+  })),
+  mockEq: vi.fn((field: any, value: any) => ({ type: "eq", field, value })),
+  mockAnd: vi.fn((...conditions: any[]) => ({ type: "and", conditions })),
+}));
 
 // Mock @synap/database
 vi.mock("@synap/database", () => ({
@@ -31,6 +46,7 @@ vi.mock("@synap/database", () => ({
       },
     },
     update: mockDbUpdate,
+    select: mockDbSelect,
   },
   eq: mockEq,
   and: mockAnd,
@@ -44,10 +60,28 @@ vi.mock("@synap/database/schema", () => ({
   channels: { id: "id" },
   ChannelType: { FEED: "FEED" },
   ChannelStatus: { ACTIVE: "ACTIVE" },
+  sourceSubscriptions: {
+    id: "id",
+    lastFetchedAt: "lastFetchedAt",
+    status: "status",
+    sourceConfigId: "sourceConfigId",
+  },
+  sourceConfigs: {
+    id: "id",
+    providerType: "providerType",
+    enabled: "enabled",
+  },
 }));
 
-// Mock pg-boss
+// Mock pg-boss — the real import is `@synap/events` (legacy path in the
+// original test mocked ../boss.js which no longer exists; we mock both to
+// stay robust to either version of the scheduler).
 vi.mock("../boss.js", () => ({
+  getBoss: vi.fn(() => ({
+    send: mockBossSend,
+  })),
+}));
+vi.mock("@synap/events", () => ({
   getBoss: vi.fn(() => ({
     send: mockBossSend,
   })),
@@ -61,6 +95,12 @@ vi.mock("../utils/feed-helpers.js", () => ({
     date.setHours(date.getHours() + 1);
     return date;
   }),
+}));
+
+// Mock feed-source-executor (avoids pulling @synap/feed-service at test time)
+vi.mock("./feed-source-executor.js", () => ({
+  FEED_SOURCE_EXECUTE_QUEUE: "feed-source-execute",
+  FEED_SOURCE_ITEMS_QUEUE: "feed-source-items",
 }));
 
 // Mock @synap/api utils

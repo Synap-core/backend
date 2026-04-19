@@ -11,12 +11,17 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, gte, count, type SQL } from "@synap/database";
+import { db, eq, and, gte, count, desc, type SQL } from "@synap/database";
 import {
   channels,
   messages,
+  feeds,
+  sourceSubscriptions,
+  FEED_TYPES,
+  FEED_STATUSES,
   ChannelType,
   ChannelStatus,
+  ChannelScope,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import {
@@ -401,6 +406,270 @@ export const feedsRouter = router({
         config,
         nextRunAt: nextRunAt.toISOString(),
       };
+    }),
+
+  // ── Phase 4: typed feeds table (Person / Ecosystem researchers) ────────────
+  //
+  // These endpoints operate on the dedicated `feeds` table (migration 0007).
+  // They coexist with the legacy metadata-based endpoints above, which remain
+  // for backwards compatibility with existing proactive/rss feeds.
+  //
+  // Agent 1 is concurrently building `source_configs` + `source_subscriptions`.
+  // The `sources` input on `create` is accepted but not written to the
+  // subscription table here — when Agent 1's work lands the subscription
+  // insert can be wired in alongside the feed insert.
+
+  list: protectedProcedure
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ input, ctx }) => {
+      const conditions: SQL[] = [eq(feeds.userId, ctx.userId)];
+      if (input?.workspaceId) {
+        conditions.push(eq(feeds.workspaceId, input.workspaceId));
+      }
+      const rows = await db
+        .select()
+        .from(feeds)
+        .where(and(...conditions))
+        .orderBy(desc(feeds.updatedAt));
+      return { feeds: rows };
+    }),
+
+  get: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const feed = await db.query.feeds.findFirst({
+        where: eq(feeds.id, input.id),
+      });
+      if (!feed) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Feed not found" });
+      }
+      if (feed.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not own this feed",
+        });
+      }
+      const subscriptions = await db
+        .select()
+        .from(sourceSubscriptions)
+        .where(eq(sourceSubscriptions.feedId, feed.id));
+      return { feed, subscriptions };
+    }),
+
+  create: protectedProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(200),
+        feedType: z.enum(FEED_TYPES),
+        criteria: z.string().min(1).max(2000),
+        workspaceId: z.string().uuid().nullable().optional(),
+        sources: z
+          .array(
+            z.object({
+              sourceConfigId: z.string().uuid(),
+              params: z.record(z.string(), z.unknown()).optional(),
+            })
+          )
+          .default([]),
+        scheduleCron: z.string().min(1).max(100).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Create the backing FEED-type channel first so channelId is stable.
+      const [channel] = await db
+        .insert(channels)
+        .values({
+          userId: ctx.userId,
+          workspaceId: input.workspaceId ?? null,
+          title: input.name,
+          channelType: ChannelType.FEED,
+          scope: input.workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+          status: ChannelStatus.ACTIVE,
+          metadata: {
+            feedKind: "researcher",
+            feedType: input.feedType,
+          },
+        })
+        .returning();
+
+      if (!channel) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create feed channel",
+        });
+      }
+
+      const [feed] = await db
+        .insert(feeds)
+        .values({
+          userId: ctx.userId,
+          workspaceId: input.workspaceId ?? null,
+          name: input.name,
+          feedType: input.feedType,
+          criteria: input.criteria,
+          channelId: channel.id,
+          scheduleCron: input.scheduleCron ?? "*/15 * * * *",
+          status: "active",
+        })
+        .returning();
+
+      if (!feed) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create feed",
+        });
+      }
+
+      // Persist subscriptions binding this feed to each selected source config.
+      if (input.sources.length > 0) {
+        await db.insert(sourceSubscriptions).values(
+          input.sources.map((s) => ({
+            userId: ctx.userId,
+            workspaceId: input.workspaceId ?? null,
+            feedId: feed.id,
+            sourceConfigId: s.sourceConfigId,
+            params: s.params ?? {},
+            status: "active" as const,
+          }))
+        );
+      }
+
+      logger.info(
+        {
+          feedId: feed.id,
+          channelId: channel.id,
+          feedType: input.feedType,
+          sourceCount: input.sources.length,
+          userId: ctx.userId,
+        },
+        "Feed created (Phase 4)"
+      );
+
+      return { feed };
+    }),
+
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        patch: z
+          .object({
+            name: z.string().min(1).max(200).optional(),
+            criteria: z.string().min(1).max(2000).optional(),
+            scheduleCron: z.string().min(1).max(100).optional(),
+            status: z.enum(FEED_STATUSES).optional(),
+          })
+          .refine((p) => Object.keys(p).length > 0, {
+            message: "patch must include at least one field",
+          }),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const existing = await db.query.feeds.findFirst({
+        where: eq(feeds.id, input.id),
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Feed not found" });
+      }
+      if (existing.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not own this feed",
+        });
+      }
+      const [updated] = await db
+        .update(feeds)
+        .set({ ...input.patch, updatedAt: new Date() })
+        .where(eq(feeds.id, input.id))
+        .returning();
+      return { feed: updated };
+    }),
+
+  pause: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const existing = await db.query.feeds.findFirst({
+        where: eq(feeds.id, input.id),
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Feed not found" });
+      }
+      if (existing.userId !== ctx.userId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Forbidden" });
+      }
+      const [updated] = await db
+        .update(feeds)
+        .set({ status: "paused", updatedAt: new Date() })
+        .where(eq(feeds.id, input.id))
+        .returning();
+      return { feed: updated };
+    }),
+
+  resume: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const existing = await db.query.feeds.findFirst({
+        where: eq(feeds.id, input.id),
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Feed not found" });
+      }
+      if (existing.userId !== ctx.userId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Forbidden" });
+      }
+      const [updated] = await db
+        .update(feeds)
+        .set({
+          status: "active",
+          errorMessage: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(feeds.id, input.id))
+        .returning();
+      return { feed: updated };
+    }),
+
+  delete: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        deleteChannel: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const existing = await db.query.feeds.findFirst({
+        where: eq(feeds.id, input.id),
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Feed not found" });
+      }
+      if (existing.userId !== ctx.userId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Forbidden" });
+      }
+
+      // source_subscriptions cascade-delete via FK (see schema/source-configs.ts).
+      await db.delete(feeds).where(eq(feeds.id, input.id));
+
+      if (input.deleteChannel) {
+        await db.delete(channels).where(eq(channels.id, existing.channelId));
+      }
+
+      logger.info(
+        {
+          feedId: input.id,
+          deletedChannel: input.deleteChannel,
+          userId: ctx.userId,
+        },
+        "Feed deleted"
+      );
+
+      return { success: true };
     }),
 });
 

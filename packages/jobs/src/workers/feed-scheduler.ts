@@ -12,12 +12,19 @@
  */
 
 import { db, eq, and } from "@synap/database";
-import { channels, ChannelType, ChannelStatus } from "@synap/database/schema";
+import {
+  channels,
+  ChannelType,
+  ChannelStatus,
+  sourceSubscriptions,
+  sourceConfigs,
+} from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
 import type { RSSFeedConfig, ProactiveFeedConfig } from "@synap/shared-utils";
 import { randomUUID } from "crypto";
 import { calculateNextRun } from "../utils/feed-helpers.js";
+import { FEED_SOURCE_EXECUTE_QUEUE } from "./feed-source-executor.js";
 
 const logger = createLogger({ module: "feed-scheduler" });
 
@@ -231,6 +238,19 @@ export async function handleFeedScheduler(): Promise<void> {
       }
     }
 
+    // ── NEW: iterate source_subscriptions joined to source_configs ────────
+    //
+    // The pluggable source system (Phase 1 + 2) schedules fetches at the
+    // subscription level, not the channel level. For each active, enabled
+    // subscription whose lastFetchedAt is older than DEFAULT_POLL_INTERVAL_MS
+    // (or null), enqueue a `feed-source-execute` job.
+    //
+    // This path coexists with the legacy channel-based path above; they share
+    // no state. Agent 3 will eventually unify both under the feeds table.
+    const sourceResult = await scheduleDueSourceSubscriptions();
+    scheduledCount += sourceResult.scheduled;
+    skippedCount += sourceResult.skipped;
+
     logger.info(
       {
         scheduled: scheduledCount,
@@ -242,4 +262,76 @@ export async function handleFeedScheduler(): Promise<void> {
     logger.error({ err }, "Feed scheduler failed");
     throw err;
   }
+}
+
+// ── Source Subscription Scheduling (Phase 1 + 2) ────────────────────────────
+
+/** Default poll cadence when a subscription has no explicit cron. */
+const DEFAULT_POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+
+async function scheduleDueSourceSubscriptions(): Promise<{
+  scheduled: number;
+  skipped: number;
+}> {
+  let scheduled = 0;
+  let skipped = 0;
+
+  // Inner join — we only care about subscriptions whose source_config is
+  // enabled and whose subscription status is active.
+  const rows = await db
+    .select({
+      subscriptionId: sourceSubscriptions.id,
+      lastFetchedAt: sourceSubscriptions.lastFetchedAt,
+      providerType: sourceConfigs.providerType,
+      configEnabled: sourceConfigs.enabled,
+    })
+    .from(sourceSubscriptions)
+    .innerJoin(
+      sourceConfigs,
+      eq(sourceSubscriptions.sourceConfigId, sourceConfigs.id)
+    )
+    .where(
+      and(
+        eq(sourceSubscriptions.status, "active"),
+        eq(sourceConfigs.enabled, true)
+      )
+    );
+
+  const boss = getBoss();
+  const now = Date.now();
+
+  for (const row of rows) {
+    try {
+      const lastFetchedMs = row.lastFetchedAt
+        ? new Date(row.lastFetchedAt).getTime()
+        : 0;
+      if (now - lastFetchedMs < DEFAULT_POLL_INTERVAL_MS) {
+        skipped++;
+        continue;
+      }
+
+      await boss.send(
+        FEED_SOURCE_EXECUTE_QUEUE,
+        {
+          subscriptionId: row.subscriptionId,
+          runId: randomUUID(),
+        },
+        { priority: PRIORITY.RSS }
+      );
+      scheduled++;
+    } catch (err) {
+      logger.error(
+        { err, subscriptionId: row.subscriptionId },
+        "Failed to schedule source subscription"
+      );
+      skipped++;
+    }
+  }
+
+  logger.info(
+    { scheduled, skipped, totalActive: rows.length },
+    "Source subscription scheduling complete"
+  );
+
+  return { scheduled, skipped };
 }

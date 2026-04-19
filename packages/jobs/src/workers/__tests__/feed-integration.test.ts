@@ -32,6 +32,13 @@ vi.mock("../boss.js", () => ({
   })),
 }));
 
+// Mirror mock at @synap/events (the scheduler actually imports from here)
+vi.mock("@synap/events", () => ({
+  getBoss: vi.fn(() => ({
+    send: mockBossSend,
+  })),
+}));
+
 vi.mock("../fetchers/rss-fetcher.js", () => ({
   fetchRSSItems: mockFetchRSSItems,
 }));
@@ -48,6 +55,15 @@ vi.mock("@synap/database", () => ({
     },
     insert: mockDbInsert,
     update: mockDbUpdate,
+    // The new source-subscription scheduler path calls db.select(...).from(...)
+    // .innerJoin(...).where(...) and resolves with an array. Default to empty.
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        innerJoin: vi.fn(() => ({
+          where: vi.fn(() => Promise.resolve([])),
+        })),
+      })),
+    })),
   },
   eq: vi.fn((a, b) => ({ type: "eq", field: a, value: b })),
   and: vi.fn((...args) => ({ type: "and", conditions: args })),
@@ -66,6 +82,24 @@ vi.mock("@synap/database/schema", () => ({
   MessageAuthorType: { BOT: "bot" },
   ChannelType: { FEED: "FEED" },
   ChannelStatus: { ACTIVE: "ACTIVE" },
+  sourceSubscriptions: {
+    id: "id",
+    lastFetchedAt: "lastFetchedAt",
+    status: "status",
+    sourceConfigId: "sourceConfigId",
+  },
+  sourceConfigs: {
+    id: "id",
+    providerType: "providerType",
+    enabled: "enabled",
+  },
+}));
+
+// Stub the feed-source-executor queue names so the scheduler import chain
+// doesn't try to resolve @synap/feed-service in tests.
+vi.mock("../feed-source-executor.js", () => ({
+  FEED_SOURCE_EXECUTE_QUEUE: "feed-source-execute",
+  FEED_SOURCE_ITEMS_QUEUE: "feed-source-items",
 }));
 
 vi.mock("@synap-core/core", () => ({

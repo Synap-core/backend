@@ -135,3 +135,9 @@ export * from "./signals.js";
 
 // NEW: Trusted Issuers (pod-level registry of approved external services)
 export * from "./trusted-issuers.js";
+
+// NEW: Feeds (long-running AI researcher per archetype — Phase 4)
+export * from "./feeds.js";
+
+// NEW: Source Configs & Subscriptions (pluggable feed source providers)
+export * from "./source-configs.js";
