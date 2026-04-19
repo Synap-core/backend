@@ -121,8 +121,8 @@
         reverse_proxy backend:4000
     }
 
-    # Admin UI (static SPA + assets under this prefix only — not Kratos
-    # `/.ory/kratos/admin`, which is handled above)
+    # Admin UI (static SPA) - must be AFTER Kratos routes
+    # `/.ory/kratos/admin`, which is handled above
     handle /admin* {
         reverse_proxy backend:4000
     }
