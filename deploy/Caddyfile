@@ -50,19 +50,10 @@
 # IMPORTANT: Place BEFORE {$DOMAIN} to prevent redirect loops.
 # cloudflared sends HTTPS traffic through the tunnel as HTTP to port 80.
 #
-# This block MUST mirror the Kratos routing from the HTTPS block below.
-# Otherwise Kratos requests get proxied through the backend's Hono proxy which
-# mangles multi-cookie Set-Cookie headers, breaking the CSRF flow (POST 400).
+# Blanket-forwards to the backend. The backend is the single CORS gate for
+# the whole pod (including Kratos) — see apps/api/src/index.ts CORS middleware.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 {$DOMAIN}:80 {
-    # Kratos public API must bypass the backend — it sets multiple cookies
-    # (flow + csrf_token) that the Hono proxy can't forward intact.
-    handle_path /.ory/kratos/public/* {
-        reverse_proxy kratos:4433
-    }
-    handle_path /.ory/kratos/admin/* {
-        reverse_proxy kratos:4434
-    }
     reverse_proxy backend:4000
 }
 
@@ -100,15 +91,22 @@
         reverse_proxy realtime:4001
     }
 
-    # Ory Kratos (Authentication)
-    # Route public API: /.ory/kratos/public/* -> kratos:4433
-    # handle_path automatically strips the matched prefix before forwarding
-    # Kratos serves internally at /self-service/... (not /public/self-service/...)
-    handle_path /.ory/kratos/public/* {
-        reverse_proxy kratos:4433
+    # Ory Kratos (Authentication) — routed THROUGH the backend, not direct.
+    #
+    # Why: the backend runs the pod's single CORS gate (apps/api/src/index.ts
+    # CORS middleware, whitelisting ALLOWED_ORIGINS + dynamic DB origins).
+    # Direct-to-Kratos routing bypasses that gate and forces every first-party
+    # Synap surface (studio, app, landing) to be re-listed inside kratos.yml,
+    # which drifts out of sync quickly. Keep one CORS source of truth.
+    #
+    # The backend's Hono proxy (app.all("/.ory/kratos/public/*", …)) forwards
+    # unchanged to kratos:4433 and correctly preserves multi-cookie Set-Cookie
+    # headers for the CSRF flow.
+    handle /.ory/kratos/public/* {
+        reverse_proxy backend:4000
     }
-    
-    # Route admin API: /.ory/kratos/admin/* -> kratos:4434
+
+    # Admin API stays internal — no browser ever hits this, so no CORS needed.
     handle_path /.ory/kratos/admin/* {
         reverse_proxy kratos:4434
     }

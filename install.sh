@@ -169,6 +169,10 @@ serve:
   public:
     base_url: https://$DOMAIN/.ory/kratos/public/
     cors:
+      # Internal only — all external browser traffic enters via Caddy →
+      # backend:4000, and the backend owns the CORS gate (ALLOWED_ORIGINS).
+      # Leaving this enabled with the pod's own origin is defensive for the
+      # case where Kratos gets called directly (e.g. dev / debug).
       enabled: true
       allowed_origins:
         - https://$DOMAIN
@@ -176,6 +180,7 @@ serve:
         - Authorization
         - Content-Type
         - Cookie
+        - X-Session-Token
       exposed_headers:
         - Content-Type
         - Set-Cookie

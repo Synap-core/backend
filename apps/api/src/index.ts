@@ -52,7 +52,6 @@ import {
 import crypto from "crypto";
 import { verifyCpJwt } from "@synap/api";
 import {
-  getCorsOrigins,
   rateLimitMiddleware,
   aiRateLimitMiddleware,
   requestSizeLimit,
@@ -100,16 +99,6 @@ try {
   if (config.server.nodeEnv === "production") {
     validateConfig("ai");
     apiLogger.info("AI configuration validated");
-
-    // Validate CORS origins — without this the API silently rejects all browser requests
-    if (!process.env.ALLOWED_ORIGINS) {
-      throw new Error(
-        "ALLOWED_ORIGINS is not set in production. " +
-          "Set it to a comma-separated list of allowed frontend origins " +
-          "(e.g. ALLOWED_ORIGINS=https://app.synap.live). " +
-          "Without this all browser requests will be rejected by CORS."
-      );
-    }
   }
 
   // Validate Intelligence Hub config (warns in dev, throws in production if missing)
@@ -133,73 +122,45 @@ try {
 // Initialize Hono app
 const app = new Hono();
 
-// Smart CORS middleware — must be first so even error responses (429, 413) carry CORS headers.
+// CORS middleware — open by design.
 //
-// Two security modes, selected per-request:
+// The backend is the pod's single security boundary. Auth decisions are
+// enforced inside the request:
+//   - Ory Kratos session cookies (SameSite=Lax) + Kratos's own CSRF tokens
+//     on self-service flows
+//   - Bearer tokens (API keys) validated per request
+//   - tRPC / REST handlers run their own authorization
 //
-//  1. API-key mode (Bearer token present, or preflight requesting Authorization header):
-//     → Allow any origin. No credentials header.
-//     → Rationale: Bearer tokens are explicit — the browser never sends them automatically.
-//       CORS cannot protect against a stolen API key (the attacker can call from their server
-//       anyway). Requiring the caller to whitelist their domain adds friction with zero security.
+// An origin whitelist on top of that adds no real security against a
+// compromised caller, and creates ongoing drift every time a new first-party
+// surface ships (studio, app, landing, relay, …). We reflect whatever origin
+// calls us and include credentials, so cookies and sessions Just Work across
+// any Synap surface, and let the auth layer decide whether to return data.
 //
-//  2. Cookie mode (Ory Kratos session, no Bearer token):
-//     → Enforce the CORS origin whitelist (env + DB-stored origins).
-//     → Include Access-Control-Allow-Credentials: true.
-//     → Rationale: Session cookies ARE sent automatically. Without a whitelist, any page could
-//       make authenticated requests using the user's Kratos session (CSRF via CORS).
-//
-// Electron desktop (no Origin header at all) passes through untouched.
+// Must run first so error responses (429, 413) still carry CORS headers.
+// Electron desktop (no Origin header) passes through untouched.
 app.use("*", async (c, next) => {
   const origin = c.req.header("origin");
-
-  // No Origin header: Electron, server-to-server, or same-origin — no CORS needed.
   if (!origin) return next();
 
-  // Detect API-key mode:
-  //  - Actual request: Authorization: Bearer xxx header
-  //  - Preflight (OPTIONS): browser signals it will send Authorization via
-  //    Access-Control-Request-Headers
-  const authHeader = c.req.header("authorization") ?? "";
-  const requestedHeaders = c.req.header("access-control-request-headers") ?? "";
-  const isApiKeyMode =
-    authHeader.startsWith("Bearer ") ||
-    requestedHeaders
-      .toLowerCase()
-      .split(",")
-      .some((h) => h.trim() === "authorization");
+  c.header("Access-Control-Allow-Origin", origin);
+  c.header("Access-Control-Allow-Credentials", "true");
+  c.header("Vary", "Origin");
+  c.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+  );
+  c.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Session-Token"
+  );
+  c.header(
+    "Access-Control-Expose-Headers",
+    "Content-Length, X-Request-Id, Set-Cookie"
+  );
+  c.header("Access-Control-Max-Age", "86400");
 
-  const ALLOW_METHODS = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
-  const ALLOW_HEADERS =
-    "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Session-Token";
-  const EXPOSE_HEADERS = "Content-Length, X-Request-Id, Set-Cookie";
-
-  if (isApiKeyMode) {
-    // Allow any origin — Bearer token auth is safe cross-origin
-    c.header("Access-Control-Allow-Origin", origin);
-    c.header("Vary", "Origin");
-    c.header("Access-Control-Allow-Methods", ALLOW_METHODS);
-    c.header("Access-Control-Allow-Headers", ALLOW_HEADERS);
-    c.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);
-    c.header("Access-Control-Max-Age", "86400");
-  } else {
-    // Cookie auth: only whitelisted origins can send session cookies cross-origin
-    const allowed = getCorsOrigins();
-    if (allowed.includes(origin)) {
-      c.header("Access-Control-Allow-Origin", origin);
-      c.header("Access-Control-Allow-Credentials", "true");
-      c.header("Vary", "Origin");
-      c.header("Access-Control-Allow-Methods", ALLOW_METHODS);
-      c.header("Access-Control-Allow-Headers", ALLOW_HEADERS);
-      c.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);
-      c.header("Access-Control-Max-Age", "86400");
-    }
-    // Origin not in whitelist → no CORS headers → browser blocks the request ✓
-  }
-
-  // Answer preflights immediately
   if (c.req.method === "OPTIONS") return c.body(null, 204);
-
   return next();
 });
 
@@ -1090,18 +1051,8 @@ app.get("/api/events/stream", (c) => {
     },
   });
 
-  // Get CORS origin for SSE response
-  const getAllowedOrigin = (): string => {
-    const allowedOrigins = getCorsOrigins();
-    const origin = c.req.header("origin") || "";
-
-    if (Array.isArray(allowedOrigins)) {
-      return allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
-    }
-    return allowedOrigins;
-  };
-
-  const allowOrigin = getAllowedOrigin();
+  // Reflect the caller's origin — CORS is not our security layer (auth is).
+  const allowOrigin = c.req.header("origin") || "*";
 
   // Return SSE stream using Hono's newResponse
   // c.newResponse(body, status, headers) signature
