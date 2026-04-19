@@ -49,8 +49,20 @@
 # Handles HTTP traffic from cloudflared (Cloudflare Tunnel connector).
 # IMPORTANT: Place BEFORE {$DOMAIN} to prevent redirect loops.
 # cloudflared sends HTTPS traffic through the tunnel as HTTP to port 80.
+#
+# This block MUST mirror the Kratos routing from the HTTPS block below.
+# Otherwise Kratos requests get proxied through the backend's Hono proxy which
+# mangles multi-cookie Set-Cookie headers, breaking the CSRF flow (POST 400).
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 {$DOMAIN}:80 {
+    # Kratos public API must bypass the backend — it sets multiple cookies
+    # (flow + csrf_token) that the Hono proxy can't forward intact.
+    handle_path /.ory/kratos/public/* {
+        reverse_proxy kratos:4433
+    }
+    handle_path /.ory/kratos/admin/* {
+        reverse_proxy kratos:4434
+    }
     reverse_proxy backend:4000
 }
 

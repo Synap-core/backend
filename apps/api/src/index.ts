@@ -315,19 +315,26 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
       redirect: "manual",
     });
 
-    // Get all response headers as plain object
-    const responseHeaders: Record<string, string> = {};
+    // Build a Headers object. Set-Cookie needs special handling because
+    // Kratos sets two cookies per flow (the flow cookie + csrf_token cookie),
+    // and iterating headers naively combines them into one comma-joined line
+    // that browsers cannot parse — which kills CSRF and every subsequent POST
+    // fails with 400.
+    const outHeaders = new Headers();
     response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
+      if (key.toLowerCase() === "set-cookie") return;
+      outHeaders.set(key, value);
     });
+    const setCookies =
+      typeof response.headers.getSetCookie === "function"
+        ? response.headers.getSetCookie()
+        : [];
+    for (const cookie of setCookies) outHeaders.append("set-cookie", cookie);
 
-    // Return Response using Hono's newResponse for proper type compatibility
-    // c.newResponse(body, status, headers) signature
-    return c.newResponse(
-      response.body,
-      response.status as any,
-      responseHeaders
-    );
+    return new Response(response.body, {
+      status: response.status,
+      headers: outHeaders,
+    });
   } catch (error) {
     apiLogger.error(
       { err: error, path: kratosPath },
