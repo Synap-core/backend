@@ -47,6 +47,7 @@
     "@synap-core/types": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/database": "workspace:*",
+    "@synap/feed-service": "workspace:*",
     "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
     "ai": "^4.0.0",

@@ -40,6 +40,8 @@ export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { feedsRouter } from "./routers/feeds.js";
+export { sourceConfigsRouter } from "./routers/source-configs.js";
+export { adminSourceConfigsRouter } from "./routers/admin-source-configs.js";
 export {
   DeliveryService,
   type DeliveryRequest,

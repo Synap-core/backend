@@ -55,6 +55,11 @@ import { handleFeedScheduler } from "./feed-scheduler.js";
 import { handleFeedRSSExecute } from "./feed-rss-executor.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 import {
+  handleFeedSourceExecute,
+  FEED_SOURCE_EXECUTE_QUEUE,
+  FEED_SOURCE_ITEMS_QUEUE,
+} from "./feed-source-executor.js";
+import {
   handleTelegramBulkImport,
   TELEGRAM_BULK_IMPORT_QUEUE,
 } from "./telegram-bulk-import.js";
@@ -111,6 +116,8 @@ const ALL_QUEUES = [
   "feed-scheduler",
   "feed-rss-execute",
   "feed-proactive-execute",
+  FEED_SOURCE_EXECUTE_QUEUE,
+  FEED_SOURCE_ITEMS_QUEUE,
   TELEGRAM_BULK_IMPORT_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
   SYNC_PUSH_QUEUE,
@@ -309,6 +316,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleFeedProactiveExecute(job)
   );
   logger.info("Registered worker: feed-proactive-execute");
+
+  // Pluggable source executor (Phase 1 + 2) — fetches one subscription via
+  // the provider registry. Downstream items land on FEED_SOURCE_ITEMS_QUEUE
+  // for Agent 3's classifier/publisher to consume.
+  await boss.work(FEED_SOURCE_EXECUTE_QUEUE, async ([job]: any[]) =>
+    handleFeedSourceExecute(job)
+  );
+  logger.info("Registered worker: feed-source-execute");
 
   // Contacts archive imports (on-demand — heavy batch upserts)
   await boss.work(TELEGRAM_BULK_IMPORT_QUEUE, async ([job]: any[]) =>

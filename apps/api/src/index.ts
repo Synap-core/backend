@@ -1125,6 +1125,10 @@ app.use("/trpc/*", async (c, next) => {
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);
 
+// Admin source configs (CP-provisioned feed source configurations — ES256 JWT auth)
+import { adminSourceConfigsRouter } from "@synap/api";
+app.route("/api/admin/source-configs", adminSourceConfigsRouter);
+
 // Control Plane provisioning endpoint (ES256 JWT, verified via JWKS)
 import { provisionRouter } from "./routers/provision.js";
 app.route("/api/provision", provisionRouter);

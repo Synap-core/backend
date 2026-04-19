@@ -282,6 +282,40 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "issuer_url",
     addedBy: "0001_trusted_issuers.sql",
   },
+
+  // source_configs — pluggable feed source providers (0008)
+  {
+    table: "source_configs",
+    column: "provider_type",
+    addedBy: "0008_source_configs.sql",
+  },
+  {
+    table: "source_configs",
+    column: "config",
+    addedBy: "0008_source_configs.sql",
+  },
+  {
+    table: "source_configs",
+    column: "enabled",
+    addedBy: "0008_source_configs.sql",
+  },
+
+  // source_subscriptions — feeds × sources × params + cursor (0008)
+  {
+    table: "source_subscriptions",
+    column: "feed_id",
+    addedBy: "0008_source_configs.sql",
+  },
+  {
+    table: "source_subscriptions",
+    column: "source_config_id",
+    addedBy: "0008_source_configs.sql",
+  },
+  {
+    table: "source_subscriptions",
+    column: "cursor",
+    addedBy: "0008_source_configs.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

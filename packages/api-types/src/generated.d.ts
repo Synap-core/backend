@@ -1505,6 +1505,14 @@ export type PaginatedResponse<T> = {
 		offset: number;
 	};
 };
+export interface SourceProviderCapabilities {
+	/** True when the provider honors and returns cursors across fetches. */
+	supportsCursor: boolean;
+	/** True when testConnection() does more than a no-op. */
+	supportsTesting: boolean;
+	/** True when the provider requires credentials (API key, Bearer, etc.). */
+	requiresAuth: boolean;
+}
 /**
  * Core API Router
  */
@@ -9558,6 +9566,195 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+			} | undefined;
+			output: {
+				feeds: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					name: string;
+					feedType: string;
+					criteria: string;
+					channelId: string;
+					scheduleCron: string;
+					status: string;
+					errorMessage: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					itemCount: number;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				feed: {
+					name: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					channelId: string;
+					status: string;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					itemCount: number;
+					feedType: string;
+					criteria: string;
+					scheduleCron: string;
+				};
+				subscriptions: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					feedId: string;
+					sourceConfigId: string;
+					params: Record<string, unknown>;
+					cursor: string | null;
+					lastFetchedAt: Date | null;
+					lastItemAt: Date | null;
+					status: string;
+					errorMessage: string | null;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				feedType: "leads" | "hiring" | "investors" | "trends" | "competitors" | "press";
+				criteria: string;
+				workspaceId?: string | null | undefined;
+				sources?: {
+					sourceConfigId: string;
+					params?: Record<string, unknown> | undefined;
+				}[] | undefined;
+				scheduleCron?: string | undefined;
+			};
+			output: {
+				feed: {
+					name: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					channelId: string;
+					status: string;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					itemCount: number;
+					feedType: string;
+					criteria: string;
+					scheduleCron: string;
+				};
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				patch: {
+					name?: string | undefined;
+					criteria?: string | undefined;
+					scheduleCron?: string | undefined;
+					status?: "error" | "active" | "paused" | undefined;
+				};
+			};
+			output: {
+				feed: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					name: string;
+					feedType: string;
+					criteria: string;
+					channelId: string;
+					scheduleCron: string;
+					status: string;
+					errorMessage: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					itemCount: number;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+			};
+			meta: object;
+		}>;
+		pause: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				feed: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					name: string;
+					feedType: string;
+					criteria: string;
+					channelId: string;
+					scheduleCron: string;
+					status: string;
+					errorMessage: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					itemCount: number;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+			};
+			meta: object;
+		}>;
+		resume: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				feed: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					name: string;
+					feedType: string;
+					criteria: string;
+					channelId: string;
+					scheduleCron: string;
+					status: string;
+					errorMessage: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					itemCount: number;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				deleteChannel?: boolean | undefined;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 	}>>;
 	trustedIssuers: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -9740,6 +9937,119 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				action: "restart" | "safe_update" | "rollback";
 				commands: string[];
 				message: string;
+			};
+			meta: object;
+		}>;
+	}>>;
+	sourceConfigs: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				providerType: string;
+				name: string;
+				description: string | null;
+				config: Record<string, unknown>;
+				enabled: boolean;
+				lastTestedAt: Date | null;
+				lastTestStatus: string | null;
+				lastTestError: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		listProviders: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				type: string;
+				displayName: string;
+				description: string;
+				capabilities: SourceProviderCapabilities;
+			}[];
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerType: string;
+				name: string;
+				config: Record<string, unknown>;
+				description?: string | undefined;
+				workspaceId?: string | null | undefined;
+				enabled?: boolean | undefined;
+			};
+			output: {
+				name: string;
+				userId: string;
+				workspaceId: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				description: string | null;
+				enabled: boolean;
+				config: Record<string, unknown>;
+				providerType: string;
+				lastTestedAt: Date | null;
+				lastTestStatus: string | null;
+				lastTestError: string | null;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				patch: {
+					name?: string | undefined;
+					description?: string | null | undefined;
+					config?: Record<string, unknown> | undefined;
+					enabled?: boolean | undefined;
+				};
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				providerType: string;
+				name: string;
+				description: string | null;
+				config: Record<string, unknown>;
+				enabled: boolean;
+				lastTestedAt: Date | null;
+				lastTestStatus: string | null;
+				lastTestError: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		testConnection: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				ok: boolean;
+				error?: string;
+				sampleCount?: number;
 			};
 			meta: object;
 		}>;
