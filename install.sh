@@ -324,6 +324,8 @@ POSTGRES_INIT_SCRIPT=./config/postgres/init-databases.sh
 
 # ── Image versions ─────────────────────────────────────────────────────────────
 BACKEND_VERSION=latest
+# Pod-agent (CP → configure / archive / suspend / …) — keep in sync with backend ring when pinning
+POD_AGENT_VERSION=latest
 
 # ── Admin (first user) ────────────────────────────────────────────────────────
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
@@ -421,8 +423,8 @@ sleep 5
 
 docker compose logs --tail=30 backend-migrate || true
 
-info "Starting application services..."
-docker compose up -d backend realtime caddy
+info "Starting application services (including pod-agent for Control Plane commands)..."
+docker compose up -d backend realtime caddy pod-agent
 
 success "All services started"
 

@@ -1600,7 +1600,7 @@ cmd_update() {
     
     # Restart services
     echo -e "${BLUE}🔄 Restarting services...${NC}"
-    docker compose up -d --remove-orphans backend realtime caddy
+    docker compose up -d --remove-orphans backend realtime caddy pod-agent
     
     echo -e "${GREEN}✅ Update complete!${NC}"
 }
