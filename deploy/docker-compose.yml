@@ -358,10 +358,18 @@ services:
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
       SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://${DOMAIN}/login
+      SELFSERVICE_ALLOWED_RETURN_URLS: https://${DOMAIN},https://${DOMAIN}/*
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
       KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
+      KRATOS_URL_UI_ERROR: https://${DOMAIN}/admin/kratos
+      KRATOS_URL_UI_SETTINGS: https://${DOMAIN}/admin/kratos
+      KRATOS_URL_UI_RECOVERY: https://${DOMAIN}/admin/kratos
+      KRATOS_URL_UI_VERIFICATION: https://${DOMAIN}/admin/kratos
+      KRATOS_URL_UI_LOGIN: https://${DOMAIN}/admin/kratos
+      KRATOS_URL_UI_REGISTRATION: https://${DOMAIN}/admin/kratos
+      KRATOS_PUBLIC_CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://localhost:3001,http://localhost:4000,https://${DOMAIN}
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     # Note: --dev flag removed for production security
     # Add --dev back only for local development
