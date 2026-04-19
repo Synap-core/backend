@@ -45,6 +45,18 @@
     }
 }
 
+# ─── Cloudflare Tunnel Handler ────────────────────────────────────────────────
+# Handles HTTP traffic from cloudflared (Cloudflare Tunnel connector).
+# Cloudflared sends HTTPS user traffic through the tunnel as HTTP to port 80.
+# This block catches it BEFORE {$DOMAIN} to prevent redirect loops.
+# The main {$DOMAIN} block only handles HTTPS (port 443) for Let's Encrypt.
+# ────────────────────────────────────────────────────────────────────────────────────────────────
+:80 {
+    reverse_proxy backend:4000 {
+        header_up X-Real-IP {remote_host}
+    }
+}
+
 {$DOMAIN} {
     # Automatic HTTPS with Let's Encrypt
 
