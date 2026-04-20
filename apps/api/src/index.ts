@@ -429,9 +429,11 @@ app.post("/api/handshake", async (c) => {
     // create a second identity, so the user ends up with two accounts:
     // one they can sign into (from setup), one the handshake keeps
     // spawning (with a throwaway password).
+    // `name` used to be read here for the auto-create path; now that
+    // handshake only looks up existing identities (setup-account owns
+    // creation), the claim is informational and we don't need it.
     const rawEmail = payload.email;
     const email = rawEmail?.trim().toLowerCase();
-    const { name } = payload;
     if (!email) {
       return c.json({ error: "Token missing email claim" }, 400);
     }
@@ -460,78 +462,33 @@ app.post("/api/handshake", async (c) => {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // 2. If no identity, create one with NO usable password.
+    // 2. No identity → refuse.
     //
-    // Previously we derived a password via HMAC(JWT_SECRET, email) and
-    // also force-PUT-overwrote it on every handshake. That meant:
-    //   (a) if JWT_SECRET leaked, every user's password was trivially
-    //       computable — expanding attack surface far beyond "pod
-    //       compromise = pod compromise";
-    //   (b) users could never set a real password, because the next
-    //       handshake would wipe it.
+    // The handshake is SSO convenience over an account that MUST already
+    // exist — it's not an account-creation path. An account only exists
+    // after the user has gone through /api/provision/setup-account
+    // (triggered by the setup-pod flow on synap.live, either from the
+    // welcome email or the in-dashboard "Finish setup" button).
     //
-    // New model: handshake creates an identity in a "needs-setup" state
-    // (metadata.setupRequired=true). The session is still materialized
-    // via Kratos admin session creation (step 3) — no password needed.
-    // The user later sets a real password via the /api/provision/setup-
-    // account flow (CP → pod JWT with email+password). From that point
-    // forward they can log in directly at <pod>/admin/ without CP.
+    // Returning 403 here is deliberate: it forces every client — Synap
+    // apps, third-party integrations, SSO attempts — to stop pretending
+    // the user is signed in on a pod where they literally have no
+    // credentials yet. The landing page catches this error and redirects
+    // the pod owner to their setup link.
     // ──────────────────────────────────────────────────────────────────
     if (!identityId) {
       apiLogger.info(
         { email },
-        "Handshake: creating new Kratos identity (setup required)"
+        "Handshake rejected: no Kratos identity yet for this email — user must complete setup-account first"
       );
-
-      // Random placeholder password the user can never know — present
-      // only because Kratos requires a password credential slot; will
-      // be replaced when the user completes setup.
-      const placeholderPassword = crypto.randomBytes(32).toString("base64url");
-
-      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schema_id: "default",
-          traits: { email, ...(name ? { name } : {}) },
-          credentials: {
-            password: {
-              config: { password: placeholderPassword },
-            },
-          },
-          metadata_public: {
-            // Marks that this identity has not gone through the
-            // password-setup flow yet. Clients can surface a "set your
-            // password" prompt when this is true.
-            setupRequired: true,
-            createdVia: "handshake",
-            createdAt: new Date().toISOString(),
-          },
-          verifiable_addresses: [
-            {
-              value: email,
-              verified: true,
-              via: "email",
-              status: "completed",
-            },
-          ],
-        }),
-      });
-
-      if (!createResp.ok) {
-        const errBody = await createResp.text();
-        apiLogger.error(
-          { status: createResp.status, body: errBody },
-          "Failed to create Kratos identity"
-        );
-        return c.json({ error: "Failed to provision user account" }, 500);
-      }
-
-      const newIdentity = (await createResp.json()) as { id: string };
-      identityId = newIdentity.id;
-      apiLogger.info(
-        { email, identityId },
-        "Handshake: created Kratos identity"
+      return c.json(
+        {
+          error: "account_not_set_up",
+          message:
+            "This pod has no account for this email yet. Open your welcome email or visit your dashboard to pick a password.",
+          setupRequired: true,
+        },
+        403
       );
     }
 
