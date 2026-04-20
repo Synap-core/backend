@@ -109,6 +109,27 @@ export async function emitSideEffects(
         automationContext: payload.automationContext,
       });
     }
+
+    // 6. Hydration summary — proactive welcome message after import review.
+    // Fired from capture.executeWithSchema once the import pipeline completes.
+    // The worker resolves the personal channel + inserts a single AI greeting
+    // summarizing what was just imported. Fire-and-forget, no retries.
+    if (payload.subjectType === "hydration" && payload.action === "imported") {
+      await boss.send(
+        "hydration-summary-post",
+        {
+          userId: payload.userId,
+          workspaceId: payload.workspaceId ?? null,
+          data: payload.data ?? {},
+        },
+        {
+          // Delay so the user sees /home render before the message pops.
+          startAfter: new Date(Date.now() + 6_000),
+          // Welcome message is best-effort — do not retry on failure.
+          retryLimit: 0,
+        }
+      );
+    }
   } catch (error) {
     // Side-effects are non-critical — log and move on
     logger.warn(

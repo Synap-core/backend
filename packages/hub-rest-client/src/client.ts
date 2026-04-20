@@ -265,8 +265,18 @@ export class HubRestClient {
     });
   }
 
-  async updateEntity(id: string, input: UpdateEntityInput): Promise<HubEntity> {
-    return this.request<HubEntity>("PATCH", `/api/hub/entities/${id}`, input);
+  async updateEntity(
+    id: string,
+    input: UpdateEntityInput
+  ): Promise<HubEntity | HubGovernanceResult> {
+    // Backend may return a full entity (approved) or a governance envelope
+    // (proposed/denied). Callers MUST check `status` first when governance
+    // is likely — e.g., agent-owned workspaces, destructive updates.
+    return this.request<HubEntity | HubGovernanceResult>(
+      "PATCH",
+      `/api/hub/entities/${id}`,
+      input
+    );
   }
 
   // ─── Unified Search ───────────────────────────────────────────────────────

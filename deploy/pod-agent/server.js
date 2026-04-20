@@ -149,11 +149,18 @@ const COMMANDS = {
         : p.envVars && typeof p.envVars === "object"
           ? Object.entries(p.envVars).map(([k, v]) => `${k}=${String(v)}`)
           : [];
+      // Each flag + value must be a separate argv element so the shell sees
+      // them as distinct positional parameters. Passing "--profile canary"
+      // as a single string would make $1="--profile canary" and the
+      // `--profile)` case wouldn't match.
+      const profileArgs = (p.profiles || []).flatMap((pr) => ["--profile", String(pr)]);
+      const recreateArgs = (p.recreate || []).flatMap((svc) => ["--recreate", String(svc)]);
       return [
         p.callbackUrl || "",
         p.callbackJwt || "",
         ...envVars,
-        ...(p.profiles || []).map((pr) => `--profile ${pr}`),
+        ...profileArgs,
+        ...recreateArgs,
       ];
     },
   },

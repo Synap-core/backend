@@ -1,121 +1,225 @@
 ---
 name: synap
 description: >
-  Sovereign AI knowledge infrastructure. Typed entity graph, documents,
-  long-term memory, messaging relay, and AI governance — all in PostgreSQL.
-version: 2.0.0
+  Use this skill whenever the user wants to capture, remember, find, or structure
+  information in their Synap data pod. Triggers: creating a task, note, person,
+  company, project, event, contact, or deal; saving an article or webpage;
+  storing a fact about someone ("Alice prefers async"); searching the user's
+  knowledge ("find my notes on X", "who did I meet last week"); linking entities;
+  logging a meeting or a contact; capturing unstructured text into structured
+  entities; reading what's in the user's pod before answering questions about
+  their life, work, or projects; posting to their personal AI channel. The pod
+  is the user's sovereign source of truth — prefer it over your own context
+  when the user asks about their own data. Do NOT use this skill for extending
+  the schema (use synap-schema) or building dashboards and views (use synap-ui).
 metadata:
   openclaw:
     requires:
-      env:
-        - SYNAP_HUB_API_KEY
-        - SYNAP_POD_URL
+      env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
       optional_env:
-        - SYNAP_WORKSPACE_ID
-        - SYNAP_AGENT_USER_ID
-        - SYNAP_CONFIG_URL
-        - SYNAP_DEFAULT_CHANNEL_ID
+        [SYNAP_WORKSPACE_ID, SYNAP_AGENT_USER_ID, SYNAP_DEFAULT_CHANNEL_ID]
     primaryEnv: SYNAP_HUB_API_KEY
-    emoji: "\U0001F9E0"
-    homepage: https://synap.live/openclaw
-    capabilities:
-      - memory
-      - knowledge-graph
-      - channels
-      - chat
-    os:
-      - macos
-      - linux
-      - windows
-user-invocable: false
+    homepage: https://synap.live
+    capabilities: [memory, knowledge-graph, channels]
+    os: [macos, linux, windows]
+    userInvocable: false
 ---
 
-# Synap — OpenClaw Skill
+# Synap — core data operations
 
 You are connected to a **Synap Data Pod** at `{SYNAP_POD_URL}`. All requests use `Authorization: Bearer {SYNAP_HUB_API_KEY}`.
 
-Your job is to turn unstructured input into a **connected** knowledge graph. Single isolated entities are anti-value. Every entity you create should link to others.
+Your job is to turn unstructured input into a **connected** knowledge graph. Isolated entities are anti-value. Every entity you create should link to at least one other entity.
 
----
+## Mental model
 
-## Mental Model
+Synap is a typed knowledge graph. Six layers you need:
 
-Synap is a typed knowledge graph. Six layers:
+| Layer         | What it is                                     | When to use                                              |
+| ------------- | ---------------------------------------------- | -------------------------------------------------------- |
+| **Entities**  | Typed structured nodes (task, person, …)       | Anything worth filtering, sorting, or linking            |
+| **Relations** | Typed edges between entities                   | Making the graph traversable                             |
+| **Documents** | Long-form markdown attached to an entity       | Meeting notes, research writeups, articles               |
+| **Memory**    | Atomic facts, no structure                     | Preferences, context, ephemeral notes                    |
+| **Threads**   | Channel conversations, optional entity context | Posting to the user's personal AI channel                |
+| **Proposals** | Writes queued for human approval               | Governance for some mutations (not an error — see below) |
 
-| Layer                  | What it is                                 | When to use                                                      |
-| ---------------------- | ------------------------------------------ | ---------------------------------------------------------------- |
-| **Entities**           | Structured typed nodes                     | Anything to filter, sort, or link (task, person, project, note…) |
-| **Relations**          | Typed edges between entities               | Making the graph traversable                                     |
-| **Documents**          | Long-form markdown attached to entities    | Meeting notes, research, writeups                                |
-| **Memory / Facts**     | Atomic knowledge fragments                 | Preferences, context, ephemeral facts                            |
-| **Threads / Channels** | Conversations with optional entity context | AI discussions, messaging                                        |
-| **Proposals**          | Writes queued for human approval           | Governance for some agent mutations                              |
+## Orient first (always)
 
----
+Never assume workspace state. Profiles, scopes, and members vary per installation.
 
-## Orient Yourself First
-
-Before doing anything, fetch live state. Never assume — workspace profiles and properties vary per installation.
+Run `scripts/orient.sh` (in this skill directory) or call these three endpoints:
 
 ```
 GET /api/hub/users/me
-  → { id, email, name }            ← your userId for all subsequent calls
+  → { id, email, name }                         ← your userId
 
 GET /api/hub/workspaces
-  → [{ id, name, role }]           ← use workspaces[0].id as workspaceId
+  → [{ id, name, role }]                        ← workspaces[0].id if only one
 
-GET /api/hub/profiles?workspaceId={workspaceId}
-  → [{ slug, displayName, entityScope, properties: [{ slug, valueType, targetProfileSlug? }] }]
+GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}
+  → [{ slug, displayName, entityScope,
+       properties: [{ slug, valueType, targetProfileSlug? }] }]
 ```
 
-`entityScope: "pod"` = visible across all workspaces (note, task, project, person, company…).
-`entityScope: "workspace"` = scoped to one workspace (deal, capture, custom types).
+`entityScope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).
+`entityScope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).
 
-**Pay attention to properties with `valueType: "entity_id"`** — these are links to other entities. They are the primary way to connect data on creation (see "Linking" below).
+Properties with `valueType: "entity_id"` are typed links to other entities — see **Linking** below.
 
----
+## Scope — default pod-wide
 
-## Linking — The Core Principle
+**Default: pod-wide.** 13 of 17 system profiles (`note`, `task`, `project`, `event`, `person`, `contact`, `company`, `bookmark`, `article`, `website`, `decision`, `question`, `research`) are pod-scoped — entities you create show up in _every_ workspace the user owns. The backend handles this automatically when the profile is pod-scoped: you don't need to pass `workspaceId`.
 
-**Never create orphan entities.** A task alone is near-useless. A task linked to a project, an assignee, and the source document is immediately useful — it shows up in graph traversals, context panels, and downstream queries.
+**Scope a creation to one workspace only when:**
 
-Synap has **two ways** to connect entities, and the good news is they auto-sync for system profiles:
+1. The user explicitly says "in my `X` workspace" / "inside this space".
+2. You're inside a clear workspace context (the user is on a project page, discussing that project — new tasks go into that workspace).
+3. The profile is workspace-scoped by definition (`deal`, `file`, `capture`, and custom profiles). The backend already uses the user's active workspace when you don't pass one — usually this is what you want.
 
-### Way 1 — ENTITY_ID properties (the fast path, auto-syncs)
+**Rule of thumb:** don't pass `workspaceId` unless the user's intent specifically narrows to one workspace. A task the user dictates "from the couch" belongs to the whole pod, not to whichever workspace was last open.
 
-Profile properties with `valueType: "entity_id"` are typed links. For system profiles, setting these properties automatically creates a row in the relations table too. No extra call needed.
+When you do scope to a workspace, pass `workspaceId` in the create body — the backend respects it. Never pass `workspaceId: null` explicitly to force pod-wide; the profile's `entityScope` decides.
 
-Known system entity_id properties and their auto-relations:
+## The work flow — question → research → decision → action
 
-| Profile | Property    | Targets | Auto-relation type   |
-| ------- | ----------- | ------- | -------------------- |
-| task    | `projectId` | project | `belongs_to_project` |
-| task    | `assignee`  | person  | `assigned_to`        |
-| contact | `companyId` | company | `works_at`           |
-| deal    | `contactId` | contact | `deal_for`           |
+AI-assisted work has a shape. When the user is actually _thinking about something_, it flows through four structural nodes. Each is a first-class entity. None of these are optional "nice-to-have" labels — they're the graph that makes the work _durable_ and transferrable between AIs.
 
-Example — creating a task correctly:
+| Stage       | Entity     | What it captures                                         | Typical trigger                                                    |
+| ----------- | ---------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| Inquiry     | `question` | What the user is trying to figure out                    | "I'm wondering about X" / "Should we Y or Z?" / "What's the best…" |
+| Exploration | `research` | Investigation: sources consulted, conclusion, confidence | Reading articles, comparing options, summarizing findings          |
+| Resolution  | `decision` | What was chosen + rationale + alternatives               | "We decided to…" / "Let's go with…" / "I'm going with…"            |
+| Execution   | `task`     | Concrete action items that follow the decision           | "Now I need to…" / "TODO: ship Y by…"                              |
+
+**Link each stage to the next:**
+
+- `question.answeredByDecisionId` → the decision that closed it
+- `research.questionId` → the question it investigates
+- `decision.projectId` → the project it affects (same for question / research)
+- Use `POST /relations type=source` to link research to its sources (articles, websites, documents)
+
+Traversing in either direction gives the user answers like:
+
+- "What am I currently exploring about Project Eve?" → `GET /entities?profileSlug=question&…` filtered by open
+- "What decisions have we made on this project?" → filtered by `projectId`
+- "What was the research behind this decision?" → reverse-lookup from `decision` via the research entities that reference the same `projectId` and question
+
+### When to create each
+
+**`question` — substantive inquiries only.** The test: _would the user want to find this later?_ "What's the weather" = no, don't create. "Should we use LangGraph or CrewAI?" = yes, create. Casual chitchat never becomes a question.
+
+**`research` — when you investigate.** Any time you go off and read articles / websites / past notes to answer something, that's research. Create the entity upfront (`status: "ongoing"`), link sources as you pull them (`POST /relations type=source`), set `conclusion` when you're done (`status: "concluded"`).
+
+**`decision` — when the user picks a path.** Already covered in the memory-vs-entity section above. Link back to the question it answers (set `question.answeredByDecisionId`).
+
+**`task` — when the decision implies concrete work.** Link with `projectId` if not already inferred.
+
+### Worked example
+
+User: _"I'm trying to figure out whether we should build our own orchestrator or standardize on OpenClaude's. Can you help me think through it?"_
+
+1. Create the question:
+
+   ```json
+   POST /api/hub/entities
+   { "profileSlug": "question",
+     "title": "Build custom orchestrator or use OpenClaude native?",
+     "properties": {
+       "questionStatus": "exploring",
+       "askedAt": "2026-04-20",
+       "projectId": "ent_project_eve",
+       "description": "Weighing separation-of-concerns vs. out-of-the-box capability."
+     } }
+   ```
+
+2. As you investigate, create a research entity and link sources:
+
+   ```json
+   POST /api/hub/entities
+   { "profileSlug": "research",
+     "title": "LangGraph vs CrewAI capability survey",
+     "properties": {
+       "researchStatus": "ongoing",
+       "questionId": "ent_question_1",
+       "projectId": "ent_project_eve"
+     } }
+
+   POST /api/hub/relations
+   { "sourceEntityId": "ent_research_1", "targetEntityId": "ent_article_langgraph_docs", "type": "source" }
+   ```
+
+3. When you reach a conclusion, update the research:
+
+   ```json
+   PATCH /api/hub/entities/ent_research_1
+   { "properties": {
+       "researchStatus": "concluded",
+       "conclusion": "LangGraph separates orchestration brain from UX. CrewAI adds agent abstractions but couples to its runtime.",
+       "researchConfidence": "high"
+     } }
+   ```
+
+4. When the user picks, create a decision linked to the question:
+
+   ```json
+   POST /api/hub/entities
+   { "profileSlug": "decision",
+     "title": "Use LangGraph orchestrator over OpenClaude native",
+     "properties": {
+       "decisionStatus": "accepted",
+       "decidedAt": "2026-04-22",
+       "rationale": "Separates Orchestration Brain from UX.",
+       "alternatives": "Standardize on OpenClaude's multi-agent logic.",
+       "projectId": "ent_project_eve"
+     } }
+
+   PATCH /api/hub/entities/ent_question_1
+   { "properties": {
+       "questionStatus": "answered",
+       "answeredByDecisionId": "ent_decision_1"
+     } }
+   ```
+
+5. Tasks follow as usual, linked to the project.
+
+**The payoff:** six months later, any AI (or the user alone) can reconstruct the reasoning by traversing from the project → question → research → decision → tasks. That's the durability Synap provides on top of chat.
+
+### Creation is silent by default
+
+Don't interrupt the conversation to ask "should I log this as a question?" — just do it and add a one-line trailer at the end of your response:
+
+> (Logged as question on Project Eve. Review: https://studio.synap.live/proposals/…)
+
+If the creation was auto-approved (entity.create is on the whitelist), there's no proposal; just show a link to the entity:
+
+> (Logged as question → https://studio.synap.live/entities/ent_question_1)
+
+## Linking — the core principle
+
+**Never create orphan entities.** A task alone is near-useless. A task linked to a project, an assignee, and the source document shows up in traversals, context panels, and downstream queries.
+
+Two ways to connect. Pick one:
+
+**Way 1 — entity_id properties (fast path, auto-syncs).** Set the property when creating the entity. For system profiles this auto-creates a row in the relations table.
 
 ```json
 POST /api/hub/entities
 {
   "userId": "{userId}",
+  "workspaceId": "{workspaceId}",
   "profileSlug": "task",
   "title": "Design new onboarding flow",
   "properties": {
     "status": "todo",
     "priority": "high",
-    "projectId": "prj_abc",          ← auto-creates belongs_to_project relation
-    "assignee": "usr_def"            ← auto-creates assigned_to relation
+    "projectId": "ent_abc",    // auto-creates belongs_to_project relation
+    "assignee":  "usr_def"     // auto-creates assigned_to relation
   }
 }
 ```
 
-After this call, `GET /api/hub/relations?entityId=prj_abc` finds the task. `GET /api/hub/graph/traverse?entityId=prj_abc` includes it as a node.
-
-### Way 2 — Explicit relations (for anything else)
-
-For arbitrary connections, custom properties without auto-sync, or links between two already-existing entities, use the relations table directly:
+**Way 2 — explicit relations.** For custom links, after-the-fact connections, or anything without a matching entity_id property.
 
 ```json
 POST /api/hub/relations
@@ -123,28 +227,133 @@ POST /api/hub/relations
   "userId": "{userId}",
   "sourceEntityId": "ent_task",
   "targetEntityId": "ent_document",
-  "type": "references"               ← any string; conventions below
+  "type": "references"
 }
 ```
 
-Conventional relation types: `related_to`, `parent_of`, `child_of`, `belongs_to`, `authored_by`, `depends_on`, `references`, `mentions`, `works_with`, `part_of`.
+For auto-sync mapping, conventional relation types, and edge cases, read **`linking.md`**.
 
-**Discovering available relation types**: the workspace may have custom typed relation defs. For well-known connections (task→project), prefer the property path (Way 1); it's cheaper and semantically typed.
+## Writing — governance in one paragraph
 
-### When to use which
+Every write returns a `status` field:
 
-| Situation                                                                   | Use                                  |
-| --------------------------------------------------------------------------- | ------------------------------------ |
-| Property exists on profile with `valueType: "entity_id"` and target matches | **Way 1** — set the property         |
-| Custom connection, no matching property                                     | **Way 2** — create a relation        |
-| Link to existing entity after-the-fact                                      | **Way 2** — create a relation        |
-| Workspace has custom profile you don't know                                 | Check `/profiles` first, then decide |
+```
+"approved"  → done, use { id }
+"proposed"  → queued for user approval; response also carries { proposalId, summary, reasoning, reviewPath, reviewUrl } — surface the link
+"denied"    → blocked, explain reason to user
+```
 
----
+**`"proposed"` is not an error.** It's the governance system queueing your change. When you get it:
 
-## Searching & Traversing
+1. Tell the user exactly what was queued — use the `summary` field **verbatim**. Don't paraphrase.
+2. Give them the link to review — `reviewUrl` opens the proposal in Synap Studio. Show the link as-is.
+3. Move on with the conversation. Don't wait or poll.
 
-Graph-based, not semantic. Think: type filter → relations → neighborhood.
+Example response to the user:
+
+> I queued **Delete task "Q2 plan review"** for your review. Destructive actions need your approval. Open it: https://studio.synap.live/proposals/prp_abc
+
+Auto-approved by default (for agent API keys): `entity.create`, `entity.update`, `document.create`, `relation.create`, `view.create`, `profile.create`, `property_def.create`, `channel.create`, `memory.*`, all reads. Destructive actions (`delete`, `archive`, `purge`) always propose in agent-owned workspaces.
+
+For the full whitelist, agent-user semantics, and workspace overrides, read **`governance.md`**.
+
+## Core writes
+
+### Create an entity (always with links)
+
+```json
+POST /api/hub/entities
+{
+  "userId": "{userId}",
+  "workspaceId": "{workspaceId}",
+  "profileSlug": "task",          // from /profiles — never guess
+  "title": "Weekly team sync",
+  "properties": { "status": "todo", "projectId": "ent_..." }
+}
+```
+
+### Update an entity
+
+```json
+PATCH /api/hub/entities/{entityId}
+{ "title": "…", "properties": { "status": "done" } }
+```
+
+### Create a document (markdown, attached to an entity)
+
+```json
+POST /api/hub/documents
+{
+  "userId": "{userId}",
+  "workspaceId": "{workspaceId}",
+  "title": "Meeting notes — 2026-04-20",
+  "content": "# Attendees\n- …\n\n# Decisions\n- …",
+  "entityId": "ent_event_..."    // attach to an entity for context
+}
+```
+
+The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
+
+### Store a fact (memory) — use sparingly
+
+```json
+POST /api/hub/memory
+{ "userId": "{userId}", "fact": "User prefers async communication over meetings" }
+```
+
+Always auto-approved. **Memory is for loose, unstructured, hard-to-title facts only.** The seductive thing about memory is it has zero friction — no dedup, no linking, no proposals. That makes it easy to misuse.
+
+**The test:** if the user later asked "show me all X," can memory answer? Memory can only keyword-match — it has no structure. So:
+
+| Input                                                   | Use                                                             |
+| ------------------------------------------------------- | --------------------------------------------------------------- |
+| "User prefers async communication"                      | memory — it's a preference                                      |
+| "Garage code is 4321"                                   | memory — throwaway fact                                         |
+| "Should we use LangGraph or CrewAI for Eve?"            | **entity `question`** — substantive inquiry, start of flow      |
+| "Here's what I found comparing LangGraph and CrewAI…"   | **entity `research`** — investigation with sources + conclusion |
+| "We decided to use LangGraph over OpenClaude's native…" | **entity `decision`** — has title, rationale, project           |
+| "Key insight: tasks need better retry logic"            | **entity `note` with tag "insight"** + link to project          |
+| "John is now head of engineering at Acme"               | **update `contact` entity** — that's a property change          |
+| "Launch date moved to May 15"                           | **update `project` entity** — change the startDate              |
+| "Action item from meeting: ship MVP by Friday"          | **entity `task`** linked to the `event` (meeting)               |
+| "Agreed with Sarah: we'll split backend & frontend"     | **entity `decision`** linked to Sarah + the project             |
+
+**Rule of thumb:** if it has a title-worthy noun OR context to link to (a project, a person, a meeting) OR a lifecycle (status/supersession) — it's an entity, not memory. Memory is the fallback, not the default.
+
+**For decisions specifically** — use the `decision` system profile:
+
+```json
+POST /api/hub/entities
+{
+  "userId": "{userId}",
+  "profileSlug": "decision",
+  "title": "Use LangGraph orchestrator over OpenClaude native",
+  "properties": {
+    "decisionStatus": "accepted",
+    "decidedAt": "2026-04-20",
+    "summary": "Dedicated orchestrator service; OpenClaude CLI as UX",
+    "rationale": "Separates the Orchestration Brain (LangGraph) from the UX (OpenClaude CLI).",
+    "alternatives": "Standardize entirely on OpenClaude's multi-agent logic.",
+    "projectId": "ent_project_eve"
+  }
+}
+```
+
+This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
+
+### Post to the user's personal channel
+
+```
+GET  /api/hub/channels/personal?userId={userId}&workspaceId={workspaceId}
+       → { id, name, … }       (get-or-create, needs hub-protocol.write scope)
+
+POST /api/hub/threads/{threadId}/messages
+       { "userId": "{userId}", "role": "user", "content": "…" }
+```
+
+## Reading
+
+Graph-based, not semantic. Type filter → relations → neighborhood.
 
 ```
 # Keyword search across everything
@@ -156,203 +365,112 @@ GET /api/hub/entities?q={query}&profileSlug={slug}&workspaceId={id}
 # Recent entities
 GET /api/hub/entities?sort=updatedAt:desc&limit=20&workspaceId={id}
 
-# Relations for an entity — includes property-derived relations for system profiles
-GET /api/hub/relations?entityId={id}&workspaceId={id}
-
-# Full neighborhood (BFS up to maxDepth hops)
-GET /api/hub/graph/traverse?entityId={id}&maxDepth=2&workspaceId={id}
-  → { nodes: Entity[], edges: Relation[] }
-
-# Unified connections — the COMPLETE view (graph + property-derived + thread refs)
-# Prefer this when you want to be sure nothing is missed, including custom-profile links
+# The full connected neighborhood of an entity (prefer this)
 GET /api/hub/entities/{id}/connections?userId={userId}&workspaceId={id}
-  → { connections: [{ entityId, entity, label, direction, source: "graph"|"property"|"thread" }],
+  → { connections: [{ entityId, entity, label, direction,
+                      source: "graph"|"property"|"thread" }],
       counts: { total, graph, structural, threads } }
 
-# Memory facts (keyword only)
+# BFS traversal (expensive at depth 3+)
+GET /api/hub/graph/traverse?entityId={id}&maxDepth=2&workspaceId={id}
+
+# Memory facts (keyword)
 GET /api/hub/memory?userId={userId}&query={keywords}
 ```
 
-**No SQL JOINs.** The graph is the join. Examples:
+No SQL joins. The graph is the join.
 
-- Tasks for a project → `GET /relations?entityId={projectId}` (works because `projectId` auto-syncs)
-- Or search: `GET /entities?profileSlug=task&q={project name}`
-- Everything connected to X → `GET /graph/traverse?entityId={id}&maxDepth=2`, then filter `nodes` by `profileSlug`
+## Multi-entity capture from free-form text
 
----
-
-## Writing — Governance
-
-Every write response has a `status` field:
-
-```json
-{ "status": "approved", "id": "ent_...", "message": "..." }          ← done
-{ "status": "proposed", "proposalId": "prp_...", "message": "..." }  ← pending human review
-{ "status": "denied",   "reason": "..." }                            ← blocked by policy
-```
-
-`"proposed"` is **not an error** — it's the governance system queueing your change for a human. Store the `proposalId`, tell the user "queued for your review in Synap", and move on.
-
-**What actually triggers a proposal:**
-
-- If your API key has an associated `agentUserId` (you're identified as an agent): the backend checks `subjectType.action` against the workspace's auto-approve whitelist. These common actions are auto-approved by default:
-  - `entity.create`, `entity.update`, `document.create`, `relation.create`
-  - `view.create`, `profile.create/update`, `property_def.create/update`
-  - `channel.create`, `bento.arrange`
-  - all read / search / memory.recall / context.\*
-  - `filesystem.read`, `filesystem.write_workspace` (OpenClaw's own sandbox)
-- Anything else (notably `entity.delete`, `entity.archive`) goes through proposals.
-- In agent-owned workspaces, destructive actions (`delete`, `archive`, `purge`) **always** propose, regardless of whitelist.
-- Without `agentUserId`, writes from `source: "ai"` or `"intelligence"` propose unless the workspace has `aiGovernance.autoApprove = true`.
-
-You don't need to set `source` — the backend reads the auth context. Just write the entity and handle the response.
-
----
-
-## Writing — Core Operations
-
-### Create entity (always with links)
-
-```json
-POST /api/hub/entities
-{
-  "userId": "{userId}",
-  "profileSlug": "{slug}",         ← from /profiles — never guess
-  "title": "...",
-  "properties": {
-    "status": "...",
-    "dueDate": "2026-05-01",
-    "projectId": "ent_...",        ← link to another entity via entity_id property
-    "assignee": "usr_..."          ← another link; auto-creates relation row
-  }
-}
-```
-
-### Update entity
-
-```json
-PATCH /api/hub/entities/{id}
-{ "title": "...", "properties": { "status": "done" } }
-```
-
-### Create explicit relation
-
-```json
-POST /api/hub/relations
-{
-  "userId": "{userId}",
-  "sourceEntityId": "...",
-  "targetEntityId": "...",
-  "type": "references"
-}
-```
-
-### Store memory fact
-
-```json
-POST /api/hub/memory
-{ "userId": "{userId}", "fact": "User prefers async communication" }
-```
-
-Always auto-approved. Use for preferences and context that don't need structure.
-
-### Send message to a channel
-
-```json
-POST /api/hub/threads/{threadId}/messages
-{ "userId": "{userId}", "role": "user", "content": "..." }
-```
-
-To get the user's personal (default) channel:
+When the user pastes a block of unstructured content (a meeting transcript, an email, a LinkedIn bio), use the capture pipeline instead of chaining manual creates:
 
 ```
-GET /api/hub/channels/personal?userId={userId}&workspaceId={workspaceId}
-  → { id, name, ... }
+POST /api/hub/capture/structure   → returns proposals + relations
+POST /api/hub/capture/execute     → commits (after user confirms)
 ```
 
-Both params are required. **This route requires the `hub-protocol.write` scope** (it does a get-or-create).
+The pipeline extracts multiple entities with their relations in one LLM call. Read **`capture.md`** for the full flow.
 
----
+## Worked examples
 
-## Key Patterns
+### Example 1 — "Remind me to send the proposal to Acme on Friday"
 
-### Capture-first: never create alone
+1. Search for the Acme entity: `GET /entities?q=Acme&profileSlug=company` → got `ent_acme`
+2. Search for an existing task: `GET /entities?q=proposal&profileSlug=task&workspaceId=…` → none
+3. Create the task with links:
 
-```
-Before creating a task, ask: what does this link to?
-  → a project?  → set properties.projectId
-  → a person?   → set properties.assignee
-  → a document? → create relation { type: "references", target: documentId }
-  → an event?   → create relation { type: "from_meeting", target: eventId }
+   ```json
+   POST /api/hub/entities
+   { "userId": "{userId}", "workspaceId": "{wsId}",
+     "profileSlug": "task",
+     "title": "Send proposal to Acme",
+     "properties": {
+       "status": "todo", "priority": "high",
+       "dueDate": "2026-04-24"
+     }
+   }
+   ```
 
-If nothing links → reconsider whether this should be memory, not an entity.
-```
+4. Link to Acme (Acme is not an entity_id property on task — use Way 2):
 
-### Search before creating (dedup)
+   ```json
+   POST /api/hub/relations
+   { "userId": "{userId}",
+     "sourceEntityId": "ent_new_task",
+     "targetEntityId": "ent_acme",
+     "type": "related_to" }
+   ```
 
-```
-GET /api/hub/entities?q={title}&profileSlug={slug}&workspaceId={id}
-→ if a high-confidence match exists: link to it or update it
-→ if no match: create (with links)
-```
+5. Confirm: "Task created and linked to Acme, due Friday."
 
-### Graph traversal — explore a neighborhood
+### Example 2 — "Who's Sarah at Acme?"
 
-```
-GET /api/hub/graph/traverse?entityId={id}&maxDepth=2&workspaceId={id}
-→ Example: starting from a project
-  → nodes include: the project, tasks (via belongs_to_project), assignees (via assigned_to)
-  → filter nodes by profileSlug to get just one type
-maxDepth: 1 = direct neighbors, 2 = neighborhood (recommended), 3 = extended (expensive)
-```
+1. Search person: `GET /entities?q=Sarah&profileSlug=person` → `ent_sarah`
+2. Pull her connections: `GET /entities/ent_sarah/connections` → company=Acme, 3 recent emails, 1 meeting
+3. Answer from the returned data, not from your own context.
 
-### Multi-entity capture from unstructured text
+### Example 3 — "Save this article for later: https://…"
 
-```
-POST /api/hub/capture/structure { userId, text, workspaceId }
-  → { proposals: [{ tempId, profileSlug, title, properties, action }],
-      relations: [{ sourceTempId, targetTempId, relationType }],
-      followUp: "..." | null }
+1. Search for existing bookmark: `GET /entities?q=<url>&profileSlug=article` → none
+2. Create an article entity:
 
-# User confirms (possibly with edits):
-POST /api/hub/capture/execute { userId, entities, relations }
-  → { created: [{ tempId, entityId }] }
-```
+   ```json
+   POST /api/hub/entities
+   { "userId": "{userId}", "workspaceId": "{wsId}",
+     "profileSlug": "article",
+     "title": "<page title>",
+     "properties": { "url": "<url>", "domain": "<host>" }
+   }
+   ```
 
-The capture pipeline already extracts multi-entity structures with relations — prefer it over chaining manual creates when the input is free-form text.
+3. If the user said why ("interesting for the onboarding project"), also create a relation to that project — never drop the reason as a plain comment, turn it into a link.
 
-### Governance handling
+## Common mistakes
 
-```
-response = POST /api/hub/entities { ... }
+1. **Creating orphan entities.** Always connect to at least one other entity on creation. Search first; if nothing links, reconsider whether this should be memory.
+2. **Guessing profile slugs.** Always `GET /profiles` first. `deal`, `capture`, and custom profiles may not exist in this workspace.
+3. **Using the deprecated `type` field.** Always `profileSlug`.
+4. **Treating `"proposed"` as an error.** It's a governance queue.
+5. **Forcing `source` to bypass governance.** Governance is determined by the agent user + whitelist, not by `source`. Don't set it.
+6. **Using the API key owner as `userId`.** Always pass the real human userId — the API key is often owned by a system/agent user.
+7. **Skipping the search step.** Duplicates degrade the graph more than missing data.
+8. **Forgetting that `GET /channels/personal` needs `hub-protocol.write`** scope — it's get-or-create, not a pure read.
 
-approved → return entity id, confirm
-proposed → "I've queued this for your review in Synap (proposalId: prp_...)"
-denied   → explain the reason, ask the user to act directly
-```
+## When you need more
 
----
+- Linking conventions, auto-sync table, relation types → **`linking.md`**
+- Full governance whitelist, proposal lifecycle, agent users → **`governance.md`**
+- Unstructured capture pipeline → **`capture.md`**
+- Extending the data model (new profiles, new properties) → install the **`synap-schema`** skill
+- Building views, dashboards, and bento layouts → install the **`synap-ui`** skill
 
 ## Authentication
 
 ```
 Authorization: Bearer {SYNAP_HUB_API_KEY}
-X-Workspace-Id: {SYNAP_WORKSPACE_ID}      ← optional; can also pass workspaceId in body/query
+X-Workspace-Id:  {workspaceId}            (optional; also pass in body/query)
 
-Required scopes (on the API key):
-  hub-protocol.read    → most GET endpoints
-  hub-protocol.write   → all write endpoints AND GET /channels/personal (get-or-create)
+Scopes:
+  hub-protocol.read   → most GET endpoints
+  hub-protocol.write  → all writes AND GET /channels/personal
 ```
-
----
-
-## Common Mistakes
-
-1. **Creating orphan entities** — every task/note/deal should link to at least one other entity. Use ENTITY_ID properties (auto-sync) or explicit relations
-2. **Assuming profile slugs exist** — always call `GET /profiles` first; `deal` and custom types may not be in this workspace
-3. **Using deprecated `type` field** — always `profileSlug`
-4. **Treating `"proposed"` as an error** — it's a governance queue, not a failure
-5. **Setting `source` manually to force governance** — governance is determined by your `agentUserId` and the whitelist, not `source`; just write and handle the response
-6. **Using API key owner as userId** — always pass the real human user's ID in request bodies (the API key is often `system`)
-7. **Skipping the search step** — always search before creating; duplicates degrade the graph
-8. **Forgetting that `/channels/personal` needs `hub-protocol.write`** — it's a get-or-create, not a pure read

@@ -1,0 +1,259 @@
+# View types — reference
+
+Each view type has its own `config` shape. This file covers the 12 implemented types with their required/optional fields.
+
+All views share a base shape:
+
+```ts
+{
+  name: string,
+  type: ViewType,
+  profileSlug?: string,          // which entity profile to query (required for entity views)
+  description?: string,
+  config: ViewTypeConfig         // type-specific, see below
+}
+```
+
+Common sub-objects:
+
+```ts
+// Filter — combine in arrays for AND; use { or: [...] } for OR
+type Filter = {
+  property: string;
+  op:
+    | "eq"
+    | "neq"
+    | "gt"
+    | "gte"
+    | "lt"
+    | "lte"
+    | "in"
+    | "nin"
+    | "contains"
+    | "exists";
+  value: unknown;
+};
+
+// Sort
+type Sort = { property: string; direction: "asc" | "desc" };
+
+// Column (for tabular views)
+type Column = { slug: string; width?: number; label?: string };
+```
+
+---
+
+## `table`
+
+Dense data. Sort, filter, resize columns.
+
+```ts
+config: {
+  columns: Column[],
+  filters?: Filter[],
+  sort?: Sort[],
+  pageSize?: number,         // default 50
+  groupBy?: { property: string }  // optional row grouping
+}
+```
+
+Best for: tasks with many fields, deals with pipeline data, contacts with CRM attributes.
+
+## `list`
+
+Scan-friendly rows. Shows title + 2–3 properties per row.
+
+```ts
+config: {
+  primaryField: string,      // usually "title"
+  secondaryFields: string[], // 2–3 properties shown as meta
+  filters?: Filter[],
+  sort?: Sort[]
+}
+```
+
+Best for: tasks, notes, messages, action items.
+
+## `grid`
+
+Uniform card grid.
+
+```ts
+config: {
+  cardFields: string[],      // properties shown on each card
+  filters?: Filter[],
+  sort?: Sort[],
+  density?: "compact" | "comfortable" | "spacious"
+}
+```
+
+Best for: mixed content where title + 2 properties is enough.
+
+## `gallery`
+
+Image-forward cards. Requires a property that holds an image URL.
+
+```ts
+config: {
+  imageProperty: string,     // e.g., "thumbnail", "favicon", "cover"
+  titleProperty?: string,    // default "title"
+  captionProperty?: string,
+  filters?: Filter[],
+  sort?: Sort[]
+}
+```
+
+Best for: articles, bookmarks, products, books, photos.
+
+## `kanban`
+
+Status pipeline. Requires `groupBy` on an enum/status property.
+
+```ts
+config: {
+  groupBy: { property: string },  // MUST be set — column grouping
+  cardFields: string[],
+  filters?: Filter[],
+  sort?: Sort[],
+  columnOrder?: string[]          // force column order
+}
+```
+
+Best for: tasks by status, deals by stage, drafts by workflow step.
+
+## `matrix`
+
+2-axis grid. Requires two `groupBy` properties.
+
+```ts
+config: {
+  xAxis: { property: string, buckets?: string[] | number[] },
+  yAxis: { property: string, buckets?: string[] | number[] },
+  cardFields?: string[],
+  filters?: Filter[]
+}
+```
+
+Best for: priority × urgency (Eisenhower), effort × impact, stage × owner.
+
+## `masonry` / `feed`
+
+Pinterest-style, variable-size cards. Default for Library.
+
+```ts
+config: {
+  cardFields: string[],
+  filters?: Filter[],
+  sort?: Sort[],
+  variableHeight: true      // cards size themselves to content
+}
+```
+
+Best for: mixed content types, inspiration boards, library browsing.
+
+## `calendar`
+
+Date-indexed. Requires a date property.
+
+```ts
+config: {
+  dateProperty: string,           // e.g., "dueDate", "startDate"
+  endDateProperty?: string,       // for events with duration
+  view?: "month" | "week" | "day" | "agenda",
+  titleProperty?: string,
+  colorBy?: { property: string },
+  filters?: Filter[]
+}
+```
+
+Best for: events, tasks with dueDate, drafts with publishDate.
+
+## `flow`
+
+Node-edge graph. Fully custom — mostly used for automations and mindmaps.
+
+```ts
+config: {
+  nodes: { id, type, position: {x,y}, data }[],
+  edges: { id, source, target, type? }[],
+  fitView?: boolean
+}
+```
+
+Best for: automations, workflow diagrams, mind maps, decision trees. Usually populated programmatically by the automation builder, not hand-authored.
+
+## `bento`
+
+A mixed composition of cells. See `widget-catalog.md` and `bento-recipes.md` for block kinds and ready-to-use layouts.
+
+```ts
+config: {
+  blocks: BentoBlock[],     // see bento section
+  gridColumns?: 12,         // default 12
+  rowHeight?: number        // px per grid row
+}
+```
+
+Best for: dashboards, workspace home pages, project overview pages.
+
+## `branch_tree`
+
+Hierarchical data with parent-child relationships.
+
+```ts
+config: {
+  parentProperty: string,   // e.g., "parentTaskId", "parentProjectId"
+  titleProperty?: string,
+  cardFields?: string[],
+  expandDepth?: number      // default 2
+}
+```
+
+Best for: projects with subtasks, topic hierarchies, org charts, file trees.
+
+## `whiteboard`
+
+Free-form canvas. Sparse config — most state is in the canvas itself.
+
+```ts
+config: {
+  canvasId: string,         // links to the yjs doc
+  defaultTool?: "pen" | "rect" | "arrow" | "text"
+}
+```
+
+Best for: brainstorming, sketches, visual thinking. Rarely generated by AI — user-authored.
+
+---
+
+## Picking a view type
+
+Work from the data, not from the request:
+
+| User says                       | Look at data                         | Pick                                                   |
+| ------------------------------- | ------------------------------------ | ------------------------------------------------------ |
+| "track tasks"                   | has `status` (enum)                  | `kanban`                                               |
+| "what's due this week"          | has `dueDate`                        | `calendar`                                             |
+| "my reading list"               | articles / bookmarks with thumbnails | `gallery`                                              |
+| "dashboard for X"               | mixed data, 4+ types of info         | `bento`                                                |
+| "pipeline", "stages"            | has ordered enum property            | `kanban`                                               |
+| "roadmap", "timeline"           | has start + end dates                | defer (unsupported) — use `calendar` or `list` grouped |
+| "team directory"                | people with photos                   | `gallery`                                              |
+| "urgent vs. important"          | has 2 enum dimensions                | `matrix`                                               |
+| "project hierarchy"             | has parent-child relation            | `branch_tree`                                          |
+| "everything", "library"         | mixed profiles                       | `masonry`/`feed` or `bento`                            |
+| "data", "database", "inventory" | dense, many columns                  | `table`                                                |
+
+If in doubt: `list` is the safe default for any entity type. Always better than guessing wrong.
+
+## Updating vs. creating
+
+- `POST /views` — create new view (auto-approved for agents)
+- `PATCH /views/:viewId` — update config (proposal-gated by default; the user owns their views)
+- `POST /views/:viewId/arrange` — bento-specific, rearrange blocks (auto-approved)
+
+When the user says "change my kanban to group by priority instead of status," that's a PATCH — expect a proposal. Explain this to the user.
+
+## Multiple views over the same data
+
+Views are cheap. A single `task` profile can have 10 views: kanban by status, kanban by project, calendar by dueDate, list of overdue, matrix priority × urgency, gallery of completed. Each view is one `POST /views` call. Don't try to make one mega-view that satisfies every need.

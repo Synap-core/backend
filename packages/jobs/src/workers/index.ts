@@ -77,6 +77,7 @@ import {
   handleSyncPushSupplementary,
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
 } from "./sync-push-supplementary.js";
+import { handleHydrationSummaryPost } from "./hydration-summary-post.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -124,6 +125,7 @@ const ALL_QUEUES = [
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
+  "hydration-summary-post",
 ];
 
 /**
@@ -333,6 +335,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleLinkedInBulkImport(job)
   );
   logger.info("Registered workers: telegram-bulk-import, linkedin-bulk-import");
+
+  // Hydration summary post — Orchestrator's first proactive message after
+  // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.
+  await boss.work("hydration-summary-post", async ([job]: any[]) =>
+    handleHydrationSummaryPost(job)
+  );
+  logger.info("Registered worker: hydration-summary-post");
 
   // Pod-to-pod sync (event log replication + supplementary rows + file payloads)
   await boss.work(SYNC_PUSH_QUEUE, async () => handleSyncPush());

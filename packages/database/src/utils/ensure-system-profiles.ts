@@ -503,6 +503,97 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "Linked Entities", inputType: "tags" },
       },
+      // Question / research / decision work-flow properties.
+      // Together these + project + task form the full "AI-assisted work" graph:
+      //   question → research → decision → tasks, each linked to a project.
+      {
+        slug: "questionStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["open", "exploring", "answered", "abandoned"],
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "askedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Asked at", inputType: "date" },
+      },
+      {
+        slug: "answeredByDecisionId",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Answered by", inputType: "entity-select" },
+      },
+      {
+        slug: "researchStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["ongoing", "concluded", "abandoned"],
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "conclusion",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Conclusion", inputType: "richtext" },
+      },
+      {
+        slug: "researchConfidence",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["low", "medium", "high"] },
+        uiHints: { label: "Confidence", inputType: "select" },
+      },
+      {
+        slug: "questionId",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Question", inputType: "entity-select" },
+      },
+      // Decision properties — structured architectural / product / business decisions
+      {
+        slug: "summary",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: { label: "Summary", inputType: "text" },
+      },
+      {
+        slug: "rationale",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Rationale", inputType: "richtext" },
+      },
+      {
+        slug: "alternatives",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: {
+          label: "Alternatives considered",
+          inputType: "richtext",
+        },
+      },
+      {
+        slug: "decisionStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["proposed", "accepted", "superseded", "rejected"],
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "decidedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Decided at", inputType: "date" },
+      },
+      {
+        slug: "supersededBy",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Superseded by", inputType: "entity-select" },
+      },
       {
         slug: "viewCount",
         valueType: PropertyValueType.NUMBER,
@@ -696,6 +787,43 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         },
         parentSlug: "bookmark",
       },
+      // Decision — structured architectural / product / business decision.
+      // First-class entity (not memory) so it shows up in project views,
+      // can be superseded, and links to the project it affects.
+      {
+        slug: "decision",
+        displayName: "Decision",
+        uiHints: {
+          icon: "git-branch",
+          color: "#A855F7",
+          description:
+            "A recorded decision — architectural, product, or business. Captures rationale, alternatives, and lifecycle (proposed → accepted → superseded).",
+        },
+      },
+      // Question — a substantive inquiry the user is working on figuring out.
+      // The entry point of the AI work flow: question → research → decision → tasks.
+      {
+        slug: "question",
+        displayName: "Question",
+        uiHints: {
+          icon: "help-circle",
+          color: "#0EA5E9",
+          description:
+            "A substantive question the user is investigating (not casual chatter). The starting node of research → decision workflows.",
+        },
+      },
+      // Research — an investigation artifact with sources + conclusion + confidence.
+      // Distinct from a `note` because it has process: what was consulted, what was found, how confident.
+      {
+        slug: "research",
+        displayName: "Research",
+        uiHints: {
+          icon: "microscope",
+          color: "#14B8A6",
+          description:
+            "An investigation: sources consulted, findings, confidence, and conclusion. Answers a question; informs a decision.",
+        },
+      },
     ];
 
     const createdProfiles = new Map<string, string>();
@@ -712,6 +840,9 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       "bookmark",
       "website",
       "article",
+      "decision",
+      "question",
+      "research",
     ]);
 
     // First pass: create all profiles without parent links
@@ -1039,6 +1170,66 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           },
           { slug: "tags", required: false, displayOrder: 21 },
           { slug: "description", required: false, displayOrder: 22 },
+        ],
+      },
+      // Decision — the full structured-decision record.
+      {
+        profileSlug: "decision",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "summary", required: false, displayOrder: 1 },
+          {
+            slug: "decisionStatus",
+            required: false,
+            defaultValue: "accepted",
+            displayOrder: 2,
+          },
+          { slug: "decidedAt", required: false, displayOrder: 3 },
+          { slug: "rationale", required: false, displayOrder: 4 },
+          { slug: "alternatives", required: false, displayOrder: 5 },
+          { slug: "projectId", required: false, displayOrder: 6 },
+          { slug: "supersededBy", required: false, displayOrder: 7 },
+          { slug: "tags", required: false, displayOrder: 8 },
+          { slug: "description", required: false, displayOrder: 9 },
+        ],
+      },
+      // Question — what the user is investigating.
+      {
+        profileSlug: "question",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          {
+            slug: "questionStatus",
+            required: false,
+            defaultValue: "open",
+            displayOrder: 1,
+          },
+          { slug: "askedAt", required: false, displayOrder: 2 },
+          { slug: "projectId", required: false, displayOrder: 3 },
+          { slug: "answeredByDecisionId", required: false, displayOrder: 4 },
+          { slug: "tags", required: false, displayOrder: 5 },
+          // description = why this question matters, constraints
+          { slug: "description", required: false, displayOrder: 6 },
+        ],
+      },
+      // Research — investigation artifact with sources + findings + confidence.
+      {
+        profileSlug: "research",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          {
+            slug: "researchStatus",
+            required: false,
+            defaultValue: "ongoing",
+            displayOrder: 1,
+          },
+          { slug: "questionId", required: false, displayOrder: 2 },
+          { slug: "projectId", required: false, displayOrder: 3 },
+          { slug: "conclusion", required: false, displayOrder: 4 },
+          { slug: "researchConfidence", required: false, displayOrder: 5 },
+          { slug: "tags", required: false, displayOrder: 6 },
+          // description = method, scope, any context that doesn't fit conclusion
+          { slug: "description", required: false, displayOrder: 7 },
         ],
       },
     ];

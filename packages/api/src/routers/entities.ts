@@ -31,7 +31,13 @@ import {
   DocumentRepository,
   drizzleSql,
 } from "@synap/database";
-import { entities, documents, views, workspaces } from "@synap/database/schema";
+import {
+  entities,
+  documents,
+  views,
+  workspaces,
+  entityExternalLinks,
+} from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -814,6 +820,16 @@ export const entitiesRouter = router({
         entity: z.any(),
         profile: z.any().optional(),
         effectiveProperties: z.array(z.any()).optional(),
+        /** Tracks where this entity was imported from (empty for user-created entities). */
+        externalLinks: z
+          .array(
+            z.object({
+              provider: z.string(),
+              externalId: z.string(),
+              createdAt: z.string(),
+            })
+          )
+          .optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -836,8 +852,22 @@ export const entitiesRouter = router({
 
       const typedEntity = toApiEntity(entity);
 
+      // Provenance: always include externalLinks (possibly empty) to keep
+      // client types predictable. Single-row entity ⇒ single cheap join.
+      const linkRows = await db.query.entityExternalLinks.findMany({
+        where: eq(entityExternalLinks.entityId, entity.id),
+      });
+      const externalLinks = linkRows.map((l) => ({
+        provider: l.provider,
+        externalId: l.externalId,
+        createdAt:
+          l.createdAt instanceof Date
+            ? l.createdAt.toISOString()
+            : new Date(l.createdAt as unknown as string).toISOString(),
+      }));
+
       if (!input.includeProfile) {
-        return { entity: typedEntity };
+        return { entity: typedEntity, externalLinks };
       }
 
       const database = await getDb();
@@ -848,7 +878,7 @@ export const entitiesRouter = router({
         ctx.workspaceId
       );
 
-      if (!profile) return { entity: typedEntity };
+      if (!profile) return { entity: typedEntity, externalLinks };
 
       const effectiveProperties =
         await resolutionService.getEffectiveProperties(
@@ -856,7 +886,12 @@ export const entitiesRouter = router({
           ctx.workspaceId
         );
 
-      return { entity: typedEntity, profile, effectiveProperties };
+      return {
+        entity: typedEntity,
+        profile,
+        effectiveProperties,
+        externalLinks,
+      };
     }),
 
   /**

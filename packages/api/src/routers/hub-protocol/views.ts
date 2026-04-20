@@ -183,6 +183,10 @@ export const hubViewsRouter = router({
           status: "proposed" as const,
           message: "View update proposed for review",
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
           view: null,
         };
       }
@@ -251,6 +255,10 @@ export const hubViewsRouter = router({
           status: "proposed" as const,
           message: "Bento arrangement proposed for review",
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
         };
       }
 

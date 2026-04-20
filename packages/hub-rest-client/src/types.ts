@@ -426,6 +426,27 @@ export interface HubGovernanceResult {
   proposalId?: string;
   reason?: string;
   message?: string;
+  /**
+   * Short human-readable summary of what was proposed. Present on `proposed`
+   * responses. Example: `Delete task "Q2 plan review"`.
+   */
+  summary?: string;
+  /**
+   * Reasoning — echoed from the AI's rationale or the policy's explanation
+   * of why review is needed. Present on `proposed` responses.
+   */
+  reasoning?: string;
+  /**
+   * Pod-relative path for the review UI: `/proposals/{id}`.
+   * Present on `proposed` responses.
+   */
+  reviewPath?: string;
+  /**
+   * Absolute URL for the review UI (defaults to `studio.synap.live`,
+   * overridable via `SYNAP_APP_URL` on the pod). Surface this directly to
+   * the user so they can approve without digging through the app.
+   */
+  reviewUrl?: string;
 }
 
 // ─── Write input types ────────────────────────────────────────────────────────

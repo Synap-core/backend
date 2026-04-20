@@ -194,6 +194,10 @@ export const channelsRouter = router({
         return {
           status: "proposed" as const,
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
           message: `Proposal created — user must approve importing ${input.externalSource} conversation "${input.title}".`,
         };
       }
@@ -405,6 +409,10 @@ export const channelsRouter = router({
           return {
             status: "proposed" as const,
             proposalId: perm.proposalId,
+            summary: perm.summary,
+            reasoning: perm.reasoning,
+            reviewPath: perm.reviewPath,
+            reviewUrl: perm.reviewUrl,
             message: "Waiting for user approval to join this A2AI channel.",
           };
         }

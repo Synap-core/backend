@@ -1718,6 +1718,58 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		executeWithSchema: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				properties: {
+					profileSlug: string;
+					slug: string;
+					valueType: "string" | "number" | "boolean" | "object" | "array" | "date" | "secret" | "entity_id";
+					displayName?: string | undefined;
+					constraints?: Record<string, unknown> | undefined;
+					remapTo?: string | undefined;
+				}[];
+				entities: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string | undefined;
+					properties?: Record<string, unknown> | undefined;
+					source?: string | undefined;
+					externalId?: string | undefined;
+					signals?: {
+						type: "email" | "phone" | "telegram_phone" | "linkedin_url" | "github_username" | "twitter_handle" | "website";
+						value: string;
+					}[] | undefined;
+					existingEntityId?: string | undefined;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+			};
+			output: {
+				propertiesCreated: number;
+				propertiesRemapped: number;
+				propertiesFailed: {
+					slug: string;
+					profileSlug: string;
+					reason: string;
+				}[];
+				created: {
+					tempId: string;
+					entityId: string;
+					profileSlug: string;
+					action: "created" | "updated" | "matched" | "linked";
+				}[];
+				relations: {
+					sourceEntityId: string;
+					targetEntityId: string;
+					relationType: string;
+				}[];
+			};
+			meta: object;
+		}>;
 	}>>;
 	entities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -1969,6 +2021,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entity: any;
 				profile?: any;
 				effectiveProperties?: any[] | undefined;
+				externalLinks?: {
+					provider: string;
+					externalId: string;
+					createdAt: string;
+				}[] | undefined;
 			};
 			meta: object;
 		}>;
@@ -2239,7 +2296,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -2823,6 +2880,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					rejectionReason: string | null;
 					comments: unknown;
 				}[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			output: {
+				request: UpdateRequest;
+				workspaceId: string | null;
+				sourceMessageId: string | null;
+				id: string;
+				data: unknown;
+				updatedAt: Date;
+				createdAt: Date;
+				status: "approved" | "pending" | "rejected" | "auto_approved";
+				expiresAt: Date | null;
+				createdBy: string | null;
+				threadId: string | null;
+				targetType: string;
+				targetId: string;
+				proposalType: string;
+				commandRunId: string | null;
+				agentUserId: string | null;
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				comments: unknown;
 			};
 			meta: object;
 		}>;
@@ -9165,7 +9250,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
-				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
+				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -9175,7 +9260,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "governance" | "ai" | "inbox";
+					category: "data" | "system" | "ai" | "governance" | "inbox";
 					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;

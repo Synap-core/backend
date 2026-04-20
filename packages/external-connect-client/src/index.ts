@@ -40,6 +40,12 @@ export interface NormalizedHandshakeError {
 export const DEFAULT_CONNECT_REDIRECT_PREFIXES = [
   "raycast://extensions/synap-core/synap/",
   "synap://",
+  // CLI flow: loopback HTTP callback. The CLI starts a short-lived local server
+  // on an ephemeral port and passes the full URL as redirect_uri. Loopback is
+  // safe — no external network can intercept the callback, and the port is
+  // chosen by the local process.
+  "http://127.0.0.1:",
+  "http://localhost:",
 ] as const;
 
 export function isAllowedConnectRedirectUri(

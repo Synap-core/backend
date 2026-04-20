@@ -543,6 +543,231 @@ provisionRouter.post("/reset-intelligence", async (c) => {
 //
 // Returns: { credentialsValid: boolean | null, status: string }
 
+// ============================================================================
+// POST /api/provision/setup-account
+// ============================================================================
+//
+// Sets the Kratos password for a user on this pod. Called by the Control
+// Plane after the user completes the setup-pod flow on synap.live — CP
+// validates the one-time setup token, then forwards email + password to
+// this endpoint with a CP-signed JWT (type=setup-account).
+//
+// Flow:
+//   1. Verify CP JWT (ES256 via JWKS).
+//   2. Find or create Kratos identity for `email`.
+//   3. Update identity with the user-chosen password + clear the
+//      `metadata_public.setupRequired` flag.
+//   4. Return success. The landing page then redirects the user to
+//      <pod>/admin/ where they can log in with their new password, or
+//      calls /api/handshake to open a session without a redirect.
+//
+// Why it's separate from /connect:
+//   - /connect handles CP-level provisioning config (workspace settings).
+//   - /setup-account mutates a Kratos identity's credentials.
+//   These are orthogonal operations and should not share a JWT type.
+provisionRouter.post("/setup-account", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = z
+    .object({
+      token: z.string().min(1),
+      // Password enforced here, not on the token — CP stores the token
+      // hash but never the password, so the password must arrive in the
+      // request body from the landing page setup form.
+      password: z.string().min(8).max(128),
+      name: z.string().optional(),
+    })
+    .safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+  const { token, password, name } = parsed.data;
+
+  const podPublicUrl = process.env.PUBLIC_URL;
+  const payload = await verifyCpJwt<{
+    type: string;
+    email: string;
+    podId: string;
+    sub?: string;
+  }>(token, config.server.controlPlaneUrl, podPublicUrl);
+
+  if (!payload) {
+    logger.warn("setup-account: JWT verification failed");
+    return c.json({ error: "Invalid or expired setup token" }, 401);
+  }
+  if (payload.type !== "setup-account") {
+    return c.json(
+      {
+        error: `Wrong token type: expected 'setup-account', got '${payload.type}'`,
+      },
+      400
+    );
+  }
+  const email = payload.email?.trim().toLowerCase();
+  if (!email) {
+    return c.json({ error: "Setup token missing email claim" }, 400);
+  }
+
+  const kratosAdminUrl =
+    process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+
+  try {
+    // ─── 1. Look up existing identity ───────────────────────────────────
+    let identityId: string | null = null;
+    const listResp = await fetch(
+      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
+    );
+    if (listResp.ok) {
+      const identities = (await listResp.json()) as Array<{ id: string }>;
+      if (Array.isArray(identities) && identities.length > 0) {
+        identityId = identities[0].id;
+      }
+    }
+
+    // ─── 2. Create if missing — admin-provisioned flow lands here ──────
+    if (!identityId) {
+      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_id: "default",
+          traits: { email, ...(name ? { name } : {}) },
+          credentials: {
+            password: { config: { password } },
+          },
+          metadata_public: {
+            setupRequired: false,
+            createdVia: "setup-account",
+            setupCompletedAt: new Date().toISOString(),
+          },
+          verifiable_addresses: [
+            {
+              value: email,
+              verified: true,
+              via: "email",
+              status: "completed",
+            },
+          ],
+        }),
+      });
+      if (!createResp.ok) {
+        const errBody = await createResp.text();
+        logger.error(
+          { status: createResp.status, body: errBody.slice(0, 500), email },
+          "setup-account: failed to create Kratos identity"
+        );
+        return c.json({ error: "Failed to create account" }, 500);
+      }
+      const newIdentity = (await createResp.json()) as { id: string };
+      identityId = newIdentity.id;
+      logger.info(
+        { email, identityId },
+        "setup-account: created Kratos identity"
+      );
+    } else {
+      // ─── 3. Update existing identity's password + clear setupRequired ───
+      // Kratos requires a full PUT (not PATCH) — we read the current
+      // identity to preserve traits we don't want to clobber.
+      const readResp = await fetch(
+        `${kratosAdminUrl}/admin/identities/${identityId}`
+      );
+      if (!readResp.ok) {
+        logger.error(
+          { status: readResp.status, identityId },
+          "setup-account: failed to read existing identity"
+        );
+        return c.json({ error: "Failed to fetch account" }, 500);
+      }
+      const existing = (await readResp.json()) as {
+        traits?: Record<string, unknown>;
+        metadata_public?: Record<string, unknown>;
+      };
+      const updateResp = await fetch(
+        `${kratosAdminUrl}/admin/identities/${identityId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            schema_id: "default",
+            traits: {
+              ...(existing.traits ?? {}),
+              email,
+              ...(name ? { name } : {}),
+            },
+            credentials: {
+              password: { config: { password } },
+            },
+            metadata_public: {
+              ...(existing.metadata_public ?? {}),
+              setupRequired: false,
+              setupCompletedAt: new Date().toISOString(),
+            },
+            state: "active",
+          }),
+        }
+      );
+      if (!updateResp.ok) {
+        const errBody = await updateResp.text();
+        logger.error(
+          {
+            status: updateResp.status,
+            body: errBody.slice(0, 500),
+            identityId,
+          },
+          "setup-account: failed to update Kratos identity"
+        );
+        return c.json({ error: "Failed to update account" }, 500);
+      }
+      logger.info(
+        { email, identityId },
+        "setup-account: updated Kratos identity password"
+      );
+
+      // Invalidate every existing session for this identity — a stolen
+      // session cookie must NOT survive a password rotation. New identities
+      // don't need this (they have no sessions yet), only the update-existing
+      // branch. Kratos returns 204 on success; 4xx on unknown identity.
+      // Non-fatal: if this fails we still return success to the user —
+      // they've updated their password, worst case a stolen session is
+      // valid for a few more hours until Kratos's natural TTL kicks in.
+      const wipeSessionsResp = await fetch(
+        `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
+        { method: "DELETE" }
+      ).catch((err) => {
+        logger.warn(
+          { err, identityId },
+          "setup-account: failed to invalidate existing sessions after password change"
+        );
+        return null;
+      });
+      if (
+        wipeSessionsResp &&
+        !wipeSessionsResp.ok &&
+        wipeSessionsResp.status !== 404
+      ) {
+        logger.warn(
+          { status: wipeSessionsResp.status, identityId },
+          "setup-account: DELETE /admin/identities/:id/sessions returned non-OK"
+        );
+      } else if (wipeSessionsResp?.ok) {
+        logger.info(
+          { identityId },
+          "setup-account: invalidated all sessions after password change"
+        );
+      }
+    }
+
+    return c.json({
+      success: true,
+      email,
+      // Return the pod URL so the landing page can show a "you can now log in" CTA
+      podUrl: podPublicUrl ?? null,
+    });
+  } catch (err) {
+    logger.error({ err, email }, "setup-account: unexpected error");
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
 provisionRouter.post("/validate-credentials", async (c) => {
   const authHeader = c.req.header("Authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) {

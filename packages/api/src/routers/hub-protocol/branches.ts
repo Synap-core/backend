@@ -96,6 +96,10 @@ export const branchesRouter = router({
           status: "proposed" as const,
           channelId: null,
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
           message: "Branch creation proposed, awaiting approval",
         };
       }
@@ -189,6 +193,10 @@ export const branchesRouter = router({
         return {
           status: "proposed" as const,
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
           message: "Branch merge proposed, awaiting approval",
         };
       }
