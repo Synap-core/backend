@@ -14,10 +14,13 @@ export default function PostBootstrapOpenClawBanner() {
   const navigate = useNavigate();
   const [show, setShow] = useState(false);
 
-  const overviewQuery = trpc.openclawAdmin.getOverview.useQuery(undefined, {
-    enabled: show,
-    staleTime: 60_000,
-  });
+  const overviewQuery = trpc.intelligenceRegistry.getOpenClawOverview.useQuery(
+    undefined,
+    {
+      enabled: show,
+      staleTime: 60_000,
+    }
+  );
 
   useEffect(() => {
     try {

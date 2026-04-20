@@ -48,7 +48,6 @@ import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { feedsRouter } from "./routers/feeds.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
-import { openclawAdminRouter } from "./routers/openclaw-admin.js";
 import { sourceConfigsRouter } from "./routers/source-configs.js";
 
 /**
@@ -105,7 +104,6 @@ export const coreRouter = router({
   sync: syncManagementRouter,
   feeds: feedsRouter,
   trustedIssuers: trustedIssuersRouter,
-  openclawAdmin: openclawAdminRouter,
   sourceConfigs: sourceConfigsRouter,
 });
 
