@@ -1120,6 +1120,7 @@ export const intelligenceRouter = router({
           createdByUserId: ctx.userId ?? "system",
           capabilities: entry.agentCapabilities,
         } satisfies AgentMetadata,
+        kratosIdentityId: `agent:${agentId}`,
         timezone: "UTC",
         locale: "en",
       });

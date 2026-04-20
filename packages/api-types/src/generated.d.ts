@@ -9852,18 +9852,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentUserId: string | null;
 					agentEmail: string | null;
 					activeHubKeys: number;
-					serviceId: string | null;
+					serviceId: null;
 					displayName: string;
-					version: string | null;
-					webhookUrl: string | null;
-					mcpEndpoint: string | null;
+					version: null;
+					webhookUrl: null;
+					mcpEndpoint: null;
 					mcpApproved: boolean;
 					health: {
-						lastCheckAt: Date | null;
+						lastCheckAt: {} | null;
 						status: string;
 					};
 					links: {
-						hostedUiUrl: string | null;
+						hostedUiUrl: string;
+						docsUrl: string;
+					} | {
+						hostedUiUrl: null;
 						docsUrl: string;
 					};
 				};
@@ -9884,15 +9887,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				ok: boolean;
-				status: "not_registered";
+				status: "not_provisioned";
 				checkedAt: string;
 				message: string;
-				serviceId?: undefined;
 			} | {
 				ok: boolean;
-				status: "healthy" | "unhealthy";
+				status: "connected";
 				checkedAt: string;
-				serviceId: string;
 				message: string;
 			};
 			meta: object;
@@ -9905,17 +9906,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentProvisioned: boolean;
 					serviceRegistered: boolean;
 					webhookReachable: boolean;
-					mcpEndpointPresent: boolean;
 					mcpApproved: boolean;
 				};
 				metadata: {
-					serviceId: string | null;
-					version: string | null;
-					webhookUrl: string | null;
-					lastHealthStatus: string | null;
-					lastHealthCheck: Date | null;
+					keyId: string | null;
+					createdAt: string | null;
+					lastUsedAt: string | null;
+					usageCount: number;
+					scopes: string[];
 				};
 				message: string;
+			};
+			meta: object;
+		}>;
+		getDockerCommand: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				status: "not_provisioned";
+				message: string;
+				dockerCommand: null;
+				placeholderApiKey?: undefined;
+			} | {
+				status: "provisioned";
+				message: string;
+				dockerCommand: string | null;
+				placeholderApiKey: string | null;
+			};
+			meta: object;
+		}>;
+		provisionOpenClaw: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				status: "already_provisioned";
+				message: string;
+				instructions: string;
+			} | {
+				status: "ready_to_provision";
+				message: string;
+				instructions?: undefined;
 			};
 			meta: object;
 		}>;
@@ -9936,6 +9964,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automated: boolean;
 				action: "restart" | "safe_update" | "rollback";
 				commands: string[];
+				message: string;
+			};
+			meta: object;
+		}>;
+		getStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				provisioned: boolean;
+				method: string | null;
+				newKeyId: string | null;
+				oldAgentId: string | null;
+				oldAgentEmail: string | null;
 				message: string;
 			};
 			meta: object;

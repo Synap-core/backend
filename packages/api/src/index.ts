@@ -461,6 +461,13 @@ registerRouter("feeds", feedsRouter, {
   description: "Unified feed management (RSS and Proactive feeds)",
 });
 
+import { openclawAdminRouter } from "./routers/openclaw-admin.js";
+registerRouter("openclawAdmin", openclawAdminRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "OpenClaw control center for admin UI",
+});
+
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };

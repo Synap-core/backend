@@ -83,6 +83,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sq
 # Copy the built server dist from the builder stage
 COPY --from=builder --chown=nodejs:nodejs /app/apps/api/dist ./dist/
 
+# Copy missing routers from packages/api (openclaw-admin is in packages/api but not in apps/api)
+COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/routers/openclaw-admin.js ./dist/routers/
+
 # Copy the provision-agent script (built from packages/api by the separate tsup step)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./dist/scripts/
 

@@ -629,6 +629,7 @@ export const intelligenceRegistryRouter = router({
           createdByUserId: ctx.userId,
           capabilities: entry.agentCapabilities,
         } satisfies NonNullable<(typeof users.$inferInsert)["agentMetadata"]>,
+        kratosIdentityId: `agent:${agentId}`,
         timezone: "UTC",
         locale: "en",
       });
