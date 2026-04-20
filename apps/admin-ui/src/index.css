@@ -1,17 +1,49 @@
 @import "@heroui/styles";
 
+/* HeroUI v3 Legacy Color Compatibility
+ * Add back the v2 numbered default scale (default-50 through default-900)
+ * that was removed in v3. This is needed for existing code.
+ */
 @layer theme {
-  :root {
-    --admin-fluid-surface: color-mix(in oklab, var(--color-content1) 92%, var(--color-primary) 8%);
-    --admin-fluid-surface-soft: color-mix(in oklab, var(--color-default-50) 90%, var(--color-primary) 10%);
-    --admin-fluid-selected: color-mix(in oklab, var(--color-default-100) 76%, var(--color-primary) 12%);
+  :root,
+  [data-theme="light"] {
+    --color-default-50: oklch(0.984 0.003 264.531);
+    --color-default-100: oklch(0.968 0.006 264.531);
+    --color-default-200: oklch(0.945 0.012 264.531);
+    --color-default-300: oklch(0.91 0.022 264.531);
+    --color-default-400: oklch(0.834 0.041 264.531);
+    --color-default-500: oklch(0.716 0.101 264.531);
+    --color-default-600: oklch(0.596 0.096 264.531);
+    --color-default-700: oklch(0.488 0.086 264.531);
+    --color-default-800: oklch(0.403 0.063 264.531);
+    --color-default-900: oklch(0.336 0.047 264.531);
   }
 
   .dark,
   [data-theme="dark"] {
-    --admin-fluid-surface: color-mix(in oklab, var(--color-content1) 88%, var(--color-primary) 12%);
-    --admin-fluid-surface-soft: color-mix(in oklab, var(--color-content2) 90%, var(--color-primary) 10%);
-    --admin-fluid-selected: color-mix(in oklab, var(--color-default-200) 68%, var(--color-primary) 14%);
+    --color-default-50: oklch(0.264 0.024 266.959);
+    --color-default-100: oklch(0.295 0.031 266.959);
+    --color-default-200: oklch(0.33 0.039 266.959);
+    --color-default-300: oklch(0.38 0.051 266.959);
+    --color-default-400: oklch(0.485 0.07 266.959);
+    --color-default-500: oklch(0.59 0.088 266.959);
+    --color-default-600: oklch(0.699 0.096 266.959);
+    --color-default-700: oklch(0.785 0.088 266.959);
+    --color-default-800: oklch(0.856 0.069 266.959);
+    --color-default-900: oklch(0.922 0.042 266.959);
+  }
+
+  @theme inline {
+    --color-default-50: var(--color-default-50);
+    --color-default-100: var(--color-default-100);
+    --color-default-200: var(--color-default-200);
+    --color-default-300: var(--color-default-300);
+    --color-default-400: var(--color-default-400);
+    --color-default-500: var(--color-default-500);
+    --color-default-600: var(--color-default-600);
+    --color-default-700: var(--color-default-700);
+    --color-default-800: var(--color-default-800);
+    --color-default-900: var(--color-default-900);
   }
 }
 
@@ -66,7 +98,7 @@ body {
 @layer components {
   .command-palette-group [cmdk-group-heading] {
     @apply px-1 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em];
-    color: color-mix(in oklab, var(--color-default-500) 75%, var(--color-primary) 25%);
+    color: var(--color-default-500);
   }
 
   .command-palette-section:first-child .command-palette-group [cmdk-group-heading] {
@@ -78,16 +110,12 @@ body {
   }
 
   .command-palette-item[data-selected="true"] {
-    background-color: var(--admin-fluid-selected);
-    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-primary) 16%, transparent);
+    background-color: var(--color-content2);
+    box-shadow: inset 0 0 0 1px var(--color-primary);
   }
 
   .command-palette-item:hover {
-    background-color: color-mix(
-      in oklab,
-      var(--color-default-100) 75%,
-      var(--color-primary) 4%
-    );
+    background-color: var(--color-content2);
   }
 }
 
@@ -115,13 +143,13 @@ body {
 
   .prose-docs p {
     @apply mb-3;
-    color: var(--color-default-700);
+    color: var(--color-default-600);
   }
 
   .prose-docs ul,
   .prose-docs ol {
     @apply mb-3 ml-5 list-outside;
-    color: var(--color-default-700);
+    color: var(--color-default-600);
   }
 
   .prose-docs ul {
@@ -139,7 +167,7 @@ body {
   .prose-docs blockquote {
     @apply mb-3 border-l-2 pl-3 italic;
     border-left-color: var(--color-default-300);
-    color: var(--color-default-600);
+    color: var(--color-default-500);
   }
 
   .prose-docs hr {

@@ -38,8 +38,8 @@ export function NavListItemButton({
           ? "justify-center rounded-2xl p-2.5"
           : "gap-3 rounded-xl px-3 py-2.5",
         active
-          ? "bg-[var(--admin-fluid-selected)] font-semibold text-foreground shadow-sm"
-          : "text-default-700 hover:bg-default-100/90 hover:text-foreground"
+          ? "bg-content2 font-semibold text-foreground shadow-sm"
+          : "text-default-600 hover:bg-default-100 hover:text-foreground"
       )}
       aria-current={active ? "page" : undefined}
     >

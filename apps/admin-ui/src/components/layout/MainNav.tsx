@@ -15,8 +15,11 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconFileText,
+  IconMoon,
+  IconSun,
 } from "@tabler/icons-react";
 import { useWorkspace } from "../../lib/workspace";
+import { useThemeContext } from "../../main";
 import SearchCommandButton from "./SearchCommandButton";
 import { NavListSectionBlock, type NavListSection } from "./NavList";
 
@@ -94,6 +97,7 @@ export default function MainNav({
   const location = useLocation();
   const { workspaceId, workspaceRole, workspaces, setWorkspace } =
     useWorkspace();
+  const { theme, toggleTheme } = useThemeContext();
 
   const isAdmin = workspaceRole === "owner" || workspaceRole === "admin";
   const podNav = isAdmin
@@ -123,7 +127,7 @@ export default function MainNav({
 
   return (
     <nav
-      className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-linear-to-b from-[var(--admin-fluid-surface)] to-[var(--admin-fluid-surface-soft)] px-3 py-3"
+      className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-content2 px-3 py-3"
       aria-label="Main navigation"
     >
       <div
@@ -145,7 +149,7 @@ export default function MainNav({
           "min-h-0 flex-1 overflow-y-auto",
           collapsed
             ? "space-y-2"
-            : "space-y-3 rounded-2xl border border-divider/70 bg-[var(--admin-fluid-surface)] p-2 shadow-sm"
+            : "space-y-3 rounded-2xl border border-divider/70 bg-content1 p-2 shadow-sm"
         )}
       >
         {podNav.map((section) => (
@@ -201,6 +205,43 @@ export default function MainNav({
       </div>
 
       <div className="mt-auto shrink-0 space-y-2 border-t border-divider pt-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "w-full rounded-xl text-default-500",
+            collapsed
+              ? "mx-auto h-9 w-9 min-w-0 rounded-2xl border border-divider bg-default-50 px-0 shadow-sm"
+              : "justify-start"
+          )}
+          aria-label={
+            theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+          }
+          onPress={toggleTheme}
+        >
+          {collapsed ? (
+            theme === "dark" ? (
+              <IconSun size={20} />
+            ) : (
+              <IconMoon size={20} />
+            )
+          ) : (
+            <span className="inline-flex items-center gap-2">
+              {theme === "dark" ? (
+                <>
+                  <IconSun size={18} />
+                  <span className="text-xs">Light mode</span>
+                </>
+              ) : (
+                <>
+                  <IconMoon size={18} />
+                  <span className="text-xs">Dark mode</span>
+                </>
+              )}
+            </span>
+          )}
+        </Button>
+
         {onToggleCollapsed ? (
           <Button
             variant="ghost"

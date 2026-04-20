@@ -1,4 +1,10 @@
-import { StrictMode } from "react";
+import {
+  StrictMode,
+  useEffect,
+  useState,
+  createContext,
+  useContext,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@heroui/react";
@@ -9,6 +15,61 @@ import GlobalErrorBoundary from "./components/error/GlobalErrorBoundary";
 import { AuthProvider } from "./lib/auth";
 import { WorkspaceProvider } from "./lib/workspace";
 import "./index.css";
+
+const THEME_KEY = "synap-admin-theme";
+
+function getSystemTheme(): "light" | "dark" {
+  if (typeof window === "undefined" || !window.matchMedia) return "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function getSavedTheme(): "light" | "dark" | null {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function useTheme() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    return getSavedTheme() ?? getSystemTheme();
+  });
+
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.remove("light", "dark");
+    html.classList.add(theme);
+    html.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e: MediaQueryListEvent) => {
+      if (getSavedTheme() === null) {
+        setTheme(e.matches ? "dark" : "light");
+      }
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
+
+  return {
+    theme,
+    setTheme,
+    toggleTheme: () => setTheme((t) => (t === "light" ? "dark" : "light")),
+  };
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +91,27 @@ function renderFatal(message: string, detail?: string) {
   console.error("[admin-ui bootstrap]", message, detail ?? "");
 }
 
+function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+}
+
+const ThemeContext = createContext<{
+  theme: "light" | "dark";
+  toggleTheme: () => void;
+} | null>(null);
+
+export function useThemeContext() {
+  const ctx = useContext(ThemeContext);
+  if (!ctx)
+    throw new Error("useThemeContext must be used within ThemeProvider");
+  return ctx;
+}
+
 const rootEl = document.getElementById("root");
 if (!rootEl) {
   renderFatal("Missing #root element.");
@@ -41,25 +123,33 @@ if (!rootEl) {
     pathname === "/admin/kratos" ||
     pathname === "/admin/bootstrap";
 
+  // Apply theme immediately to avoid flash
+  const initialTheme = getSavedTheme() ?? getSystemTheme();
+  const html = document.documentElement;
+  html.classList.remove("light", "dark");
+  html.classList.add(initialTheme);
+  html.setAttribute("data-theme", initialTheme);
+
   try {
     createRoot(rootEl).render(
       <StrictMode>
         <GlobalErrorBoundary>
           <TRPCProvider client={trpcClient} queryClient={queryClient}>
             <QueryClientProvider client={queryClient}>
-              {/* ToastRegion renders null when the queue is empty — keep it a sibling, not a parent of the app. */}
               <ToastProvider placement="top end" maxVisibleToasts={4} />
-              <BrowserRouter basename="/admin">
-                {isPublicAdminPath ? (
-                  <App />
-                ) : (
-                  <AuthProvider>
-                    <WorkspaceProvider>
-                      <App />
-                    </WorkspaceProvider>
-                  </AuthProvider>
-                )}
-              </BrowserRouter>
+              <ThemeProvider>
+                <BrowserRouter basename="/admin">
+                  {isPublicAdminPath ? (
+                    <App />
+                  ) : (
+                    <AuthProvider>
+                      <WorkspaceProvider>
+                        <App />
+                      </WorkspaceProvider>
+                    </AuthProvider>
+                  )}
+                </BrowserRouter>
+              </ThemeProvider>
             </QueryClientProvider>
           </TRPCProvider>
         </GlobalErrorBoundary>
