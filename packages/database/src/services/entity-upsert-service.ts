@@ -59,7 +59,12 @@ export interface EntityUpsertInput {
   externalId: string;
   /** Identity signals extracted from this record — used for cross-source matching. */
   signals: IdentitySignal[];
-  workspaceId: string;
+  /**
+   * Workspace context for the upsert. Pass `null` for pod-wide profiles
+   * (entityScope='pod') — EntityRepository resolves the effective scope from
+   * the profile and may still persist with `workspace_id = null`.
+   */
+  workspaceId: string | null;
   userId: string;
 }
 

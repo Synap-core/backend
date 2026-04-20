@@ -20,6 +20,10 @@ import {
   RelationRepository,
   RelationDefRepository,
   ProfileResolutionService,
+  PropertyDefRepository,
+  EntityUpsertService,
+  PropertyValueType,
+  type IdentitySignal,
 } from "@synap/database";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
@@ -598,5 +602,376 @@ export const captureRouter = router({
       }
 
       return { created, relations: createdRelations };
+    }),
+
+  // ── executeWithSchema (batch property_def create + entity upsert) ──────
+  //
+  // Three-layer import pipeline step: parser proposes a schema (properties)
+  // and a batch of entities; this endpoint creates the missing PropertyDefs
+  // first, then upserts entities through EntityUpsertService (cross-source
+  // dedup via identity_signals), then wires relations.
+  //
+  // Unlike `execute`, entities here go through EntityUpsertService so that
+  // re-imports from the same or a different source collapse onto one entity.
+  // Property defs can be remapped (`remapTo`) when the parser suggests a
+  // new slug that a workspace already has a canonical name for.
+  executeWithSchema: podProcedure
+    .input(
+      z.object({
+        properties: z.array(
+          z.object({
+            profileSlug: z.string(),
+            slug: z.string(),
+            displayName: z.string().optional(),
+            valueType: z.enum([
+              "string",
+              "number",
+              "boolean",
+              "date",
+              "entity_id",
+              "array",
+              "object",
+              "secret",
+            ]),
+            constraints: z.record(z.string(), z.unknown()).optional(),
+            /** When present, remap incoming property to this existing slug instead of creating a new def. */
+            remapTo: z.string().optional(),
+          })
+        ),
+        entities: z.array(
+          z.object({
+            tempId: z.string(),
+            profileSlug: z.string(),
+            title: z.string(),
+            description: z.string().optional(),
+            properties: z.record(z.string(), z.unknown()).optional(),
+            /** Provenance from parser — used for dedup + audit trail. */
+            source: z.string().optional(),
+            externalId: z.string().optional(),
+            signals: z
+              .array(
+                z.object({
+                  type: z.enum([
+                    "email",
+                    "phone",
+                    "telegram_phone",
+                    "linkedin_url",
+                    "github_username",
+                    "twitter_handle",
+                    "website",
+                  ]),
+                  value: z.string(),
+                })
+              )
+              .optional(),
+            existingEntityId: z.string().uuid().optional(),
+          })
+        ),
+        relations: z.array(
+          z.object({
+            sourceTempId: z.string(),
+            targetTempId: z.string(),
+            relationType: z.string(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      // workspaceId is optional — pod-wide profiles accept null, workspace
+      // scoped profiles will throw inside EntityRepository.create.
+      const workspaceId = ctx.workspaceId;
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const profileService = new ProfileResolutionService(database);
+      const propDefRepo = new PropertyDefRepository(database);
+      const upsertService = new EntityUpsertService(database, eventRepo);
+      const relationRepo = new RelationRepository(database, eventRepo);
+
+      // ── Phase 1: property defs ────────────────────────────────────────────
+      // remap[profileSlug][fromSlug] = toSlug — applied to entity properties
+      const remap: Record<string, Record<string, string>> = {};
+      let propertiesCreated = 0;
+      let propertiesRemapped = 0;
+      const propertiesFailed: Array<{
+        slug: string;
+        profileSlug: string;
+        reason: string;
+      }> = [];
+
+      // Cache profileSlug → profileId lookups to avoid repeated resolution
+      const profileIdCache = new Map<string, string | null>();
+      const resolveProfileId = async (slug: string): Promise<string | null> => {
+        if (profileIdCache.has(slug)) return profileIdCache.get(slug) ?? null;
+        const profile = await profileService.resolveProfile(
+          slug,
+          userId,
+          workspaceId
+        );
+        const id = profile?.id ?? null;
+        profileIdCache.set(slug, id);
+        return id;
+      };
+
+      for (const prop of input.properties) {
+        if (prop.remapTo) {
+          remap[prop.profileSlug] ??= {};
+          remap[prop.profileSlug][prop.slug] = prop.remapTo;
+          propertiesRemapped++;
+          continue;
+        }
+
+        try {
+          const profileId = await resolveProfileId(prop.profileSlug);
+          if (!profileId) {
+            propertiesFailed.push({
+              slug: prop.slug,
+              profileSlug: prop.profileSlug,
+              reason: `profile not found: ${prop.profileSlug}`,
+            });
+            continue;
+          }
+
+          const uiHints: Record<string, unknown> = {};
+          if (prop.displayName) uiHints.displayName = prop.displayName;
+
+          await propDefRepo.create({
+            slug: prop.slug,
+            valueType: prop.valueType as PropertyValueType,
+            constraints: prop.constraints,
+            uiHints: Object.keys(uiHints).length > 0 ? uiHints : undefined,
+            profileId,
+            workspaceId,
+          });
+          propertiesCreated++;
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          logger.warn(
+            { err, slug: prop.slug, profileSlug: prop.profileSlug },
+            "Property def creation failed, continuing batch"
+          );
+          propertiesFailed.push({
+            slug: prop.slug,
+            profileSlug: prop.profileSlug,
+            reason,
+          });
+        }
+      }
+
+      // ── Phase 2: entities (through EntityUpsertService) ───────────────────
+      const tempToReal: Record<string, string> = {};
+      const created: Array<{
+        tempId: string;
+        entityId: string;
+        profileSlug: string;
+        action: "created" | "updated" | "matched" | "linked";
+      }> = [];
+
+      for (const entity of input.entities) {
+        if (entity.existingEntityId) {
+          tempToReal[entity.tempId] = entity.existingEntityId;
+          created.push({
+            tempId: entity.tempId,
+            entityId: entity.existingEntityId,
+            profileSlug: entity.profileSlug,
+            action: "linked",
+          });
+          continue;
+        }
+
+        // Apply remap to incoming property keys.
+        const profileRemap = remap[entity.profileSlug];
+        const rawProps = entity.properties ?? {};
+        const properties: Record<string, unknown> = profileRemap
+          ? Object.fromEntries(
+              Object.entries(rawProps).map(([k, v]) => [
+                profileRemap[k] ?? k,
+                v,
+              ])
+            )
+          : rawProps;
+
+        const source = entity.source ?? "import";
+        const externalId = entity.externalId ?? entity.tempId;
+        const signals: IdentitySignal[] = entity.signals ?? [];
+
+        try {
+          // workspaceId may be null — pod-wide profiles resolve entityScope
+          // inside EntityRepository and may still persist with workspace_id=null.
+          const result = await upsertService.upsert({
+            profileSlug: entity.profileSlug,
+            title: entity.title,
+            properties,
+            source,
+            externalId,
+            signals,
+            workspaceId,
+            userId,
+          });
+          tempToReal[entity.tempId] = result.entity.id;
+          created.push({
+            tempId: entity.tempId,
+            entityId: result.entity.id,
+            profileSlug: entity.profileSlug,
+            action: result.action,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, tempId: entity.tempId, profileSlug: entity.profileSlug },
+            "Entity upsert failed, skipping"
+          );
+        }
+      }
+
+      // ── Phase 3: relations (mirror capture.execute) ───────────────────────
+      const createdRelations: Array<{
+        sourceEntityId: string;
+        targetEntityId: string;
+        relationType: string;
+      }> = [];
+
+      const relDefRepo = new RelationDefRepository(database);
+      let validRelationSlugs: Set<string>;
+      if (workspaceId) {
+        try {
+          const allDefs = await relDefRepo.list(workspaceId);
+          validRelationSlugs = new Set(allDefs.map((d) => d.slug));
+        } catch {
+          validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
+        }
+      } else {
+        validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
+      }
+
+      for (const rel of input.relations) {
+        const sourceId = tempToReal[rel.sourceTempId];
+        const targetId = tempToReal[rel.targetTempId];
+        if (!sourceId || !targetId || sourceId === targetId) continue;
+
+        const relationType = validRelationSlugs.has(rel.relationType)
+          ? rel.relationType
+          : FALLBACK_RELATION_TYPE;
+
+        try {
+          await relationRepo.create(
+            {
+              id: randomUUID(),
+              sourceEntityId: sourceId,
+              targetEntityId: targetId,
+              type: relationType,
+              workspaceId,
+              userId,
+            },
+            userId
+          );
+          createdRelations.push({
+            sourceEntityId: sourceId,
+            targetEntityId: targetId,
+            relationType,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, sourceId, targetId, relationType },
+            "Relation creation failed, skipping"
+          );
+        }
+      }
+
+      logger.info(
+        {
+          userId,
+          propertiesCreated,
+          propertiesRemapped,
+          propertiesFailed: propertiesFailed.length,
+          entitiesCreated: created.filter((c) => c.action === "created").length,
+          entitiesMatched: created.filter((c) => c.action === "matched").length,
+          entitiesUpdated: created.filter((c) => c.action === "updated").length,
+          entitiesLinked: created.filter((c) => c.action === "linked").length,
+          relationsCreated: createdRelations.length,
+        },
+        "Capture executeWithSchema completed"
+      );
+
+      // Emit capture.complete event (same contract as capture.execute)
+      if (created.length > 0) {
+        const captureEventId = _captureUUID();
+        const entityIds = created.map((c) => c.entityId);
+        const profileSlugs = [...new Set(created.map((c) => c.profileSlug))];
+        const eventData = {
+          workspaceId: workspaceId ?? undefined,
+          entityIds,
+          profileSlugs,
+          entityCount: created.filter((c) => c.action !== "linked").length,
+          linkedCount: created.filter((c) => c.action === "linked").length,
+        };
+
+        emitSideEffects({
+          subjectType: "capture",
+          action: "complete",
+          subjectId: captureEventId,
+          userId,
+          workspaceId: workspaceId ?? undefined,
+          data: eventData,
+        }).catch(() => {}); // fire-and-forget
+
+        eventRepository
+          .append({
+            id: captureEventId,
+            version: "v1",
+            type: "capture.complete.completed",
+            subjectType: "capture",
+            data: eventData,
+            userId,
+            source: "api",
+            timestamp: new Date(),
+          })
+          .catch(() => {}); // non-blocking
+
+        // Hydration welcome — Gap 3 of onboarding: Orchestrator posts a short
+        // proactive summary in the user's personal channel after they finish
+        // the import review. Handled async by the hydration-summary-post worker
+        // (delayed ~6s so /home renders first). Fire-and-forget.
+        //
+        // Aggregate per-profile + per-source counts and new-property counts
+        // from the input + created arrays so the worker can render a
+        // specific, human-tuned message without hitting the DB.
+        const entitiesByProfile: Record<string, number> = {};
+        for (const c of created) {
+          entitiesByProfile[c.profileSlug] =
+            (entitiesByProfile[c.profileSlug] ?? 0) + 1;
+        }
+
+        const sourcesSummary: Record<string, number> = {};
+        for (const e of input.entities) {
+          const src = e.source ?? "import";
+          sourcesSummary[src] = (sourcesSummary[src] ?? 0) + 1;
+        }
+
+        emitSideEffects({
+          subjectType: "hydration",
+          action: "imported",
+          subjectId: randomUUID(),
+          userId,
+          workspaceId: workspaceId ?? undefined,
+          data: {
+            entitiesByProfile,
+            sourcesSummary,
+            propertiesCreated,
+            totalCreated: created.filter((c) => c.action === "created").length,
+            totalMatched: created.filter(
+              (c) => c.action === "matched" || c.action === "linked"
+            ).length,
+          },
+        }).catch(() => {}); // fire-and-forget
+      }
+
+      return {
+        propertiesCreated,
+        propertiesRemapped,
+        propertiesFailed,
+        created,
+        relations: createdRelations,
+      };
     }),
 });
