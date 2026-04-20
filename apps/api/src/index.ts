@@ -429,7 +429,9 @@ app.post("/api/handshake", async (c) => {
     const kratosAdminUrl =
       process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
 
+    // ──────────────────────────────────────────────────────────────────
     // 1. Find existing Kratos identity by email
+    // ──────────────────────────────────────────────────────────────────
     let identityId: string | null = null;
 
     const listResp = await fetch(
@@ -440,13 +442,41 @@ app.post("/api/handshake", async (c) => {
       const identities = (await listResp.json()) as Array<{ id: string }>;
       if (Array.isArray(identities) && identities.length > 0) {
         identityId = identities[0].id;
-        apiLogger.info({ email, identityId }, "Found existing Kratos identity");
+        apiLogger.info(
+          { email, identityId },
+          "Handshake: found existing Kratos identity"
+        );
       }
     }
 
-    // 2. If no identity, create one (provisioning new cloud user on this pod)
+    // ──────────────────────────────────────────────────────────────────
+    // 2. If no identity, create one with NO usable password.
+    //
+    // Previously we derived a password via HMAC(JWT_SECRET, email) and
+    // also force-PUT-overwrote it on every handshake. That meant:
+    //   (a) if JWT_SECRET leaked, every user's password was trivially
+    //       computable — expanding attack surface far beyond "pod
+    //       compromise = pod compromise";
+    //   (b) users could never set a real password, because the next
+    //       handshake would wipe it.
+    //
+    // New model: handshake creates an identity in a "needs-setup" state
+    // (metadata.setupRequired=true). The session is still materialized
+    // via Kratos admin session creation (step 3) — no password needed.
+    // The user later sets a real password via the /api/provision/setup-
+    // account flow (CP → pod JWT with email+password). From that point
+    // forward they can log in directly at <pod>/admin/ without CP.
+    // ──────────────────────────────────────────────────────────────────
     if (!identityId) {
-      apiLogger.info({ email }, "Creating new Kratos identity for cloud user");
+      apiLogger.info(
+        { email },
+        "Handshake: creating new Kratos identity (setup required)"
+      );
+
+      // Random placeholder password the user can never know — present
+      // only because Kratos requires a password credential slot; will
+      // be replaced when the user completes setup.
+      const placeholderPassword = crypto.randomBytes(32).toString("base64url");
 
       const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
         method: "POST",
@@ -456,18 +486,16 @@ app.post("/api/handshake", async (c) => {
           traits: { email, ...(name ? { name } : {}) },
           credentials: {
             password: {
-              config: {
-                // Deterministic password derived from pod secret + email
-                // Used by the handshake to create a login session via self-service flow
-                password: crypto
-                  .createHmac(
-                    "sha256",
-                    process.env.JWT_SECRET || "synap-pod-default"
-                  )
-                  .update(email)
-                  .digest("hex"),
-              },
+              config: { password: placeholderPassword },
             },
+          },
+          metadata_public: {
+            // Marks that this identity has not gone through the
+            // password-setup flow yet. Clients can surface a "set your
+            // password" prompt when this is true.
+            setupRequired: true,
+            createdVia: "handshake",
+            createdAt: new Date().toISOString(),
           },
           verifiable_addresses: [
             {
@@ -491,86 +519,67 @@ app.post("/api/handshake", async (c) => {
 
       const newIdentity = (await createResp.json()) as { id: string };
       identityId = newIdentity.id;
-      apiLogger.info({ email, identityId }, "Created Kratos identity");
-    }
-
-    // 3. Create a Kratos session via self-service login flow
-    //    (admin session creation is not available in Kratos OSS v1.3+)
-    const kratosPublicUrl =
-      process.env.KRATOS_PUBLIC_URL || "http://kratos:4433";
-
-    // Derive the same deterministic password used at identity creation
-    const derivedPassword = crypto
-      .createHmac("sha256", process.env.JWT_SECRET || "synap-pod-default")
-      .update(email)
-      .digest("hex");
-
-    // For existing users created with a random password (before this fix),
-    // update their password via admin API so login works
-    await fetch(`${kratosAdminUrl}/admin/identities/${identityId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        schema_id: "default",
-        traits: { email, ...(name ? { name } : {}) },
-        credentials: {
-          password: { config: { password: derivedPassword } },
-        },
-        state: "active",
-      }),
-    }).catch(() => {
-      // Non-fatal — password may already be correct for new users
-    });
-
-    // Step 3a: Initiate a native (API) login flow
-    const flowResp = await fetch(`${kratosPublicUrl}/self-service/login/api`);
-    if (!flowResp.ok) {
-      apiLogger.error(
-        { status: flowResp.status },
-        "Failed to create Kratos login flow"
+      apiLogger.info(
+        { email, identityId },
+        "Handshake: created Kratos identity"
       );
-      return c.json({ error: "Failed to create login flow" }, 500);
     }
-    const flow = (await flowResp.json()) as {
-      id: string;
-      ui: { action: string };
-    };
 
-    // Step 3b: Submit login credentials
-    const loginResp = await fetch(flow.ui.action, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        method: "password",
-        identifier: email,
-        password: derivedPassword,
-      }),
-    });
+    // ──────────────────────────────────────────────────────────────────
+    // 3. Create a Kratos session via ADMIN API — no password needed.
+    //
+    // Kratos v1.3+ exposes POST /admin/identities/:id/sessions which
+    // returns a session_token we can set as the browser cookie. This
+    // replaces the earlier "admin PUT password + self-service login"
+    // dance that forced us to know a password.
+    // ──────────────────────────────────────────────────────────────────
+    const adminSessionResp = await fetch(
+      `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }
+    );
 
-    if (!loginResp.ok) {
-      const errBody = await loginResp.text();
+    if (!adminSessionResp.ok) {
+      const errBody = await adminSessionResp.text();
       apiLogger.error(
-        { status: loginResp.status, body: errBody.substring(0, 500) },
-        "Failed to create Kratos session via login"
+        {
+          status: adminSessionResp.status,
+          body: errBody.slice(0, 500),
+          identityId,
+        },
+        "Failed to create Kratos session via admin API"
       );
       return c.json({ error: "Failed to create session" }, 500);
     }
 
-    const sessionData = (await loginResp.json()) as {
-      session?: { id: string; active: boolean };
+    const adminSessionData = (await adminSessionResp.json()) as {
+      session?: { id: string; active?: boolean };
       session_token?: string;
     };
 
-    const sessionToken = sessionData.session_token;
-
+    const sessionToken = adminSessionData.session_token;
     if (!sessionToken) {
-      apiLogger.error({ sessionData }, "No session_token in Kratos response");
+      apiLogger.error(
+        { identityId },
+        "Kratos admin session endpoint returned no session_token"
+      );
       return c.json(
         { error: "Session token not returned by auth server" },
         500
       );
     }
 
+    // Shape the rest of the handler to match the previous success path:
+    // treat `sessionData` as if it came from the native login flow.
+    const sessionData: {
+      session?: { id: string; active?: boolean };
+      session_token?: string;
+    } = adminSessionData;
+
+    // ──────────────────────────────────────────────────────────────────
     // 4. Set session cookie for the browser.
     //
     // `c.req.url` alone is unreliable here: Caddy terminates TLS and forwards
