@@ -462,34 +462,83 @@ app.post("/api/handshake", async (c) => {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // 2. No identity → refuse.
+    // 2. No identity → behavior depends on pod mode.
     //
-    // The handshake is SSO convenience over an account that MUST already
-    // exist — it's not an account-creation path. An account only exists
-    // after the user has gone through /api/provision/setup-account
-    // (triggered by the setup-pod flow on synap.live, either from the
-    // welcome email or the in-dashboard "Finish setup" button).
+    // Dedicated pods:
+    //   The handshake is SSO convenience over an account that MUST
+    //   already exist. Users go through the /setup-pod flow on
+    //   synap.live to establish credentials; handshake then just hands
+    //   out a session. Return 403 to force clients into setup-first.
     //
-    // Returning 403 here is deliberate: it forces every client — Synap
-    // apps, third-party integrations, SSO attempts — to stop pretending
-    // the user is signed in on a pod where they literally have no
-    // credentials yet. The landing page catches this error and redirects
-    // the pod owner to their setup link.
+    // Shared pods:
+    //   Users never see synap.live/setup-pod — they interact with the
+    //   pod exclusively through Relay / landing / other Synap apps that
+    //   authenticate via handshake. There's no user-facing password
+    //   (they don't need one; recovery via Kratos self-service still
+    //   works if they ever want one). So on shared pods we auto-create
+    //   the identity with a random password they'll never know.
+    //
+    // This split is the minimal path to unblock shared pods without a
+    // full setup-flow rework for them. Full design: per-user setup
+    // tracking + proper shared-pod onboarding flow. Punted until the
+    // shared pod has real traffic.
     // ──────────────────────────────────────────────────────────────────
     if (!identityId) {
+      if (!config.server.sharedPodMode) {
+        apiLogger.info(
+          { email },
+          "Handshake rejected: no Kratos identity yet for this email — user must complete setup-account first"
+        );
+        return c.json(
+          {
+            error: "account_not_set_up",
+            message:
+              "This pod has no account for this email yet. Open your welcome email or visit your dashboard to pick a password.",
+            setupRequired: true,
+          },
+          403
+        );
+      }
+
+      // Shared pod path — auto-create the identity with a random
+      // password. The user doesn't need to know it; handshake will
+      // issue sessions via Kratos admin API every time they visit.
       apiLogger.info(
         { email },
-        "Handshake rejected: no Kratos identity yet for this email — user must complete setup-account first"
+        "Handshake (shared pod): auto-creating Kratos identity for new user"
       );
-      return c.json(
-        {
-          error: "account_not_set_up",
-          message:
-            "This pod has no account for this email yet. Open your welcome email or visit your dashboard to pick a password.",
-          setupRequired: true,
-        },
-        403
-      );
+      const placeholderPassword = crypto.randomBytes(32).toString("base64url");
+      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_id: "default",
+          traits: { email },
+          credentials: {
+            password: { config: { password: placeholderPassword } },
+          },
+          metadata_public: {
+            createdVia: "handshake-shared",
+            createdAt: new Date().toISOString(),
+            // No setupRequired flag — shared-pod users aren't expected
+            // to ever set a password. If they want one they can go
+            // through Kratos self-service recovery.
+          },
+          verifiable_addresses: [
+            { value: email, verified: true, via: "email", status: "completed" },
+          ],
+        }),
+      });
+      if (!createResp.ok) {
+        const errBody = await createResp.text();
+        apiLogger.error(
+          { status: createResp.status, body: errBody.slice(0, 500) },
+          "Failed to create Kratos identity on shared pod"
+        );
+        return c.json({ error: "Failed to provision user account" }, 500);
+      }
+      const newIdentity = (await createResp.json()) as { id: string };
+      identityId = newIdentity.id;
     }
 
     // ──────────────────────────────────────────────────────────────────

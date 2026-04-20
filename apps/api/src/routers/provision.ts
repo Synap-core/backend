@@ -721,6 +721,39 @@ provisionRouter.post("/setup-account", async (c) => {
         { email, identityId },
         "setup-account: updated Kratos identity password"
       );
+
+      // Invalidate every existing session for this identity — a stolen
+      // session cookie must NOT survive a password rotation. New identities
+      // don't need this (they have no sessions yet), only the update-existing
+      // branch. Kratos returns 204 on success; 4xx on unknown identity.
+      // Non-fatal: if this fails we still return success to the user —
+      // they've updated their password, worst case a stolen session is
+      // valid for a few more hours until Kratos's natural TTL kicks in.
+      const wipeSessionsResp = await fetch(
+        `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
+        { method: "DELETE" }
+      ).catch((err) => {
+        logger.warn(
+          { err, identityId },
+          "setup-account: failed to invalidate existing sessions after password change"
+        );
+        return null;
+      });
+      if (
+        wipeSessionsResp &&
+        !wipeSessionsResp.ok &&
+        wipeSessionsResp.status !== 404
+      ) {
+        logger.warn(
+          { status: wipeSessionsResp.status, identityId },
+          "setup-account: DELETE /admin/identities/:id/sessions returned non-OK"
+        );
+      } else if (wipeSessionsResp?.ok) {
+        logger.info(
+          { identityId },
+          "setup-account: invalidated all sessions after password change"
+        );
+      }
     }
 
     return c.json({
