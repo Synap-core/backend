@@ -2296,7 +2296,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -9384,7 +9384,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
-				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
+				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -9394,7 +9394,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "governance" | "ai" | "inbox";
+					category: "data" | "system" | "ai" | "governance" | "inbox";
 					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
