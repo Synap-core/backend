@@ -9,7 +9,12 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  workspaceProcedure,
+  protectedProcedure,
+  podProcedure,
+} from "../trpc.js";
 import {
   db,
   sql,
@@ -182,7 +187,7 @@ export const entitiesRouter = router({
    * When `global: true`, the entity is created without a workspaceId
    * and will be visible across all workspaces.
    */
-  create: workspaceProcedure
+  create: podProcedure
     .input(
       z.object({
         profileSlug: z.string().optional(),
@@ -483,7 +488,7 @@ export const entitiesRouter = router({
    *
    * Returns entities belonging to the active workspace AND global entities (workspaceId IS NULL).
    */
-  list: workspaceProcedure
+  list: podProcedure
     .input(
       paginatedInput.extend({
         profileSlug: z.string().optional(),
@@ -508,7 +513,7 @@ export const entitiesRouter = router({
         if (input.includeDescendants) {
           const descendants = await profileService.getDescendantSlugs(
             input.profileSlug,
-            ctx.workspaceId
+            ctx.workspaceId ?? undefined
           );
           profileSlugs = [input.profileSlug, ...descendants];
         }
@@ -530,9 +535,10 @@ export const entitiesRouter = router({
           // Pod-wide: show all entities of this type regardless of workspace
           // (userCondition already ensures ownership — no workspaceId filter needed)
         } else {
-          // Workspace-scoped: this workspace + global entities
+          // Workspace-scoped: this workspace + global entities.
+          // Workspace-less callers (hydration) see pod-wide only.
           conditions.push(
-            input.globalOnly
+            input.globalOnly || !ctx.workspaceId
               ? isNull(entities.workspaceId)
               : or(
                   eq(entities.workspaceId, ctx.workspaceId),
@@ -541,9 +547,10 @@ export const entitiesRouter = router({
           );
         }
       } else {
-        // No profile filter — use standard workspace scoping
+        // No profile filter — use standard workspace scoping.
+        // Workspace-less callers (hydration) see pod-wide only.
         conditions.push(
-          input.globalOnly
+          input.globalOnly || !ctx.workspaceId
             ? isNull(entities.workspaceId)
             : or(
                 eq(entities.workspaceId, ctx.workspaceId),
@@ -795,7 +802,7 @@ export const entitiesRouter = router({
   /**
    * Get entity by ID
    */
-  get: workspaceProcedure
+  get: podProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -814,10 +821,12 @@ export const entitiesRouter = router({
         where: and(
           eq(entities.id, input.id),
           eq(entities.userId, ctx.userId),
-          or(
-            eq(entities.workspaceId, ctx.workspaceId),
-            isNull(entities.workspaceId)
-          )
+          ctx.workspaceId
+            ? or(
+                eq(entities.workspaceId, ctx.workspaceId),
+                isNull(entities.workspaceId)
+              )
+            : isNull(entities.workspaceId)
         ),
       });
 
@@ -853,7 +862,7 @@ export const entitiesRouter = router({
   /**
    * Update entity
    */
-  update: workspaceProcedure
+  update: podProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -1019,7 +1028,7 @@ export const entitiesRouter = router({
   /**
    * Delete entity (soft delete)
    */
-  delete: workspaceProcedure
+  delete: podProcedure
     .input(
       z.object({
         id: z.string().uuid(),

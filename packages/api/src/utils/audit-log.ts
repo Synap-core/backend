@@ -15,7 +15,8 @@ export interface AuditLogOpts {
   phase: string;
   subjectId: string;
   userId: string;
-  workspaceId?: string;
+  /** Pass null for workspace-less (hydration / pod-wide) operations. */
+  workspaceId?: string | null;
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
@@ -36,7 +37,7 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
       subjectId: opts.subjectId,
       data: {
         ...opts.data,
-        workspaceId: opts.workspaceId,
+        workspaceId: opts.workspaceId ?? undefined,
         userId: opts.userId,
       },
       userId: opts.userId,

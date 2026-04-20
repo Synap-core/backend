@@ -41,7 +41,7 @@ const logger = createLogger({ module: "property-relation-sync" });
 export async function syncPropertyToRelations(
   entityId: string,
   profileId: string,
-  workspaceId: string,
+  workspaceId: string | null,
   userId: string,
   oldProperties: Record<string, unknown>,
   newProperties: Record<string, unknown>
@@ -148,7 +148,7 @@ export async function syncRelationToPropertyOnCreate(
   sourceEntityId: string,
   targetEntityId: string,
   relationType: string,
-  workspaceId: string
+  workspaceId: string | null
 ): Promise<void> {
   const mapped = await findMappedProperty(
     sourceEntityId,
@@ -190,7 +190,7 @@ export async function syncRelationToPropertyOnDelete(
   sourceEntityId: string,
   targetEntityId: string,
   relationType: string,
-  workspaceId: string
+  workspaceId: string | null
 ): Promise<void> {
   const mapped = await findMappedProperty(
     sourceEntityId,
@@ -248,7 +248,7 @@ interface MappedProperty {
 async function findMappedProperty(
   sourceEntityId: string,
   relationType: string,
-  workspaceId: string
+  workspaceId: string | null
 ): Promise<MappedProperty | null> {
   const db = await getDb();
 
@@ -258,6 +258,9 @@ async function findMappedProperty(
     columns: { profileId: true },
   });
   if (!entity?.profileId) return null;
+
+  // Relation defs are workspace-scoped — skip when workspace-less.
+  if (!workspaceId) return null;
 
   // Find the relation def by slug + workspace
   const relDef = await db.query.relationDefs.findFirst({

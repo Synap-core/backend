@@ -17,7 +17,8 @@ export interface SideEffectPayload {
   action: string;
   subjectId: string;
   userId: string;
-  workspaceId?: string;
+  /** Pass null for workspace-less (hydration / pod-wide) operations. */
+  workspaceId?: string | null;
   data?: Record<string, unknown>;
   /** Automation chain tracking — prevents circular triggers */
   automationContext?: {
