@@ -670,6 +670,134 @@ export class IntelligenceHubClient {
   }
 
   /**
+   * Bulk multi-entity extraction with SSE streaming.
+   *
+   * Accepts up to 200 items; the IS runs `runStructure` for each with
+   * bounded concurrency (default 4, max 8) and streams per-item results.
+   *
+   * Yields events as they arrive. If the caller disconnects (via
+   * `signal`), in-flight LLM calls are aborted on the server.
+   *
+   * Used by hydration-style onboarding (LinkedIn, markdown dumps, Apple
+   * Notes exports) so we don't ping /api/structure 340 times client-side.
+   */
+  async *structureBulk(
+    input: {
+      items: Array<{
+        clientId: string;
+        text?: string;
+        html?: string;
+        url?: string;
+        context?: string;
+        sourceHint?: string;
+      }>;
+      hints?: {
+        availableProfiles?: Array<{
+          slug: string;
+          displayName: string;
+          description?: string;
+          propertyHints?: string;
+        }>;
+      };
+      concurrency?: number;
+    },
+    signal?: AbortSignal
+  ): AsyncIterable<
+    | { type: "item-start"; clientId: string }
+    | {
+        type: "item-complete";
+        clientId: string;
+        result: {
+          entities: Array<{
+            tempId: string;
+            profileSlug: string;
+            title: string;
+            description?: string;
+            properties?: Record<string, unknown>;
+            confidence: number;
+          }>;
+          relations: Array<{
+            sourceTempId: string;
+            targetTempId: string;
+            relationType: string;
+          }>;
+          followUp: string | null;
+        };
+      }
+    | { type: "item-error"; clientId: string; error: string }
+    | {
+        type: "batch-complete";
+        totalCompleted: number;
+        totalErrored: number;
+      }
+    | { type: "error"; message: string }
+  > {
+    const controller = new AbortController();
+    const abortListener = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener("abort", abortListener, { once: true });
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/structure-bulk`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": this.apiKey,
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(input),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        const text = await response.text().catch(() => "<unreadable>");
+        yield {
+          type: "error",
+          message: `structureBulk HTTP ${response.status}: ${text.slice(0, 200)}`,
+        };
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              yield JSON.parse(line.slice(6));
+            } catch {
+              // skip malformed
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        yield {
+          type: "error",
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    } finally {
+      if (signal) signal.removeEventListener("abort", abortListener);
+    }
+  }
+
+  /**
    * Health check
    */
   async healthCheck(): Promise<boolean> {

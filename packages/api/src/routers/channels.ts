@@ -1102,6 +1102,28 @@ export const channelsRouter = router({
         capability: "chat",
       });
 
+      // TODO(hydration-onboarding, Phase 3): route the first N user messages
+      // on a brand-new personal channel through OnboardingAgent instead of
+      // the Orchestrator (personal agentType).
+      //
+      // What is needed before this can land:
+      //   1. A cheap "messages on this channel" count or a dedicated
+      //      `channel.onboardingState` column ({ status, remainingTurns }) —
+      //      counting on every send is O(N) today.
+      //   2. A per-call agentType override for this path that feeds the IS
+      //      "onboarding" while the channel's stored agentType stays
+      //      PERSONAL (so history + memory continue to belong to the
+      //      Orchestrator once hydration completes).
+      //   3. A graceful hand-off: OnboardingAgent writes its distilled
+      //      context into session state so the Orchestrator picks up where
+      //      it left off on message N+1.
+      //   4. A Studio-aware trigger (surface = "studio" from Task B) so
+      //      Relay / Browser keep their current flow unchanged.
+      //
+      // For now: the first Orchestrator greeting seeded in
+      // `ensurePersonalChannel()` does the hydration opener statically;
+      // follow-up messages continue through the Orchestrator as today.
+
       // AI routing gate:
       //   thread: AI active when agentType is set and not NONE.
       //   agent_collab: always AI-active.

@@ -173,7 +173,29 @@ async function runMigrations() {
       path.join(process.cwd(), "migrations"), // CWD fallback (dev)
       path.join(__dirname, "../../migrations"), // Last resort: src/scripts/ or dist/scripts/
     ];
-    const migrationsDir = candidates.find(existsSync) ?? candidates[0];
+    const migrationsDir = candidates.find(existsSync);
+    if (!migrationsDir) {
+      console.error(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      );
+      console.error("❌ No migrations directory found");
+      console.error(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      );
+      console.error("  Searched:");
+      for (const c of candidates) console.error(`    - ${c}`);
+      console.error(
+        "\n  This usually means the Docker build did not copy packages/database/migrations/"
+      );
+      console.error(
+        "  into the image (see deploy/Dockerfile). Refusing to start — the backend would"
+      );
+      console.error("  otherwise boot against an empty schema.");
+      console.error(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+      );
+      process.exit(1);
+    }
     console.log(`📂 Migrations directory: ${migrationsDir}\n`);
 
     await initMigrationsTable();
@@ -184,12 +206,17 @@ async function runMigrations() {
     console.log(`📊 Already applied: ${applied.size}\n`);
 
     // Collect and sort pending migrations
-    const allFiles = existsSync(migrationsDir)
-      ? readdirSync(migrationsDir)
-          .filter((f) => f.endsWith(".sql"))
-          .sort()
-      : [];
+    const allFiles = readdirSync(migrationsDir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
     const pending = allFiles.filter((f) => !applied.has(f));
+
+    if (allFiles.length === 0) {
+      console.error(
+        `❌ Migrations directory ${migrationsDir} contains no .sql files — refusing to start.`
+      );
+      process.exit(1);
+    }
 
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     console.log(

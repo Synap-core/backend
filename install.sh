@@ -20,7 +20,13 @@
 
 set -euo pipefail
 
-RAW_BASE="https://raw.githubusercontent.com/Synap-core/backend/main"
+# Deploy version controls BOTH the raw.githubusercontent.com ref used to fetch
+# config files, AND the Docker image tag used for backend/realtime/pod-agent.
+# Defaults to "main" (always present on GHCR). Override via --deploy-version
+# (e.g. "v1.0.2") or SYNAP_DEPLOY_VERSION env var. Do NOT use "latest" — it
+# only exists on v* tags and will break fresh installs if no release has been cut.
+DEPLOY_VERSION="${SYNAP_DEPLOY_VERSION:-main}"
+RAW_BASE_TEMPLATE="https://raw.githubusercontent.com/Synap-core/backend"
 
 # ─── Defaults (override via env or flags) ─────────────────────────────────────
 INSTALL_DIR="${SYNAP_DIR:-/srv/synap}"
@@ -29,19 +35,30 @@ LETSENCRYPT_EMAIL="${SYNAP_EMAIL:-}"
 INTELLIGENCE_URL="${SYNAP_INTELLIGENCE_URL:-}"
 INTELLIGENCE_API_KEY="${SYNAP_INTELLIGENCE_API_KEY:-}"
 ADMIN_EMAIL="${SYNAP_ADMIN_EMAIL:-}"
+BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
+POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
 
 # ─── CLI flags ─────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --domain)           DOMAIN="$2";             shift 2 ;;
-    --dir)              INSTALL_DIR="$2";         shift 2 ;;
-    --email)            LETSENCRYPT_EMAIL="$2";   shift 2 ;;
-    --intelligence-url) INTELLIGENCE_URL="$2";    shift 2 ;;
-    --intelligence-key) INTELLIGENCE_API_KEY="$2"; shift 2 ;;
-    --admin-email)      ADMIN_EMAIL="$2";         shift 2 ;;
+    --domain)             DOMAIN="$2";                 shift 2 ;;
+    --dir)                INSTALL_DIR="$2";             shift 2 ;;
+    --email)              LETSENCRYPT_EMAIL="$2";       shift 2 ;;
+    --intelligence-url)   INTELLIGENCE_URL="$2";        shift 2 ;;
+    --intelligence-key)   INTELLIGENCE_API_KEY="$2";    shift 2 ;;
+    --admin-email)        ADMIN_EMAIL="$2";             shift 2 ;;
+    --deploy-version)     DEPLOY_VERSION="$2";          shift 2 ;;
+    --backend-version)    BACKEND_VERSION_FLAG="$2";    shift 2 ;;
+    --pod-agent-version)  POD_AGENT_VERSION_FLAG="$2";  shift 2 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
+
+# Image tags default to DEPLOY_VERSION when not set explicitly. This keeps the
+# three artifacts (config files, backend image, pod-agent image) version-aligned.
+BACKEND_VERSION="${BACKEND_VERSION_FLAG:-$DEPLOY_VERSION}"
+POD_AGENT_VERSION="${POD_AGENT_VERSION_FLAG:-$DEPLOY_VERSION}"
+RAW_BASE="${RAW_BASE_TEMPLATE}/${DEPLOY_VERSION}"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -148,6 +165,20 @@ _download "kratos/identity.schema.json"                    "$INSTALL_DIR/config/
 _download "kratos/oidc.github.jsonnet"                     "$INSTALL_DIR/config/kratos/oidc.github.jsonnet"
 _download "kratos/oidc.google.jsonnet"                     "$INSTALL_DIR/config/kratos/oidc.google.jsonnet"
 _download "docker/postgres/init-databases.sh"              "$INSTALL_DIR/config/postgres/init-databases.sh"
+
+# Pod-agent operational scripts — executed from /deploy/ mount when the
+# Control Plane issues a pod-agent command (configure, suspend, archive,
+# restore, update, etc.). The pod-agent container bind-mounts $INSTALL_DIR
+# as /deploy:rw, so these files MUST live next to docker-compose.yml.
+POD_AGENT_SCRIPTS="configure-pod.sh suspend-pod.sh restore-pod.sh restore-archive-pod.sh archive-pod.sh update-pod.sh update-agent.sh"
+for script in $POD_AGENT_SCRIPTS; do
+  _download "deploy/$script" "$INSTALL_DIR/$script"
+  chmod +x "$INSTALL_DIR/$script"
+done
+
+# Add-on installer (referenced by the post-install "Next steps" message)
+_download "deploy/setup-openclaw.sh" "$INSTALL_DIR/setup-openclaw.sh"
+chmod +x "$INSTALL_DIR/setup-openclaw.sh"
 
 chmod +x "$INSTALL_DIR/config/postgres/init-databases.sh"
 
@@ -328,9 +359,13 @@ KRATOS_CONFIG_DIR=./config/kratos
 POSTGRES_INIT_SCRIPT=./config/postgres/init-databases.sh
 
 # ── Image versions ─────────────────────────────────────────────────────────────
-BACKEND_VERSION=latest
+# Resolved by install.sh from --deploy-version (default: "main"). Override with
+# --backend-version / --pod-agent-version for split deployments.
+# Do NOT set these to "latest" unless you have cut a v* release — the workflow
+# only publishes :latest on version tags, so fresh installs will fail to pull.
+BACKEND_VERSION=$BACKEND_VERSION
 # Pod-agent (CP → configure / archive / suspend / …) — keep in sync with backend ring when pinning
-POD_AGENT_VERSION=latest
+POD_AGENT_VERSION=$POD_AGENT_VERSION
 
 # ── Admin (first user) ────────────────────────────────────────────────────────
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
