@@ -675,16 +675,6 @@ export const intelligenceRegistryRouter = router({
         "Pod-wide agent provisioned"
       );
 
-      auditLog({
-        subjectType: "agent_user",
-        action: "create",
-        phase: "completed",
-        subjectId: agentId,
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
-        data: { agentType: input.serviceType, email },
-      });
-
       logger.info(
         {
           workspaceId: ctx.workspaceId,
@@ -769,35 +759,18 @@ export const intelligenceRegistryRouter = router({
    * the agent user record. The intelligence service registration (if any) is left
    * intact — the service deregisters itself on shutdown.
    */
-  deprovisionAgent: workspaceProcedure
+  deprovisionAgent: podProcedure
     .input(z.object({ serviceType: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
-      const perm = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: ctx.workspaceId },
-        requiredPermission: "manage",
-      });
-      if (!perm.allowed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            perm.reason ||
-            "Owner or admin role required to deprovision agent services",
-        });
-      }
-
       // Validate service type (throws on unknown)
       getServiceEntry(input.serviceType);
 
-      const agent = await findProvisionedAgent(
-        ctx.workspaceId,
-        input.serviceType
-      );
+      // Pod-wide search - no workspace membership required
+      const agent = await findProvisionedAgent(null, input.serviceType);
       if (!agent) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `${input.serviceType} is not provisioned for this workspace`,
+          message: `${input.serviceType} is not provisioned on this pod`,
         });
       }
 
@@ -811,17 +784,7 @@ export const intelligenceRegistryRouter = router({
         })
         .where(eq(apiKeys.userId, agent.id));
 
-      // 2. Remove workspace membership
-      await db
-        .delete(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, agent.id),
-            eq(workspaceMembers.workspaceId, ctx.workspaceId)
-          )
-        );
-
-      // 3. Delete agent user record
+      // 2. Delete agent user record (no workspace membership for pod-wide agents)
       await db.delete(users).where(eq(users.id, agent.id));
 
       auditLog({
@@ -830,13 +793,12 @@ export const intelligenceRegistryRouter = router({
         phase: "completed",
         subjectId: agent.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: ctx.workspaceId ?? undefined,
         data: { agentType: input.serviceType },
       });
 
       logger.info(
         {
-          workspaceId: ctx.workspaceId,
           agentUserId: agent.id,
           serviceType: input.serviceType,
           revokedBy: ctx.userId,
