@@ -24,6 +24,7 @@ import {
   ApiKeyRepository,
   sql,
   drizzleSql,
+  sqlDrizzle,
 } from "@synap/database";
 import {
   users,
@@ -48,6 +49,8 @@ import {
 } from "../utils/server-vault.js";
 
 const logger = createLogger({ module: "intelligence-registry" });
+
+const OPENCLAW_HUB_ID = "integration:openclaw";
 
 // Simple ID generator (timestamp + random)
 const generateId = () =>
@@ -653,6 +656,7 @@ export const intelligenceRegistryRouter = router({
           scope: entry.defaultScopes,
           userId: agentId,
           keyType: "hub_inbound",
+          hubId: `integration:${input.serviceType}`, // For unified checking
           description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
         },
         ctx.userId
@@ -815,14 +819,15 @@ export const intelligenceRegistryRouter = router({
    *
    * Revokes all existing keys and issues a new one. The new plaintext key is
    * returned ONCE — update the container's SYNAP_HUB_API_KEY.
+   * Uses podProcedure to support pod-wide agents (no workspace required).
    */
-  rotateAgentKey: workspaceProcedure
+  rotateAgentKey: podProcedure
     .input(z.object({ serviceType: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
       const perm = await verifyPermission({
         db,
         userId: ctx.userId,
-        workspace: { id: ctx.workspaceId },
+        workspace: ctx.workspaceId ? { id: ctx.workspaceId } : undefined,
         requiredPermission: "manage",
       });
       if (!perm.allowed) {
@@ -835,18 +840,44 @@ export const intelligenceRegistryRouter = router({
 
       const entry = getServiceEntry(input.serviceType);
 
-      const agent = await findProvisionedAgent(
-        ctx.workspaceId,
-        input.serviceType
-      );
-      if (!agent) {
+      let existingAgent = await findProvisionedAgent(null, input.serviceType);
+
+      if (!existingAgent) {
+        const hubId = `integration:${input.serviceType}`;
+        const keyRows = await db.execute(sqlDrizzle`
+          SELECT k.user_id FROM api_keys k
+          WHERE k.hub_id = ${hubId}
+            AND k.is_active = true
+          ORDER BY k.created_at DESC
+          LIMIT 1
+        `);
+        if (keyRows[0]) {
+          const userId = (keyRows[0] as { user_id: string }).user_id;
+          existingAgent = {
+            id: userId,
+            email: `agent-${input.serviceType}@synap.agent`,
+            name: `${entry.displayName} Agent`,
+            agentMetadata: null,
+          } as {
+            id: string;
+            email: string;
+            name: string | null;
+            agentMetadata: NonNullable<
+              (typeof users.$inferInsert)["agentMetadata"]
+            > | null;
+          };
+        }
+      }
+
+      if (!existingAgent) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `${input.serviceType} is not provisioned for this workspace`,
+          message: `${input.serviceType} is not provisioned on this pod`,
         });
       }
 
-      // Revoke existing keys
+      const agentId = existingAgent.id;
+
       await db
         .update(apiKeys)
         .set({
@@ -854,9 +885,8 @@ export const intelligenceRegistryRouter = router({
           revokedAt: new Date(),
           revokedReason: `Key rotated by user ${ctx.userId}`,
         })
-        .where(eq(apiKeys.userId, agent.id));
+        .where(eq(apiKeys.userId, agentId));
 
-      // Issue new key
       const keyPrefix =
         process.env.NODE_ENV === "production"
           ? "synap_hub_live_"
@@ -869,21 +899,21 @@ export const intelligenceRegistryRouter = router({
 
       await apiKeyRepo.create(
         {
-          keyName: `${entry.displayName} — workspace ${ctx.workspaceId} (rotated)`,
+          keyName: `${entry.displayName} — ${input.serviceType} (rotated)`,
           keyPrefix,
           key: plainKey,
           scope: entry.defaultScopes,
-          userId: agent.id,
+          userId: agentId,
           keyType: "hub_inbound",
-          description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
+          hubId: `integration:${input.serviceType}`,
+          description: `Hub Protocol auth token for ${entry.displayName} agent service.`,
         },
         ctx.userId
       );
 
       logger.info(
         {
-          workspaceId: ctx.workspaceId,
-          agentUserId: agent.id,
+          agentUserId: agentId,
           serviceType: input.serviceType,
           rotatedBy: ctx.userId,
         },
@@ -891,10 +921,9 @@ export const intelligenceRegistryRouter = router({
       );
 
       const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
-      const serviceId = `${input.serviceType}-${agent.id.slice(0, 8)}`;
+      const serviceId = `${input.serviceType}-${agentId.slice(0, 8)}`;
       const configUrl = `${podUrl}/trpc/intelligenceRegistry.getServiceConfig`;
 
-      // Re-encrypt and overwrite vault entry with fresh key
       if (isServerVaultAvailable()) {
         try {
           const database = await getDb();
@@ -905,13 +934,13 @@ export const intelligenceRegistryRouter = router({
           const blob = encryptConfig({
             SYNAP_POD_URL: podUrl,
             SYNAP_HUB_API_KEY: plainKey,
-            SYNAP_WORKSPACE_ID: ctx.workspaceId,
-            SYNAP_AGENT_USER_ID: agent.id,
+            SYNAP_WORKSPACE_ID: ctx.workspaceId ?? "pod-wide",
+            SYNAP_AGENT_USER_ID: agentId,
             SYNAP_CONFIG_URL: configUrl,
           });
           await vaultRepo.upsertServerSide(
             {
-              userId: agent.id,
+              userId: agentId,
               serviceId,
               name: `${entry.displayName} — Service Config`,
               type: "api_key",
@@ -930,7 +959,6 @@ export const intelligenceRegistryRouter = router({
         status: "rotated" as const,
         serviceId,
         configUrl,
-        /** New plaintext key — returned as fallback when vault is unavailable. */
         apiKey: plainKey,
       };
     }),
@@ -1120,6 +1148,363 @@ export const intelligenceRegistryRouter = router({
       );
 
       return { stored: true, secretId: secret.id };
+    }),
+
+  // ===========================================================================================
+  // OpenClaw Unified Admin Endpoints
+  // ===========================================================================================
+
+  getOpenClawOverview: podProcedure.query(async () => {
+    const workspace = await db.query.workspaces.findFirst({
+      columns: { id: true, name: true, settings: true },
+    });
+
+    if (!workspace) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Workspace not found",
+      });
+    }
+
+    const settings = (workspace.settings as Record<string, unknown>) ?? {};
+    const controlPlane =
+      (settings.controlPlane as Record<string, unknown>) ?? {};
+
+    const keyRows = await db.execute(sqlDrizzle`
+      SELECT k.id, k.user_id, k.created_at, k.last_used_at
+      FROM api_keys k
+      WHERE k.hub_id = ${OPENCLAW_HUB_ID}
+        AND k.is_active = true
+      ORDER BY k.created_at DESC
+      LIMIT 1
+    `);
+
+    const agentRows = await db.execute(sqlDrizzle`
+      SELECT u.id, u.email
+      FROM users u
+      WHERE u.user_type = 'agent'
+        AND u.agent_metadata->>'agentType' = 'openclaw'
+      LIMIT 1
+    `);
+
+    const key = keyRows[0];
+    const agentUser = agentRows[0] as { id: string; email: string } | undefined;
+
+    let oldKey = null;
+    if (agentUser) {
+      const oldKeyRows = await db.execute(sqlDrizzle`
+        SELECT k.id, k.created_at, k.last_used_at
+        FROM api_keys k
+        WHERE k.user_id = ${agentUser.id}
+          AND k.key_type = 'hub_inbound'
+          AND k.is_active = true
+        ORDER BY k.created_at DESC
+        LIMIT 1
+      `);
+      oldKey = oldKeyRows[0];
+    }
+
+    const isProvisioned = !!key || !!agentUser;
+
+    const settingsLinks =
+      typeof controlPlane.openclawUiUrl === "string"
+        ? {
+            hostedUiUrl: controlPlane.openclawUiUrl,
+            docsUrl: "https://docs.synap.ai/openclaw",
+          }
+        : { hostedUiUrl: null, docsUrl: "https://docs.synap.ai/openclaw" };
+
+    return {
+      workspace: { id: workspace.id, name: workspace.name },
+      deploymentModel: "hybrid-explicit" as const,
+      lifecycleDomains: {
+        infra: "synap-cli" as const,
+        runtime: "openclaw-cli" as const,
+      },
+      openclaw: {
+        provisioned: isProvisioned,
+        registered: isProvisioned,
+        serviceType: "openclaw",
+        agentUserId: key?.user_id ?? agentUser?.id ?? null,
+        agentEmail: agentUser?.email ?? null,
+        activeHubKeys: (key ? 1 : 0) + (agentUser ? 1 : 0),
+        serviceId: null,
+        displayName: "OpenClaw",
+        version: null,
+        webhookUrl: null,
+        mcpEndpoint: null,
+        mcpApproved: false,
+        health: {
+          lastCheckAt: key?.last_used_at ?? oldKey?.last_used_at ?? null,
+          status: isProvisioned ? "unknown" : "not_configured",
+        },
+        links: settingsLinks,
+      },
+      controlPlane: {
+        url: typeof controlPlane.url === "string" ? controlPlane.url : null,
+        podId:
+          typeof controlPlane.podId === "string" ? controlPlane.podId : null,
+        tier: typeof controlPlane.tier === "string" ? controlPlane.tier : null,
+      },
+      operations: {
+        supportsManagedOps: false,
+        notes:
+          "Restart/update/rollback not yet automated. Use synap CLI commands below.",
+        commands: [
+          "./synap --help",
+          "./synap profiles enable openclaw",
+          "./synap services add openclaw",
+          "./synap services status openclaw",
+          "./synap services rotate openclaw",
+          "./synap services remove openclaw",
+          "./synap logs openclaw",
+          "./synap restart openclaw",
+        ],
+      },
+    };
+  }),
+
+  validateOpenClawConnection: podProcedure.mutation(async () => {
+    const keyRows = await db.execute(sqlDrizzle`
+      SELECT k.id FROM api_keys k
+      WHERE k.hub_id = ${OPENCLAW_HUB_ID}
+        AND k.is_active = true
+      ORDER BY k.created_at DESC
+      LIMIT 1
+    `);
+
+    const oldAgent = await db.execute(sqlDrizzle`
+      SELECT u.id FROM users u
+      WHERE u.user_type = 'agent'
+        AND u.agent_metadata->>'agentType' = 'openclaw'
+      LIMIT 1
+    `);
+
+    if (!keyRows[0] && !oldAgent[0]) {
+      return {
+        ok: false,
+        status: "not_provisioned" as const,
+        checkedAt: new Date().toISOString(),
+        message:
+          "OpenClaw is not provisioned. Click 'Provision OpenClaw' to connect.",
+      };
+    }
+
+    return {
+      ok: true,
+      status: "connected" as const,
+      checkedAt: new Date().toISOString(),
+      message: "OpenClaw is provisioned and connected.",
+    };
+  }),
+
+  runOpenClawDiagnostics: podProcedure.mutation(async () => {
+    const rows = await db.execute(sqlDrizzle`
+      SELECT k.id, k.created_at, k.last_used_at, k.usage_count, k.scope
+      FROM api_keys k
+      WHERE k.hub_id = ${OPENCLAW_HUB_ID}
+        AND k.is_active = true
+      ORDER BY k.created_at DESC
+      LIMIT 1
+    `);
+    const key = rows[0] as
+      | {
+          id: string;
+          created_at: string;
+          last_used_at: string | null;
+          usage_count: number;
+          scope: string[];
+        }
+      | undefined;
+
+    const oldAgent = await db.execute(sqlDrizzle`
+      SELECT u.id, u.email, u.created_at
+      FROM users u
+      WHERE u.user_type = 'agent'
+        AND u.agent_metadata->>'agentType' = 'openclaw'
+      LIMIT 1
+    `);
+    const oldUser = oldAgent[0] as
+      | { id: string; email: string; created_at: string }
+      | undefined;
+
+    return {
+      checkedAt: new Date().toISOString(),
+      checks: {
+        agentProvisioned: !!key || !!oldUser,
+        serviceRegistered: !!key || !!oldUser,
+        webhookReachable: false,
+        mcpApproved: false,
+      },
+      metadata: {
+        keyId: key?.id ?? null,
+        createdAt: key?.created_at ?? null,
+        lastUsedAt: key?.last_used_at ?? null,
+        usageCount: key?.usage_count ?? 0,
+        scopes: key?.scope ?? [],
+      },
+      message:
+        key || oldUser ? "OpenClaw is configured." : "No OpenClaw key found.",
+    };
+  }),
+
+  getOpenClawDockerCommand: podProcedure.query(async () => {
+    const keyRows = await db.execute(sqlDrizzle`
+      SELECT k.id FROM api_keys k
+      WHERE k.hub_id = ${OPENCLAW_HUB_ID}
+        AND k.is_active = true
+      ORDER BY k.created_at DESC
+      LIMIT 1
+    `);
+
+    const oldAgent = await db.execute(sqlDrizzle`
+      SELECT u.id FROM users u
+      WHERE u.user_type = 'agent'
+        AND u.agent_metadata->>'agentType' = 'openclaw'
+      LIMIT 1
+    `);
+
+    if (!keyRows[0] && !oldAgent[0]) {
+      return {
+        status: "not_provisioned" as const,
+        message:
+          "OpenClaw is not provisioned. Click 'Provision OpenClaw' to generate an API key.",
+        dockerCommand: null,
+      };
+    }
+
+    const workspace = await db.query.workspaces.findFirst({
+      columns: { id: true },
+    });
+
+    const workspaceId = workspace?.id ?? "pod-wide";
+    const shortId = workspaceId.slice(0, 8);
+    const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+
+    const useOldMethod = !!oldAgent[0];
+    return {
+      status: "provisioned" as const,
+      message: useOldMethod
+        ? "OpenClaw was provisioned with old method. Keys are managed via API Keys page."
+        : "Copy and run the Docker command below. Replace YOUR_API_KEY with your OpenClaw API key.",
+      dockerCommand: useOldMethod
+        ? null
+        : `# Run this command after provisioning OpenClaw:
+docker run -d \\
+  --name openclaw-${shortId} \\
+  -e SYNAP_POD_URL="${podUrl}" \\
+  -e SYNAP_HUB_API_KEY="YOUR_API_KEY" \\
+  -e SYNAP_WORKSPACE_ID="${workspaceId}" \\
+  ghcr.io/openclaw/openclaw:latest`,
+      placeholderApiKey: useOldMethod ? null : "YOUR_API_KEY",
+    };
+  }),
+
+  getOpenClawStatus: podProcedure.query(async () => {
+    const keyRows = await db.execute(sqlDrizzle`
+      SELECT k.id, k.created_at, k.last_used_at
+      FROM api_keys k
+      WHERE k.hub_id = ${OPENCLAW_HUB_ID}
+        AND k.is_active = true
+      ORDER BY k.created_at DESC
+      LIMIT 1
+    `);
+    const key = keyRows[0] as
+      | { id: string; created_at: string; last_used_at: string | null }
+      | undefined;
+
+    const agentRows = await db.execute(sqlDrizzle`
+      SELECT u.id, u.email, u.created_at
+      FROM users u
+      WHERE u.user_type = 'agent'
+        AND u.agent_metadata->>'agentType' = 'openclaw'
+      LIMIT 1
+    `);
+    const agentUser = agentRows[0] as
+      | { id: string; email: string; created_at: string }
+      | undefined;
+
+    let oldKey = null;
+    if (agentUser) {
+      const oldKeyRows = await db.execute(sqlDrizzle`
+        SELECT k.id, k.created_at, k.last_used_at
+        FROM api_keys k
+        WHERE k.user_id = ${agentUser.id}
+          AND k.key_type = 'hub_inbound'
+          AND k.is_active = true
+        LIMIT 1
+      `);
+      oldKey = oldKeyRows[0];
+    }
+
+    const isProvisioned = !!key || !!oldKey;
+
+    return {
+      provisioned: isProvisioned,
+      method: key ? "new" : oldKey ? "old" : null,
+      newKeyId: key?.id ?? null,
+      oldAgentId: agentUser?.id ?? null,
+      oldAgentEmail: agentUser?.email ?? null,
+      message: isProvisioned ? "OpenClaw is provisioned." : "Not provisioned.",
+    };
+  }),
+
+  getOpenClawHostedUiLink: podProcedure.query(async () => {
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+
+    const settings = (ws?.settings as Record<string, unknown>) ?? {};
+    const controlPlane =
+      (settings.controlPlane as Record<string, unknown>) ?? {};
+    const openclawUi =
+      typeof controlPlane.openclawUiUrl === "string"
+        ? controlPlane.openclawUiUrl
+        : null;
+
+    return {
+      url: openclawUi,
+      available: !!openclawUi,
+      fallback:
+        "Use `npx @synap-core/cli openclaw open` or your configured OpenClaw dashboard URL.",
+    };
+  }),
+
+  runOpenClawRuntimeAction: podProcedure
+    .input(
+      z.object({
+        action: z.enum(["restart", "safe_update", "rollback"]),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const actionToCommands: Record<
+        "restart" | "safe_update" | "rollback",
+        string[]
+      > = {
+        restart: [
+          "npx @synap-core/cli openclaw restart",
+          "synap restart openclaw",
+          "synap logs openclaw",
+        ],
+        safe_update: [
+          "synap update --with-openclaw",
+          "npx @synap-core/cli openclaw doctor",
+          "npx @synap-core/cli openclaw logs",
+        ],
+        rollback: [
+          "docker compose logs openclaw",
+          "synap services rotate openclaw",
+          "npx @synap-core/cli openclaw configure",
+        ],
+      };
+
+      return {
+        automated: false,
+        action: input.action,
+        commands: actionToCommands[input.action],
+        message:
+          "This action is not automated by backend API yet; run the suggested command sequence.",
+      };
     }),
 });
 

@@ -55,12 +55,16 @@ export default function OpenClawControlCenterPage() {
     return "overview";
   }, [location.pathname]);
 
-  const overviewQuery = trpc.openclawAdmin.getOverview.useQuery(undefined, {
-    refetchInterval: 30_000,
-  });
-  const hostedUiQuery = trpc.openclawAdmin.getHostedUiLink.useQuery(undefined, {
-    refetchInterval: 30_000,
-  });
+  const overviewQuery = trpc.intelligenceRegistry.getOpenClawOverview.useQuery(
+    undefined,
+    {
+      refetchInterval: 30_000,
+    }
+  );
+  const hostedUiQuery =
+    trpc.intelligenceRegistry.getOpenClawHostedUiLink.useQuery(undefined, {
+      refetchInterval: 30_000,
+    });
 
   const provisionMutation =
     trpc.intelligenceRegistry.provisionAgent.useMutation({
@@ -95,34 +99,37 @@ export default function OpenClawControlCenterPage() {
     onError: (err) => showErrorNotification({ message: err.message }),
   });
 
-  const validateMutation = trpc.openclawAdmin.validateConnection.useMutation({
-    onSuccess: (data) => {
-      void overviewQuery.refetch();
-      if (data.ok) {
-        showSuccessNotification({
-          message: "OpenClaw health check is healthy.",
-        });
-      } else {
-        showErrorNotification({
-          message: data.message ?? "Health check failed.",
-        });
-      }
-    },
-    onError: (err) => showErrorNotification({ message: err.message }),
-  });
+  const validateMutation =
+    trpc.intelligenceRegistry.validateOpenClawConnection.useMutation({
+      onSuccess: (data) => {
+        void overviewQuery.refetch();
+        if (data.ok) {
+          showSuccessNotification({
+            message: "OpenClaw health check is healthy.",
+          });
+        } else {
+          showErrorNotification({
+            message: data.message ?? "Health check failed.",
+          });
+        }
+      },
+      onError: (err) => showErrorNotification({ message: err.message }),
+    });
 
-  const diagnosticsMutation = trpc.openclawAdmin.runDiagnostics.useMutation({
-    onError: (err) => showErrorNotification({ message: err.message }),
-  });
+  const diagnosticsMutation =
+    trpc.intelligenceRegistry.runOpenClawDiagnostics.useMutation({
+      onError: (err) => showErrorNotification({ message: err.message }),
+    });
 
-  const runtimeMutation = trpc.openclawAdmin.runRuntimeAction.useMutation({
-    onSuccess: (data) => {
-      showInfoNotification({
-        message: `${data.action} is manual today. Commands listed in Operations.`,
-      });
-    },
-    onError: (err) => showErrorNotification({ message: err.message }),
-  });
+  const runtimeMutation =
+    trpc.intelligenceRegistry.runOpenClawRuntimeAction.useMutation({
+      onSuccess: (data) => {
+        showInfoNotification({
+          message: `${data.action} is manual today. Commands listed in Operations.`,
+        });
+      },
+      onError: (err) => showErrorNotification({ message: err.message }),
+    });
 
   const data = overviewQuery.data;
   const openclaw = data?.openclaw;
