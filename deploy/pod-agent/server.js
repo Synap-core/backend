@@ -11,10 +11,36 @@
 const http = require("http");
 const https = require("https");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const { execFile } = require("child_process");
 
 const PORT = parseInt(process.env.POD_AGENT_PORT || "4002", 10);
 const DEPLOY_DIR = process.env.DEPLOY_DIR || "/deploy";
+
+/**
+ * Host log directory bind-mounted from /var/log on the host at /host-log:ro
+ * inside this container. Used by the read-host-log endpoint to return the
+ * contents of install / cloud-init log files to the Control Plane dashboard.
+ *
+ * The mount must be read-only; the allowlist below is the *only* way to read
+ * files out of it, and no path traversal is permitted.
+ */
+const HOST_LOG_DIR = process.env.HOST_LOG_DIR || "/host-log";
+
+/**
+ * Files readable via GET /api/pod-agent/host-log?file=NAME. Strict allowlist
+ * because this endpoint exposes host-visible state to the CP; anything not
+ * explicitly listed here returns 404.
+ */
+const HOST_LOG_ALLOWLIST = new Set([
+  "cp-callback.log",       // per-phase install-callback outcomes
+  "synap-install.log",      // install.sh stdout
+  "cloud-init-output.log",  // full cloud-init runcmd output
+  "cloud-init.log",         // cloud-init internals
+]);
+
+const HOST_LOG_MAX_BYTES = 256 * 1024; // 256 KB — tail from end if larger
 
 // ── JWKS Cache ──
 
@@ -237,6 +263,74 @@ http
         return respond(res, 200, { healthy, status, addon: addonName });
       });
       return; // response sent asynchronously
+    }
+
+    // Host log retrieval — authenticated GET. Returns the tail of a whitelisted
+    // file from /host-log (bind-mounted read-only from the pod's /var/log).
+    // The dashboard uses this for "Fetch cloud-init logs" in the Inspector so
+    // admins don't need SSH for a routine debug.
+    const hostLogMatch =
+      req.method === "GET" &&
+      (req.url || "").match(/^(?:\/api\/pod-agent)?\/host-log\?(.*)$/);
+    if (hostLogMatch) {
+      try {
+        const auth = req.headers["authorization"] || "";
+        if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
+        const jwksUrl = req.headers["x-jwks-url"];
+        if (!jwksUrl || !jwksUrl.startsWith("https://")) return respond(res, 400, { error: "bad jwks url" });
+        const publicKey = await getPublicKey(jwksUrl);
+        const payload = verifyJWT(auth.slice(7), publicKey);
+        if (payload.type !== "read-host-log") {
+          return respond(res, 403, { error: "wrong jwt type" });
+        }
+
+        const params = new URLSearchParams(hostLogMatch[1]);
+        const fileParam = params.get("file") || "";
+        if (!HOST_LOG_ALLOWLIST.has(fileParam)) {
+          return respond(res, 404, { error: "file not in allowlist", allowlist: Array.from(HOST_LOG_ALLOWLIST) });
+        }
+
+        // Resolve and re-verify the file stays inside HOST_LOG_DIR — defense in
+        // depth against a malformed allowlist entry or symlink escape.
+        const fullPath = path.resolve(HOST_LOG_DIR, fileParam);
+        if (!fullPath.startsWith(HOST_LOG_DIR + path.sep) && fullPath !== path.resolve(HOST_LOG_DIR)) {
+          return respond(res, 400, { error: "path escape" });
+        }
+
+        let content;
+        let size;
+        let truncated = false;
+        try {
+          const stat = fs.statSync(fullPath);
+          size = stat.size;
+          if (size > HOST_LOG_MAX_BYTES) {
+            const fd = fs.openSync(fullPath, "r");
+            const buf = Buffer.alloc(HOST_LOG_MAX_BYTES);
+            fs.readSync(fd, buf, 0, HOST_LOG_MAX_BYTES, size - HOST_LOG_MAX_BYTES);
+            fs.closeSync(fd);
+            content = buf.toString("utf8");
+            truncated = true;
+          } else {
+            content = fs.readFileSync(fullPath, "utf8");
+          }
+        } catch (err) {
+          if (err.code === "ENOENT") {
+            return respond(res, 200, { file: fileParam, exists: false, size: 0, content: "" });
+          }
+          return respond(res, 500, { error: err.message || "read failed" });
+        }
+
+        return respond(res, 200, {
+          file: fileParam,
+          exists: true,
+          size,
+          truncated,
+          content,
+        });
+      } catch (e) {
+        log(`host-log rejected: ${e.message}`);
+        return respond(res, 403, { error: e.message });
+      }
     }
 
     if (req.method !== "POST" || (req.url !== "/command" && req.url !== "/api/pod-agent/command")) {

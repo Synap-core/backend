@@ -698,9 +698,15 @@ services:
     environment:
       POD_AGENT_PORT: 4002
       DEPLOY_DIR: /deploy
+      HOST_LOG_DIR: /host-log
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/deploy:rw
+      # Host /var/log mounted read-only so the agent can serve install /
+      # cloud-init logs to the Control Plane dashboard (allowlisted files
+      # only — see server.js HOST_LOG_ALLOWLIST). Read-only is critical:
+      # a compromised CP JWT should never be able to tamper with host logs.
+      - /var/log:/host-log:ro
     ports:
       - "4002:4002"
     networks:
