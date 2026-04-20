@@ -68,7 +68,7 @@ Each skill is portable and works unchanged in:
 
 - **OpenClaw** — drop into the standard skill directory, env vars pick up the pod URL and key
 - **Claude Code** — install to `~/.claude/skills/synap/` (strip `metadata.openclaw` block if desired)
-- **Claude Desktop** — same as Claude Code, different directory
+- **Claude Desktop** — does NOT read local skill folders. Skills in Claude Desktop sync from claude.ai — upload the three skill directories there (Settings → Skills → Upload). Claude Desktop CAN still use the pod via an MCP bridge — see `synap-cli/src/lib/targets.ts` `installClaudeDesktop` for the stdio-bridge config.
 - **Raycast** — the Raycast extension is a separate package with its own tool bindings; it reads these skills as context
 
 The OpenClaw-specific metadata block is namespaced under `metadata.openclaw` so consumers that don't recognize it will ignore it cleanly.

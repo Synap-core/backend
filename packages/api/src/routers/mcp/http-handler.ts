@@ -131,6 +131,26 @@ mcpHttpApp.post("/", async (c) => {
 
   const { id, method, params } = body;
 
+  // ── 2b. Handle JSON-RPC notifications ────────────────────────────────────
+  // Notifications have no `id` field. Per JSON-RPC 2.0 spec, the server MUST
+  // NOT respond with a result object. MCP uses these for lifecycle events:
+  //
+  //   notifications/initialized — client says "handshake done, ready for work"
+  //   notifications/cancelled   — client aborts an in-flight request
+  //   notifications/progress    — client progress updates
+  //   notifications/roots/list_changed
+  //
+  // Return 202 Accepted with empty body. If we return a JSON-RPC error for
+  // notifications (like "method not found"), mcp-remote falls back to SSE
+  // transport and then errors out on content-type mismatch.
+  if (id === undefined || id === null) {
+    if (method === "notifications/initialized") {
+      // Client signals it completed the initialize handshake. No-op for us.
+    }
+    // All notifications: acknowledge with 202, no body.
+    return c.body(null, 202);
+  }
+
   // ── 3. Route method ──────────────────────────────────────────────────────
   try {
     switch (method) {
@@ -218,10 +238,11 @@ mcpHttpApp.post("/", async (c) => {
       }
 
       default: {
-        return c.json(
-          jsonRpcError(id, -32601, `Method not found: ${method}`),
-          404
-        );
+        // Per JSON-RPC 2.0: method-not-found is an application-level error,
+        // returned in the response body with HTTP 200. Returning HTTP 404
+        // confuses MCP clients (they interpret it as transport failure and
+        // fall back to alternate transports that we don't implement).
+        return c.json(jsonRpcError(id, -32601, `Method not found: ${method}`));
       }
     }
   } catch (err) {
