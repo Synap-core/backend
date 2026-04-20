@@ -42,26 +42,29 @@ GET /api/hub/property-defs?userId={userId}&workspaceId={workspaceId}&profileId={
 
 The `synap` skill's `scripts/orient.sh` already fetches profiles — reuse its output.
 
-## System profiles (14 built-in, DON'T duplicate)
+## System profiles (17 built-in, DON'T duplicate)
 
 These exist in every pod. Check first. If the user's request fits one, use it.
 
-| Slug     | Parent   | What it is                 | Entity scope | Key properties                                    |
-| -------- | -------- | -------------------------- | ------------ | ------------------------------------------------- |
-| note     | —        | Free-form note             | pod          | content, tags                                     |
-| task     | —        | Todo                       | pod          | status, priority, dueDate, projectId, assignee    |
-| project  | —        | A project                  | pod          | status, tags                                      |
-| event    | —        | Calendar event             | pod          | startDate, endDate, location, isAllDay, attendees |
-| person   | —        | Any person                 | pod          | email, phone                                      |
-| contact  | person   | Professional contact       | pod          | + role, companyId (inherits person)               |
-| company  | —        | Organization               | pod          | website, industry, employees, location            |
-| deal     | —        | Sales deal                 | workspace    | stage, value, closeDate, contactId, companyId     |
-| bookmark | —        | Any saved URL              | pod          | url, domain, source                               |
-| website  | bookmark | Website bookmark           | pod          | + favicon                                         |
-| article  | bookmark | Article / longform         | pod          | + author, publishedAt, readTime                   |
-| capture  | bookmark | Quick capture from clients | workspace    | —                                                 |
-| file     | —        | File                       | workspace    | fileName, mimeType, fileSize                      |
-| anchor   | —        | Pinned channel message     | workspace    | channelId, messageId, messageRole                 |
+| Slug     | Parent   | What it is                                    | Entity scope | Key properties                                                                                      |
+| -------- | -------- | --------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------- |
+| note     | —        | Free-form note                                | pod          | content, tags                                                                                       |
+| task     | —        | Todo                                          | pod          | status, priority, dueDate, projectId, assignee                                                      |
+| project  | —        | A project                                     | pod          | status, tags                                                                                        |
+| event    | —        | Calendar event                                | pod          | startDate, endDate, location, isAllDay, attendees                                                   |
+| person   | —        | Any person                                    | pod          | email, phone                                                                                        |
+| contact  | person   | Professional contact                          | pod          | + role, companyId (inherits person)                                                                 |
+| company  | —        | Organization                                  | pod          | website, industry, employees, location                                                              |
+| deal     | —        | Sales deal                                    | workspace    | stage, value, closeDate, contactId, companyId                                                       |
+| bookmark | —        | Any saved URL                                 | pod          | url, domain, source                                                                                 |
+| website  | bookmark | Website bookmark                              | pod          | + favicon                                                                                           |
+| article  | bookmark | Article / longform                            | pod          | + author, publishedAt, readTime                                                                     |
+| capture  | bookmark | Quick capture from clients                    | workspace    | —                                                                                                   |
+| file     | —        | File                                          | workspace    | fileName, mimeType, fileSize                                                                        |
+| anchor   | —        | Pinned channel message                        | workspace    | channelId, messageId, messageRole                                                                   |
+| decision | —        | Architectural / product decision              | pod          | summary, rationale, alternatives, decisionStatus, decidedAt, projectId, supersededBy                |
+| question | —        | Substantive inquiry the user is investigating | pod          | questionStatus (open/exploring/answered/abandoned), askedAt, projectId, answeredByDecisionId        |
+| research | —        | Investigation artifact (sources + conclusion) | pod          | researchStatus (ongoing/concluded/abandoned), questionId, projectId, conclusion, researchConfidence |
 
 Before creating a new profile: **does one of these already fit?** A podcast episode is arguably an `article` (or a new profile). A meeting is an `event`. A book to read is an `article` or `bookmark`. Err on the side of reuse + extension, not creation.
 

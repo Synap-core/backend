@@ -69,7 +69,7 @@ Properties with `valueType: "entity_id"` are typed links to other entities — s
 
 ## Scope — default pod-wide
 
-**Default: pod-wide.** 10 of 14 system profiles (`note`, `task`, `project`, `event`, `person`, `contact`, `company`, `bookmark`, `article`, `website`) are pod-scoped — entities you create show up in _every_ workspace the user owns. The backend handles this automatically when the profile is pod-scoped: you don't need to pass `workspaceId`.
+**Default: pod-wide.** 13 of 17 system profiles (`note`, `task`, `project`, `event`, `person`, `contact`, `company`, `bookmark`, `article`, `website`, `decision`, `question`, `research`) are pod-scoped — entities you create show up in _every_ workspace the user owns. The backend handles this automatically when the profile is pod-scoped: you don't need to pass `workspaceId`.
 
 **Scope a creation to one workspace only when:**
 
@@ -80,6 +80,120 @@ Properties with `valueType: "entity_id"` are typed links to other entities — s
 **Rule of thumb:** don't pass `workspaceId` unless the user's intent specifically narrows to one workspace. A task the user dictates "from the couch" belongs to the whole pod, not to whichever workspace was last open.
 
 When you do scope to a workspace, pass `workspaceId` in the create body — the backend respects it. Never pass `workspaceId: null` explicitly to force pod-wide; the profile's `entityScope` decides.
+
+## The work flow — question → research → decision → action
+
+AI-assisted work has a shape. When the user is actually _thinking about something_, it flows through four structural nodes. Each is a first-class entity. None of these are optional "nice-to-have" labels — they're the graph that makes the work _durable_ and transferrable between AIs.
+
+| Stage       | Entity     | What it captures                                         | Typical trigger                                                    |
+| ----------- | ---------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| Inquiry     | `question` | What the user is trying to figure out                    | "I'm wondering about X" / "Should we Y or Z?" / "What's the best…" |
+| Exploration | `research` | Investigation: sources consulted, conclusion, confidence | Reading articles, comparing options, summarizing findings          |
+| Resolution  | `decision` | What was chosen + rationale + alternatives               | "We decided to…" / "Let's go with…" / "I'm going with…"            |
+| Execution   | `task`     | Concrete action items that follow the decision           | "Now I need to…" / "TODO: ship Y by…"                              |
+
+**Link each stage to the next:**
+
+- `question.answeredByDecisionId` → the decision that closed it
+- `research.questionId` → the question it investigates
+- `decision.projectId` → the project it affects (same for question / research)
+- Use `POST /relations type=source` to link research to its sources (articles, websites, documents)
+
+Traversing in either direction gives the user answers like:
+
+- "What am I currently exploring about Project Eve?" → `GET /entities?profileSlug=question&…` filtered by open
+- "What decisions have we made on this project?" → filtered by `projectId`
+- "What was the research behind this decision?" → reverse-lookup from `decision` via the research entities that reference the same `projectId` and question
+
+### When to create each
+
+**`question` — substantive inquiries only.** The test: _would the user want to find this later?_ "What's the weather" = no, don't create. "Should we use LangGraph or CrewAI?" = yes, create. Casual chitchat never becomes a question.
+
+**`research` — when you investigate.** Any time you go off and read articles / websites / past notes to answer something, that's research. Create the entity upfront (`status: "ongoing"`), link sources as you pull them (`POST /relations type=source`), set `conclusion` when you're done (`status: "concluded"`).
+
+**`decision` — when the user picks a path.** Already covered in the memory-vs-entity section above. Link back to the question it answers (set `question.answeredByDecisionId`).
+
+**`task` — when the decision implies concrete work.** Link with `projectId` if not already inferred.
+
+### Worked example
+
+User: _"I'm trying to figure out whether we should build our own orchestrator or standardize on OpenClaude's. Can you help me think through it?"_
+
+1. Create the question:
+
+   ```json
+   POST /api/hub/entities
+   { "profileSlug": "question",
+     "title": "Build custom orchestrator or use OpenClaude native?",
+     "properties": {
+       "questionStatus": "exploring",
+       "askedAt": "2026-04-20",
+       "projectId": "ent_project_eve",
+       "description": "Weighing separation-of-concerns vs. out-of-the-box capability."
+     } }
+   ```
+
+2. As you investigate, create a research entity and link sources:
+
+   ```json
+   POST /api/hub/entities
+   { "profileSlug": "research",
+     "title": "LangGraph vs CrewAI capability survey",
+     "properties": {
+       "researchStatus": "ongoing",
+       "questionId": "ent_question_1",
+       "projectId": "ent_project_eve"
+     } }
+
+   POST /api/hub/relations
+   { "sourceEntityId": "ent_research_1", "targetEntityId": "ent_article_langgraph_docs", "type": "source" }
+   ```
+
+3. When you reach a conclusion, update the research:
+
+   ```json
+   PATCH /api/hub/entities/ent_research_1
+   { "properties": {
+       "researchStatus": "concluded",
+       "conclusion": "LangGraph separates orchestration brain from UX. CrewAI adds agent abstractions but couples to its runtime.",
+       "researchConfidence": "high"
+     } }
+   ```
+
+4. When the user picks, create a decision linked to the question:
+
+   ```json
+   POST /api/hub/entities
+   { "profileSlug": "decision",
+     "title": "Use LangGraph orchestrator over OpenClaude native",
+     "properties": {
+       "decisionStatus": "accepted",
+       "decidedAt": "2026-04-22",
+       "rationale": "Separates Orchestration Brain from UX.",
+       "alternatives": "Standardize on OpenClaude's multi-agent logic.",
+       "projectId": "ent_project_eve"
+     } }
+
+   PATCH /api/hub/entities/ent_question_1
+   { "properties": {
+       "questionStatus": "answered",
+       "answeredByDecisionId": "ent_decision_1"
+     } }
+   ```
+
+5. Tasks follow as usual, linked to the project.
+
+**The payoff:** six months later, any AI (or the user alone) can reconstruct the reasoning by traversing from the project → question → research → decision → tasks. That's the durability Synap provides on top of chat.
+
+### Creation is silent by default
+
+Don't interrupt the conversation to ask "should I log this as a question?" — just do it and add a one-line trailer at the end of your response:
+
+> (Logged as question on Project Eve. Review: https://studio.synap.live/proposals/…)
+
+If the creation was auto-approved (entity.create is on the whitelist), there's no proposal; just show a link to the entity:
+
+> (Logged as question → https://studio.synap.live/entities/ent_question_1)
 
 ## Linking — the core principle
 
@@ -180,14 +294,52 @@ POST /api/hub/documents
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
 
-### Store a fact (memory)
+### Store a fact (memory) — use sparingly
 
 ```json
 POST /api/hub/memory
 { "userId": "{userId}", "fact": "User prefers async communication over meetings" }
 ```
 
-Always auto-approved. Use for preferences and ephemeral context that don't deserve structure. If the fact is about a specific person/thing, prefer creating or updating an entity instead.
+Always auto-approved. **Memory is for loose, unstructured, hard-to-title facts only.** The seductive thing about memory is it has zero friction — no dedup, no linking, no proposals. That makes it easy to misuse.
+
+**The test:** if the user later asked "show me all X," can memory answer? Memory can only keyword-match — it has no structure. So:
+
+| Input                                                   | Use                                                             |
+| ------------------------------------------------------- | --------------------------------------------------------------- |
+| "User prefers async communication"                      | memory — it's a preference                                      |
+| "Garage code is 4321"                                   | memory — throwaway fact                                         |
+| "Should we use LangGraph or CrewAI for Eve?"            | **entity `question`** — substantive inquiry, start of flow      |
+| "Here's what I found comparing LangGraph and CrewAI…"   | **entity `research`** — investigation with sources + conclusion |
+| "We decided to use LangGraph over OpenClaude's native…" | **entity `decision`** — has title, rationale, project           |
+| "Key insight: tasks need better retry logic"            | **entity `note` with tag "insight"** + link to project          |
+| "John is now head of engineering at Acme"               | **update `contact` entity** — that's a property change          |
+| "Launch date moved to May 15"                           | **update `project` entity** — change the startDate              |
+| "Action item from meeting: ship MVP by Friday"          | **entity `task`** linked to the `event` (meeting)               |
+| "Agreed with Sarah: we'll split backend & frontend"     | **entity `decision`** linked to Sarah + the project             |
+
+**Rule of thumb:** if it has a title-worthy noun OR context to link to (a project, a person, a meeting) OR a lifecycle (status/supersession) — it's an entity, not memory. Memory is the fallback, not the default.
+
+**For decisions specifically** — use the `decision` system profile:
+
+```json
+POST /api/hub/entities
+{
+  "userId": "{userId}",
+  "profileSlug": "decision",
+  "title": "Use LangGraph orchestrator over OpenClaude native",
+  "properties": {
+    "decisionStatus": "accepted",
+    "decidedAt": "2026-04-20",
+    "summary": "Dedicated orchestrator service; OpenClaude CLI as UX",
+    "rationale": "Separates the Orchestration Brain (LangGraph) from the UX (OpenClaude CLI).",
+    "alternatives": "Standardize entirely on OpenClaude's multi-agent logic.",
+    "projectId": "ent_project_eve"
+  }
+}
+```
+
+This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
 
 ### Post to the user's personal channel
 

@@ -39,8 +39,9 @@ type OpenClawTab =
   | "troubleshooting";
 
 export default function OpenClawControlCenterPage() {
-  const { workspaceId, workspaceName, workspaces, setWorkspace } =
-    useWorkspace();
+  // OpenClaw is pod-wide — component doesn't read workspace state directly
+  // but the hook call preserves any subscription side-effects.
+  useWorkspace();
   const navigate = useNavigate();
   const location = useLocation();
   const [lastKey, setLastKey] = useState<string | null>(null);

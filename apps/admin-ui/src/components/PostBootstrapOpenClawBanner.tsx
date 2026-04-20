@@ -64,7 +64,11 @@ export default function PostBootstrapOpenClawBanner() {
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-wrap gap-2 pt-3">
-        <Button color="primary" size="sm" onPress={() => navigate("/openclaw")}>
+        <Button
+          variant="primary"
+          size="sm"
+          onPress={() => navigate("/openclaw")}
+        >
           Open OpenClaw setup
         </Button>
         <Button variant="outline" size="sm" onPress={dismiss}>
