@@ -142,59 +142,37 @@ export default function OpenClawControlCenterPage() {
           </Text>
         </div>
         <Text className="text-sm text-default-500">
-          Monitoring add-on module: use this page for OpenClaw lifecycle and
-          diagnostics, and Pod Services for core runtime health/logs. Monitoring
-          is pod-wide, activation is workspace-scoped.
+          OpenClaw control center: provision, monitor, and manage the OpenClaw
+          agent for this pod. One agent per pod — shared across all workspaces.
         </Text>
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Chip size="sm" variant="soft" color="default">
-            Monitoring: Pod-wide
+            Scope: Pod-wide
           </Chip>
-          <Chip size="sm" variant="soft" color="accent">
-            Activation: Workspace-scoped
+          <Chip size="sm" variant="soft" color="success">
+            Pod-wide agent
           </Chip>
         </div>
       </header>
 
       <Card.Root className="border border-divider">
         <Card.Header>
-          <Card.Title>Activation target workspace</Card.Title>
+          <Card.Title>OpenClaw Agent</Card.Title>
           <Card.Description>
-            OpenClaw provisioning and key rotation apply to the selected
-            workspace.
+            One pod-wide OpenClaw agent for all workspaces. The agent
+            authenticates via Hub Protocol using its API key.
           </Card.Description>
         </Card.Header>
         <Card.Content className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Text className="text-sm text-default-500">Current target:</Text>
-            <Chip
-              size="sm"
-              variant="soft"
-              color={workspaceId ? "success" : "warning"}
-            >
-              {workspaceId && workspaceName
-                ? `${workspaceName} (${workspaceId.slice(0, 8)}...)`
-                : "No workspace selected"}
+            <Text className="text-sm text-default-500">Active in:</Text>
+            <Chip size="sm" variant="soft" color="success">
+              This pod (all workspaces)
             </Chip>
           </div>
-          {workspaces.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {workspaces.map((ws) => (
-                <Button
-                  key={ws.id}
-                  size="sm"
-                  variant={workspaceId === ws.id ? "primary" : "outline"}
-                  onPress={() => setWorkspace(ws.id)}
-                >
-                  {ws.name}
-                </Button>
-              ))}
-            </div>
-          ) : (
-            <Text className="text-sm text-default-500">
-              No accessible workspaces found for activation.
-            </Text>
-          )}
+          <Text className="text-sm text-default-500">
+            OpenClaw is pod-wide — one agent shared across all workspaces.
+          </Text>
         </Card.Content>
       </Card.Root>
 
@@ -202,8 +180,7 @@ export default function OpenClawControlCenterPage() {
         selectedKey={tab}
         onSelectionChange={(value) => {
           const key = String(value) as OpenClawTab;
-          const route =
-            key === "overview" ? "/openclaw" : `/openclaw/${String(key)}`;
+          const route = key === "overview" ? "/openclaw" : `/openclaw/${key}`;
           navigate(route);
         }}
       >
@@ -267,7 +244,7 @@ export default function OpenClawControlCenterPage() {
             <Card.Content className="flex flex-wrap gap-2">
               <Button
                 variant="primary"
-                isDisabled={isBusy || !workspaceId}
+                isDisabled={isBusy}
                 onPress={() =>
                   provisionMutation.mutate({ serviceType: "openclaw" })
                 }
@@ -279,7 +256,7 @@ export default function OpenClawControlCenterPage() {
               </Button>
               <Button
                 variant="outline"
-                isDisabled={isBusy || !workspaceId || !openclaw?.provisioned}
+                isDisabled={isBusy || !openclaw?.provisioned}
                 onPress={() =>
                   rotateMutation.mutate({ serviceType: "openclaw" })
                 }
@@ -316,19 +293,6 @@ export default function OpenClawControlCenterPage() {
             </Card.Content>
           </Card.Root>
         </div>
-      ) : null}
-
-      {!workspaceId ? (
-        <Alert status="warning">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Title>No workspace selected</Alert.Title>
-            <Alert.Description>
-              Pod-wide status is available, but activate/rotate actions require
-              a workspace context.
-            </Alert.Description>
-          </Alert.Content>
-        </Alert>
       ) : null}
 
       {tab === "onboarding" && (

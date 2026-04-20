@@ -10,6 +10,7 @@ import {
   protectedProcedure,
   publicProcedure,
   workspaceProcedure,
+  podProcedure,
 } from "../trpc.js";
 import {
   db,
@@ -580,53 +581,38 @@ export const intelligenceRegistryRouter = router({
    * Idempotent: if an agent of this type already exists, returns already_provisioned
    * without creating a new key.
    */
-  provisionAgent: workspaceProcedure
+  provisionAgent: podProcedure
     .input(z.object({ serviceType: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
-      const perm = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: ctx.workspaceId },
-        requiredPermission: "manage",
-      });
-      if (!perm.allowed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            perm.reason ||
-            "Owner or admin role required to provision agent services",
-        });
-      }
-
+      // Pod-wide provisioning: any authenticated user can provision (podProcedure handles auth check)
       // Throws if serviceType is not registered
       const entry = getServiceEntry(input.serviceType);
 
-      // Check for existing agent user of this type
+      // Check for existing agent user of this type (pod-wide search)
       const existing = await findProvisionedAgent(
-        ctx.workspaceId,
+        null, // null workspaceId = pod-wide search
         input.serviceType
       );
       if (existing) {
         logger.info(
           {
-            workspaceId: ctx.workspaceId,
             agentUserId: existing.id,
             serviceType: input.serviceType,
           },
-          "Agent already provisioned for workspace — returning existing info"
+          "Agent already provisioned pod-wide — returning existing info"
         );
         const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
         return {
           status: "already_provisioned" as const,
           agentUserId: existing.id,
           agentEmail: existing.email,
-          workspaceId: ctx.workspaceId,
+          workspaceId: null,
           podUrl,
           configUrl: `${podUrl}/trpc/intelligenceRegistry.getServiceConfig`,
         };
       }
 
-      // Create agent user
+      // Create pod-wide agent user (no workspace membership)
       const agentId = randomUUID();
       const shortId = agentId.slice(0, 8);
       const email = `agent-${input.serviceType}-${shortId}@synap.agent`;
@@ -647,14 +633,6 @@ export const intelligenceRegistryRouter = router({
         locale: "en",
       });
 
-      // Add to workspace with the catalog-specified role
-      await db.insert(workspaceMembers).values({
-        workspaceId: ctx.workspaceId,
-        userId: agentId,
-        role: entry.agentRole,
-        invitedBy: ctx.userId,
-      });
-
       // Create Hub Protocol API key
       const keyPrefix =
         process.env.NODE_ENV === "production"
@@ -668,7 +646,7 @@ export const intelligenceRegistryRouter = router({
 
       await apiKeyRepo.create(
         {
-          keyName: `${entry.displayName} — workspace ${ctx.workspaceId}`,
+          keyName: `${entry.displayName} — pod-wide`,
           keyPrefix,
           key: plainKey,
           scope: entry.defaultScopes,
@@ -685,9 +663,17 @@ export const intelligenceRegistryRouter = router({
         phase: "completed",
         subjectId: agentId,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: ctx.workspaceId ?? undefined,
         data: { agentType: input.serviceType, email },
       });
+
+      logger.info(
+        {
+          agentUserId: agentId,
+          serviceType: input.serviceType,
+        },
+        "Pod-wide agent provisioned"
+      );
 
       logger.info(
         {
@@ -715,7 +701,7 @@ export const intelligenceRegistryRouter = router({
           const blob = encryptConfig({
             SYNAP_POD_URL: podUrl,
             SYNAP_HUB_API_KEY: plainKey,
-            SYNAP_WORKSPACE_ID: ctx.workspaceId,
+            SYNAP_WORKSPACE_ID: ctx.workspaceId ?? "pod-wide",
             SYNAP_AGENT_USER_ID: agentId,
             SYNAP_CONFIG_URL: configUrl,
           });
@@ -773,35 +759,18 @@ export const intelligenceRegistryRouter = router({
    * the agent user record. The intelligence service registration (if any) is left
    * intact — the service deregisters itself on shutdown.
    */
-  deprovisionAgent: workspaceProcedure
+  deprovisionAgent: podProcedure
     .input(z.object({ serviceType: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
-      const perm = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: ctx.workspaceId },
-        requiredPermission: "manage",
-      });
-      if (!perm.allowed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            perm.reason ||
-            "Owner or admin role required to deprovision agent services",
-        });
-      }
-
       // Validate service type (throws on unknown)
       getServiceEntry(input.serviceType);
 
-      const agent = await findProvisionedAgent(
-        ctx.workspaceId,
-        input.serviceType
-      );
+      // Pod-wide search - no workspace membership required
+      const agent = await findProvisionedAgent(null, input.serviceType);
       if (!agent) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `${input.serviceType} is not provisioned for this workspace`,
+          message: `${input.serviceType} is not provisioned on this pod`,
         });
       }
 
@@ -815,17 +784,7 @@ export const intelligenceRegistryRouter = router({
         })
         .where(eq(apiKeys.userId, agent.id));
 
-      // 2. Remove workspace membership
-      await db
-        .delete(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, agent.id),
-            eq(workspaceMembers.workspaceId, ctx.workspaceId)
-          )
-        );
-
-      // 3. Delete agent user record
+      // 2. Delete agent user record (no workspace membership for pod-wide agents)
       await db.delete(users).where(eq(users.id, agent.id));
 
       auditLog({
@@ -834,13 +793,12 @@ export const intelligenceRegistryRouter = router({
         phase: "completed",
         subjectId: agent.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: ctx.workspaceId ?? undefined,
         data: { agentType: input.serviceType },
       });
 
       logger.info(
         {
-          workspaceId: ctx.workspaceId,
           agentUserId: agent.id,
           serviceType: input.serviceType,
           revokedBy: ctx.userId,
@@ -1173,34 +1131,58 @@ function generateApiKey(prefix: string): string {
 }
 
 /**
- * Find an existing provisioned agent user of a given service type in a workspace.
+ * Find an existing provisioned agent user of a given service type.
+ * If workspaceId is null, searches pod-wide (no workspace membership required).
  */
-async function findProvisionedAgent(workspaceId: string, serviceType: string) {
-  const [row] = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      name: users.name,
-      agentMetadata: users.agentMetadata,
-      role: workspaceMembers.role,
-    })
-    .from(users)
-    .innerJoin(
-      workspaceMembers,
-      and(
-        eq(workspaceMembers.userId, users.id),
-        eq(workspaceMembers.workspaceId, workspaceId)
+async function findProvisionedAgent(
+  workspaceId: string | null,
+  serviceType: string
+) {
+  if (workspaceId) {
+    // Workspace-scoped search (legacy)
+    const [row] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        agentMetadata: users.agentMetadata,
+        role: workspaceMembers.role,
+      })
+      .from(users)
+      .innerJoin(
+        workspaceMembers,
+        and(
+          eq(workspaceMembers.userId, users.id),
+          eq(workspaceMembers.workspaceId, workspaceId)
+        )
       )
-    )
-    .where(
-      and(
-        eq(users.userType, "agent"),
-        drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+      .where(
+        and(
+          eq(users.userType, "agent"),
+          drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+        )
       )
-    )
-    .limit(1);
-
-  return row;
+      .limit(1);
+    return row;
+  } else {
+    // Pod-wide search (no workspace membership required)
+    const [row] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        agentMetadata: users.agentMetadata,
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.userType, "agent"),
+          drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+        )
+      )
+      .limit(1);
+    return row;
+  }
 }
 
 /**

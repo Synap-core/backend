@@ -50,10 +50,21 @@
 # IMPORTANT: Place BEFORE {$DOMAIN} to prevent redirect loops.
 # cloudflared sends HTTPS traffic through the tunnel as HTTP to port 80.
 #
-# Blanket-forwards to the backend. The backend is the single CORS gate for
-# the whole pod (including Kratos) — see apps/api/src/index.ts CORS middleware.
+# Route Kratos directly (not through backend) - this is critical for auth
+# flows to work properly with cookies and session handling.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 {$DOMAIN}:80 {
+    # Ory Kratos public API - route direct to bypass backend CORS issues
+    handle_path /.ory/kratos/public/* {
+        reverse_proxy kratos:4433
+    }
+
+    # Ory Kratos admin API
+    handle_path /.ory/kratos/admin/* {
+        reverse_proxy kratos:4434
+    }
+
+    # Everything else goes to backend
     reverse_proxy backend:4000
 }
 
@@ -92,18 +103,12 @@
     }
 
     # Ory Kratos (Authentication) — routed THROUGH the backend, not direct.
-    #
-    # Why: the backend runs the pod's single CORS gate (apps/api/src/index.ts
-    # CORS middleware, whitelisting ALLOWED_ORIGINS + dynamic DB origins).
-    # Direct-to-Kratos routing bypasses that gate and forces every first-party
     # Synap surface (studio, app, landing) to be re-listed inside kratos.yml,
     # which drifts out of sync quickly. Keep one CORS source of truth.
     #
-    # The backend's Hono proxy (app.all("/.ory/kratos/public/*", …)) forwards
-    # unchanged to kratos:4433 and correctly preserves multi-cookie Set-Cookie
-    # headers for the CSRF flow.
-    handle /.ory/kratos/public/* {
-        reverse_proxy backend:4000
+    # Route Kratos directly for auth flows - this was the original working config
+    handle_path /.ory/kratos/public/* {
+        reverse_proxy kratos:4433
     }
 
     # Admin API stays internal — no browser ever hits this, so no CORS needed.

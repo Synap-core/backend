@@ -253,7 +253,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         <Modal.Container size="lg" placement="center" scroll="inside">
           <Modal.Dialog>
             <Command className="flex min-h-0 flex-1 flex-col">
-              <div className="flex shrink-0 items-center gap-2 border-b border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-3 pr-12">
+              <div className="flex shrink-0 items-center gap-2 border-b border-divider bg-content2 px-4 py-3 pr-12">
                 <IconSearch size={18} className="shrink-0 text-default-400" />
                 <Command.Input
                   ref={inputRef}
@@ -295,7 +295,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 ))}
               </Command.List>
 
-              <div className="flex shrink-0 flex-wrap gap-4 border-t border-divider bg-[var(--admin-fluid-surface-soft)] px-4 py-2.5">
+              <div className="flex shrink-0 flex-wrap gap-4 border-t border-divider bg-content2 px-4 py-2.5">
                 <div className="flex items-center gap-1.5 text-xs text-default-500">
                   <kbd className="rounded border border-divider bg-default-100 px-1.5 py-0.5 font-mono text-xs text-default-600">
                     ↑↓

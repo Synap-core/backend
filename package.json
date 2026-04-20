@@ -17,7 +17,7 @@
     "db:migrate:remote": "tsx --env-file=.env.development.remote packages/database/scripts/migrate.ts",
     "db:studio": "cd packages/database && pnpm drizzle-kit studio",
     "create:hub-client": "tsx scripts/create-hub-client.ts",
-    "typecheck": "pnpm --filter @synap-core/types build && tsc -b --pretty false",
+    "typecheck": "pnpm build",
     "publish:packages": "./scripts/publish-packages.sh",
     "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run",
     "lint": "eslint . --cache",
