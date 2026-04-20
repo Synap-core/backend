@@ -31,14 +31,24 @@ report() {
 log "=== Configuring pod ==="
 
 PROFILES=""
+RECREATE_SERVICES=""
 
-# Process arguments: KEY=VALUE pairs and --profile flags
+# Process arguments: KEY=VALUE pairs, --profile, and --recreate flags.
+# --recreate <service>: force-recreate the named service so it picks up
+#   new env values (Docker Compose won't reload env vars on a simple
+#   restart). Typically used after changing DOMAIN — the Caddy container
+#   has to recreate to re-issue a cert for the new hostname.
 while [ $# -gt 0 ]; do
   case "$1" in
     --profile)
       shift
       PROFILES="$PROFILES --profile $1"
       log "Will activate profile: $1"
+      ;;
+    --recreate)
+      shift
+      RECREATE_SERVICES="$RECREATE_SERVICES $1"
+      log "Will force-recreate service: $1"
       ;;
     *=*)
       KEY=$(echo "$1" | cut -d= -f1)
@@ -63,6 +73,15 @@ done
 if [ -n "$PROFILES" ]; then
   log "Starting profile services..."
   $COMPOSE $PROFILES up -d 2>&1
+fi
+
+# Force-recreate specific services so they pick up new .env values.
+# Using `up -d --force-recreate` rather than `restart` because Compose
+# only re-evaluates env vars on recreate.
+if [ -n "$RECREATE_SERVICES" ]; then
+  log "Force-recreating services:$RECREATE_SERVICES"
+  # shellcheck disable=SC2086
+  $COMPOSE up -d --force-recreate --no-deps $RECREATE_SERVICES 2>&1 | tail -20
 fi
 
 log "=== Configuration complete ==="
