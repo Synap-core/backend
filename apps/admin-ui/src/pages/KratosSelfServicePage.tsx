@@ -85,9 +85,22 @@ export default function KratosSelfServicePage({
         setValues(extractInitialValues(loaded));
       } catch (err) {
         if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load auth flow"
-          );
+          // Enhanced error handling with specific messages
+          const errMsg = err instanceof Error ? err.message : "Failed to load auth flow";
+          
+          // Provide more helpful error messages based on common issues
+          let displayError = errMsg;
+          if (errMsg.includes("flow_expired") || errMsg.includes("expired")) {
+            displayError = "Your session has expired. Please try again.";
+          } else if (errMsg.includes("flow_not_found") || errMsg.includes("404")) {
+            displayError = "Authentication flow not found. Please try again.";
+          } else if (errMsg.includes("service_unavailable") || errMsg.includes("503")) {
+            displayError = "Authentication service is temporarily unavailable. Please try again later.";
+          } else if (errMsg.includes("400")) {
+            displayError = "Unable to start authentication. Please refresh and try again.";
+          }
+          
+          setError(displayError);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -146,11 +159,27 @@ export default function KratosSelfServicePage({
               if (fresh) {
                 setFlow(fresh);
                 setValues((prev) => mergeHiddenValues(prev, fresh));
-                setError("Session expired — please sign in again.");
+                // Clear the error and show a clearer message
+                setError("Please sign in again.");
                 return;
               }
-            } catch {
-              /* fall through to error display */
+            } catch (createErr) {
+              // More specific error handling for recreate failures
+              const createErrMsg = createErr instanceof Error ? createErr.message : "Unknown error";
+              
+              if (createErrMsg.includes("session_already_available")) {
+                // Should have been caught earlier, but handle it
+                (onSuccess ?? defaultOnSuccess)({
+                  id: "existing",
+                  active: true,
+                  identity: { id: "existing" },
+                } as KratosSession);
+                return;
+              }
+              
+              // Pass through the recreate error
+              setError(`Could not refresh session: ${createErrMsg}`);
+              return;
             }
           }
           setError(
