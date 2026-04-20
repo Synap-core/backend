@@ -67,7 +67,8 @@ export type PermissionResult =
 export interface PermissionCheckOpts {
   userId: string;
   agentUserId?: string;
-  workspaceId?: string;
+  /** Pass null for workspace-less (hydration / pod-wide personal) operations. */
+  workspaceId?: string | null;
   subjectType: string;
   action: string;
   source?: string;

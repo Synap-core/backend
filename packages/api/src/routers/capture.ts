@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
@@ -185,7 +185,7 @@ export const captureRouter = router({
    * Extract multiple entities + relations from raw text.
    * Calls IS /api/structure, then searches Typesense for dedup candidates.
    */
-  structure: workspaceProcedure
+  structure: podProcedure
     .use(aiRateLimitMiddleware)
     .input(
       z.object({
@@ -208,19 +208,22 @@ export const captureRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const workspaceId = requireWorkspaceId(ctx.workspaceId);
+      const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
 
       logger.debug(
         { userId, contentLength: input.text.length },
         "Structure capture: calling IS"
       );
 
-      // 1. Fetch workspace profiles for IS hints
+      // 1. Fetch accessible profiles for IS hints.
+      // When workspaceId is null (hydration onboarding), pass empty string so
+      // the repo query falls back to SYSTEM + USER-scope profiles only — exactly
+      // what a workspace-less user should see.
       const database = await getDb();
       const profileService = new ProfileResolutionService(database);
       const accessibleProfiles = await profileService.getAccessibleProfiles(
         userId,
-        workspaceId
+        workspaceId ?? ""
       );
       const availableProfiles = accessibleProfiles
         .filter((p) => !(p.uiHints as Record<string, unknown>)?.hideFromCreate)
@@ -241,7 +244,7 @@ export const captureRouter = router({
       // 2. Call IS /api/structure
       const { client } = await resolveIntelligenceService({
         userId,
-        workspaceId,
+        workspaceId: workspaceId ?? undefined,
         capability: "default",
       });
 
@@ -328,7 +331,7 @@ export const captureRouter = router({
             const searchResult = await searchService.searchCollection(
               "entities",
               entity.title,
-              { userId, workspaceId, limit: 3 }
+              { userId, workspaceId: workspaceId ?? undefined, limit: 3 }
             );
 
             // Typesense textMatch is a large integer; normalize to 0-1
@@ -377,7 +380,7 @@ export const captureRouter = router({
    * Batch-create entities and relations from confirmed proposals.
    * Maps tempIds to real entity IDs, creates relations between them.
    */
-  execute: workspaceProcedure
+  execute: podProcedure
     .input(
       z.object({
         entities: z.array(
@@ -402,7 +405,10 @@ export const captureRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const workspaceId = requireWorkspaceId(ctx.workspaceId);
+      // workspaceId is optional — EntityRepository will resolve `null` for
+      // pod-wide profiles (entityScope='pod') and throw for workspace-scoped
+      // profiles when the user has no workspace context.
+      const workspaceId = ctx.workspaceId;
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -487,13 +493,19 @@ export const captureRouter = router({
         relationType: string;
       }> = [];
 
-      // Prefetch all valid relation type slugs for this workspace (avoids N+1)
+      // Prefetch all valid relation type slugs for this workspace (avoids N+1).
+      // Workspace-less callers (hydration) just get the fallback — custom
+      // relation types are a workspace-scoped concept.
       const relDefRepo = new RelationDefRepository(database);
       let validRelationSlugs: Set<string>;
-      try {
-        const allDefs = await relDefRepo.list(workspaceId);
-        validRelationSlugs = new Set(allDefs.map((d) => d.slug));
-      } catch {
+      if (workspaceId) {
+        try {
+          const allDefs = await relDefRepo.list(workspaceId);
+          validRelationSlugs = new Set(allDefs.map((d) => d.slug));
+        } catch {
+          validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
+        }
+      } else {
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
@@ -553,7 +565,7 @@ export const captureRouter = router({
         const entityIds = created.map((c) => c.entityId);
         const profileSlugs = [...new Set(created.map((c) => c.profileSlug))];
         const eventData = {
-          workspaceId,
+          workspaceId: workspaceId ?? undefined,
           entityIds,
           profileSlugs,
           entityCount: created.filter((c) => !c.linked).length,
@@ -566,7 +578,7 @@ export const captureRouter = router({
           action: "complete",
           subjectId: captureEventId,
           userId,
-          workspaceId,
+          workspaceId: workspaceId ?? undefined,
           data: eventData,
         }).catch(() => {}); // fire-and-forget
 

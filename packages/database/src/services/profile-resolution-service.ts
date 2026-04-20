@@ -43,15 +43,15 @@ export class ProfileResolutionService {
    */
   async getEntityScope(
     profileSlug: string,
-    workspaceId: string
+    workspaceId: string | null
   ): Promise<"pod" | "workspace"> {
-    const cacheKey = `${profileSlug}:${workspaceId}`;
+    const cacheKey = `${profileSlug}:${workspaceId ?? "__nows__"}`;
     const cached = ProfileResolutionService.entityScopeCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.scope;
 
     const profile = await this.profileRepo.getBySlugForWorkspace(
       profileSlug,
-      workspaceId
+      workspaceId ?? ""
     );
     const scope = profile?.entityScope === "pod" ? "pod" : "workspace";
 
@@ -82,10 +82,15 @@ export class ProfileResolutionService {
   async resolveProfile(
     identifier: string,
     userId: string,
-    workspaceId: string
+    workspaceId: string | null
   ): Promise<Profile | null> {
-    // Try by slug first — workspace-aware, returns only what's accessible
-    let profile = await this.profileRepo.getBySlug(identifier, workspaceId);
+    // Try by slug first — workspace-aware, returns only what's accessible.
+    // Empty string for workspaceId is the convention for "no workspace lens"
+    // (workspace-less users in hydration).
+    let profile = await this.profileRepo.getBySlug(
+      identifier,
+      workspaceId ?? ""
+    );
     if (profile) return profile;
 
     // Try by ID
@@ -103,7 +108,7 @@ export class ProfileResolutionService {
   private async isAccessible(
     profile: Profile,
     userId: string,
-    workspaceId: string
+    workspaceId: string | null
   ): Promise<boolean> {
     if (profile.scope === "system") return true;
     // Profiles have a globally unique slug constraint, so workspace-scoped
@@ -111,6 +116,7 @@ export class ProfileResolutionService {
     if (profile.scope === "workspace") return true;
     if (profile.scope === "user" && profile.userId === userId) return true;
     if (profile.scope === "shared") {
+      if (!workspaceId) return false;
       // Check profile_workspace_access join table
       const granted = await this.profileRepo.getGrantedWorkspaces(profile.id);
       return granted.includes(workspaceId);
@@ -119,13 +125,14 @@ export class ProfileResolutionService {
   }
 
   /**
-   * Get all profiles accessible to a user in a workspace
+   * Get all profiles accessible to a user in a workspace.
+   * Pass null/empty for workspace-less contexts (returns SYSTEM + USER-scope only).
    */
   async getAccessibleProfiles(
     userId: string,
-    workspaceId: string
+    workspaceId: string | null
   ): Promise<Profile[]> {
-    return this.profileRepo.getAccessibleProfiles(userId, workspaceId);
+    return this.profileRepo.getAccessibleProfiles(userId, workspaceId ?? "");
   }
 
   /**

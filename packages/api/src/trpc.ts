@@ -165,6 +165,55 @@ export const workspaceProcedure = protectedProcedure.use(async (opts) => {
 });
 
 /**
+ * Pod procedure (auth + optional workspace)
+ *
+ * Tolerates workspace-less callers (new users, hydration onboarding, pod-wide reads).
+ * If X-Workspace-Id header is present, verifies membership and provides
+ * ctx.workspaceRole. If absent, ctx.workspaceId stays null and ctx.workspaceRole
+ * is undefined — the procedure body is responsible for deciding whether that's OK
+ * (typically: pod-wide profiles (entityScope='pod') work; workspace-scoped don't).
+ *
+ * Use this for any endpoint that must function during onboarding before a workspace
+ * exists, or that operates on pod-wide data (entities, channels, proposals) where
+ * the workspace lens is optional.
+ */
+export const podProcedure = protectedProcedure.use(async (opts) => {
+  const { ctx } = opts;
+
+  if (!ctx.workspaceId) {
+    return opts.next({
+      ctx: {
+        ...ctx,
+        workspaceId: null as string | null,
+        workspaceRole: undefined as string | undefined,
+      },
+    });
+  }
+
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, ctx.workspaceId),
+      eq(workspaceMembers.userId, ctx.userId)
+    ),
+  });
+
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Access denied to workspace",
+    });
+  }
+
+  return opts.next({
+    ctx: {
+      ...ctx,
+      workspaceId: ctx.workspaceId as string | null,
+      workspaceRole: membership.role as string | undefined,
+    },
+  });
+});
+
+/**
  * Pod-admin procedure (auth + pod admin role required)
  *
  * Restricts access to users who are an admin or owner of the pod-admin
