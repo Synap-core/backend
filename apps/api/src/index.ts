@@ -421,7 +421,17 @@ app.post("/api/handshake", async (c) => {
       return c.json({ error: "Invalid token type" }, 400);
     }
 
-    const { email, name } = payload;
+    // Normalize email so lookups survive casing differences between the
+    // CP's Better Auth user record, setup-account's normalized email, and
+    // whatever casing the user originally typed. Without this, a JWT
+    // carrying "Alice@Ex.com" wouldn't find the Kratos identity created
+    // by setup-account as "alice@ex.com" — and handshake would happily
+    // create a second identity, so the user ends up with two accounts:
+    // one they can sign into (from setup), one the handshake keeps
+    // spawning (with a throwaway password).
+    const rawEmail = payload.email;
+    const email = rawEmail?.trim().toLowerCase();
+    const { name } = payload;
     if (!email) {
       return c.json({ error: "Token missing email claim" }, 400);
     }
