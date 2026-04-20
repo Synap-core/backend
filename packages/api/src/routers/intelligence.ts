@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc, or, like, sql, drizzleSql } from "@synap/database";
@@ -21,7 +21,6 @@ import {
   ChannelAgentType,
   intelligenceServices,
   users,
-  workspaceMembers,
   apiKeys,
   mcpServers,
   compactedStates,
@@ -1013,7 +1012,7 @@ export const intelligenceRouter = router({
    * Idempotent: if the agent already exists, returns its ID without a new API key
    * (key is only shown once — user must rotate if lost).
    */
-  provisionService: workspaceProcedure
+  provisionService: podProcedure
     .input(
       z.object({
         serviceType: z.enum(["openclaw"]),
@@ -1023,17 +1022,9 @@ export const intelligenceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { serviceType, podUrlOverride } = input;
-      const workspaceId = ctx.workspaceId!;
+      const workspaceId = ctx.workspaceId ?? null;
 
-      // Only workspace owners and admins can provision agent services
-      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Only workspace owners and admins can provision intelligence services.",
-        });
-      }
-
+      // Pod-level: any authenticated user can provision (pod-level check done by podProcedure)
       const entry = SERVICE_CATALOG[serviceType];
       if (!entry) {
         throw new TRPCError({
@@ -1042,15 +1033,13 @@ export const intelligenceRouter = router({
         });
       }
 
-      // Check if agent already exists for this workspace
+      // Check if agent already exists (pod-wide search - no workspace membership required)
       const [existing] = await db
         .select({ id: users.id, email: users.email })
         .from(users)
-        .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
         .where(
           and(
             eq(users.userType, "agent"),
-            eq(workspaceMembers.workspaceId, workspaceId),
             drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
           )
         )
@@ -1082,7 +1071,7 @@ export const intelligenceRouter = router({
         const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
         await apiKeyRepo.create(
           {
-            keyName: `${entry.displayName} — workspace ${workspaceId} (rotated)`,
+            keyName: `${entry.displayName} — rotated`,
             keyPrefix,
             key: plainKey,
             scope: entry.defaultScopes,
@@ -1096,21 +1085,10 @@ export const intelligenceRouter = router({
         const dockerRunCommand =
           entry.buildDockerCommand?.({
             podUrl,
-            workspaceId,
+            workspaceId: workspaceId ?? "pod-wide",
             agentUserId: existing.id,
             apiKey: plainKey,
           }) ?? null;
-
-        // Persist docker command in workspace settings so wizard can show it after re-open.
-        // Path is hardcoded per serviceType (openclaw-only enum) — no interpolation needed.
-        if (dockerRunCommand) {
-          await db
-            .update(workspaces)
-            .set({
-              settings: drizzleSql`jsonb_set(coalesce(settings, '{}'), '{serviceCommands,openclaw}', ${JSON.stringify(dockerRunCommand)}::jsonb, true)`,
-            })
-            .where(eq(workspaces.id, workspaceId));
-        }
 
         return {
           alreadyProvisioned: true,
@@ -1119,13 +1097,13 @@ export const intelligenceRouter = router({
           env: {
             SYNAP_POD_URL: podUrl,
             SYNAP_HUB_API_KEY: plainKey,
-            SYNAP_WORKSPACE_ID: workspaceId,
+            SYNAP_WORKSPACE_ID: workspaceId ?? "pod-wide",
             SYNAP_AGENT_USER_ID: existing.id,
           },
         };
       }
 
-      // Create new agent user
+      // Create new pod-wide agent user (no workspace membership required)
       const agentId = randomUUID();
       const shortId = agentId.slice(0, 8);
       const email = `agent-${serviceType}-${shortId}@synap.agent`;
@@ -1146,13 +1124,6 @@ export const intelligenceRouter = router({
         locale: "en",
       });
 
-      await db.insert(workspaceMembers).values({
-        workspaceId,
-        userId: agentId,
-        role: entry.agentRole,
-        invitedBy: null,
-      });
-
       const keyPrefix =
         process.env.NODE_ENV === "production"
           ? "synap_hub_live_"
@@ -1163,7 +1134,7 @@ export const intelligenceRouter = router({
       const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
       await apiKeyRepo.create(
         {
-          keyName: `${entry.displayName} — workspace ${workspaceId}`,
+          keyName: `${entry.displayName} — pod-wide`,
           keyPrefix,
           key: plainKey,
           scope: entry.defaultScopes,
@@ -1177,21 +1148,10 @@ export const intelligenceRouter = router({
       const dockerRunCommand =
         entry.buildDockerCommand?.({
           podUrl,
-          workspaceId,
+          workspaceId: workspaceId ?? "pod-wide",
           agentUserId: agentId,
           apiKey: plainKey,
         }) ?? null;
-
-      // Persist docker command in workspace settings so wizard can show it after re-open.
-      // Path is hardcoded per serviceType (openclaw-only enum) — no interpolation needed.
-      if (dockerRunCommand) {
-        await db
-          .update(workspaces)
-          .set({
-            settings: drizzleSql`jsonb_set(coalesce(settings, '{}'), '{serviceCommands,openclaw}', ${JSON.stringify(dockerRunCommand)}::jsonb, true)`,
-          })
-          .where(eq(workspaces.id, workspaceId));
-      }
 
       return {
         alreadyProvisioned: false,
@@ -1200,7 +1160,7 @@ export const intelligenceRouter = router({
         env: {
           SYNAP_POD_URL: podUrl,
           SYNAP_HUB_API_KEY: plainKey,
-          SYNAP_WORKSPACE_ID: workspaceId,
+          SYNAP_WORKSPACE_ID: workspaceId ?? "pod-wide",
           SYNAP_AGENT_USER_ID: agentId,
         },
       };
