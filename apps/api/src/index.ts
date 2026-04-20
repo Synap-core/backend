@@ -571,8 +571,28 @@ app.post("/api/handshake", async (c) => {
       );
     }
 
-    // 4. Set session cookie for the browser
-    const isSecure = c.req.url.startsWith("https");
+    // 4. Set session cookie for the browser.
+    //
+    // `c.req.url` alone is unreliable here: Caddy terminates TLS and forwards
+    // to backend:4000 over plain HTTP, so `c.req.url.startsWith("https")` is
+    // always false behind the reverse proxy — which would drop the `Secure`
+    // flag. Modern browsers reject `SameSite=None` cookies without `Secure`,
+    // so the cookie would silently never reach the client.
+    //
+    // Detect HTTPS via the proxy's forwarded proto header, with X-Forwarded-Proto
+    // and X-Scheme as fallbacks, and finally trust PUBLIC_URL as the ground truth
+    // for the public origin. Default to Secure=true in production to fail safe.
+    const forwardedProto = c.req
+      .header("x-forwarded-proto")
+      ?.split(",")[0]
+      ?.trim();
+    const isSecure =
+      forwardedProto === "https" ||
+      c.req.header("x-scheme") === "https" ||
+      c.req.url.startsWith("https") ||
+      (process.env.PUBLIC_URL ?? "").startsWith("https://") ||
+      process.env.NODE_ENV === "production";
+
     c.header(
       "Set-Cookie",
       `ory_kratos_session=${sessionToken}; Path=/; HttpOnly; ${isSecure ? "Secure; " : ""}SameSite=None`

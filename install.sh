@@ -37,6 +37,7 @@ INTELLIGENCE_API_KEY="${SYNAP_INTELLIGENCE_API_KEY:-}"
 ADMIN_EMAIL="${SYNAP_ADMIN_EMAIL:-}"
 BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
 POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
+CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
 
 # ─── CLI flags ─────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -50,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --deploy-version)     DEPLOY_VERSION="$2";          shift 2 ;;
     --backend-version)    BACKEND_VERSION_FLAG="$2";    shift 2 ;;
     --pod-agent-version)  POD_AGENT_VERSION_FLAG="$2";  shift 2 ;;
+    --control-plane-url)  CONTROL_PLANE_URL_FLAG="$2";  shift 2 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -408,11 +410,25 @@ VAULT_SERVER_KEY=$VAULT_SERVER_KEY
 # Required by setup-openclaw.sh to create agent users and API keys.
 PROVISIONING_TOKEN=$PROVISIONING_TOKEN
 
+# ── Pod Public URL ────────────────────────────────────────────────────────────
+# MUST match the public HTTPS origin the browser uses to reach this pod.
+# Used as:
+#   1) Handshake JWT audience check — CP signs handshake tokens with
+#      aud=https://<this-pod-domain>, and the pod verifies aud === PUBLIC_URL.
+#      If PUBLIC_URL is wrong, every handshake fails with 401.
+#   2) Self-reference for any backend-side link generation (invite URLs, etc.).
+# Overriding this is ONLY correct if you fronted the pod with a different
+# public hostname (custom domain) — then set PUBLIC_URL to that hostname too.
+PUBLIC_URL=https://$DOMAIN
+
 # ── Control Plane Integration ─────────────────────────────────────────────────
 # For Synap-managed deployments only. Leave blank for fully self-hosted setups.
 # The pod verifies CP JWTs by fetching /.well-known/jwks.json from CONTROL_PLANE_URL.
 # No shared secret required — only the public URL is needed here.
-CONTROL_PLANE_URL=
+# When blank, the pod falls back to reading the \`iss\` claim from each JWT
+# (standard OIDC discovery). Setting it explicitly is safer: it pins which
+# Control Plane is trusted to sign tokens for this pod.
+CONTROL_PLANE_URL=${CONTROL_PLANE_URL_FLAG}
 
 # ── Intelligence Service (Synap Agent Hub) ────────────────────────────────────
 INTELLIGENCE_HUB_URL=${INTELLIGENCE_URL:-}
