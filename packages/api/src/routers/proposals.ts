@@ -257,6 +257,64 @@ export const proposalsRouter = router({
     }),
 
   /**
+   * Fetch a single proposal by ID.
+   *
+   * Used by the Studio's /proposals/:id detail page — the destination of the
+   * `reviewUrl` returned on every `"status": "proposed"` response. Enforces
+   * the same workspace-access check as `list` (editor or higher).
+   */
+  get: protectedProcedure
+    .input(z.object({ proposalId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+
+      // Workspace access check
+      if (proposal.workspaceId) {
+        const { workspaceMembers } = await import("@synap/database/schema");
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, proposal.workspaceId),
+            eq(workspaceMembers.userId, userId)
+          ),
+        });
+        if (
+          !membership ||
+          !["owner", "admin", "editor"].includes(membership.role)
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Editor or higher role required to view this proposal",
+          });
+        }
+      } else {
+        // Pod-wide proposal (no workspaceId) — only the proposer can see it
+        const proposalData = proposal.data as Record<string, unknown> | null;
+        if (proposalData?.sourceId !== userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Not authorized to view this proposal",
+          });
+        }
+      }
+
+      return {
+        ...proposal,
+        request: buildRequestFromProposal(proposal),
+      };
+    }),
+
+  /**
    * Approve a proposal
    * For hub-created document proposals (AI edit): applies proposedContent to storage + DB.
    * For other proposals: emits the original request event as *.validated.

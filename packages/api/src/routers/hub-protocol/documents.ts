@@ -81,6 +81,10 @@ export const documentsRouter = router({
           documentId,
           status: "proposed" as const,
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
           message: "Document creation proposed, awaiting approval",
         };
       }
@@ -266,9 +270,22 @@ export const documentsRouter = router({
         operation: "create",
       });
 
+      const { buildProposalResponseFields } =
+        await import("../../utils/permission-check.js");
+      const envelope = buildProposalResponseFields({
+        proposalId: proposal.id,
+        subjectType: "document",
+        action: input.proposalType,
+        data: { id: input.documentId, title: doc.title },
+      });
+
       return {
         status: "proposed",
         proposalId: proposal.id,
+        summary: envelope.summary,
+        reasoning: envelope.reasoning,
+        reviewPath: envelope.reviewPath,
+        reviewUrl: envelope.reviewUrl,
         message: "Document edit proposed, awaiting approval",
         requestId: proposal.id,
       };

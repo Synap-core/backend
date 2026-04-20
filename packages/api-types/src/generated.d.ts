@@ -2883,6 +2883,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			output: {
+				request: UpdateRequest;
+				workspaceId: string | null;
+				sourceMessageId: string | null;
+				id: string;
+				data: unknown;
+				updatedAt: Date;
+				createdAt: Date;
+				status: "approved" | "pending" | "rejected" | "auto_approved";
+				expiresAt: Date | null;
+				createdBy: string | null;
+				threadId: string | null;
+				targetType: string;
+				targetId: string;
+				proposalType: string;
+				commandRunId: string | null;
+				agentUserId: string | null;
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				comments: unknown;
+			};
+			meta: object;
+		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				proposalId: string;

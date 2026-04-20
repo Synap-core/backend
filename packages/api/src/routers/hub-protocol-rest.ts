@@ -296,6 +296,54 @@ app.patch("/workspaces/:workspaceId/eve-provider-routing", async (c) => {
  * GET /workspaces/:workspaceId/eve-provider-routing
  * Read synced Eve provider routing policy from workspace settings.
  */
+/**
+ * GET /workspaces/:workspaceId/governance
+ * Returns the effective AI governance policy for a workspace — the resolved
+ * auto-approve whitelist (workspace override or backend default), governance
+ * mode, proposal approval policy, and the default list for comparison.
+ *
+ * Consumers:
+ *   - skills (synap/governance.md) — so agents can tell the user what will be
+ *     auto-approved vs queued for review BEFORE attempting the write.
+ *   - admin UIs that want to show "what your AI can do here" per workspace.
+ *
+ * Scope: hub-protocol.read
+ */
+app.get("/workspaces/:workspaceId/governance", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+
+  const userId = c.get("userId") as string;
+  const workspaceId = c.req.param("workspaceId");
+  if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+    columns: { role: true },
+  });
+  if (!membership) return c.json({ error: "Access denied" }, 403);
+
+  try {
+    const { getEffectiveGovernance } =
+      await import("../utils/permission-check.js");
+    const policy = await getEffectiveGovernance(workspaceId);
+    return c.json(policy);
+  } catch (err) {
+    logger.error(
+      { err, userId, workspaceId },
+      "GET /workspaces/:workspaceId/governance failed"
+    );
+    return c.json({ error: "Failed to read governance policy" }, 500);
+  }
+});
+
 app.get("/workspaces/:workspaceId/eve-provider-routing", async (c) => {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
     return c.json(
@@ -3934,6 +3982,10 @@ app.post("/commands/execute", async (c) => {
       return c.json({
         status: "proposed",
         proposalId: permResult.proposalId,
+        summary: permResult.summary,
+        reasoning: permResult.reasoning,
+        reviewPath: permResult.reviewPath,
+        reviewUrl: permResult.reviewUrl,
         message: "Command proposed for approval",
       });
     }

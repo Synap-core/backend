@@ -10,7 +10,7 @@
  * Returns immediately — no async event pipeline.
  */
 
-import { db, proposals } from "@synap/database";
+import { db, proposals, eq } from "@synap/database";
 import { users, workspaces, ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
@@ -61,8 +61,122 @@ const BLOCKED_FILESYSTEM_PATHS: RegExp[] = [
 
 export type PermissionResult =
   | { granted: true }
-  | { granted: false; proposalId: string }
+  | {
+      granted: false;
+      proposalId: string;
+      /** Short human-readable summary: e.g., `Delete task "Q2 plan review"`. */
+      summary: string;
+      /** The AI's reasoning, echoed back so callers can surface it to the user. */
+      reasoning: string;
+      /** Pod-relative path for the review UI: `/proposals/{id}`. */
+      reviewPath: string;
+      /** Absolute URL to review the proposal (e.g., studio.synap.live). */
+      reviewUrl: string;
+    }
   | { denied: true; reason: string };
+
+/**
+ * Base URL of the Synap Studio app where proposals are reviewed.
+ * Override via `SYNAP_APP_URL` env var (e.g., self-hosted: `https://app.my-pod.com`).
+ * Default: `https://studio.synap.live`.
+ */
+export const STUDIO_APP_URL =
+  process.env.SYNAP_APP_URL?.replace(/\/$/, "") ?? "https://studio.synap.live";
+
+/**
+ * Default whitelist: agent actions that bypass proposal review.
+ *
+ * Workspaces can override via `settings.aiGovernance.autoApproveFor`.
+ * When `settings.governanceMode === "agent-owned"`, destructive actions
+ * (delete/archive/purge) always propose regardless of this list.
+ *
+ * Format: "<subjectType>.<action>" or "<subjectType>.*" glob.
+ */
+export const DEFAULT_AUTO_APPROVE: readonly string[] = [
+  "search.*",
+  "memory.recall",
+  "entity.read",
+  "bento.arrange",
+  "document.read",
+  "context.*",
+  "filesystem.read",
+  "filesystem.write_workspace",
+  "view.create",
+  "profile.create",
+  "profile.update",
+  "property_def.create",
+  "property_def.update",
+  "entity.create",
+  "entity.update",
+  "document.create",
+  "relation.create",
+  "channel.create",
+  "terminal.read_logs",
+];
+
+/**
+ * Actions that always require a proposal in agent-owned workspaces,
+ * regardless of whitelist configuration.
+ */
+export const DESTRUCTIVE_ACTIONS: readonly string[] = [
+  "delete",
+  "archive",
+  "purge",
+];
+
+/**
+ * Resolve the effective governance policy for a workspace.
+ *
+ * Returns the actual whitelist that would be used at runtime, plus metadata
+ * about whether it's the default or a workspace override. Used by:
+ *   - GET /api/hub/workspaces/:id/governance (client-facing introspection)
+ *   - skills (to tell the user what will be auto-approved vs proposed)
+ */
+export async function getEffectiveGovernance(workspaceId: string): Promise<{
+  workspaceId: string;
+  effective: {
+    autoApproveFor: readonly string[];
+    governanceMode: "default" | "agent-owned";
+    proposalApprovalPolicy: "owner_and_admins" | "any_editor" | "admins_only";
+    destructiveAlwaysPropose: boolean;
+    destructiveActions: readonly string[];
+  };
+  source: "workspace" | "default";
+  defaults: {
+    autoApproveFor: readonly string[];
+  };
+}> {
+  const [ws] = await db
+    .select({ settings: workspaces.settings })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
+  const settings = ws?.settings as WorkspaceSettings | undefined;
+  const override = settings?.aiGovernance?.autoApproveFor;
+  const governanceMode =
+    (settings as Record<string, unknown> | undefined)?.governanceMode ===
+    "agent-owned"
+      ? "agent-owned"
+      : "default";
+  const proposalApprovalPolicy =
+    settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
+
+  return {
+    workspaceId,
+    effective: {
+      autoApproveFor: override ?? DEFAULT_AUTO_APPROVE,
+      governanceMode,
+      proposalApprovalPolicy,
+      destructiveAlwaysPropose: governanceMode === "agent-owned",
+      destructiveActions: DESTRUCTIVE_ACTIONS,
+    },
+    source: override ? "workspace" : "default",
+    defaults: {
+      autoApproveFor: DEFAULT_AUTO_APPROVE,
+    },
+  };
+}
 
 export interface PermissionCheckOpts {
   userId: string;
@@ -233,34 +347,8 @@ export async function checkPermissionOrPropose(
           });
         }
 
-        // Default whitelist: read-only + safe context-tracking + schema evolution operations.
-        // "context.*" covers linkEntity / linkDocument (thread context metadata, not state changes).
-        // "filesystem.read" is safe — agents can read files without proposals.
-        // "filesystem.write_workspace" is safe — OpenClaw's own ~/openclaw/workspace/ directory.
-        // "view.create" — agents create views freely; view.update requires proposal.
-        // "profile.create/update" — schema evolution is non-destructive and reversible.
-        // "property_def.create/update" — adding/renaming fields is safe; no delete exposed.
-        const DEFAULT_AUTO_APPROVE = [
-          "search.*",
-          "memory.recall",
-          "entity.read",
-          "bento.arrange",
-          "document.read",
-          "context.*",
-          "filesystem.read",
-          "filesystem.write_workspace",
-          "view.create",
-          "profile.create",
-          "profile.update",
-          "property_def.create",
-          "property_def.update",
-          "entity.create", // AI creates entities during workspace setup
-          "entity.update", // AI updates entity schemas/properties
-          "document.create", // AI creates documents
-          "relation.create", // AI creates relations between entities
-          "channel.create", // AI creates AI thread channels
-          "terminal.read_logs", // AI reads pod service logs (read-only, no side effects)
-        ];
+        // Default whitelist: see DEFAULT_AUTO_APPROVE at module scope.
+        // Workspace override via settings.aiGovernance.autoApproveFor.
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
 
@@ -365,6 +453,58 @@ export async function checkPermissionOrPropose(
 const PROPOSAL_TTL_DAYS = 30;
 
 /**
+ * Build a short human-readable summary of what's being proposed.
+ * Example: `Create task "Design new onboarding flow"`
+ *          `Delete entity ent_abc`
+ *          `Update view "Active Tasks"`
+ */
+export function buildProposalSummary(
+  subjectType: string,
+  action: string,
+  data: Record<string, unknown>
+): string {
+  const actionVerb = action.charAt(0).toUpperCase() + action.slice(1);
+  const label = (data.title || data.name || data.slug || data.id) as
+    | string
+    | undefined;
+  if (label) return `${actionVerb} ${subjectType} "${label}"`;
+  return `${actionVerb} ${subjectType}`;
+}
+
+/**
+ * Build the envelope of fields returned on any "proposed" response. Used both
+ * by `createProposal()` (via the perm helper) and by any caller that creates
+ * a proposal directly via `db.insert(proposals)`.
+ */
+export function buildProposalResponseFields(opts: {
+  proposalId: string;
+  subjectType: string;
+  action: string;
+  data: Record<string, unknown>;
+  reasoning?: string;
+}): {
+  summary: string;
+  reasoning: string;
+  reviewPath: string;
+  reviewUrl: string;
+} {
+  const summary = buildProposalSummary(
+    opts.subjectType,
+    opts.action,
+    opts.data
+  );
+  const reviewPath = `/proposals/${opts.proposalId}`;
+  return {
+    summary,
+    reasoning:
+      opts.reasoning ??
+      `${opts.action} ${opts.subjectType} requires your approval`,
+    reviewPath,
+    reviewUrl: `${STUDIO_APP_URL}${reviewPath}`,
+  };
+}
+
+/**
  * Create a proposal for an AI-sourced action that requires review.
  */
 async function createProposal(opts: {
@@ -380,7 +520,14 @@ async function createProposal(opts: {
   threadId?: string;
   commandRunId?: string;
   sourceMessageId?: string;
-}): Promise<{ granted: false; proposalId: string }> {
+}): Promise<{
+  granted: false;
+  proposalId: string;
+  summary: string;
+  reasoning: string;
+  reviewPath: string;
+  reviewUrl: string;
+}> {
   const {
     userId,
     agentUserId,
@@ -489,5 +636,14 @@ async function createProposal(opts: {
     agentUserId: agentUserId ?? undefined,
   }).catch(() => {});
 
-  return { granted: false, proposalId: proposal.id };
+  const summary = buildProposalSummary(singularType, action, data);
+  const reviewPath = `/proposals/${proposal.id}`;
+  return {
+    granted: false,
+    proposalId: proposal.id,
+    summary,
+    reasoning: reasoning ?? `${action} ${singularType} requires your approval`,
+    reviewPath,
+    reviewUrl: `${STUDIO_APP_URL}${reviewPath}`,
+  };
 }

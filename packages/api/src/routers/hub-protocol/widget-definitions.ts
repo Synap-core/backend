@@ -112,6 +112,10 @@ export const hubWidgetDefinitionsRouter = router({
           status: "proposed" as const,
           message: "Widget registration proposed for review",
           proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
           widgetDef: null,
         };
       }

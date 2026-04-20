@@ -168,6 +168,26 @@ export const entitiesRouter = router({
         agentUserId: input.agentUserId,
       });
 
+      if (result.status === "proposed" && result.proposalId) {
+        const { buildProposalResponseFields } =
+          await import("../../utils/permission-check.js");
+        const envelope = buildProposalResponseFields({
+          proposalId: result.proposalId,
+          subjectType: "entity",
+          action: "update",
+          data: { id: input.entityId, title: input.title },
+        });
+        return {
+          status: result.status,
+          message: result.message,
+          proposalId: result.proposalId,
+          summary: envelope.summary,
+          reasoning: envelope.reasoning,
+          reviewPath: envelope.reviewPath,
+          reviewUrl: envelope.reviewUrl,
+        };
+      }
+
       return {
         status: result.status,
         message: result.message,
