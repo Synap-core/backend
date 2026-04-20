@@ -1206,6 +1206,16 @@ export const intelligenceRegistryRouter = router({
 
     const isProvisioned = !!key || !!agentUser;
 
+    const keyRow = key as { last_used_at: string } | undefined;
+    const oldKeyRow = oldKey as { last_used_at: string } | undefined;
+    const lastUsedAt = keyRow?.last_used_at ?? oldKeyRow?.last_used_at ?? null;
+    const now = new Date();
+    const lastCheck = lastUsedAt ? new Date(lastUsedAt) : null;
+    const isHealthy =
+      isProvisioned &&
+      !!lastCheck &&
+      now.getTime() - lastCheck.getTime() < 24 * 60 * 60 * 1000;
+
     const settingsLinks =
       typeof controlPlane.openclawUiUrl === "string"
         ? {
@@ -1235,8 +1245,12 @@ export const intelligenceRegistryRouter = router({
         mcpEndpoint: null,
         mcpApproved: false,
         health: {
-          lastCheckAt: key?.last_used_at ?? oldKey?.last_used_at ?? null,
-          status: isProvisioned ? "unknown" : "not_configured",
+          lastCheckAt: lastUsedAt,
+          status: isProvisioned
+            ? isHealthy
+              ? "healthy"
+              : "not_responded"
+            : "not_configured",
         },
         links: settingsLinks,
       },
@@ -1290,11 +1304,29 @@ export const intelligenceRegistryRouter = router({
       };
     }
 
+    const key = keyRows[0];
+    const lastUsedAt = (key as { last_used_at: string } | undefined)
+      ?.last_used_at;
+    const now = new Date();
+    const lastCheck = lastUsedAt ? new Date(lastUsedAt) : null;
+    const isHealthy =
+      !!lastCheck && now.getTime() - lastCheck.getTime() < 24 * 60 * 60 * 1000;
+
+    if (!isHealthy) {
+      return {
+        ok: true,
+        status: "provisioned" as const,
+        checkedAt: new Date().toISOString(),
+        message:
+          "OpenClaw is provisioned. Start the OpenClaw container to connect.",
+      };
+    }
+
     return {
       ok: true,
-      status: "connected" as const,
+      status: "healthy" as const,
       checkedAt: new Date().toISOString(),
-      message: "OpenClaw is provisioned and connected.",
+      message: "OpenClaw is running and connected.",
     };
   }),
 
@@ -1328,12 +1360,21 @@ export const intelligenceRegistryRouter = router({
       | { id: string; email: string; created_at: string }
       | undefined;
 
+    const isProvisioned = !!key || !!oldUser;
+    const lastUsedAt = key?.last_used_at;
+    const now = new Date();
+    const lastCheck = lastUsedAt ? new Date(lastUsedAt) : null;
+    const hasConnected =
+      isProvisioned &&
+      !!lastCheck &&
+      now.getTime() - lastCheck.getTime() < 24 * 60 * 60 * 1000;
+
     return {
       checkedAt: new Date().toISOString(),
       checks: {
-        agentProvisioned: !!key || !!oldUser,
-        serviceRegistered: !!key || !!oldUser,
-        webhookReachable: false,
+        agentProvisioned: isProvisioned,
+        serviceRegistered: isProvisioned,
+        webhookReachable: hasConnected,
         mcpApproved: false,
       },
       metadata: {
@@ -1457,16 +1498,18 @@ docker run -d \\
     const settings = (ws?.settings as Record<string, unknown>) ?? {};
     const controlPlane =
       (settings.controlPlane as Record<string, unknown>) ?? {};
-    const openclawUi =
+    const customUrl =
       typeof controlPlane.openclawUiUrl === "string"
         ? controlPlane.openclawUiUrl
         : null;
 
+    const podUrl = process.env.PUBLIC_URL || "http://localhost:4000";
+    const uiUrl = customUrl || `${podUrl}/openclaw`;
+
     return {
-      url: openclawUi,
-      available: !!openclawUi,
-      fallback:
-        "Use `npx @synap-core/cli openclaw open` or your configured OpenClaw dashboard URL.",
+      url: uiUrl,
+      customUrl: !!customUrl,
+      available: true,
     };
   }),
 

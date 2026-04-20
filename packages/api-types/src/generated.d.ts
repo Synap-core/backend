@@ -4643,7 +4643,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mcpEndpoint: null;
 					mcpApproved: boolean;
 					health: {
-						lastCheckAt: {} | null;
+						lastCheckAt: string | null;
 						status: string;
 					};
 					links: {
@@ -4676,7 +4676,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 			} | {
 				ok: boolean;
-				status: "connected";
+				status: "provisioned";
+				checkedAt: string;
+				message: string;
+			} | {
+				ok: boolean;
+				status: "healthy";
 				checkedAt: string;
 				message: string;
 			};
@@ -4733,9 +4738,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getOpenClawHostedUiLink: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
-				url: string | null;
+				url: string;
+				customUrl: boolean;
 				available: boolean;
-				fallback: string;
 			};
 			meta: object;
 		}>;
