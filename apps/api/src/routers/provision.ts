@@ -8,6 +8,7 @@
  *   POST /api/provision/connect               — CP pushes credentials via signed JWT
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
  *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
+ *   POST /api/provision/seed-admin            — Atomic admin seeding (Kratos + users + workspace)
  *   GET  /api/provision/status                — Public status check (includes IS credential probe)
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
@@ -25,6 +26,7 @@ import {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
   verifyCpJwt,
+  verifyCpJwtWithTrust,
 } from "@synap/api";
 import {
   getDb,
@@ -34,6 +36,7 @@ import {
   EventRepository,
   ApiKeyRepository,
   sql,
+  seedAdminUser,
 } from "@synap/database";
 import {
   workspaces,
@@ -74,13 +77,26 @@ provisionRouter.post("/connect", async (c) => {
   }
   const { token } = parsed.data;
 
-  // JWT issuer verification uses the Trusted Issuers registry (trusted_issuers table).
-  // The setup/agent and provision endpoints go through TrustedIssuerService first.
-  // For other provisioning endpoints, verifyCpJwt resolves the issuer URL from:
-  //   - cpUrl param (CONTROL_PLANE_URL env) → allowlist mode
-  //   - JWT iss claim (OIDC-style) → any HTTPS issuer
-  // See hub-protocol-rest.ts setup/agent for the full trusted issuer flow.
-  const payload = await verifyCpJwt<{
+  // JWT issuer verification uses the Trusted Issuers registry (trusted_issuers
+  // table). `verifyCpJwtWithTrust` layers the allowlist check on top of the
+  // standard ES256 signature / issuer / expiry / audience / jti verification —
+  // only issuers whose `status === "approved"` are accepted.
+  //
+  // Audience (PUBLIC_URL) is mandatory: a provisioning token minted for another
+  // pod must not replay here. If PUBLIC_URL is unset we refuse the request
+  // rather than silently skipping the check.
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "connect refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json(
+      { error: "PUBLIC_URL not configured; handshake refused" },
+      500
+    );
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     controlPlaneUrl: string;
@@ -91,7 +107,10 @@ provisionRouter.post("/connect", async (c) => {
     appUrl?: string;
     nangoHost?: string;
     nangoRecordsApiKey?: string;
-  }>(token, config.server.controlPlaneUrl);
+  }>(token, {
+    pinnedIssuer: config.server.controlPlaneUrl,
+    audience: podPublicUrl,
+  });
 
   if (!payload) {
     logger.warn("Provision token verification failed");
@@ -544,227 +563,123 @@ provisionRouter.post("/reset-intelligence", async (c) => {
 // Returns: { credentialsValid: boolean | null, status: string }
 
 // ============================================================================
-// POST /api/provision/setup-account
+// POST /api/provision/seed-admin
 // ============================================================================
 //
-// Sets the Kratos password for a user on this pod. Called by the Control
-// Plane after the user completes the setup-pod flow on synap.live — CP
-// validates the one-time setup token, then forwards email + password to
-// this endpoint with a CP-signed JWT (type=setup-account).
+// One-shot admin seeding endpoint — replaces the broken /setup-account webhook
+// flow. Called once at pod provisioning (by the Control Plane or an operator
+// script) to atomically create:
+//   1. A Kratos identity for the admin email (with a random password).
+//   2. The matching users table row (id = Kratos identity id).
+//   3. A default personal workspace + owner-role membership.
 //
-// Flow:
-//   1. Verify CP JWT (ES256 via JWKS).
-//   2. Find or create Kratos identity for `email`.
-//   3. Update identity with the user-chosen password + clear the
-//      `metadata_public.setupRequired` flag.
-//   4. Return success. The landing page then redirects the user to
-//      <pod>/admin/ where they can log in with their new password, or
-//      calls /api/handshake to open a session without a redirect.
+// Why this endpoint exists:
+//   Kratos only fires `identity.created` webhooks for self-service flows,
+//   NOT for admin-API creates. The previous `/setup-account` handler created
+//   the identity via the admin API — so the users table stayed empty and the
+//   user could log in but was invisible to the admin panel. This endpoint
+//   performs the full DB seeding in one transaction, no webhook dependency.
 //
-// Why it's separate from /connect:
-//   - /connect handles CP-level provisioning config (workspace settings).
-//   - /setup-account mutates a Kratos identity's credentials.
-//   These are orthogonal operations and should not share a JWT type.
-provisionRouter.post("/setup-account", async (c) => {
-  const body = await c.req.json().catch(() => null);
-  const parsed = z
-    .object({
-      token: z.string().min(1),
-      // Password enforced here, not on the token — CP stores the token
-      // hash but never the password, so the password must arrive in the
-      // request body from the landing page setup form.
-      password: z.string().min(8).max(128),
-      name: z.string().optional(),
-    })
-    .safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-  const { token, password, name } = parsed.data;
-
-  const podPublicUrl = process.env.PUBLIC_URL;
-  const payload = await verifyCpJwt<{
-    type: string;
-    email: string;
-    podId: string;
-    sub?: string;
-  }>(token, config.server.controlPlaneUrl, podPublicUrl);
-
-  if (!payload) {
-    logger.warn("setup-account: JWT verification failed");
-    return c.json({ error: "Invalid or expired setup token" }, 401);
-  }
-  if (payload.type !== "setup-account") {
+// Auth: Bearer <PROVISIONING_TOKEN> (self-hosted operator env var).
+//   Same pattern used by /api/hub/setup/agent — static token known only to
+//   the operator. If the env var is unset, the endpoint 403s (the pod isn't
+//   configured for provisioning).
+//
+// Body: { email: string (valid email), name?: string }
+//
+// Idempotent:
+//   - If a Kratos identity for the email already exists, it is reused.
+//   - If the users row already exists, it is upserted (email/name refreshed).
+//   - If the user already has any workspace membership, the first one is
+//     returned (no second workspace created).
+//   `alreadyExisted` reflects whether the KRATOS IDENTITY pre-existed.
+//
+// Returns: { success: true, userId, workspaceId, alreadyExisted }
+provisionRouter.post("/seed-admin", async (c) => {
+  // ── Auth: static provisioning token ───────────────────────────────────────
+  const expectedToken = process.env.PROVISIONING_TOKEN;
+  if (!expectedToken) {
+    logger.warn(
+      "seed-admin: endpoint called but PROVISIONING_TOKEN is not configured"
+    );
     return c.json(
       {
-        error: `Wrong token type: expected 'setup-account', got '${payload.type}'`,
+        error:
+          "Provisioning is not enabled on this pod (PROVISIONING_TOKEN unset)",
+      },
+      403
+    );
+  }
+
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const providedToken = authHeader.slice(7).trim();
+  if (providedToken !== expectedToken) {
+    logger.warn("seed-admin: invalid provisioning token");
+    return c.json({ error: "Invalid provisioning token" }, 401);
+  }
+
+  // ── Parse body ────────────────────────────────────────────────────────────
+  const rawBody = await c.req.json().catch(() => null);
+  const parsed = z
+    .object({
+      email: z.string().email(),
+      name: z.string().trim().min(1).max(200).optional(),
+    })
+    .safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: "Invalid request body",
+        details: parsed.error.flatten(),
       },
       400
     );
   }
-  const email = payload.email?.trim().toLowerCase();
-  if (!email) {
-    return c.json({ error: "Setup token missing email claim" }, 400);
-  }
+  const { email, name } = parsed.data;
 
+  // ── Seed ──────────────────────────────────────────────────────────────────
   const kratosAdminUrl =
     process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+  // 32 random bytes → 64-char hex password. The admin never needs this — they
+  // go through password recovery to set a real one. It just satisfies Kratos'
+  // "password credential required" constraint at identity creation.
+  const randomPassword = randomBytes(32).toString("hex");
 
   try {
-    // ─── 1. Look up existing identity ───────────────────────────────────
-    let identityId: string | null = null;
-    const listResp = await fetch(
-      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
+    const result = await seedAdminUser({
+      email,
+      name,
+      randomPassword,
+      kratosAdminUrl,
+    });
+    logger.info(
+      {
+        email,
+        userId: result.userId,
+        workspaceId: result.workspaceId,
+        alreadyExisted: result.alreadyExisted,
+      },
+      "seed-admin: success"
     );
-    if (listResp.ok) {
-      const identities = (await listResp.json()) as Array<{ id: string }>;
-      if (Array.isArray(identities) && identities.length > 0) {
-        identityId = identities[0].id;
-      }
-    }
-
-    // ─── 2. Create if missing — admin-provisioned flow lands here ──────
-    if (!identityId) {
-      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schema_id: "default",
-          traits: { email, ...(name ? { name } : {}) },
-          credentials: {
-            password: { config: { password } },
-          },
-          metadata_public: {
-            setupRequired: false,
-            createdVia: "setup-account",
-            setupCompletedAt: new Date().toISOString(),
-          },
-          verifiable_addresses: [
-            {
-              value: email,
-              verified: true,
-              via: "email",
-              status: "completed",
-            },
-          ],
-        }),
-      });
-      if (!createResp.ok) {
-        const errBody = await createResp.text();
-        logger.error(
-          { status: createResp.status, body: errBody.slice(0, 500), email },
-          "setup-account: failed to create Kratos identity"
-        );
-        return c.json({ error: "Failed to create account" }, 500);
-      }
-      const newIdentity = (await createResp.json()) as { id: string };
-      identityId = newIdentity.id;
-      logger.info(
-        { email, identityId },
-        "setup-account: created Kratos identity"
-      );
-    } else {
-      // ─── 3. Update existing identity's password + clear setupRequired ───
-      // Kratos requires a full PUT (not PATCH) — we read the current
-      // identity to preserve traits we don't want to clobber.
-      const readResp = await fetch(
-        `${kratosAdminUrl}/admin/identities/${identityId}`
-      );
-      if (!readResp.ok) {
-        logger.error(
-          { status: readResp.status, identityId },
-          "setup-account: failed to read existing identity"
-        );
-        return c.json({ error: "Failed to fetch account" }, 500);
-      }
-      const existing = (await readResp.json()) as {
-        traits?: Record<string, unknown>;
-        metadata_public?: Record<string, unknown>;
-      };
-      const updateResp = await fetch(
-        `${kratosAdminUrl}/admin/identities/${identityId}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            schema_id: "default",
-            traits: {
-              ...(existing.traits ?? {}),
-              email,
-              ...(name ? { name } : {}),
-            },
-            credentials: {
-              password: { config: { password } },
-            },
-            metadata_public: {
-              ...(existing.metadata_public ?? {}),
-              setupRequired: false,
-              setupCompletedAt: new Date().toISOString(),
-            },
-            state: "active",
-          }),
-        }
-      );
-      if (!updateResp.ok) {
-        const errBody = await updateResp.text();
-        logger.error(
-          {
-            status: updateResp.status,
-            body: errBody.slice(0, 500),
-            identityId,
-          },
-          "setup-account: failed to update Kratos identity"
-        );
-        return c.json({ error: "Failed to update account" }, 500);
-      }
-      logger.info(
-        { email, identityId },
-        "setup-account: updated Kratos identity password"
-      );
-
-      // Invalidate every existing session for this identity — a stolen
-      // session cookie must NOT survive a password rotation. New identities
-      // don't need this (they have no sessions yet), only the update-existing
-      // branch. Kratos returns 204 on success; 4xx on unknown identity.
-      // Non-fatal: if this fails we still return success to the user —
-      // they've updated their password, worst case a stolen session is
-      // valid for a few more hours until Kratos's natural TTL kicks in.
-      const wipeSessionsResp = await fetch(
-        `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
-        { method: "DELETE" }
-      ).catch((err) => {
-        logger.warn(
-          { err, identityId },
-          "setup-account: failed to invalidate existing sessions after password change"
-        );
-        return null;
-      });
-      if (
-        wipeSessionsResp &&
-        !wipeSessionsResp.ok &&
-        wipeSessionsResp.status !== 404
-      ) {
-        logger.warn(
-          { status: wipeSessionsResp.status, identityId },
-          "setup-account: DELETE /admin/identities/:id/sessions returned non-OK"
-        );
-      } else if (wipeSessionsResp?.ok) {
-        logger.info(
-          { identityId },
-          "setup-account: invalidated all sessions after password change"
-        );
-      }
-    }
-
     return c.json({
       success: true,
-      email,
-      // Return the pod URL so the landing page can show a "you can now log in" CTA
-      podUrl: podPublicUrl ?? null,
+      userId: result.userId,
+      workspaceId: result.workspaceId,
+      alreadyExisted: result.alreadyExisted,
     });
   } catch (err) {
-    logger.error({ err, email }, "setup-account: unexpected error");
-    return c.json({ error: "Internal server error" }, 500);
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err, email }, "seed-admin: failed");
+    return c.json(
+      {
+        error: "Failed to seed admin user",
+        message,
+      },
+      500
+    );
   }
 });
 

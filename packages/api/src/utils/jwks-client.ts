@@ -17,6 +17,7 @@
 import crypto, { type JsonWebKey as CryptoJsonWebKey } from "crypto";
 import jwt from "jsonwebtoken";
 import { createLogger } from "@synap-core/core";
+import { TrustedIssuerService } from "@synap/database";
 
 const logger = createLogger({ module: "jwks-client" });
 
@@ -255,6 +256,83 @@ export async function verifyCpJwt<T extends object>(
       cache.delete(issuerUrl);
     }
 
+    return null;
+  }
+}
+
+/**
+ * Verify a CP-signed JWT AND enforce that its issuer is an approved entry in
+ * the pod's `trusted_issuers` registry.
+ *
+ * This is the hardened variant of {@link verifyCpJwt} that ALL CP→pod entry
+ * points should use. Plain `verifyCpJwt` only checks the JWT's cryptographic
+ * validity, which means any HTTPS domain serving a valid JWKS could sign a
+ * token that passes verification. `verifyCpJwtWithTrust` layers the pod-local
+ * trust allowlist on top, so only issuers that the pod admin (or the built-in
+ * seed) has explicitly approved can authenticate.
+ *
+ * Flow:
+ *   1. Delegate signature / issuer / expiry / audience / jti check to `verifyCpJwt`.
+ *   2. On success, look up the payload's `iss` claim in `trusted_issuers`.
+ *   3. Return the payload ONLY if the entry exists AND `status === "approved"`.
+ *
+ * Returns null on any rejection (verify failure, unknown issuer, non-approved status).
+ *
+ * @param token - The JWT to verify.
+ * @param opts.pinnedIssuer - Optional allowlist: if set, `verifyCpJwt` enforces
+ *   that the token's `iss` matches this URL exactly. If omitted, the issuer is
+ *   read from the token's `iss` claim (OIDC-style) — but trust registry lookup
+ *   still applies, so only approved issuers pass.
+ * @param opts.audience - Required non-empty audience string (typically the pod's
+ *   PUBLIC_URL). Callers MUST refuse the request before calling this function if
+ *   they cannot supply an audience — there is no way to skip the check here.
+ */
+export async function verifyCpJwtWithTrust<T extends object>(
+  token: string,
+  opts: {
+    pinnedIssuer?: string;
+    audience: string;
+  }
+): Promise<T | null> {
+  const payload = await verifyCpJwt<T>(token, opts.pinnedIssuer, opts.audience);
+  if (!payload) {
+    return null;
+  }
+
+  // Extract the iss claim from the verified payload — verifyCpJwt has already
+  // enforced that the signature matches this issuer's JWKS.
+  const iss = (payload as Record<string, unknown>).iss;
+  if (typeof iss !== "string") {
+    logger.warn(
+      { iss },
+      "verifyCpJwtWithTrust: payload missing iss claim — rejected"
+    );
+    return null;
+  }
+
+  try {
+    const svc = new TrustedIssuerService();
+    const entry = await svc.getByUrl(iss);
+    if (!entry) {
+      logger.warn(
+        { issuerUrl: iss },
+        "verifyCpJwtWithTrust: issuer not in trusted_issuers registry — rejected"
+      );
+      return null;
+    }
+    if (entry.status !== "approved") {
+      logger.warn(
+        { issuerUrl: iss, status: entry.status },
+        "verifyCpJwtWithTrust: issuer registry entry is not approved — rejected"
+      );
+      return null;
+    }
+    return payload;
+  } catch (err) {
+    logger.warn(
+      { err, issuerUrl: iss },
+      "verifyCpJwtWithTrust: trusted-issuer lookup failed — rejected"
+    );
     return null;
   }
 }

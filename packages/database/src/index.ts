@@ -29,6 +29,7 @@ export * from "./services/view-default-columns-service.js";
 export * from "./services/encryption-service.js";
 export * from "./services/entity-upsert-service.js";
 export * from "./services/trusted-issuer-service.js";
+export * from "./services/user-provisioning.js";
 
 // Export errors
 export * from "./errors/index.js";

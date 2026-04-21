@@ -27,7 +27,7 @@ export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js"
 export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
 export {
-  ensurePersonalChannel,
+  ensureDefaultAgentChannel,
   ensureProactiveFeedChannel,
 } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
@@ -85,13 +85,14 @@ export {
 } from "./utils/cors-cache.js";
 
 // Export utilities for webhook handling
-export {
-  syncUserFromKratos,
-  createDefaultWorkspace,
-} from "./utils/kratos-sync.js";
+export { syncUserFromKratos } from "./utils/kratos-sync.js";
 
 // Export JWKS client for CP JWT verification
-export { verifyCpJwt, clearJwksCache } from "./utils/jwks-client.js";
+export {
+  verifyCpJwt,
+  verifyCpJwtWithTrust,
+  clearJwksCache,
+} from "./utils/jwks-client.js";
 export {
   setTrustedIssuerSeedHealth,
   getTrustedIssuerSeedHealth,

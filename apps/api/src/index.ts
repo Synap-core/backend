@@ -50,7 +50,7 @@ import {
   registerCronSchedules,
 } from "@synap/jobs";
 import crypto from "crypto";
-import { verifyCpJwt } from "@synap/api";
+import { verifyCpJwtWithTrust } from "@synap/api";
 import {
   rateLimitMiddleware,
   aiRateLimitMiddleware,
@@ -377,41 +377,48 @@ app.post("/api/handshake", async (c) => {
       return c.json({ error: "token is required" }, 400);
     }
 
-    // Verify the handshake JWT via the issuer's JWKS (ES256).
+    // Verify the handshake JWT via the issuer's JWKS (ES256) AND enforce the
+    // trusted_issuers allowlist. The audience claim (PUBLIC_URL) is mandatory —
+    // skipping it would let a token minted for another pod be replayed here.
     //
-    // Issuer URL resolution (OIDC-style, handled by verifyCpJwt):
+    // Issuer URL resolution:
     //   - Client-provided issuerUrl or legacy cpUrl → passed as explicit allowlist
     //   - CONTROL_PLANE_URL env var → passed as explicit allowlist
-    //   - Neither set → verifyCpJwt reads the `iss` claim from the JWT itself
-    //
-    // Security: signature is always verified against JWKS fetched from the issuer.
-    // Even if the client provides an issuerUrl, verification fails if the JWT was
-    // signed with a different key. The audience check (PUBLIC_URL) prevents cross-pod reuse.
+    //   - Neither set → verifyCpJwt reads the `iss` claim from the JWT itself,
+    //     but trusted_issuers lookup still gates acceptance.
+    const podPublicUrl = process.env.PUBLIC_URL;
+    if (!podPublicUrl) {
+      apiLogger.error(
+        "Handshake refused: PUBLIC_URL not configured — audience check is mandatory"
+      );
+      return c.json(
+        { error: "PUBLIC_URL not configured; handshake refused" },
+        500
+      );
+    }
+
     const issuerUrl =
       clientIssuerUrl ?? legacyCpUrl ?? config.server.controlPlaneUrl;
 
-    const podPublicUrl = process.env.PUBLIC_URL;
-    const payload = await verifyCpJwt<{
+    const payload = await verifyCpJwtWithTrust<{
       sub: string;
       email: string;
       name?: string;
       aud: string;
       type: string;
       trialEnd?: string;
-    }>(token, issuerUrl, podPublicUrl);
+    }>(token, { pinnedIssuer: issuerUrl, audience: podPublicUrl });
 
     if (!payload) {
       apiLogger.warn(
         { issuerUrl, podPublicUrl },
-        "Handshake token verification failed — JWT signature/audience/expiry check failed"
+        "Handshake token verification failed — signature/audience/expiry or trusted-issuer check failed"
       );
       return c.json(
         {
           error: "Invalid or expired handshake token",
           code: "JWT_VERIFICATION_FAILED",
-          hint: podPublicUrl
-            ? `Token audience must match this pod's PUBLIC_URL (${podPublicUrl})`
-            : "This pod has no PUBLIC_URL set — audience check is skipped but signature verification may have failed",
+          hint: `Token audience must match this pod's PUBLIC_URL (${podPublicUrl}) and issuer must be approved in trusted_issuers`,
         },
         401
       );
@@ -422,15 +429,15 @@ app.post("/api/handshake", async (c) => {
     }
 
     // Normalize email so lookups survive casing differences between the
-    // CP's Better Auth user record, setup-account's normalized email, and
+    // CP's Better Auth user record, the seed-admin-normalized email, and
     // whatever casing the user originally typed. Without this, a JWT
     // carrying "Alice@Ex.com" wouldn't find the Kratos identity created
-    // by setup-account as "alice@ex.com" — and handshake would happily
+    // by seed-admin as "alice@ex.com" — and handshake would happily
     // create a second identity, so the user ends up with two accounts:
-    // one they can sign into (from setup), one the handshake keeps
+    // one they can sign into (from seeding), one the handshake keeps
     // spawning (with a throwaway password).
     // `name` used to be read here for the auto-create path; now that
-    // handshake only looks up existing identities (setup-account owns
+    // handshake only looks up existing identities (seed-admin owns
     // creation), the claim is informational and we don't need it.
     const rawEmail = payload.email;
     const email = rawEmail?.trim().toLowerCase();
@@ -465,18 +472,21 @@ app.post("/api/handshake", async (c) => {
     // 2. No identity → behavior depends on pod mode.
     //
     // Dedicated pods:
-    //   The handshake is SSO convenience over an account that MUST
-    //   already exist. Users go through the /setup-pod flow on
-    //   synap.live to establish credentials; handshake then just hands
-    //   out a session. Return 403 to force clients into setup-first.
+    //   The admin identity is seeded during provisioning via the pod's
+    //   /api/provision/seed-admin endpoint (called by the CP). Handshake
+    //   is SSO convenience over an account that MUST already exist.
+    //   Returning 403 here indicates the pod wasn't seeded correctly —
+    //   the operator needs to re-run seed-admin or the user needs to
+    //   recover their password via Kratos self-service.
     //
     // Shared pods:
-    //   Users never see synap.live/setup-pod — they interact with the
-    //   pod exclusively through Relay / landing / other Synap apps that
-    //   authenticate via handshake. There's no user-facing password
-    //   (they don't need one; recovery via Kratos self-service still
-    //   works if they ever want one). So on shared pods we auto-create
-    //   the identity with a random password they'll never know.
+    //   Users never went through a dedicated provisioning flow — they
+    //   interact with the pod exclusively through Relay / landing /
+    //   other Synap apps that authenticate via handshake. There's no
+    //   user-facing password (they don't need one; recovery via Kratos
+    //   self-service still works if they ever want one). So on shared
+    //   pods we auto-create the identity with a random password they'll
+    //   never know.
     //
     // This split is the minimal path to unblock shared pods without a
     // full setup-flow rework for them. Full design: per-user setup
@@ -487,13 +497,13 @@ app.post("/api/handshake", async (c) => {
       if (!config.server.sharedPodMode) {
         apiLogger.info(
           { email },
-          "Handshake rejected: no Kratos identity yet for this email — user must complete setup-account first"
+          "Handshake rejected: no Kratos identity yet for this email — pod admin must be seeded via /api/provision/seed-admin"
         );
         return c.json(
           {
             error: "account_not_set_up",
             message:
-              "This pod has no account for this email yet. Open your welcome email or visit your dashboard to pick a password.",
+              "This pod has no account for this email yet. Ask your admin to reseed the pod, or use Kratos self-service recovery to set a password.",
             setupRequired: true,
           },
           403
@@ -804,7 +814,7 @@ app.post("/api/auth/telegram", async (c) => {
     // 1. Look up channel connection
     const { db, eq, and } = await import("@synap/database");
     const { channelConnections } = await import("@synap/database/schema");
-    const { ensurePersonalChannel } = await import("@synap/api");
+    const { ensureDefaultAgentChannel } = await import("@synap/api");
 
     const connection = await db.query.channelConnections.findFirst({
       where: and(
@@ -862,11 +872,11 @@ app.post("/api/auth/telegram", async (c) => {
     // 4. Ensure the user has a dedicated Telegram channel
     let telegramChannelId = connection.defaultChannelId;
     if (!telegramChannelId) {
-      const personalChannel = await ensurePersonalChannel(
+      const defaultAgentChannel = await ensureDefaultAgentChannel(
         userId,
         workspaceId ?? undefined
       );
-      telegramChannelId = personalChannel.id;
+      telegramChannelId = defaultAgentChannel.id;
     }
 
     apiLogger.info(
@@ -997,7 +1007,7 @@ app.post("/api/auth/telegram-link", async (c) => {
     // Upsert channel_connection
     const { db, eq, and } = await import("@synap/database");
     const { channelConnections } = await import("@synap/database/schema");
-    const { ensurePersonalChannel } = await import("@synap/api");
+    const { ensureDefaultAgentChannel } = await import("@synap/api");
 
     // Check if connection already exists
     const existing = await db.query.channelConnections.findFirst({
@@ -1027,11 +1037,11 @@ app.post("/api/auth/telegram-link", async (c) => {
     // Ensure a personal channel exists
     let telegramChannelId: string | null = null;
     if (workspaceId) {
-      const personalChannel = await ensurePersonalChannel(
+      const defaultAgentChannel = await ensureDefaultAgentChannel(
         sessionIdentityId,
         workspaceId
       );
-      telegramChannelId = personalChannel.id;
+      telegramChannelId = defaultAgentChannel.id;
     }
 
     // Insert the connection

@@ -30,7 +30,7 @@ import {
 import { getWorkspaceMembership } from "@synap/database";
 import {
   resolveIntelligenceService,
-  ensurePersonalChannel,
+  ensureDefaultAgentChannel,
   resolveTelegramBotToken,
   proposalsRouter,
   createHubProtocolCallerContext,
@@ -233,11 +233,11 @@ channelGatewayApp.post("/inbound", async (c) => {
   let threadId: string = defaultChannelId ?? "";
 
   if (!threadId) {
-    const personalChannel = await ensurePersonalChannel(
+    const defaultAgentChannel = await ensureDefaultAgentChannel(
       userId,
       workspaceId ?? undefined
     );
-    threadId = personalChannel.id;
+    threadId = defaultAgentChannel.id;
   }
 
   // 3. Resolve intelligence service
