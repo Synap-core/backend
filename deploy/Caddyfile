@@ -80,6 +80,17 @@
         reverse_proxy backend:4000
     }
 
+    # MCP endpoint — JSON-RPC over HTTP for Claude Desktop, Cursor, and other
+    # MCP-capable clients (typically reached via the `mcp-remote` stdio bridge).
+    # Without an explicit route, Caddy's catch-all below serves plain text and
+    # breaks the MCP handshake.
+    handle /mcp {
+        reverse_proxy backend:4000
+    }
+    handle /mcp/* {
+        reverse_proxy backend:4000
+    }
+
     # Realtime WebSocket (Socket.IO)
     # Caddy v2 automatically detects and upgrades WebSocket connections
     # No manual header manipulation needed - it breaks the upgrade
