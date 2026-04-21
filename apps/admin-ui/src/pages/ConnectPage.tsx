@@ -22,6 +22,7 @@ import {
   IconAlertCircle,
   IconPlugConnected,
   IconX,
+  IconLock,
 } from "@tabler/icons-react";
 import { trpc } from "../lib/trpc";
 import {
@@ -34,6 +35,7 @@ import {
   extractFlowId,
   isAllowedConnectRedirectUri,
 } from "@synap-core/external-connect-client";
+import KratosSelfServicePage from "./KratosSelfServicePage";
 
 // ─── Integration label map ───────────────────────────────────────────────────
 const INTEGRATION_LABELS: Record<
@@ -68,8 +70,20 @@ export default function ConnectPage() {
     | "custom";
 
   const [step, setStep] = useState<
-    "idle" | "generating" | "done" | "redirecting" | "error"
+    | "idle"
+    | "generating"
+    | "done"
+    | "redirecting"
+    | "error"
+    /**
+     * Handshake failed — token couldn't establish a pod session (expired,
+     * issuer mismatch, pod unreachable). We render the inline Kratos login
+     * flow instead of dead-ending on an error screen. After successful login,
+     * we proceed to the `/connect` capability as if no token had been passed.
+     */
+    | "handshake-fallback"
   >("idle");
+  const [handshakeError, setHandshakeError] = useState<string>("");
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [podUrl, setPodUrl] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -164,12 +178,15 @@ export default function ConnectPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setStep("error");
-        setError(
-          err instanceof Error
-            ? `Could not create pod session: ${err.message}`
-            : "Could not create pod session"
-        );
+        // Handshake failed — most common causes: expired token (short TTL),
+        // issuer mismatch (pod image pre-dates current CP JWT format), or
+        // PUBLIC_URL audience mismatch. Rather than dead-ending on an error
+        // screen, fall back to the inline Kratos login so the user can
+        // authenticate manually and continue the connect flow.
+        const detail =
+          err instanceof Error ? err.message : "unknown handshake error";
+        setHandshakeError(detail);
+        setStep("handshake-fallback");
       })
       .finally(() => {
         if (!cancelled) setIsBootstrappingSession(false);
@@ -279,6 +296,51 @@ export default function ConnectPage() {
             <div className="flex flex-col items-center gap-4 py-6 text-center">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               <p className="text-small text-default-500">Generating key…</p>
+            </div>
+          )}
+
+          {/* Handshake failed — fall back to inline Kratos login.
+              Happens when the CP sign-in link is expired, the pod's
+              issuer/PUBLIC_URL don't match the token, or the pod image
+              predates the current JWT contract. Rather than dead-ending,
+              we authenticate the user manually then resume /connect. */}
+          {step === "handshake-fallback" && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
+                <IconLock size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-small font-semibold">
+                    Sign-in link didn&apos;t work
+                  </p>
+                  <p className="text-xs opacity-90">
+                    Sign in below to finish connecting {integrationInfo.label}.
+                  </p>
+                  {handshakeError && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-[11px] opacity-70 hover:opacity-100">
+                        Details
+                      </summary>
+                      <p className="mt-1 font-mono text-[11px] opacity-70">
+                        {handshakeError}
+                      </p>
+                    </details>
+                  )}
+                </div>
+              </div>
+
+              <div className="-mx-6 -mb-5">
+                <KratosSelfServicePage
+                  initialKind="login"
+                  onSuccess={() => {
+                    // Session established — hide the login form and return to
+                    // the Generate & connect button. No redirect: we're already
+                    // on /admin/connect with the right query params.
+                    setSessionBootstrapped(true);
+                    setHandshakeError("");
+                    setStep("idle");
+                  }}
+                />
+              </div>
             </div>
           )}
 

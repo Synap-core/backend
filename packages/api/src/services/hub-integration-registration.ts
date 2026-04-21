@@ -21,17 +21,41 @@ export const SETUP_AGENT_HUB_SCOPES = [
   "mcp.write",
 ] as const;
 
-/** Scopes granted per integration type (admin /connect UI) */
+/** Scopes granted per integration type (admin /connect UI).
+ *
+ * All integrations get `mcp.read` + `mcp.write` so the issued key can drive
+ * the pod's /mcp endpoint end-to-end. MCP tool dispatch gates on these scopes
+ * (see `packages/api/src/routers/mcp/tools/index.ts`); without them tool
+ * calls return -32603 "Tool '...' requires scope 'mcp.read'" and clients
+ * like Claude Desktop surface this as a generic "not responding" timeout.
+ *
+ * Matches `SETUP_AGENT_HUB_SCOPES` above — the two paths now issue keys
+ * with the same capability surface, differing only in audit tagging.
+ */
 export const INTEGRATION_HUB_SCOPES: Record<string, string[]> = {
-  raycast: ["hub-protocol.read", "hub-protocol.write", "data.read"],
-  cli: ["hub-protocol.read", "hub-protocol.write", "data.read", "data.write"],
+  raycast: [
+    "hub-protocol.read",
+    "hub-protocol.write",
+    "mcp.read",
+    "mcp.write",
+    "data.read",
+  ],
+  cli: [
+    "hub-protocol.read",
+    "hub-protocol.write",
+    "mcp.read",
+    "mcp.write",
+    "data.read",
+    "data.write",
+  ],
   openclaw: [
     "hub-protocol.read",
     "hub-protocol.write",
-    "mcp.connect",
+    "mcp.read",
+    "mcp.write",
     "data.read",
   ],
-  custom: ["hub-protocol.read", "hub-protocol.write"],
+  custom: ["hub-protocol.read", "hub-protocol.write", "mcp.read", "mcp.write"],
 };
 
 export function getHubInboundKeyPrefix(): string {
