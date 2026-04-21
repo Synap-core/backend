@@ -25,7 +25,6 @@ import { createLogger, config } from "@synap-core/core";
 import {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
-  verifyCpJwt,
   verifyCpJwtWithTrust,
 } from "@synap/api";
 import {
@@ -231,12 +230,23 @@ provisionRouter.post("/register-intelligence", async (c) => {
     }
   }
 
-  const payload = await verifyCpJwt<{
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "register-intelligence refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     controlPlaneUrl: string;
     intelligenceHubUrl?: string;
-  }>(token, cpUrl);
+  }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
 
   if (!payload) {
     logger.warn({ cpUrl }, "register-intelligence: token verification failed");
@@ -458,9 +468,20 @@ provisionRouter.post("/reset-intelligence", async (c) => {
     /* fall through */
   }
 
-  const payload = await verifyCpJwt<{ type: string; podId: string }>(
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "reset-intelligence refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{ type: string; podId: string }>(
     token,
-    cpUrl
+    {
+      pinnedIssuer: cpUrl,
+      audience: podPublicUrl,
+    }
   );
   if (!payload) {
     logger.warn({ cpUrl }, "reset-intelligence: token verification failed");
@@ -567,47 +588,44 @@ provisionRouter.post("/reset-intelligence", async (c) => {
 // ============================================================================
 //
 // One-shot admin seeding endpoint — replaces the broken /setup-account webhook
-// flow. Called once at pod provisioning (by the Control Plane or an operator
-// script) to atomically create:
-//   1. A Kratos identity for the admin email (with a random password).
-//   2. The matching users table row (id = Kratos identity id).
-//   3. A default personal workspace + owner-role membership.
+// flow. Called once at pod provisioning (by the Control Plane) to atomically:
+//   1. Find-or-create a Kratos identity for the admin email (via admin API).
+//   2. Upsert the matching users table row (id = Kratos identity id).
+//   3. Ensure a default personal workspace + owner-role membership.
 //
 // Why this endpoint exists:
 //   Kratos only fires `identity.created` webhooks for self-service flows,
 //   NOT for admin-API creates. The previous `/setup-account` handler created
 //   the identity via the admin API — so the users table stayed empty and the
 //   user could log in but was invisible to the admin panel. This endpoint
-//   performs the full DB seeding in one transaction, no webhook dependency.
+//   performs Kratos lookup + DB seeding in one pass, no webhook dependency.
 //
-// Auth: Bearer <PROVISIONING_TOKEN> (self-hosted operator env var).
-//   Same pattern used by /api/hub/setup/agent — static token known only to
-//   the operator. If the env var is unset, the endpoint 403s (the pod isn't
-//   configured for provisioning).
+// Auth: Bearer <cpJwt> — CP-signed ES256 JWT, verified via JWKS + Trusted
+//   Issuers registry (same chain as /connect). Claims:
+//     { type: "seed-admin", email: string, name?: string, aud: <pod PUBLIC_URL> }
+//   Audience MUST equal this pod's PUBLIC_URL (mandatory — prevents replay
+//   against another pod). If PUBLIC_URL is unset, the endpoint 500s.
 //
-// Body: { email: string (valid email), name?: string }
+// Body: ignored. The authoritative email/name come from the signed JWT.
 //
 // Idempotent:
 //   - If a Kratos identity for the email already exists, it is reused.
 //   - If the users row already exists, it is upserted (email/name refreshed).
 //   - If the user already has any workspace membership, the first one is
 //     returned (no second workspace created).
-//   `alreadyExisted` reflects whether the KRATOS IDENTITY pre-existed.
+//   `alreadyExisted` reflects whether the `users` row pre-existed.
 //
 // Returns: { success: true, userId, workspaceId, alreadyExisted }
 provisionRouter.post("/seed-admin", async (c) => {
-  // ── Auth: static provisioning token ───────────────────────────────────────
-  const expectedToken = process.env.PROVISIONING_TOKEN;
-  if (!expectedToken) {
-    logger.warn(
-      "seed-admin: endpoint called but PROVISIONING_TOKEN is not configured"
+  // ── Auth: CP-signed JWT, audience-pinned to this pod ──────────────────────
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "seed-admin refused: PUBLIC_URL not configured — audience check is mandatory"
     );
     return c.json(
-      {
-        error:
-          "Provisioning is not enabled on this pod (PROVISIONING_TOKEN unset)",
-      },
-      403
+      { error: "PUBLIC_URL not configured; seed-admin refused" },
+      500
     );
   }
 
@@ -615,45 +633,134 @@ provisionRouter.post("/seed-admin", async (c) => {
   if (!authHeader.startsWith("Bearer ")) {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
-  const providedToken = authHeader.slice(7).trim();
-  if (providedToken !== expectedToken) {
-    logger.warn("seed-admin: invalid provisioning token");
-    return c.json({ error: "Invalid provisioning token" }, 401);
+  const token = authHeader.slice(7).trim();
+  if (!token) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
 
-  // ── Parse body ────────────────────────────────────────────────────────────
-  const rawBody = await c.req.json().catch(() => null);
-  const parsed = z
-    .object({
-      email: z.string().email(),
-      name: z.string().trim().min(1).max(200).optional(),
-    })
-    .safeParse(rawBody);
-  if (!parsed.success) {
+  const payload = await verifyCpJwtWithTrust<{
+    type: string;
+    email: string;
+    name?: string;
+    aud: string;
+  }>(token, {
+    pinnedIssuer: config.server.controlPlaneUrl,
+    audience: podPublicUrl,
+  });
+
+  if (!payload) {
+    logger.warn("seed-admin: token verification failed");
+    return c.json({ error: "Invalid or untrusted seed-admin token" }, 401);
+  }
+
+  if (payload.type !== "seed-admin") {
     return c.json(
       {
-        error: "Invalid request body",
-        details: parsed.error.flatten(),
+        error: `Invalid token type — expected 'seed-admin', got '${payload.type}'`,
       },
       400
     );
   }
-  const { email, name } = parsed.data;
 
-  // ── Seed ──────────────────────────────────────────────────────────────────
+  const email = (payload.email ?? "").trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return c.json({ error: "Invalid or missing email in token claims" }, 400);
+  }
+  const name = payload.name?.trim() || undefined;
+
+  // ── Resolve Kratos identity (find-or-create via admin API) ────────────────
+  //
+  // Kept in the handler (not the DB service) so @synap/database stays HTTP-
+  // free. A successful lookup short-circuits identity creation for idempotency.
   const kratosAdminUrl =
     process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
-  // 32 random bytes → 64-char hex password. The admin never needs this — they
-  // go through password recovery to set a real one. It just satisfies Kratos'
-  // "password credential required" constraint at identity creation.
-  const randomPassword = randomBytes(32).toString("hex");
+  let kratosIdentityId: string | null = null;
 
   try {
+    const listResp = await fetch(
+      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
+    );
+    if (listResp.ok) {
+      const identities = (await listResp.json()) as Array<{ id: string }>;
+      if (Array.isArray(identities) && identities.length > 0) {
+        kratosIdentityId = identities[0].id;
+      }
+    }
+  } catch (err) {
+    logger.warn(
+      { err, email },
+      "seed-admin: Kratos identity lookup failed — will attempt create"
+    );
+  }
+
+  if (!kratosIdentityId) {
+    // 32 random bytes → 64-char hex password. The admin never needs this —
+    // they go through password recovery to set a real one. It just satisfies
+    // Kratos' "password credential required" constraint at identity creation.
+    const randomPassword = randomBytes(32).toString("hex");
+    try {
+      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_id: "default",
+          traits: { email, ...(name ? { name } : {}) },
+          credentials: {
+            password: { config: { password: randomPassword } },
+          },
+          metadata_public: {
+            createdVia: "provision-seed",
+            setupRequired: false,
+            seededAt: new Date().toISOString(),
+          },
+          verifiable_addresses: [
+            {
+              value: email,
+              verified: true,
+              via: "email",
+              status: "completed",
+            },
+          ],
+        }),
+      });
+      if (!createResp.ok) {
+        const errBody = await createResp.text().catch(() => "");
+        logger.error(
+          { status: createResp.status, body: errBody.slice(0, 500), email },
+          "seed-admin: failed to create Kratos identity"
+        );
+        return c.json(
+          {
+            error: "Failed to create Kratos identity",
+            status: createResp.status,
+          },
+          500
+        );
+      }
+      const newIdentity = (await createResp.json()) as { id: string };
+      kratosIdentityId = newIdentity.id;
+      logger.info(
+        { email, kratosIdentityId },
+        "seed-admin: created Kratos identity"
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err, email }, "seed-admin: Kratos admin call threw");
+      return c.json({ error: "Kratos admin API unreachable", message }, 500);
+    }
+  }
+
+  if (!kratosIdentityId) {
+    return c.json({ error: "Unable to resolve Kratos identity id" }, 500);
+  }
+
+  // ── Seed DB (transactional) ──────────────────────────────────────────────
+  try {
     const result = await seedAdminUser({
+      kratosIdentityId,
       email,
       name,
-      randomPassword,
-      kratosAdminUrl,
+      emailVerified: true,
     });
     logger.info(
       {
@@ -672,7 +779,7 @@ provisionRouter.post("/seed-admin", async (c) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    logger.error({ err, email }, "seed-admin: failed");
+    logger.error({ err, email }, "seed-admin: DB seed failed");
     return c.json(
       {
         error: "Failed to seed admin user",
@@ -705,11 +812,22 @@ provisionRouter.post("/validate-credentials", async (c) => {
     /* fall through */
   }
 
-  const payload = await verifyCpJwt<{
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "validate-credentials refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     intelligenceHubUrl?: string;
-  }>(token, cpUrl);
+  }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
   if (!payload) {
     return c.json({ error: "Invalid or expired provision token" }, 401);
   }
@@ -1211,9 +1329,20 @@ provisionRouter.get("/addon-status", async (c) => {
     /* fall through */
   }
 
-  const payload = await verifyCpJwt<{ type: string; podId: string }>(
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "addon-status refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{ type: string; podId: string }>(
     token,
-    cpUrl
+    {
+      pinnedIssuer: cpUrl,
+      audience: podPublicUrl,
+    }
   );
   if (!payload) return c.json({ error: "Invalid or expired token" }, 401);
   if (payload.type !== "addon_status") {
@@ -1320,13 +1449,24 @@ provisionRouter.post("/activate-addon", async (c) => {
     /* fall through */
   }
 
-  const payload = await verifyCpJwt<{
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "activate-addon refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     addon: string;
     serviceId: string;
     workspaceId?: string;
-  }>(token, cpUrl);
+  }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
 
   if (!payload) {
     logger.warn({ cpUrl }, "activate-addon: token verification failed");
@@ -1567,12 +1707,23 @@ provisionRouter.post("/deactivate-addon", async (c) => {
     /* fall through */
   }
 
-  const payload = await verifyCpJwt<{
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "deactivate-addon refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     addon: string;
     agentUserId?: string;
-  }>(token, cpUrl);
+  }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
 
   if (!payload) {
     return c.json({ error: "Invalid or expired provision token" }, 401);
@@ -1659,8 +1810,19 @@ provisionRouter.post("/disconnect", async (c) => {
   }
   const { token } = parsed.data;
 
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "disconnect refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
   const cpUrl = config.server.controlPlaneUrl;
-  const payload = await verifyCpJwt<{ type?: string }>(token, cpUrl);
+  const payload = await verifyCpJwtWithTrust<{ type?: string }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
   if (!payload) {
     return c.json({ error: "Invalid or expired token" }, 401);
   }
@@ -1752,7 +1914,15 @@ provisionRouter.post("/trigger-update", async (c) => {
     );
   }
 
-  const payload = await verifyCpJwt<{
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "trigger-update refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     targetVersion?: string;
     updateId?: string;
@@ -1760,7 +1930,10 @@ provisionRouter.post("/trigger-update", async (c) => {
     nonce?: string;
     callbackUrl?: string;
     callbackJwt?: string;
-  }>(token, cpUrl);
+  }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
   if (!payload || payload.type !== "provision") {
     return c.json({ error: "Invalid or expired JWT" }, 401);
   }

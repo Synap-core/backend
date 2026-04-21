@@ -20,7 +20,7 @@ import {
   EventRepository,
 } from "@synap/database";
 import { entityExternalLinks } from "@synap/database/schema";
-import { verifyCpJwt } from "@synap/api";
+import { verifyCpJwtWithTrust } from "@synap/api";
 import { emitSideEffects } from "@synap/jobs";
 import { config, createLogger } from "@synap-core/core";
 import crypto from "crypto";
@@ -180,15 +180,26 @@ connectorsRouter.post("/pull-sync", async (c) => {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "pull-sync refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
   const cpUrl = config.server.controlPlaneUrl;
-  const payload = await verifyCpJwt<{
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     userId: string;
     provider: string;
     nangoConnectionId: string;
     model: string;
-  }>(parsed.data.token, cpUrl);
+  }>(parsed.data.token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
 
   if (!payload || payload.type !== "connector_sync_ready") {
     return c.json({ error: "Invalid or expired token" }, 401);
@@ -410,13 +421,24 @@ connectorsRouter.post("/disconnect", async (c) => {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "connector disconnect refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
   const cpUrl = config.server.controlPlaneUrl;
-  const payload = await verifyCpJwt<{
+  const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
     provider: string;
     nangoConnectionId: string;
-  }>(parsed.data.token, cpUrl);
+  }>(parsed.data.token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+  });
 
   if (!payload || payload.type !== "connector_disconnect") {
     return c.json({ error: "Invalid or expired token" }, 401);

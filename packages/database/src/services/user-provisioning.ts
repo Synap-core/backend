@@ -1,17 +1,22 @@
 /**
- * UserProvisioningService — transactional Kratos + users + workspace seeding.
+ * UserProvisioningService — transactional users + workspace seeding.
  *
  * Replaces the broken /api/provision/setup-account flow, where Kratos only
  * fires `identity.created` webhooks for self-service flows, not admin-API
  * creates — so the users table stayed empty after admin provisioning.
  *
- * This module does the full stack in one pass, inside a DB transaction:
- *   1. Find-or-create Kratos identity (via admin API).
- *   2. Upsert the users row with id = kratosIdentityId.
- *   3. If the user has no workspace, create a default personal workspace
+ * This module does the DB side of the admin seed in one pass, inside a
+ * transaction:
+ *   1. Upsert the users row with id = kratosIdentityId.
+ *   2. If the user has no workspace, create a default personal workspace
  *      + owner membership.
  *
- * Idempotent — safe to call multiple times with the same email.
+ * The Kratos admin API call (find-or-create identity) is the CALLER's
+ * responsibility — this keeps `@synap/database` free of HTTP concerns.
+ * See `apps/api/src/routers/provision.ts` for the seed-admin handler that
+ * resolves the identity id and then invokes this service.
+ *
+ * Idempotent — safe to call multiple times with the same Kratos identity id.
  */
 import { eq } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
@@ -24,37 +29,33 @@ const logger = createLogger({ module: "user-provisioning" });
 const normalizeEmail = (e: string) => e.trim().toLowerCase();
 
 export interface SeedAdminUserInput {
+  /** Kratos identity id, pre-resolved by the caller (find-or-create via Kratos admin API). */
+  kratosIdentityId: string;
   email: string;
   name?: string;
-  /** Random password assigned to a freshly-created Kratos identity. */
-  randomPassword: string;
-  /** Base URL of the Kratos admin API (e.g. http://localhost:4434). */
-  kratosAdminUrl: string;
+  /** Whether the Kratos identity reports the email as verified. */
+  emailVerified?: boolean;
 }
 
 export interface SeedAdminUserResult {
   userId: string;
   workspaceId: string;
-  kratosIdentityId: string;
-  /** True if the Kratos identity already existed prior to this call. */
+  /** True if the `users` row pre-existed prior to this call. */
   alreadyExisted: boolean;
 }
 
 /**
- * Atomically provision an admin user on this pod.
+ * Atomically seed a users row + default workspace on this pod, keyed on a
+ * pre-resolved Kratos identity id.
  *
- * Flow:
- *   - Lookup Kratos identity by email. If missing, create it via the Kratos
- *     admin API with the supplied random password, verified email, and
- *     metadata_public: { createdVia: "provision-seed", setupRequired: false }.
- *   - Upsert users row keyed on the Kratos identity id.
+ * Flow (all in a single DB transaction):
+ *   - Detect whether a `users` row already exists for the identity id.
+ *   - Upsert the users row (email/name/verified refreshed on conflict).
  *   - Ensure the user owns at least one personal workspace with an
- *     owner-role membership.
+ *     owner-role membership; reuse the first existing membership if any.
  *
- * DB writes run inside a single transaction. Kratos calls happen before the
- * transaction (they cannot be rolled back), but the resulting identity id is
- * the primary key used inside the transaction — so if the DB writes fail,
- * the next retry will pick up the existing Kratos identity via the lookup.
+ * `alreadyExisted` reflects whether the USERS row pre-existed — the caller
+ * is responsible for reporting Kratos-identity existence if needed.
  */
 export async function seedAdminUser(
   input: SeedAdminUserInput
@@ -63,79 +64,20 @@ export async function seedAdminUser(
   if (!email) {
     throw new Error("seedAdminUser: email is required");
   }
+  const identityId = input.kratosIdentityId?.trim();
+  if (!identityId) {
+    throw new Error("seedAdminUser: kratosIdentityId is required");
+  }
   const name = input.name?.trim() || undefined;
-  const { kratosAdminUrl } = input;
+  const emailVerified = input.emailVerified ?? true;
 
-  // ─── 1. Find or create Kratos identity ──────────────────────────────────
-  let kratosIdentityId: string | null = null;
-  let alreadyExisted = false;
-
-  try {
-    const listResp = await fetch(
-      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
-    );
-    if (listResp.ok) {
-      const identities = (await listResp.json()) as Array<{ id: string }>;
-      if (Array.isArray(identities) && identities.length > 0) {
-        kratosIdentityId = identities[0].id;
-        alreadyExisted = true;
-      }
-    }
-  } catch (err) {
-    logger.warn(
-      { err, email },
-      "seedAdminUser: Kratos identity lookup failed — will attempt create"
-    );
-  }
-
-  if (!kratosIdentityId) {
-    const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        schema_id: "default",
-        traits: { email, ...(name ? { name } : {}) },
-        credentials: {
-          password: { config: { password: input.randomPassword } },
-        },
-        metadata_public: {
-          createdVia: "provision-seed",
-          setupRequired: false,
-          seededAt: new Date().toISOString(),
-        },
-        verifiable_addresses: [
-          {
-            value: email,
-            verified: true,
-            via: "email",
-            status: "completed",
-          },
-        ],
-      }),
+  const { workspaceId, alreadyExisted } = await db.transaction(async (tx) => {
+    // Detect pre-existing users row for accurate alreadyExisted reporting.
+    const existingUser = await tx.query.users.findFirst({
+      where: eq(users.id, identityId),
+      columns: { id: true },
     });
-    if (!createResp.ok) {
-      const errBody = await createResp.text().catch(() => "");
-      throw new Error(
-        `seedAdminUser: failed to create Kratos identity (status=${createResp.status}, body=${errBody.slice(0, 500)})`
-      );
-    }
-    const newIdentity = (await createResp.json()) as { id: string };
-    kratosIdentityId = newIdentity.id;
-    alreadyExisted = false;
-    logger.info(
-      { email, kratosIdentityId },
-      "seedAdminUser: created Kratos identity"
-    );
-  }
 
-  if (!kratosIdentityId) {
-    throw new Error("seedAdminUser: unable to resolve Kratos identity id");
-  }
-
-  const identityId = kratosIdentityId;
-
-  // ─── 2–3. Upsert user + ensure workspace membership (transactional) ─────
-  const workspaceId = await db.transaction(async (tx) => {
     // Upsert users row. Kratos identity id is the canonical primary key.
     await tx
       .insert(users)
@@ -143,7 +85,7 @@ export async function seedAdminUser(
         id: identityId,
         email,
         name: name ?? null,
-        emailVerified: true,
+        emailVerified,
         userType: "human",
         kratosIdentityId: identityId,
         lastSyncedAt: new Date(),
@@ -153,7 +95,7 @@ export async function seedAdminUser(
         set: {
           email,
           name: name ?? null,
-          emailVerified: true,
+          emailVerified,
           userType: "human",
           kratosIdentityId: identityId,
           lastSyncedAt: new Date(),
@@ -167,7 +109,10 @@ export async function seedAdminUser(
       columns: { workspaceId: true },
     });
     if (existingMembership) {
-      return existingMembership.workspaceId;
+      return {
+        workspaceId: existingMembership.workspaceId,
+        alreadyExisted: !!existingUser,
+      };
     }
 
     // Otherwise create a default personal workspace + owner membership.
@@ -195,7 +140,7 @@ export async function seedAdminUser(
       role: "owner",
     });
 
-    return workspace.id;
+    return { workspaceId: workspace.id, alreadyExisted: !!existingUser };
   });
 
   logger.info(
@@ -206,7 +151,6 @@ export async function seedAdminUser(
   return {
     userId: identityId,
     workspaceId,
-    kratosIdentityId: identityId,
     alreadyExisted,
   };
 }
