@@ -5,7 +5,14 @@
  * from the Data Pod (e.g., Synap Intelligence Service, third-party AI providers)
  */
 
-import { pgTable, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  jsonb,
+  boolean,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 export const intelligenceServices = pgTable("intelligence_services", {
   id: text("id").primaryKey(),
@@ -40,6 +47,14 @@ export const intelligenceServices = pgTable("intelligence_services", {
    * via the trusted Hub Protocol provisioning path (control plane sets this to true).
    */
   mcpApproved: boolean("mcp_approved").notNull().default(false),
+
+  /** Human-readable provider type (e.g. 'openai', 'anthropic', 'self-hosted', 'custom') */
+  providerType: text("provider_type"),
+
+  /** Whether to automatically sync agent list from this service into the agents table */
+  agentListSyncEnabled: boolean("agent_list_sync_enabled")
+    .notNull()
+    .default(false),
 
   // Metadata
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),

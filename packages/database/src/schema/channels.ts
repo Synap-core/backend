@@ -18,6 +18,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import { agents } from "./agents.js";
 
 /**
  * Channel Types (V2)
@@ -208,6 +209,11 @@ export const channels = pgTable(
 
     /** MCP servers enabled for this channel. null = inherit no MCPs (opt-in model). */
     mcpServerIds: uuid("mcp_server_id").array(),
+
+    /** UUID of the agent that sent the first/most recent message in this channel. */
+    senderAgentId: uuid("sender_agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
 
     // Context (compressed summaries from merged sub-threads)
     contextSummary: text("context_summary"),
