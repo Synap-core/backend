@@ -130,8 +130,6 @@ async function ensureProactiveFeedChannel(
       scope: ChannelScope.POD,
       feedScope: FeedScope.USER,
       status: ChannelStatus.ACTIVE,
-      agentId: "proactive",
-      agentType: ChannelAgentType.PERSONAL,
     })
     .returning();
   return channel;
@@ -161,8 +159,6 @@ async function ensurePersonalChatChannel(
       threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
-      agentId: "personal",
-      agentType: ChannelAgentType.PERSONAL,
     })
     .returning();
   return channel;

@@ -37,7 +37,20 @@ import { withRetry, FEED_RETRY_OPTIONS } from "@synap/shared-utils";
 import type { SourceItem } from "@synap/feed-service";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import type { FeedMessageMetadata } from "@synap-core/types/feeds";
-import { FeedMessageMetadataSchema } from "@synap/api/src/types/feed-config";
+import { z } from "zod";
+
+const FeedMessageMetadataSchema = z.object({
+  feedItem: z.literal(true),
+  feedType: z.enum(["rss", "proactive", "automation"]),
+  source: z.object({ platform: z.string(), url: z.string() }),
+  topics: z.array(z.string()),
+  categories: z.array(z.string()),
+  relevanceScore: z.number().min(0).max(1),
+  aiClassified: z.boolean(),
+  crossFeeds: z.array(z.any()).default([]),
+  batched: z.boolean().optional(),
+  batchId: z.string().uuid().optional(),
+});
 
 const logger = createLogger({ module: "entity-extract" });
 
@@ -311,14 +324,24 @@ async function resolveFeedConfig(
 ): Promise<FeedConfig> {
   try {
     const feed = await db.query.feeds.findFirst({
-      where: and(eq(feeds.id, feedId), eq(feeds.userId, userId)),
-      columns: { config: true },
+      where: and(
+        eq(db.query.feeds.id, feedId),
+        eq(db.query.feeds.userId, userId)
+      ),
+      columns: { feedType: true, channelId: true },
+      with: {
+        channel: {
+          columns: { agentConfig: true },
+        },
+      },
     });
 
-    const config = feed?.config as Record<string, unknown> | undefined;
-    if (config) {
+    if (feed && feed.channel) {
+      const config =
+        (feed.channel.agentConfig as Record<string, unknown>) ?? {};
       return {
-        feedType: (config.feedType as string) ?? "rss",
+        feedType:
+          (feed.feedType as string) ?? (config.feedType as string) ?? "rss",
         minRelevanceScore: ((config.minRelevanceScore as number) ?? 0) / 100, // stored as 0-100
         enrichmentEnabled: config.enrichmentEnabled !== false,
       };
