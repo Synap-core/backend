@@ -17,7 +17,6 @@
  */
 
 import { randomUUID, createHash } from "crypto";
-import type PgBoss from "pg-boss";
 import {
   db,
   eq,
@@ -29,21 +28,16 @@ import {
 import { sql as dbSql } from "@synap/database";
 import {
   channels,
-  feeds,
   messages,
-  sourceConfigs,
   sourceSubscriptions,
 } from "@synap/database/schema";
 import { createLogger, ServiceUnavailableError } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { withRetry, FEED_RETRY_OPTIONS } from "@synap/shared-utils";
 import type { SourceItem } from "@synap/feed-service";
-import {
-  MessageRole,
-  MessageAuthorType,
-  type FeedMessageMetadata,
-} from "@synap/database/schema";
-import { FeedMessageMetadataSchema } from "@synap/database/src/types/feed-config";
+import { MessageRole, MessageAuthorType } from "@synap/database/schema";
+import type { FeedMessageMetadata } from "@synap-core/types/feeds";
+import { FeedMessageMetadataSchema } from "@synap/api/src/types/feed-config";
 
 const logger = createLogger({ module: "entity-extract" });
 
@@ -148,8 +142,8 @@ async function classifyWithIS(
     excerpt?: string;
     bodyText?: string;
   }>,
-  userId: string,
-  workspaceId: string | undefined,
+  _userId: string,
+  _workspaceId: string | undefined,
   feedType: string
 ): Promise<Record<string, ClassificationResult>> {
   const isUrl = process.env.INTELLIGENCE_HUB_URL;
