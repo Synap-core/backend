@@ -106,7 +106,8 @@ function extractJsDoc(lines, lineIndex) {
         .replace(/^\*+\s?/, "")
         .replace(/^\/\*\*/, "")
         .trim()
-    );
+);
+
     i--;
   }
   if (i >= 0 && lines[i].trim().startsWith("/**")) {
@@ -297,5 +298,5 @@ console.log(
   `✅  API reference written to ${OUT_FILE} (${files.length} routers, ${sections.reduce(
     (n, s) => n + (s.match(/^####/gm) || []).length,
     0
-  )} procedures)`
+   )} procedures)`
 );
