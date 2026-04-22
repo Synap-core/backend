@@ -8,12 +8,13 @@
 import { EntityPropertyIndexRepository } from "../repositories/entity-property-index-repository.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export class PropertyIndexService {
   private indexRepo: EntityPropertyIndexRepository;
   private profileResolution: ProfileResolutionService;
 
-  constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
+  constructor(db: PostgresJsDatabase<typeof schema>) {
     this.indexRepo = new EntityPropertyIndexRepository(db);
     this.profileResolution = new ProfileResolutionService(db);
   }

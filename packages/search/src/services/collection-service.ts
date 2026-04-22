@@ -32,7 +32,7 @@ export class CollectionService {
         // Check if collection exists
         await client.collections(schema.name).retrieve();
         console.log(`Collection ${schema.name} already exists`);
-      } catch (error) {
+      } catch {
         // Collection doesn't exist, create it
         try {
           await client.collections().create(schema);
@@ -78,7 +78,7 @@ export class CollectionService {
           numDocuments: collection.num_documents,
           createdAt: collection.created_at,
         };
-      } catch (error) {
+      } catch {
         stats[schema.name] = { error: "Collection not found" };
       }
     }

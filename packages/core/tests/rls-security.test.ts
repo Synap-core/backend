@@ -15,7 +15,7 @@ import {
   entities,
   events,
   tags,
-  relations,
+  _relations,
   setCurrentUser,
   clearCurrentUser,
 } from "@synap/database";
@@ -256,7 +256,7 @@ describeIf(isPostgres)("Row-Level Security (RLS) Tests", () => {
       await setCurrentUser(userB);
 
       // Try to update User A's entity (should fail due to RLS)
-      const updateResult = await db
+      await db
         .update(entities)
         .set({ title: "Hacked Title" })
         .where(eq(entities.id, entityAId));

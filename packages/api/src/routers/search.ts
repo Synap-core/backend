@@ -72,7 +72,7 @@ export const searchRouter = router({
       // Cast results to entity type (remove rank field from response)
       const entitiesResults = (results as Record<string, unknown>[]).map(
         (r) => {
-          const { rank, ...entity } = r;
+          const { _rank, ...entity } = r;
           return entity;
         }
       );

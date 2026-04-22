@@ -17,7 +17,7 @@ import { setupBridge } from "./bridge.js";
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 // CORS origin - allow frontend URL or use wildcard for same-domain setups (Caddy reverse proxy)
-const CORS_ORIGIN = process.env.CORS_ORIGIN || FRONTEND_URL;
+const _CORS_ORIGIN = process.env.CORS_ORIGIN || FRONTEND_URL;
 
 // Create HTTP server
 const httpServer = createServer();

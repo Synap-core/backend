@@ -12,6 +12,7 @@ import {
   type NewProfileRelation,
 } from "../schema/profile-relations.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export interface LinkProfileRelationInput {
   sourceProfileId: string;
@@ -22,9 +23,7 @@ export interface LinkProfileRelationInput {
 }
 
 export class ProfileRelationRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Link two profiles via a relation definition

@@ -84,7 +84,7 @@ export async function getIdentityById(identityId: string): Promise<any | null> {
       id: identityId,
     });
     return identity;
-  } catch (error) {
+  } catch {
     return null;
   }
 }

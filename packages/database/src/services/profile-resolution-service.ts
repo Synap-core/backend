@@ -9,6 +9,7 @@ import { ProfilePropertyRepository } from "../repositories/profile-property-repo
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export interface EffectiveProperty extends PropertyDef {
   required: boolean;
@@ -17,7 +18,7 @@ export interface EffectiveProperty extends PropertyDef {
 }
 
 export class ProfileResolutionService {
-  private _db: PostgresJsDatabase<typeof import("../schema/index.js")>;
+  private _db: PostgresJsDatabase<typeof schema>;
   private profileRepo: ProfileRepository;
   private profilePropertyRepo: ProfilePropertyRepository;
   private propertyDefRepo: PropertyDefRepository;
@@ -29,7 +30,7 @@ export class ProfileResolutionService {
   >();
   private static CACHE_TTL = 60_000;
 
-  constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
+  constructor(db: PostgresJsDatabase<typeof schema>) {
     this._db = db;
     this.profileRepo = new ProfileRepository(db);
     this.profilePropertyRepo = new ProfilePropertyRepository(db);

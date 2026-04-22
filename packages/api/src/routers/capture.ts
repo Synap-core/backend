@@ -22,7 +22,7 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
-  PropertyValueType,
+  type PropertyValueType,
   type IdentitySignal,
 } from "@synap/database";
 import { searchService } from "@synap/search";

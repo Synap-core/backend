@@ -166,7 +166,7 @@ class EventStreamManager {
     for (const [clientId, client] of this.clients.entries()) {
       try {
         client.controller.enqueue(encoded);
-      } catch (error) {
+      } catch {
         deadClients.push(clientId);
       }
     }

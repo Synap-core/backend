@@ -191,7 +191,7 @@ export class R2Storage {
         })
       );
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

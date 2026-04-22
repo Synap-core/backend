@@ -5,7 +5,7 @@
  * to authenticate with the Data Pod.
  */
 
-import { AdminApi, Configuration } from "@ory/hydra-client";
+import { AdminApi as _AdminApi, Configuration } from "@ory/hydra-client";
 import crypto from "crypto";
 
 const hydraAdminUrl = process.env.HYDRA_ADMIN_URL || "http://localhost:4445";
@@ -32,7 +32,7 @@ async function createHubClient() {
   try {
     // Check if client already exists
     try {
-      const existing = await hydraAdmin.getOAuth2Client({ id: clientId });
+      const _existing = await hydraAdmin.getOAuth2Client({ id: clientId });
       console.log("⚠️  Client already exists. Updating...");
 
       // Update existing client

@@ -11,6 +11,7 @@ import {
   type NewRelationDef,
 } from "../schema/relation-defs.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export interface CreateRelationDefInput {
   slug: string;
@@ -23,9 +24,7 @@ export interface CreateRelationDefInput {
 }
 
 export class RelationDefRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Create or update a relation definition (upsert on slug + workspaceId)

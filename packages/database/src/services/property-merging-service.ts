@@ -7,6 +7,7 @@
 
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 import { entityPropertyIndex } from "../schema/entity-property-index.js";
 
 /**
@@ -30,7 +31,7 @@ export interface MergedProperty {
 export class PropertyMergingService {
   private profileResolution: ProfileResolutionService;
 
-  constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
+  constructor(db: PostgresJsDatabase<typeof schema>) {
     this.profileResolution = new ProfileResolutionService(db);
   }
 
@@ -39,7 +40,7 @@ export class PropertyMergingService {
    * Uses the "hot properties" list from PropertyIndexService
    */
   private async getIndexedPropertyDefIds(
-    db: PostgresJsDatabase<typeof import("../schema/index.js")>
+    db: PostgresJsDatabase<typeof schema>
   ): Promise<Set<string>> {
     // Option A: Query entity_property_index for distinct propertyDefIds
     // This tells us which properties are actually indexed
@@ -61,7 +62,7 @@ export class PropertyMergingService {
    */
   async mergePropertiesFromProfiles(
     scopeProfileIds: string[],
-    db: PostgresJsDatabase<typeof import("../schema/index.js")>,
+    db: PostgresJsDatabase<typeof schema>,
     workspaceId?: string | null
   ): Promise<Map<string, MergedProperty>> {
     if (scopeProfileIds.length === 0) {

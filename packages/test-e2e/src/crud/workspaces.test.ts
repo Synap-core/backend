@@ -16,7 +16,7 @@ import {
   expectValidated,
   expectValidUUID,
 } from "../utils/assertions.js";
-import { randomUUID } from "crypto";
+import { randomUUID as _randomUUID } from "crypto";
 
 describe("Workspaces CRUD", () => {
   let testEnv: TestEnvironment;

@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { RSSFeedConfig } from "@synap/shared-utils/feed-types.js";
 
 // Setup mocks using hoisted pattern
 const {
@@ -164,7 +165,7 @@ const createMockJob = (
       userId: "user-456",
       workspaceId: "workspace-789",
       runId: "run-abc",
-      config: mergedConfig as import("@synap/shared-utils").RSSFeedConfig,
+      config: mergedConfig as RSSFeedConfig,
       ...otherOverrides,
     },
   };

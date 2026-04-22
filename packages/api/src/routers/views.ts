@@ -545,7 +545,7 @@ export const viewsRouter = router({
           if (latestVersion) {
             try {
               content = JSON.parse(latestVersion.content);
-            } catch (e) {
+            } catch (_e) {
               content = {};
             }
           }

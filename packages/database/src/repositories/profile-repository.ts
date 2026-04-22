@@ -13,6 +13,7 @@ import {
   ProfileScope,
 } from "../schema/profiles.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export interface CreateProfileInput {
   slug: string;
@@ -34,9 +35,7 @@ export interface CreateProfileInput {
 }
 
 export class ProfileRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Create a new profile

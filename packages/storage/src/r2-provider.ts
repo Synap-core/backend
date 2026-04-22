@@ -143,7 +143,7 @@ export class R2StorageProvider implements IFileStorage {
         })
       );
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

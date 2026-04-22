@@ -42,7 +42,7 @@ import {
   withRetryResult,
   API_RETRY_OPTIONS,
   type RetryOptions,
-  CircuitBreaker,
+  type CircuitBreaker,
   circuitBreakerRegistry,
 } from "@synap/shared-utils";
 

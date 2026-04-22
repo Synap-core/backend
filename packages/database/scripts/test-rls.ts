@@ -10,7 +10,7 @@
 import { db, withRLSContext, withoutRLSContext } from "@synap/database";
 import {
   workspaces,
-  workspaceMembers,
+  workspaceMembers as _workspaceMembers,
   entities,
   documents,
 } from "@synap/database/schema";
@@ -127,7 +127,7 @@ async function runTests() {
           .where(eq(documents.id, doc.id));
       });
       console.log(`  ✗ User 2 should not be able to update`);
-    } catch (err) {
+    } catch (_err) {
       console.log(`  ✓ User 2 correctly blocked from update`);
     }
 

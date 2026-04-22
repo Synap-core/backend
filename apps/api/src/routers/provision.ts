@@ -1223,7 +1223,7 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
     } finally {
       clearTimeout(timer);
     }
-  } catch (err) {
+  } catch {
     healthResult = { reachable: false };
     issues.push("unreachable");
   }

@@ -53,7 +53,7 @@ describe("E2E Executor Flows", () => {
 
   describe("Fast Executors (Tags)", () => {
     it("should process tags.create: Requested -> Validated -> Completed", async () => {
-      const { apiUrl, users } = testEnv;
+      const { users } = testEnv;
       const user = users.userA;
       const tagName = `E2E Tag ${randomUUID().slice(0, 8)}`;
 

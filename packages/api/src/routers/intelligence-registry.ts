@@ -197,7 +197,7 @@ export const intelligenceRegistryRouter = router({
       }
 
       // Don't expose API key
-      const { apiKey, ...publicService } = service;
+      const { _apiKey, ...publicService } = service;
       return publicService;
     }),
 

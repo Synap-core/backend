@@ -8,18 +8,18 @@
  * - Creates test users and gets tokens
  */
 
-import { beforeAll, afterAll } from "vitest";
+import { beforeAll as _beforeAll, afterAll as _afterAll } from "vitest";
 import { createLogger } from "@synap-core/core";
-import { db } from "@synap/database";
+import { db as _db } from "@synap/database";
 import { config } from "@synap-core/core";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
 import {
   createTestClient,
-  createMultiUserClients,
+  createMultiUserClients as _createMultiUserClients,
 } from "./utils/test-client.js";
-import type { AppRouter } from "@synap/api";
+import type { AppRouter as _AppRouter } from "@synap/api";
 
 const execAsync = promisify(exec);
 const logger = createLogger({ module: "e2e-setup" });
@@ -44,7 +44,7 @@ export interface TestEnvironment {
 
 let testEnv: TestEnvironment | null = null;
 const apiServer: any = null;
-const apiPort = 0;
+const _apiPort = 0;
 
 /**
  * Start API server in test mode
@@ -192,7 +192,7 @@ async function createTestUser(
 /**
  * Login and get session cookie (simplified)
  */
-async function loginUser(user: TestUser, apiUrl: string): Promise<string> {
+async function loginUser(user: TestUser, _apiUrl: string): Promise<string> {
   // Simplified: Just return the mock session cookie
   logger.info({ email: user.email }, "User logged in (mock mode)");
   return user.sessionCookie || `mock-session-cookie=${user.id}`;

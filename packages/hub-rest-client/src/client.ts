@@ -535,7 +535,7 @@ export class HubRestClient {
    */
   async getMessages(
     threadId: string,
-    options?: { limit?: number; before?: string }
+    _options?: { limit?: number; before?: string }
   ): Promise<HubMessage[]> {
     // The backend GET /threads/:threadId/messages does not accept query params in
     // the current implementation — returns all messages ordered by timestamp.

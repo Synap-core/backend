@@ -26,7 +26,7 @@ export type PostProactiveMessageOptions = {
   userId: string;
   workspaceId: string;
   content: string;
-  proactiveType: import("../services/DeliveryService.js").ProactiveMessageType;
+  proactiveType: ProactiveMessageType;
   metadata?: Record<string, unknown>;
 };
 

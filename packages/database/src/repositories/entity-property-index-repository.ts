@@ -12,11 +12,10 @@ import {
   type NewEntityPropertyIndex,
 } from "../schema/entity-property-index.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export class EntityPropertyIndexRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Index a property value for an entity

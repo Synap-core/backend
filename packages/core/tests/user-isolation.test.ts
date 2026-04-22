@@ -84,7 +84,7 @@ describeIf("User Isolation (Application-Level Filtering)", () => {
 
   let entityIdA: string;
   let entityIdB: string;
-  let tagIdA: string;
+  let _tagIdA: string;
 
   beforeAll(async () => {
     console.log("\n🧪 Setting up user isolation tests...");

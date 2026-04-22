@@ -14,9 +14,9 @@ import * as path from "path";
 import {
   intro,
   outro,
-  text,
+  text as _text,
   confirm,
-  select,
+  select as _select,
   spinner,
   note,
 } from "@clack/prompts";
@@ -130,7 +130,12 @@ async function main() {
 }
 
 async function generateAllFiles(config: TableConfig): Promise<GeneratedFiles> {
-  const { tableName, hasWorkspace, hasUserId, generateTests } = config;
+  const {
+    tableName: _tableName,
+    hasWorkspace: _hasWorkspace,
+    hasUserId: _hasUserId,
+    generateTests,
+  } = config;
 
   return {
     worker: generateWorker(config),

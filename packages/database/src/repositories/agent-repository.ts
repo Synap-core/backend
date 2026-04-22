@@ -7,6 +7,7 @@
 
 import { eq, and, desc, isNull, isNotNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 import { agents, type Agent, type NewAgent } from "../schema/agents.js";
 
 export interface UpsertAgentFromSyncData {
@@ -21,9 +22,7 @@ export interface UpsertAgentFromSyncData {
 }
 
 export class AgentRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Upsert an agent from IS sync payload.

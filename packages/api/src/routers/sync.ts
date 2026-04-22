@@ -792,7 +792,7 @@ app.post("/receive-file", async (c) => {
   let body: z.infer<typeof filePayloadSchema>;
   try {
     body = filePayloadSchema.parse(await c.req.json());
-  } catch (err) {
+  } catch (_err) {
     return c.json({ error: "Invalid payload" }, 400);
   }
 
@@ -856,7 +856,7 @@ app.post("/receive-file-version", async (c) => {
   let body: z.infer<typeof fileVersionPayloadSchema>;
   try {
     body = fileVersionPayloadSchema.parse(await c.req.json());
-  } catch (err) {
+  } catch (_err) {
     return c.json({ error: "Invalid payload" }, 400);
   }
 

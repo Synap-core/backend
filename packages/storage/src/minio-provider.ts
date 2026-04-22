@@ -93,7 +93,7 @@ export class MinIOStorageProvider implements IFileStorage {
       );
       this.bucketInitialized = true;
       return;
-    } catch (error) {
+    } catch {
       // Bucket doesn't exist
       if (this.createBucketIfNotExists) {
         try {
@@ -212,7 +212,7 @@ export class MinIOStorageProvider implements IFileStorage {
         })
       );
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

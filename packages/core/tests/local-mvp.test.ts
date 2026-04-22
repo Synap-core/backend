@@ -53,7 +53,7 @@ async function runTests() {
 
   // Test 2: Database Connection (PostgreSQL)
   try {
-    const result = await db.select().from(events).limit(1);
+    const _result = await db.select().from(events).limit(1);
     logTest("Test 2: Database Connection (PostgreSQL)", true);
   } catch (error) {
     logTest(

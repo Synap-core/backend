@@ -11,6 +11,7 @@ import {
   type NewProfileProperty,
 } from "../schema/profile-properties.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export interface LinkProfilePropertyInput {
   profileId: string;
@@ -21,9 +22,7 @@ export interface LinkProfilePropertyInput {
 }
 
 export class ProfilePropertyRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Link a property to a profile

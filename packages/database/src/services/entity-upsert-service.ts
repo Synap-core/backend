@@ -39,6 +39,7 @@ import {
   entityIdentitySignals,
   entities,
 } from "../schema/index.js";
+import type * as schema from "../schema/index.js";
 import type { Entity } from "../schema/entities.js";
 import { EntityRepository } from "../repositories/entity-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
@@ -81,7 +82,7 @@ export class EntityUpsertService {
   private entityRepo: EntityRepository;
 
   constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>,
+    private db: PostgresJsDatabase<typeof schema>,
     eventRepo: EventRepository
   ) {
     this.entityRepo = new EntityRepository(db, eventRepo);

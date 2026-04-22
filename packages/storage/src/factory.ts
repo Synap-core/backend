@@ -17,17 +17,14 @@ import { MinIOStorageProvider, type MinIOConfig } from "./minio-provider.js";
 // @synap-core/core doesn't depend on @synap/database, breaking the cycle:
 // database → storage → core ✅ (no cycle!)
 import { ValidationError, InternalServerError } from "@synap-core/core";
+import type { Config as AppConfig } from "@synap-core/core/config.js";
 
 // Import config using dynamic import to avoid circular dependencies
 // This will be resolved when the module loads
-let _config: (typeof import("@synap-core/core"))["config"] | null = null;
-let _configPromise: Promise<
-  (typeof import("@synap-core/core"))["config"]
-> | null = null;
+let _config: AppConfig | null = null;
+let _configPromise: Promise<AppConfig> | null = null;
 
-async function loadConfig(): Promise<
-  (typeof import("@synap-core/core"))["config"]
-> {
+async function loadConfig(): Promise<AppConfig> {
   if (!_configPromise) {
     _configPromise = import("@synap-core/core").then((module) => {
       _config = module.config;
@@ -37,7 +34,7 @@ async function loadConfig(): Promise<
   return _configPromise;
 }
 
-function getConfig(): (typeof import("@synap-core/core"))["config"] {
+function getConfig(): AppConfig {
   if (_config) {
     return _config;
   }

@@ -10,7 +10,7 @@
 import { randomBytes } from "crypto";
 import type { ApiKeyRepository, CreateApiKeyInput } from "@synap/database";
 import { and, eq } from "@synap/database";
-import { db } from "@synap/database";
+import type { db } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
 /** Default scopes for externally provisioned agents via setup/agent */

@@ -4303,7 +4303,7 @@ app.get("/terminal/logs", async (c) => {
         maxBuffer: 100 * 1024,
       });
       output = stdout;
-    } catch (_dockerErr) {
+    } catch {
       // Fallback: journalctl
       let jCmd = `journalctl -u synap-${service} -n ${lines} --no-pager`;
       if (since) jCmd += ` --since="${since} ago"`;

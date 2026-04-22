@@ -39,7 +39,7 @@ export async function introspectToken(token: string): Promise<any | null> {
       token,
     });
     return data.active ? data : null;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -74,7 +74,7 @@ export async function getOAuth2Client(clientId: string): Promise<any | null> {
   try {
     const { data } = await hydraAdmin.getOAuth2Client({ id: clientId });
     return data;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -104,7 +104,7 @@ export async function exchangeToken(_params: {
     throw new Error(
       "Token Exchange not yet fully implemented - needs custom endpoint"
     );
-  } catch (error) {
+  } catch {
     return null;
   }
 }

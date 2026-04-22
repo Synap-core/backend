@@ -7,6 +7,7 @@
 
 import { eq, and, desc } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 import {
   channels,
   type Channel,
@@ -51,9 +52,7 @@ export interface UpdateChannelData {
 export class ChannelRepository {
   private eventRepo: EventRepository;
 
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {
+  constructor(private db: PostgresJsDatabase<typeof schema>) {
     this.eventRepo = new EventRepository(sql);
   }
 

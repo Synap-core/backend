@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 import {
-  mkdtempSync,
+  mkdtempSync as _mkdtempSync,
   rmSync,
   existsSync,
   mkdirSync,

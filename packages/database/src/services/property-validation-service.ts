@@ -109,12 +109,13 @@ export class PropertyValidationService {
       case PropertyValueType.STRING:
         return String(value);
 
-      case PropertyValueType.NUMBER:
+      case PropertyValueType.NUMBER: {
         const num = Number(value);
         if (isNaN(num)) {
           throw new Error(`Cannot cast to number: ${value}`);
         }
         return num;
+      }
 
       case PropertyValueType.BOOLEAN:
         if (typeof value === "boolean") return value;

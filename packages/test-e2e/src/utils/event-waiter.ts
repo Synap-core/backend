@@ -154,7 +154,7 @@ export async function waitForValidation(
  * Clear old test events (cleanup utility)
  */
 export async function clearTestEvents(
-  olderThan: Date = new Date(Date.now() - 60000)
+  _olderThan: Date = new Date(Date.now() - 60000)
 ) {
   // Note: In production, events are immutable. This is ONLY for tests.
   // Consider using a separate test database or marking test events differently.

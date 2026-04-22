@@ -5,7 +5,7 @@
  */
 
 import { sql } from "../src/client-pg.js";
-import { randomBytes, createHash } from "crypto";
+import { randomBytes, createHash as _createHash } from "crypto";
 import * as bcrypt from "bcryptjs";
 
 // Configuration

@@ -510,7 +510,8 @@ export async function rollbackFeedConfigurations(
 
     return result;
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const _errorMessage =
+      error instanceof Error ? error.message : String(error);
     result.success = false;
     result.durationMs = Date.now() - startTime;
     return result;

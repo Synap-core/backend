@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 
+const _path = path;
+
 // Define paths
 const coreTypesDist =
   "/Users/antoine/Documents/Code/synap/synap-backend/packages/types/dist/index.d.ts";

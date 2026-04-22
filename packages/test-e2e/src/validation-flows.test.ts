@@ -20,7 +20,7 @@ import {
 } from "./test-harness.js";
 import { createLogger } from "@synap-core/core";
 import { db } from "@synap/database";
-import { randomUUID } from "crypto";
+import { randomUUID as _randomUUID } from "crypto";
 
 const logger = createLogger({ module: "e2e-validation-flows" });
 
@@ -329,7 +329,7 @@ describe("E2E Validation Flows", () => {
 
         expect(hasEntity).toBe(false);
         expect(hasProposal).toBe(false);
-      } catch (error) {
+      } catch {
         // Expected path
         logger.info("Entity creation denied as expected");
       }

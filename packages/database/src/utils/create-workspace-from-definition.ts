@@ -863,7 +863,7 @@ export async function createWorkspaceFromDefinition(
             );
             for (const pd of pdMap.values()) existingPropSlugs.add(pd.slug);
           }
-        } catch (_) {
+        } catch {
           // If we can't determine existing props, skip property creation for reused profiles
           continue;
         }

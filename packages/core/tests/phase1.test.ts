@@ -49,7 +49,7 @@ async function runTests() {
   // Test 2: Database Connection
   try {
     // Try to query the events table
-    const result = await db.select().from(events).limit(1);
+    await db.select().from(events).limit(1);
     logTest("Test 2: Database Connection", true);
   } catch (error) {
     logTest("Test 2: Database Connection", false, (error as Error).message);

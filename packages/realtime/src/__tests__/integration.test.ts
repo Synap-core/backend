@@ -21,7 +21,7 @@ describe("Real-Time Notification Integration", () => {
   const realtimeUrl = process.env.REALTIME_URL || "http://localhost:8787";
 
   const ws: WebSocket | null = null;
-  const receivedMessages: Array<{ type: string; data: unknown }> = [];
+  const _receivedMessages: Array<{ type: string; data: unknown }> = [];
 
   beforeAll(() => {
     // Note: In a real test environment, you would:

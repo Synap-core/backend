@@ -18,6 +18,7 @@ import { ChannelMessagePublisher } from "./publishers/ChannelMessagePublisher.js
 import type { ISClassifierConfig } from "./classifiers/ISClassifier.js";
 import type { KeywordClassifierConfig } from "./classifiers/KeywordClassifier.js";
 import type { ChannelMessagePublisherConfig } from "./publishers/ChannelMessagePublisher.js";
+import type { CustomProviderConfig } from "./config/RSSProviderConfig.js";
 
 /**
  * Factory options for creating components
@@ -75,9 +76,7 @@ export class FeedServiceFactory {
   static createProvider(config: RSSProviderConfig): IFeedProvider {
     switch (config.type) {
       case "custom":
-        return new CustomProvider(
-          config as import("./config/RSSProviderConfig.js").CustomProviderConfig
-        );
+        return new CustomProvider(config as CustomProviderConfig);
 
       default:
         throw new Error(

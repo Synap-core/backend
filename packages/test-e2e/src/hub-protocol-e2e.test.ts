@@ -13,7 +13,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { setupTestEnvironment, type TestEnvironment } from "./setup.js";
 import {
   createTestClient,
-  testDataFactory,
+  _testDataFactory,
   DatabaseTestHelpers,
   wait,
   retryUntil,
@@ -29,7 +29,7 @@ describe("E2E Hub Protocol", () => {
   let testClient: any;
   let dbHelpers: DatabaseTestHelpers;
   let testWorkspaceId: string;
-  let accessToken: string;
+  let _accessToken: string;
 
   beforeAll(async () => {
     testEnv = await setupTestEnvironment();
@@ -65,7 +65,7 @@ describe("E2E Hub Protocol", () => {
   describe("1. Token Generation", () => {
     it("should generate access token with specified scopes", async () => {
       const requestId = randomUUID();
-      const scopes = ["entities:read", "entities:write"];
+      const _scopes = ["entities:read", "entities:write"];
 
       const result = await testClient.client.hub.generateAccessToken.mutate({
         requestId,
@@ -77,7 +77,7 @@ describe("E2E Hub Protocol", () => {
       expect(result.expiresAt).toBeDefined();
       expect(new Date(result.expiresAt).getTime()).toBeGreaterThan(Date.now());
 
-      accessToken = result.token;
+      _accessToken = result.token;
       logger.info({ requestId }, "Access token generated");
     }, 10000);
 

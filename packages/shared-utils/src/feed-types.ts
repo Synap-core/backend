@@ -270,7 +270,7 @@ export function calculateNextRun(cron: string, timezone: string): Date {
       currentDate: new Date(),
     });
     return interval.next().toDate();
-  } catch (error) {
+  } catch {
     // Fallback: run in 1 hour if cron is invalid
     return new Date(Date.now() + 60 * 60 * 1000);
   }

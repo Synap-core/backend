@@ -72,7 +72,7 @@ describeIf("Multi-User Isolation (RLS)", () => {
   const userB = "test-user-b-" + Date.now();
 
   // Test data IDs
-  let noteIdA: string;
+  let _noteIdA: string;
   let entityIdA: string;
 
   beforeAll(async () => {
@@ -249,7 +249,7 @@ describeIf("Multi-User Isolation (RLS)", () => {
     await pool.query(`SET LOCAL app.current_user_id = '${userB}'`);
 
     // This should fail silently (no rows affected) due to RLS
-    const result = await db
+    await db
       .update(entities)
       .set({ title: "HACKED BY USER B" })
       .where(sql`id = ${entityIdA}`);

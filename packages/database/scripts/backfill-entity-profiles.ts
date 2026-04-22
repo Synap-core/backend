@@ -22,7 +22,7 @@ async function backfillEntityProfiles() {
   console.log("🔄 Backfilling entity profiles...\n");
 
   const db = await getDb();
-  const profileRepo = new ProfileRepository(db);
+  const _profileRepo = new ProfileRepository(db);
 
   try {
     // 1. Get all system profiles

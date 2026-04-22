@@ -70,7 +70,7 @@ async function checkViews() {
 
     // Check for default views
     const defaultViewNames = ["All Tasks", "Task Board", "Main Whiteboard"];
-    const foundDefaults = allViews.filter((v) =>
+    const _foundDefaults = allViews.filter((v) =>
       defaultViewNames.some((name) => v.name.includes(name))
     );
 

@@ -12,6 +12,7 @@ import {
   type PropertyValueType,
 } from "../schema/property-defs.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 export interface CreatePropertyDefInput {
   slug: string;
@@ -34,9 +35,7 @@ export interface CreatePropertyDefInput {
 }
 
 export class PropertyDefRepository {
-  constructor(
-    private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {}
+  constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
    * Create a new property definition.

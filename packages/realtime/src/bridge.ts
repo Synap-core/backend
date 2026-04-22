@@ -265,7 +265,7 @@ function parseBody(req: IncomingMessage): Promise<unknown> {
       try {
         const parsed = JSON.parse(body);
         resolve(parsed);
-      } catch (error) {
+      } catch {
         reject(new Error("Invalid JSON"));
       }
     });

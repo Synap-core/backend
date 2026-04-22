@@ -9,6 +9,7 @@ import { sql, eq, and, type SQL } from "drizzle-orm";
 import { entities, entityPropertyIndex } from "../schema/index.js";
 import { PropertyMergingService } from "./property-merging-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type * as schema from "../schema/index.js";
 
 // EntityFilter type definition (from @synap-core/types)
 export interface EntityFilter {
@@ -47,9 +48,9 @@ export interface PropertyFilterMeta {
 
 export class ViewFilterCompiler {
   private propertyMerging: PropertyMergingService;
-  private db: PostgresJsDatabase<typeof import("../schema/index.js")>;
+  private db: PostgresJsDatabase<schema>;
 
-  constructor(db: PostgresJsDatabase<typeof import("../schema/index.js")>) {
+  constructor(db: PostgresJsDatabase<schema>) {
     this.db = db;
     this.propertyMerging = new PropertyMergingService(db);
   }

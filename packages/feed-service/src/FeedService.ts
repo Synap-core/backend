@@ -15,6 +15,7 @@ import type {
   UserContext,
   FeedFetchResult,
   ClassifiedItem,
+  NormalizedRSSItem,
 } from "./types/index.js";
 import type { PublishDestination } from "./interfaces/IFeedPublisher.js";
 import { FeedServiceFactory } from "./FeedServiceFactory.js";
@@ -447,8 +448,8 @@ export class FeedService {
    */
   private async deduplicateItems(
     _sourceUrl: string,
-    items: import("./types/index.js").NormalizedRSSItem[]
-  ): Promise<import("./types/index.js").NormalizedRSSItem[]> {
+    items: NormalizedRSSItem[]
+  ): Promise<NormalizedRSSItem[]> {
     if (!this.repository) return items;
 
     // Generate content hashes for deduplication
@@ -468,9 +469,7 @@ export class FeedService {
   /**
    * Generate hash for deduplication
    */
-  private generateItemHash(
-    item: import("./types/index.js").NormalizedRSSItem
-  ): string {
+  private generateItemHash(item: NormalizedRSSItem): string {
     const content = `${item.title}|${item.url}|${item.publishedAt?.toISOString() || ""}`;
     return crypto
       .createHash("sha256")

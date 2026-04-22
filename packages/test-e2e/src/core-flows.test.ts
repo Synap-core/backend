@@ -209,16 +209,13 @@ describe("E2E Core Flows", () => {
 
       // Step 2: Request data
       const requestDataStart = Date.now();
-      const requestDataResponse = await fetch(
-        `${apiUrl}/trpc/hub.requestData`,
-        {
-          method: "GET",
-          headers: {
-            Cookie: user.sessionCookie || "",
-          },
-          // Note: tRPC GET requests use query params
-        }
-      );
+      await fetch(`${apiUrl}/trpc/hub.requestData`, {
+        method: "GET",
+        headers: {
+          Cookie: user.sessionCookie || "",
+        },
+        // Note: tRPC GET requests use query params
+      });
 
       // For tRPC, we need to use POST for mutations/queries with body
       const requestDataResponsePost = await fetch(

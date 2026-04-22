@@ -7,6 +7,7 @@
 
 import { eq, and, or, isNull, inArray, desc } from "drizzle-orm";
 import { entities } from "../schema/index.js";
+import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
@@ -96,7 +97,7 @@ export class EntityRepository extends BaseRepository<
   private propertyIndex: PropertyIndexService;
 
   constructor(
-    db: PostgresJsDatabase<typeof import("../schema/index.js")>,
+    db: PostgresJsDatabase<typeof schema>,
     eventRepo: EventRepository
   ) {
     super(db, eventRepo, { subjectType: "entity", pluralName: "entities" });
