@@ -12,7 +12,7 @@ import { z } from "zod";
 // ============================================================================
 
 /** Valid RSS provider types */
-export const ProviderTypeSchema = z.enum(["custom"]);
+export const ProviderTypeSchema = z.enum(["custom", "direct"]);
 
 /** Valid feed parser types */
 export const ParserTypeSchema = z.enum(["rss", "atom", "json"]);
@@ -252,7 +252,7 @@ const PublishingConfigSchema = z.object({
  */
 export const FeedServiceConfigSchema = z.object({
   /** Default provider configuration */
-  defaultProvider: RSSProviderConfigSchema.default({ type: "direct" }),
+  defaultProvider: RSSProviderConfigSchema.default({ type: "custom" }),
   /** Default classifier type */
   defaultClassifier: ClassifierTypeSchema.default("keyword"),
   /** Default publisher type */

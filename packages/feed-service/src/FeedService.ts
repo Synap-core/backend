@@ -114,7 +114,7 @@ export class FeedService {
 
   constructor(config: FeedServiceConfiguration = {}) {
     this.config = {
-      defaultProvider: { type: "direct" },
+      defaultProvider: { type: "custom" },
       defaultClassifier: "keyword",
       defaultPublisher: "channel",
       enableDeduplication: true,

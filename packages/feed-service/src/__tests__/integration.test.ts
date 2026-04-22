@@ -13,11 +13,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FeedServiceFactory } from "../FeedServiceFactory.js";
 import { FeedService } from "../FeedService.js";
-import type {
-  RSSProviderConfig,
-  FeedSourceConfig,
-  NormalizedRSSItem,
-} from "../types/index.js";
+import type { FeedSourceConfig, NormalizedRSSItem } from "../types/index.js";
 
 // ============================================================================
 // Test Setup
@@ -100,14 +96,14 @@ describe("Feed Integration", () => {
       mockFetch.mockResolvedValueOnce(createMockResponse(sampleRSSXML));
 
       const provider = FeedServiceFactory.createProvider({
-        type: "direct",
+        type: "custom",
         timeoutMs: 30000,
         retryAttempts: 3,
       });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/feed.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       const items = await provider.fetch(source);
@@ -120,11 +116,11 @@ describe("Feed Integration", () => {
     it("should fetch Atom via DirectRSSProvider", async () => {
       mockFetch.mockResolvedValueOnce(createMockResponse(sampleAtomXML));
 
-      const provider = FeedServiceFactory.createProvider({ type: "direct" });
+      const provider = FeedServiceFactory.createProvider({ type: "custom" });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/atom.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       const items = await provider.fetch(source);
@@ -136,11 +132,11 @@ describe("Feed Integration", () => {
     it("should handle fetch errors gracefully", async () => {
       mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
-      const provider = FeedServiceFactory.createProvider({ type: "direct" });
+      const provider = FeedServiceFactory.createProvider({ type: "custom" });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/feed.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       // Provider throws on error
@@ -150,11 +146,11 @@ describe("Feed Integration", () => {
     it("should handle HTTP error responses", async () => {
       mockFetch.mockResolvedValueOnce(createMockResponse("Not found", 404));
 
-      const provider = FeedServiceFactory.createProvider({ type: "direct" });
+      const provider = FeedServiceFactory.createProvider({ type: "custom" });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/missing.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       // Provider throws on error
@@ -304,18 +300,18 @@ describe("Feed Integration", () => {
         .mockResolvedValueOnce(createMockResponse(sampleRSSXML));
 
       const primaryProvider = FeedServiceFactory.createProvider({
-        type: "direct",
+        type: "custom",
         timeoutMs: 5000,
       });
 
       const fallbackProvider = FeedServiceFactory.createProvider({
-        type: "direct",
+        type: "custom",
         timeoutMs: 5000,
       });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/feed.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       // Try primary
@@ -340,7 +336,7 @@ describe("Feed Integration", () => {
 
       const source: FeedSourceConfig = {
         url: "https://example.com/feed.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       const result = await service.processFeed(source, {
@@ -368,7 +364,7 @@ describe("Feed Integration", () => {
 
       const source: FeedSourceConfig = {
         url: "https://example.com/feed.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       const result = await service.processFeed(source, {
@@ -392,11 +388,11 @@ describe("Feed Integration", () => {
         createMockResponse("This is not valid XML")
       );
 
-      const provider = FeedServiceFactory.createProvider({ type: "direct" });
+      const provider = FeedServiceFactory.createProvider({ type: "custom" });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/invalid.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       // Provider throws on parse error
@@ -412,13 +408,13 @@ describe("Feed Integration", () => {
       );
 
       const provider = FeedServiceFactory.createProvider({
-        type: "direct",
+        type: "custom",
         timeoutMs: 50, // Very short timeout
       });
 
       const source: FeedSourceConfig = {
         url: "https://example.com/slow.xml",
-        provider: { type: "direct" },
+        provider: { type: "custom" },
       };
 
       await expect(provider.fetch(source)).rejects.toThrow();
