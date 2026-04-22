@@ -136,7 +136,7 @@ export async function resolveIntelligenceService(
         logger.info(
           {
             serviceId: wsServiceId,
-            url: (service as any).webhookUrl,
+            url: service.webhookUrl,
             source: "workspace_preference",
           },
           "IS resolved via workspace preference"
@@ -174,7 +174,7 @@ export async function resolveIntelligenceService(
       logger.info(
         {
           serviceId: userServiceId,
-          url: (service as any).webhookUrl,
+          url: service.webhookUrl,
           source: "user_preference",
         },
         "IS resolved via user preference"
@@ -327,8 +327,18 @@ async function getActiveService(serviceId: string) {
  * Create client from service record, using the service's own API key.
  * Logs a warning if the service's last health check is stale (> 5 min).
  */
-function createClient(service: any): ResolvedService {
-  const apiKey = resolveServiceKey(service.apiKey as string);
+/** Service record shape expected by createClient — non-null string fields after Drizzle nullable inference */
+interface ServiceRecord {
+  serviceId: string;
+  webhookUrl: string;
+  apiKey: string | null;
+  mcpEndpoint: string | null;
+  mcpApproved: boolean | null;
+  lastHealthCheck: Date | string | null;
+}
+
+function createClient(service: ServiceRecord): ResolvedService {
+  const apiKey = resolveServiceKey(service.apiKey ?? "");
 
   // Warn if health check timestamp is stale — the service may be unhealthy
   if (service.lastHealthCheck) {

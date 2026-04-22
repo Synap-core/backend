@@ -63,3 +63,6 @@ kratos/kratos.yml.*
 # MinIO runtime data (never source-controlled)
 data/
 **/.minio.sys/
+
+# Cloudflare Wrangler build artifacts
+.wrangler/
