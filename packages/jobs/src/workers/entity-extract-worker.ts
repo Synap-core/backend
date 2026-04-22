@@ -28,6 +28,7 @@ import {
 import { sql as dbSql } from "@synap/database";
 import {
   channels,
+  feeds,
   messages,
   sourceSubscriptions,
 } from "@synap/database/schema";
@@ -316,36 +317,38 @@ interface FeedConfig {
   feedType: string;
   minRelevanceScore: number; // 0-1
   enrichmentEnabled: boolean;
+  agentConfig: Record<string, unknown>;
 }
 
 async function resolveFeedConfig(
   feedId: string,
   userId: string
-): Promise<FeedConfig> {
+): Promise<FeedConfig & { channelId?: string }> {
   try {
-    const feed = await db.query.feeds.findFirst({
-      where: and(
-        eq(db.query.feeds.id, feedId),
-        eq(db.query.feeds.userId, userId)
-      ),
-      columns: { feedType: true, channelId: true },
-      with: {
-        channel: {
-          columns: { agentConfig: true },
-        },
-      },
-    });
+    const [row] = await db
+      .select()
+      .from(feeds)
+      .where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
+      .limit(1);
 
-    if (feed && feed.channel) {
-      const config =
-        (feed.channel.agentConfig as Record<string, unknown>) ?? {};
-      return {
-        feedType:
-          (feed.feedType as string) ?? (config.feedType as string) ?? "rss",
-        minRelevanceScore: ((config.minRelevanceScore as number) ?? 0) / 100, // stored as 0-100
-        enrichmentEnabled: config.enrichmentEnabled !== false,
-      };
+    if (!row) throw new Error("Feed not found");
+
+    let agentConfig: Record<string, unknown> = {};
+    if (row.channelId) {
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, row.channelId),
+        columns: { agentConfig: true },
+      });
+      agentConfig = (channel?.agentConfig as Record<string, unknown>) ?? {};
     }
+
+    return {
+      feedType:
+        (row.feedType as string) ?? (agentConfig.feedType as string) ?? "rss",
+      minRelevanceScore: ((agentConfig.minRelevanceScore as number) ?? 0) / 100, // stored as 0-100
+      enrichmentEnabled: agentConfig.enrichmentEnabled !== false,
+      agentConfig,
+    };
   } catch (err) {
     logger.debug(
       { err: err instanceof Error ? err.message : "unknown", feedId },
@@ -357,6 +360,7 @@ async function resolveFeedConfig(
     feedType: "rss",
     minRelevanceScore: 0,
     enrichmentEnabled: true,
+    agentConfig: {},
   };
 }
 
@@ -408,7 +412,7 @@ async function createEntityFromItem(
 
 async function postToProactiveFeed(
   userId: string,
-  workspaceId: string | undefined,
+  _workspaceId: string | undefined,
   highlightedItems: Array<{
     title: string;
     url: string;
@@ -421,7 +425,7 @@ async function postToProactiveFeed(
 
   // Find user's feed channel
   const feedChannel = await db.query.channels.findFirst({
-    where: and(eq(channels.userId, userId), eq(channels.type, "feed")),
+    where: and(eq(channels.userId, userId), eq(channels.channelType, "feed")),
   });
 
   if (!feedChannel) {
@@ -494,9 +498,7 @@ async function postToProactiveFeed(
 
 // ── Main Handler ─────────────────────────────────────────────────────────────
 
-export async function handleEntityExtract(job: {
-  data: EntityExtractJobPayload;
-}): Promise<{
+type ExtractResult = {
   ok: boolean;
   itemsReceived: number;
   itemsDeduped: number;
@@ -504,13 +506,17 @@ export async function handleEntityExtract(job: {
   itemsCreated: number;
   itemsFiltered: number;
   error?: string;
-}> {
+};
+
+export async function handleEntityExtract(job: {
+  data: EntityExtractJobPayload;
+}): Promise<ExtractResult> {
   const { subscriptionId, feedId, userId, workspaceId, runId, items } =
     job.data;
 
   const startTime = Date.now();
   const jobRunId = runId ?? randomUUID();
-  const result = {
+  const result: ExtractResult = {
     ok: true,
     itemsReceived: items.length,
     itemsDeduped: 0,
@@ -639,7 +645,7 @@ export async function handleEntityExtract(job: {
 
     // 7. Post to proactive feed (highlights only)
     try {
-      await postToProactiveFeed(userId, workspaceId, highlighted, jobRunId);
+      await postToProactiveFeed(userId, undefined, highlighted, jobRunId);
     } catch (err) {
       logger.warn(
         { err: err instanceof Error ? err.message : "unknown" },

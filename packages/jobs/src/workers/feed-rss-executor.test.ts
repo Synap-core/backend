@@ -910,7 +910,7 @@ describe("feed-rss-executor", () => {
         ok: true,
         json: () =>
           Promise.resolve({
-            classifiedItems: items.map(() => ({
+            classifiedItems: feedItems.map(() => ({
               topics: ["AI"],
               relevanceScore: 0.9,
             })),

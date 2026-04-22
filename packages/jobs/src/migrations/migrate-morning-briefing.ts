@@ -25,7 +25,6 @@ import {
   ChannelScope,
   FeedScope,
   ChannelStatus,
-  ChannelAgentType,
 } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
@@ -188,8 +187,6 @@ async function createMorningBriefingFeed(
       scope: ChannelScope.POD,
       feedScope: FeedScope.USER,
       status: ChannelStatus.ACTIVE,
-      agentId: "proactive",
-      agentType: ChannelAgentType.PERSONAL,
       agentConfig: {
         systemPrompt:
           "You are a proactive assistant that delivers morning briefings. " +

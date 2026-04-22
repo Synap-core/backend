@@ -24,11 +24,9 @@ import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import {
   RSSDirectProvider,
-  CPRelayProvider,
   type SourceItem,
   type ResolvedConfig,
-  type FetchParams,
-  type FetchResult,
+  type NormalizedRSSItem,
 } from "@synap/feed-service";
 import type {
   FeedExecutionPayload,
@@ -63,7 +61,6 @@ function sourceItemsToNormalized(
     url: item.url,
     author: item.author,
     publishedAt: item.publishedAt,
-    contentText: item.excerpt ?? "",
     categories: Array.isArray(item.raw)
       ? (item.raw as string[]).filter(Boolean)
       : [],
@@ -212,7 +209,7 @@ async function classifyItemsWithIS(
     logger.warn("IS not configured, using local classification fallback");
     return items.map((item) => ({
       ...item,
-      topics: extractBasicTopics(item.title + " " + item.contentText),
+      topics: extractBasicTopics(item.title + " " + item.content),
       relevanceScore: 50,
       aiClassified: false,
     }));
@@ -231,7 +228,7 @@ async function classifyItemsWithIS(
           body: JSON.stringify({
             items: items.map((item) => ({
               title: item.title,
-              description: item.contentText.slice(0, 500),
+              description: (item.content ?? "").slice(0, 500),
               url: item.url,
             })),
             options: {
@@ -296,7 +293,7 @@ async function classifyItemsWithIS(
     // Fallback: return items with basic classification
     return items.map((item) => ({
       ...item,
-      topics: extractBasicTopics(item.title + " " + item.contentText),
+      topics: extractBasicTopics(item.title + " " + item.content),
       relevanceScore: 50,
       aiClassified: false,
     }));
@@ -324,8 +321,8 @@ async function classifyItems(
         shouldInclude: item.relevanceScore >= (config.minRelevanceScore || 0),
         categories: item.topics.length > 0 ? item.topics : item.categories,
         summary:
-          item.contentText.slice(0, 200) +
-          (item.contentText.length > 200 ? "..." : ""),
+          (item.content ?? "").slice(0, 200) +
+          ((item.content?.length ?? 0) > 200 ? "..." : ""),
       });
     }
   } catch (error) {
@@ -374,10 +371,9 @@ function formatItemContent(
   if (classification.summary) {
     parts.push(classification.summary);
     parts.push("");
-  } else if (item.contentText) {
+  } else if (item.content) {
     parts.push(
-      item.contentText.slice(0, 300) +
-        (item.contentText.length > 300 ? "..." : "")
+      item.content.slice(0, 300) + (item.content.length > 300 ? "..." : "")
     );
     parts.push("");
   }
@@ -513,11 +509,11 @@ async function postRSSItems(
             platform: item.source.name,
             url: item.url,
             author: item.author,
-            publishedAt: item.publishedAt.toISOString(),
+            publishedAt: item.publishedAt?.toISOString(),
           },
           sourceUrl: item.url,
           sourceItemId: item.id,
-          publishedAt: item.publishedAt.toISOString(),
+          publishedAt: item.publishedAt?.toISOString() ?? "",
           author: item.author,
           categories: classification.categories,
           topics: classification.categories,
@@ -614,13 +610,18 @@ export async function handleFeedRSSExecute(job: {
     }
 
     // 2. Fetch RSS items
+    const sources = config.sources;
+    const maxItems = config.maxItemsPerRun ?? 10;
+    let fetchResult: {
+      items: NormalizedRSSItem[];
+      errors: Array<{ source: string; error: string }>;
+      sourceCount: number;
+    };
+
     try {
-      if (!config.sources?.length) {
+      if (!sources?.length) {
         throw new Error("RSS feed config missing sources");
       }
-
-      const sources = config.sources;
-      const maxItems = config.maxItemsPerRun ?? 10;
 
       const directProvider = new RSSDirectProvider();
       const allItems: NormalizedRSSItem[] = [];
@@ -649,7 +650,7 @@ export async function handleFeedRSSExecute(job: {
         return bDate - aDate;
       });
 
-      const fetchResult = {
+      fetchResult = {
         items: allItems.slice(0, maxItems * 2),
         errors: fetchErrors,
         sourceCount: sources.length,
@@ -697,7 +698,7 @@ export async function handleFeedRSSExecute(job: {
 
     // 3. Filter seen URLs
     const newItems = fetchResult.items.filter(
-      (item) => !seenUrls.has(item.url)
+      (item) => !seenUrls.has(item.url ?? "")
     );
     logger.info(
       { newItems: newItems.length, fetched: fetchResult.items.length },

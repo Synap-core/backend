@@ -27,7 +27,6 @@ import {
   FeedScope,
   ThreadKind,
   ChannelStatus,
-  ChannelAgentType,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
