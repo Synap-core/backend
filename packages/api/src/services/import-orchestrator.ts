@@ -14,10 +14,6 @@ import { entitiesRouter } from "../routers/entities.js";
 import { channelsRouter } from "../routers/channels.js";
 import { getBoss } from "@synap/jobs";
 import {
-  TELEGRAM_BULK_IMPORT_QUEUE,
-  type TelegramPersonPayload,
-} from "@synap/jobs/workers/telegram-bulk-import.js";
-import {
   LINKEDIN_BULK_IMPORT_QUEUE,
   type LinkedInContactPayload,
 } from "@synap/jobs/workers/linkedin-bulk-import.js";
@@ -323,17 +319,6 @@ export class ImportOrchestrator {
       "Import batch completed"
     );
     return { batchId, ...stats };
-  }
-
-  async queueTelegramContacts(people: TelegramPersonPayload[]) {
-    const jobId = await getBoss().send(TELEGRAM_BULK_IMPORT_QUEUE, {
-      workspaceId: this.ctx.workspaceId,
-      userId: this.ctx.userId,
-      people,
-      runId: randomUUID(),
-      source: "telegram_archive" satisfies ImportSource,
-    });
-    return { jobId, total: people.length, status: "queued" as const };
   }
 
   async queueLinkedInContacts(contacts: LinkedInContactPayload[]) {
